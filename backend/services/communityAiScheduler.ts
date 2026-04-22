@@ -1,8 +1,10 @@
 import { supabase } from '../db/supabaseClient';
 import { executeAction } from './communityAiActionExecutor';
 import { logCommunityAiActionEvent } from './communityAiActionLogService';
+import { randomUUID } from 'crypto';
 import { notifyCommunityAi } from './communityAiNotificationService';
 import { sendCommunityAiWebhooks } from './communityAiWebhookService';
+import { persistExecutionResult } from './communityAiActionExecutor';
 import { getPlaybookById } from './playbooks/playbookService';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
@@ -115,10 +117,13 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
   for (const action of actions) {
     if (!action.tenant_id || !action.organization_id) {
       failed += 1;
-      await supabase
-        .from('community_ai_actions')
-        .update({ status: 'failed', updated_at: new Date().toISOString() })
-        .eq('id', action.id);
+      await persistExecutionResult({
+        actionId: action.id,
+        organizationId: action.organization_id || 'unknown',
+        correlationId: randomUUID(),
+        result: { ok: false, status: 'failed', error: 'TENANT_SCOPE_MISSING', response: { source: 'scheduler' } },
+        rowHint: { platform: action.platform, action_type: action.action_type, target_id: action.target_id },
+      });
       await logCommunityAiActionEvent({
         action_id: action.id,
         tenant_id: action.tenant_id || 'unknown',
@@ -144,15 +149,14 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
 
     if (!action.playbook_id) {
       failed += 1;
-      const failure = { ok: false, status: 'failed', error: 'PLAYBOOK_REQUIRED' };
-      await supabase
-        .from('community_ai_actions')
-        .update({
-          status: 'failed',
-          execution_result: failure,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', action.id);
+      const failure = { ok: false, status: 'failed' as const, error: 'PLAYBOOK_REQUIRED', response: { source: 'scheduler' } };
+      await persistExecutionResult({
+        actionId: action.id,
+        organizationId: action.organization_id,
+        correlationId: randomUUID(),
+        result: failure,
+        rowHint: { platform: action.platform, action_type: action.action_type, target_id: action.target_id },
+      });
       await logCommunityAiActionEvent({
         action_id: action.id,
         tenant_id: action.tenant_id,
@@ -187,15 +191,14 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       );
     } catch (error: any) {
       failed += 1;
-      const failure = { ok: false, status: 'failed', error: 'PLAYBOOK_NOT_FOUND' };
-      await supabase
-        .from('community_ai_actions')
-        .update({
-          status: 'failed',
-          execution_result: failure,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', action.id);
+      const failure = { ok: false, status: 'failed' as const, error: 'PLAYBOOK_NOT_FOUND', response: { source: 'scheduler' } };
+      await persistExecutionResult({
+        actionId: action.id,
+        organizationId: action.organization_id,
+        correlationId: randomUUID(),
+        result: failure,
+        rowHint: { platform: action.platform, action_type: action.action_type, target_id: action.target_id },
+      });
       await logCommunityAiActionEvent({
         action_id: action.id,
         tenant_id: action.tenant_id,
@@ -247,13 +250,13 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
         'AUTOMATION_LEVEL_AUTOMATE_LIMIT',
       ]);
       if (skipReasons.has(reason)) {
-        await supabase
-          .from('community_ai_actions')
-          .update({
-            status: 'skipped',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', action.id);
+        await persistExecutionResult({
+          actionId: action.id,
+          organizationId: action.organization_id,
+          correlationId: randomUUID(),
+          result: { ok: false, status: 'skipped', reason, response: { source: 'scheduler' } },
+          rowHint: { platform: action.platform, action_type: action.action_type, target_id: action.target_id },
+        });
         await logCommunityAiActionEvent({
           action_id: action.id,
           tenant_id: action.tenant_id,
@@ -267,17 +270,17 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       failed += 1;
       const failure = {
         ok: false,
-        status: 'failed',
+        status: 'failed' as const,
         error: reason,
+        response: { source: 'scheduler' },
       };
-      await supabase
-        .from('community_ai_actions')
-        .update({
-          status: 'failed',
-          execution_result: failure,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', action.id);
+      await persistExecutionResult({
+        actionId: action.id,
+        organizationId: action.organization_id,
+        correlationId: randomUUID(),
+        result: failure,
+        rowHint: { platform: action.platform, action_type: action.action_type, target_id: action.target_id },
+      });
       await logCommunityAiActionEvent({
         action_id: action.id,
         tenant_id: action.tenant_id,
@@ -319,17 +322,17 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
         failed += 1;
         const failure = {
           ok: false,
-          status: 'failed',
+          status: 'failed' as const,
           error: 'Platform not connected',
+          response: { source: 'scheduler' },
         };
-        await supabase
-          .from('community_ai_actions')
-          .update({
-            status: 'failed',
-            execution_result: failure,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', action.id);
+        await persistExecutionResult({
+          actionId: action.id,
+          organizationId: action.organization_id,
+          correlationId: randomUUID(),
+          result: failure,
+          rowHint: { platform: action.platform, action_type: action.action_type, target_id: action.target_id },
+        });
         await logCommunityAiActionEvent({
           action_id: action.id,
           tenant_id: action.tenant_id,
@@ -369,21 +372,33 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       { source: 'scheduler' }
     );
     if (!guardrail.allowed) {
-      await supabase
-        .from('community_ai_actions')
-        .update({
-          status: 'skipped_guardrail',
-          skip_reason: guardrail.reason ?? null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', action.id);
+      // 'skipped_guardrail' is a scheduler-specific status retained for
+      // backwards compatibility. Route through persistExecutionResult so the
+      // central pipeline owns every row write; the status CHECK still
+      // permits the legacy value.
+      await persistExecutionResult({
+        actionId: action.id,
+        organizationId: action.organization_id,
+        correlationId: randomUUID(),
+        result: {
+          ok: false,
+          status: 'skipped',
+          reason: guardrail.reason ?? 'GUARDRAIL',
+          response: { source: 'scheduler', guardrail_reason: guardrail.reason ?? null },
+        },
+        rowHint: { platform: action.platform, action_type: action.action_type, target_id: action.target_id },
+      });
       continue;
     }
 
+    // Executor owns the terminal row write (persist:true). The scheduler
+    // simply observes the outcome; notify + webhook fan-out lives inside
+    // the executor so every entry point emits identically.
     const result = await executeAction(action, true, {
-      notify: false,
-      webhook: false,
+      notify: true,
+      webhook: true,
       source: 'scheduler',
+      persist: true,
     });
 
     if (result.status === 'skipped' && result.reason === 'HUMAN_APPROVAL_REQUIRED') {
@@ -395,19 +410,6 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
     if (result.ok) executed += 1;
     else if (result.status !== 'skipped') failed += 1;
 
-    const updatePayload: Record<string, unknown> = {
-      status: nextStatus,
-      execution_result: result,
-      updated_at: new Date().toISOString(),
-    };
-    if (nextStatus === 'executed') {
-      updatePayload.executed_at = new Date().toISOString();
-    }
-    await supabase
-      .from('community_ai_actions')
-      .update(updatePayload)
-      .eq('id', action.id);
-
     await logCommunityAiActionEvent({
       action_id: action.id,
       tenant_id: action.tenant_id,
@@ -415,25 +417,6 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       event_type: nextStatus === 'executed' ? 'executed' : nextStatus === 'skipped' ? 'skipped' : 'failed',
       event_payload: result,
     });
-
-    if (nextStatus !== 'skipped') {
-      await notifyCommunityAi({
-        tenant_id: action.tenant_id,
-        organization_id: action.organization_id,
-        action_id: action.id,
-        event_type: nextStatus === 'executed' ? 'executed' : 'failed',
-        message: `Scheduled action ${nextStatus} on ${action.platform}`,
-      });
-
-      void sendCommunityAiWebhooks({
-        tenant_id: action.tenant_id,
-        organization_id: action.organization_id,
-        event_type: nextStatus === 'executed' ? 'executed' : 'failed',
-        action_id: action.id,
-        message: `Scheduled action ${nextStatus} on ${action.platform}`,
-        metadata: { platform: action.platform, action_type: action.action_type },
-      });
-    }
   }
 
   return { processed: actions.length, executed, failed };

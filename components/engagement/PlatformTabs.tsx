@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { getPlatformLabel } from '@/utils/platformIcons';
 import type { PlatformCounts } from '@/hooks/usePlatformCounts';
 import type { PlatformWorkItem } from '@/hooks/useWorkQueue';
+import { VERIFIED_ENGAGEMENT_PLATFORMS } from '@/lib/engagementCapabilities';
 
 /** Canonical order for known platforms when displayed dynamically. */
 const PLATFORM_ORDER = ['linkedin', 'twitter', 'instagram', 'facebook', 'youtube', 'reddit'] as const;
@@ -24,7 +25,14 @@ function normalizeToCanonicalSlug(p: string): string {
 function buildTabItems(integratedPlatforms: string[]): Array<{ slug: string; label: string }> {
   const allTab = { slug: 'all', label: 'All' };
   if (!integratedPlatforms.length) return [allTab];
-  const normalized = [...new Set(integratedPlatforms.map(normalizeToCanonicalSlug).filter((s) => s !== 'unknown'))];
+  const normalized = [
+    ...new Set(
+      integratedPlatforms
+        .map(normalizeToCanonicalSlug)
+        .filter((s) => s !== 'unknown')
+        .filter((s) => VERIFIED_ENGAGEMENT_PLATFORMS.includes(s)),
+    ),
+  ];
   const ordered = normalized.sort((a, b) => {
     const ia = PLATFORM_ORDER.indexOf(a as typeof PLATFORM_ORDER[number]);
     const ib = PLATFORM_ORDER.indexOf(b as typeof PLATFORM_ORDER[number]);
@@ -73,8 +81,9 @@ function getAggregateCounts(counts: PlatformCounts, workPlatforms?: PlatformWork
   };
 }
 
-/** Legacy fallback: all platforms when no integrations passed (backward compat). */
-const FALLBACK_PLATFORM_SLUGS = ['linkedin', 'twitter', 'instagram', 'facebook', 'youtube', 'reddit'];
+/** Fallback when no integrations prop is passed: only platforms that have at
+ *  least one verified engagement action. No "coming soon" placeholders. */
+const FALLBACK_PLATFORM_SLUGS = [...VERIFIED_ENGAGEMENT_PLATFORMS];
 
 export interface PlatformTabsProps {
   counts: PlatformCounts;

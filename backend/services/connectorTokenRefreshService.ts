@@ -15,9 +15,10 @@
 import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
 import { getToken, saveToken } from './platformTokenService';
+import { getOAuthCredentialsForPlatform } from '../auth/oauthCredentialResolver';
 
 const BUFFER_HOURS = 24; // Refresh if expiring within 24 hours
-const PLATFORMS_WITH_REFRESH = ['linkedin', 'facebook', 'instagram', 'twitter', 'reddit', 'x'];
+const PLATFORMS_WITH_REFRESH = ['linkedin', 'facebook', 'instagram', 'twitter', 'reddit', 'x', 'youtube'];
 
 type TokenRow = {
   id: string;
@@ -42,8 +43,9 @@ async function refreshLinkedIn(
   currentToken: { access_token: string; refresh_token?: string | null }
 ): Promise<{ access_token: string; refresh_token?: string | null; expires_at: string } | null> {
   if (!currentToken.refresh_token) return null;
-  const clientId = process.env.LINKEDIN_CLIENT_ID;
-  const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('linkedin');
+  const clientId = credentials?.client_id || process.env.LINKEDIN_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || process.env.LINKEDIN_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
 
   const res = await axios.post(
@@ -71,8 +73,9 @@ async function refreshTwitter(
   currentToken: { access_token: string; refresh_token?: string | null }
 ): Promise<{ access_token: string; refresh_token?: string | null; expires_at: string } | null> {
   if (!currentToken.refresh_token) return null;
-  const clientId = process.env.TWITTER_CLIENT_ID || process.env.X_CLIENT_ID;
-  const clientSecret = process.env.TWITTER_CLIENT_SECRET || process.env.X_CLIENT_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('x');
+  const clientId = credentials?.client_id || process.env.X_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || process.env.X_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
 
   const creds = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -103,8 +106,9 @@ async function refreshFacebook(
   orgId: string,
   currentToken: { access_token: string; refresh_token?: string | null }
 ): Promise<{ access_token: string; refresh_token?: string | null; expires_at: string } | null> {
-  const appId = process.env.FACEBOOK_CLIENT_ID || process.env.FACEBOOK_APP_ID;
-  const appSecret = process.env.FACEBOOK_CLIENT_SECRET || process.env.FACEBOOK_APP_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('facebook');
+  const appId = credentials?.client_id || process.env.FACEBOOK_CLIENT_ID || process.env.FACEBOOK_APP_ID;
+  const appSecret = credentials?.client_secret || process.env.FACEBOOK_CLIENT_SECRET || process.env.FACEBOOK_APP_SECRET;
   if (!appId || !appSecret) return null;
 
   try {
@@ -153,8 +157,9 @@ async function refreshReddit(
   currentToken: { access_token: string; refresh_token?: string | null }
 ): Promise<{ access_token: string; refresh_token?: string | null; expires_at: string } | null> {
   if (!currentToken.refresh_token) return null;
-  const clientId = process.env.REDDIT_CLIENT_ID;
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('reddit');
+  const clientId = credentials?.client_id || process.env.REDDIT_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || process.env.REDDIT_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
 
   const creds = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -171,6 +176,36 @@ async function refreshReddit(
         'User-Agent': 'community-ai/1.0',
       },
     }
+  );
+  if (!res.data?.access_token) return null;
+  const expiresIn = res.data.expires_in || 3600;
+  return {
+    access_token: res.data.access_token,
+    refresh_token: res.data.refresh_token || currentToken.refresh_token,
+    expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+  };
+}
+
+async function refreshYouTube(
+  tenantId: string,
+  orgId: string,
+  currentToken: { access_token: string; refresh_token?: string | null }
+): Promise<{ access_token: string; refresh_token?: string | null; expires_at: string } | null> {
+  if (!currentToken.refresh_token) return null;
+  const credentials = await getOAuthCredentialsForPlatform('youtube');
+  const clientId = credentials?.client_id || process.env.YOUTUBE_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || process.env.YOUTUBE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+
+  const res = await axios.post(
+    'https://oauth2.googleapis.com/token',
+    new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: currentToken.refresh_token,
+      grant_type: 'refresh_token',
+    }),
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
   );
   if (!res.data?.access_token) return null;
   const expiresIn = res.data.expires_in || 3600;
@@ -199,6 +234,8 @@ async function refreshForPlatform(
       return refreshFacebook(tenantId, orgId, currentToken); // Instagram uses Facebook Graph
     case 'reddit':
       return refreshReddit(tenantId, orgId, currentToken);
+    case 'youtube':
+      return refreshYouTube(tenantId, orgId, currentToken);
     default:
       return null;
   }
@@ -215,8 +252,9 @@ export type ConnectorTokenRefreshResult = {
 /**
  * Run connector token refresh for tokens expiring within BUFFER_HOURS.
  * Call from cron job (e.g. every 6 hours).
+ * Pass `organizationId` to scope the refresh to a single org (e.g. refresh-on-login).
  */
-export async function runConnectorTokenRefresh(): Promise<ConnectorTokenRefreshResult> {
+export async function runConnectorTokenRefresh(organizationId?: string): Promise<ConnectorTokenRefreshResult> {
   const result: ConnectorTokenRefreshResult = {
     checked: 0,
     refreshed: 0,
@@ -225,11 +263,15 @@ export async function runConnectorTokenRefresh(): Promise<ConnectorTokenRefreshR
     details: [],
   };
 
-  const { data: rows, error } = await supabase
+  let query = supabase
     .from('community_ai_platform_tokens')
     .select('id, tenant_id, organization_id, platform, access_token, refresh_token, expires_at')
     .not('access_token', 'is', null)
     .in('platform', PLATFORMS_WITH_REFRESH);
+  if (organizationId) {
+    query = query.eq('organization_id', organizationId);
+  }
+  const { data: rows, error } = await query;
 
   if (error) {
     console.error('[connectorTokenRefresh] Failed to fetch tokens:', error.message);

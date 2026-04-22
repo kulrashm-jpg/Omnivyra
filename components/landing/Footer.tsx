@@ -76,8 +76,8 @@ export default function Footer() {
         <div className="grid grid-cols-2 gap-10 sm:grid-cols-4 lg:gap-16">
           {/* Brand */}
           <div className="col-span-2 sm:col-span-1">
-            <Link href="/" aria-label="Omnivyra home">
-              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
+            <Link href="/" aria-label="OmniVyra home">
+              <img src="/logo.png" alt="OmniVyra" className="h-12 w-auto object-contain" />
             </Link>
             <p className="mt-3 text-sm leading-relaxed text-[#6B7C93]">
               Clarity, control, and direction<br />in your marketing.
@@ -124,7 +124,7 @@ export default function Footer() {
         {/* Bottom row */}
         <div className="mt-12 flex flex-col items-center justify-between gap-3 border-t border-gray-100 pt-6 sm:flex-row">
           <p className="text-xs text-[#6B7C93]">
-            &copy; {new Date().getFullYear()} Omnivyra. All rights reserved.
+            &copy; {new Date().getFullYear()} OmniVyra. All rights reserved.
           </p>
           <p className="text-xs text-[#6B7C93]">
             Marketing Decision Intelligence Platform

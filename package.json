@@ -47,12 +47,17 @@
     "inject:test-signal": "tsx scripts/inject_test_signal.ts",
     "env:validate": "tsx scripts/validate_startup_env.ts",
     "lint:lead-signal-boundary": "node scripts/check_lead_signal_write_boundaries.js",
+    "audit:legacy-ledger-reads": "tsx scripts/audit-legacy-ledger-reads.ts",
+    "check:frozen-schemas": "tsx scripts/check-frozen-schemas.ts",
+    "guard:cost-tracking": "npm run audit:legacy-ledger-reads && npm run check:frozen-schemas",
     "lint": "eslint . --max-warnings 200",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "check:file-lengths": "node scripts/check-file-lengths.js",
     "update:browserslist": "npm install caniuse-lite@latest --legacy-peer-deps",
-    "fresh": "npm run clean && npm run update:browserslist && npm run dev"
+    "fresh": "npm run clean && npm run update:browserslist && npm run dev",
+    "rpa:install": "npx playwright install chromium",
+    "rpa:check": "node -e \"(async()=>{try{const p=await import('playwright');const b=await p.chromium.launch({headless:true});await b.close();console.log('RPA_ENV_READY');}catch(e){console.error('RPA_ENV_NOT_READY',e?.message);process.exit(1);}})()\""
   },
   "dependencies": {
     "@alloc/quick-lru": "^5.2.0",
@@ -87,6 +92,7 @@
     "openai": "^5.23.0",
     "pdfkit": "^0.17.2",
     "pg": "^8.16.3",
+    "playwright": "^1.49.0",
     "react": "latest",
     "react-dom": "latest",
     "react-icons": "^5.6.0",

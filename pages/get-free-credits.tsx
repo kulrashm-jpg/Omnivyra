@@ -93,8 +93,8 @@ export default function GetFreeCreditsPage() {
   return (
     <>
       <Head>
-        <title>Get Free Credits | Omnivyra</title>
-        <meta name="description" content="Start with free credits and explore the full Omnivyra platform your way." />
+        <title>Get Free Credits | OmniVyra</title>
+        <meta name="description" content="Start with free credits and explore the full OmniVyra platform your way." />
       </Head>
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
@@ -103,7 +103,7 @@ export default function GetFreeCreditsPage() {
         <header className="sticky top-0 z-40 border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-2xl items-center justify-between px-6">
             <Link href="/">
-              <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
+              <img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" />
             </Link>
             {step > 0 && step < 5 && (
               <span className="text-xs text-[#6B7C93]">
@@ -145,6 +145,9 @@ export default function GetFreeCreditsPage() {
               </p>
               <button
                 onClick={next}
+                data-ga-primary-cta
+                data-ga-label="Get Free Credits"
+                data-ga-location="/get-free-credits"
                 className="mt-8 rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-8 py-3.5 text-base font-semibold text-white shadow-[0_4px_20px_rgba(10,102,194,0.4)] transition hover:shadow-[0_6px_28px_rgba(10,102,194,0.55)] hover:opacity-95"
               >
                 Get Free Credits
@@ -281,6 +284,9 @@ export default function GetFreeCreditsPage() {
               <div className="mt-8 text-center">
                 <Link
                   href="/create-account"
+                  data-ga-primary-cta
+                  data-ga-label="Claim Credits & Create Account"
+                  data-ga-location="/get-free-credits"
                   className="inline-block w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-8 py-4 text-center text-base font-semibold text-white shadow-[0_4px_20px_rgba(10,102,194,0.4)] transition hover:opacity-95"
                 >
                   Claim Credits &amp; Create Account

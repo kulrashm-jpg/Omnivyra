@@ -18,12 +18,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { platform } = req.body || {};
   if (!platform) return res.status(400).json({ error: 'platform required' });
+  const normalizedPlatform = String(platform).toLowerCase().trim();
+  const platformAliases = normalizedPlatform === 'x' || normalizedPlatform === 'twitter'
+    ? ['x', 'twitter']
+    : [normalizedPlatform];
 
   const { error: dbErr } = await supabase
     .from('social_accounts')
     .update({ is_active: false, updated_at: new Date().toISOString() })
     .eq('user_id', userId)
-    .eq('platform', String(platform).toLowerCase().trim())
+    .in('platform', platformAliases)
     .eq('is_active', true)
     .not('platform_user_id', 'like', 'planning_%');
 

@@ -11,6 +11,7 @@
 import { getPlatformOAuthConfig } from '../services/platformOauthConfigService';
 
 const PLATFORM_ENV_MAP: Record<string, { id: string; secret: string }> = {
+  ga4: { id: 'GOOGLE_ANALYTICS_CLIENT_ID', secret: 'GOOGLE_ANALYTICS_CLIENT_SECRET' },
   linkedin: { id: 'LINKEDIN_CLIENT_ID', secret: 'LINKEDIN_CLIENT_SECRET' },
   youtube: { id: 'YOUTUBE_CLIENT_ID', secret: 'YOUTUBE_CLIENT_SECRET' },
   facebook: { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
@@ -18,8 +19,7 @@ const PLATFORM_ENV_MAP: Record<string, { id: string; secret: string }> = {
   meta:      { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
   whatsapp:  { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
   instagram: { id: 'FACEBOOK_CLIENT_ID', secret: 'FACEBOOK_CLIENT_SECRET' },
-  twitter: { id: 'TWITTER_CLIENT_ID', secret: 'TWITTER_CLIENT_SECRET' },
-  x: { id: 'TWITTER_CLIENT_ID', secret: 'TWITTER_CLIENT_SECRET' },
+  x: { id: 'X_CLIENT_ID', secret: 'X_CLIENT_SECRET' },
   tiktok: { id: 'TIKTOK_CLIENT_ID', secret: 'TIKTOK_CLIENT_SECRET' },
   pinterest: { id: 'PINTEREST_APP_ID', secret: 'PINTEREST_APP_SECRET' },
   spotify:       { id: 'SPOTIFY_CLIENT_ID',       secret: 'SPOTIFY_CLIENT_SECRET' },
@@ -60,10 +60,20 @@ export async function getOAuthCredentialsForPlatform(
   // 2. Fallback to .env (migration / backward compatibility)
   const envKeys = PLATFORM_ENV_MAP[normalized];
   if (envKeys) {
-    const client_id = process.env[envKeys.id] || process.env[envKeys.id.replace('_CLIENT_ID', '_APP_ID')] || '';
-    const client_secret =
-      process.env[envKeys.secret] || process.env[envKeys.secret.replace('_CLIENT_SECRET', '_APP_SECRET')] || '';
-    if (client_id && client_secret && !client_id.includes('your_')) {
+    const envCandidates = [envKeys.id];
+    if (normalized === 'ga4') envCandidates.push('GOOGLE_CLIENT_ID');
+    if (normalized === 'x') envCandidates.push('TWITTER_CLIENT_ID');
+    const secretCandidates = [envKeys.secret];
+    if (normalized === 'ga4') secretCandidates.push('GOOGLE_CLIENT_SECRET');
+    if (normalized === 'x') secretCandidates.push('TWITTER_CLIENT_SECRET');
+
+    const client_id = envCandidates
+      .flatMap((k) => [process.env[k], process.env[k.replace('_CLIENT_ID', '_APP_ID')]])
+      .find((v) => v && v.trim() && !v.includes('your_')) || '';
+    const client_secret = secretCandidates
+      .flatMap((k) => [process.env[k], process.env[k.replace('_CLIENT_SECRET', '_APP_SECRET')]])
+      .find((v) => v && v.trim()) || '';
+    if (client_id && client_secret) {
       return {
         client_id,
         client_secret,

@@ -207,7 +207,7 @@ export default function BlogTemplatePage() {
     return (
       <>
         <Head>
-          <title>Customize Template | Omnivyra</title>
+          <title>Customize Template | OmniVyra</title>
         </Head>
         <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-6">
           <div className="mx-auto max-w-3xl">
@@ -236,7 +236,7 @@ export default function BlogTemplatePage() {
   return (
     <>
       <Head>
-        <title>Choose Template | Omnivyra</title>
+        <title>Choose Template | OmniVyra</title>
       </Head>
       <div className="min-h-screen bg-gradient-to-br from-purple-50 to-indigo-50 p-6">
         <div className="mx-auto max-w-5xl">

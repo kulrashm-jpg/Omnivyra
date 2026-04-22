@@ -128,7 +128,7 @@ export function generateDynamicRequirements(
     social_accounts_connected: {
       label: 'Social accounts linked',
       helpText: 'Connect your LinkedIn, Twitter, and other social accounts for distribution.',
-      helpLink: '/integrations',
+      helpLink: '/integrations?focus=data',
     },
     campaign_created: {
       label: 'Launch first campaign',

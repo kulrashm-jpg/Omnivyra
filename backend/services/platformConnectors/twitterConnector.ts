@@ -22,6 +22,14 @@ const requestJson = async (url: string, options: RequestInit, errorPrefix: strin
   return { status: response.status, data: payload };
 };
 
+const extractTwitterId = (result: { data?: any } | null): string | null => {
+  const data = result?.data;
+  if (!data || typeof data !== 'object') return null;
+  // v2 wraps payloads in { data: { id, text } }, or { data: { liked: true } } for likes.
+  const candidate = data?.data?.id ?? data?.id ?? null;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+};
+
 const getUserId = async (authToken: string) => {
   const result = await requestJson(
     `${TWITTER_API}/users/me`,
@@ -60,7 +68,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         },
         'Twitter reply failed'
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractTwitterId(result), platform_response: result };
     }
 
     if (action.action_type === 'like') {
@@ -77,7 +85,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         },
         'Twitter like failed'
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractTwitterId(result), platform_response: result };
     }
 
     if (action.action_type === 'share') {
@@ -94,7 +102,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         },
         'Twitter retweet failed'
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractTwitterId(result), platform_response: result };
     }
 
     if (action.action_type === 'follow') {
@@ -111,7 +119,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         },
         'Twitter follow failed'
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractTwitterId(result), platform_response: result };
     }
 
     return { success: false, error: 'ACTION_TYPE_NOT_SUPPORTED' };

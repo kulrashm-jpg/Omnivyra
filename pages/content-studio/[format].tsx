@@ -358,7 +358,7 @@ export default function ContentStudioFormatPage() {
   return (
     <>
       <Head>
-        <title>{meta.label} Studio | Omnivyra</title>
+        <title>{meta.label} Studio | OmniVyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-3 sm:px-4 lg:px-6">

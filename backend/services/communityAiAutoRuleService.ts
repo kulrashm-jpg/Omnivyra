@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
-import { executeAction } from './communityAiActionExecutor';
+import { executeAction, persistExecutionResult } from './communityAiActionExecutor';
 import { logCommunityAiActionEvent } from './communityAiActionLogService';
 import { getPlaybookById, listPlaybooks } from './playbooks/playbookService';
 import { evaluatePlaybookForEvent } from './playbooks/playbookEvaluator';
@@ -439,14 +439,13 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
           input.organization_id
         );
       } catch (error: any) {
-        await supabase
-          .from('community_ai_actions')
-          .update({
-            status: 'failed',
-            execution_result: { ok: false, status: 'failed', error: 'PLAYBOOK_NOT_FOUND' },
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', record.id);
+        await persistExecutionResult({
+          actionId: record.id,
+          organizationId: input.organization_id,
+          correlationId: randomUUID(),
+          result: { ok: false, status: 'failed', error: 'PLAYBOOK_NOT_FOUND', response: { source: 'auto_rules' } },
+          rowHint: { platform: record.platform, action_type: record.action_type, target_id: record.target_id },
+        });
         await logCommunityAiActionEvent({
           action_id: record.id,
           tenant_id: input.tenant_id,
@@ -471,18 +470,18 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         null
       );
       if (!recordValidation.allowed) {
-        await supabase
-          .from('community_ai_actions')
-          .update({
+        await persistExecutionResult({
+          actionId: record.id,
+          organizationId: input.organization_id,
+          correlationId: randomUUID(),
+          result: {
+            ok: false,
             status: 'failed',
-            execution_result: {
-              ok: false,
-              status: 'failed',
-              error: recordValidation.reason || 'PLAYBOOK_VIOLATION',
-            },
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', record.id);
+            error: recordValidation.reason || 'PLAYBOOK_VIOLATION',
+            response: { source: 'auto_rules' },
+          },
+          rowHint: { platform: record.platform, action_type: record.action_type, target_id: record.target_id },
+        });
         await logCommunityAiActionEvent({
           action_id: record.id,
           tenant_id: input.tenant_id,
@@ -509,17 +508,22 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
         { source: 'evaluation' }
       );
       if (!guardrail.allowed) {
-        await supabase
-          .from('community_ai_actions')
-          .update({
-            status: 'skipped_guardrail',
-            skip_reason: guardrail.reason ?? null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', record.id);
+        await persistExecutionResult({
+          actionId: record.id,
+          organizationId: input.organization_id,
+          correlationId: randomUUID(),
+          result: {
+            ok: false,
+            status: 'skipped',
+            reason: guardrail.reason ?? 'GUARDRAIL',
+            response: { source: 'auto_rules', guardrail_reason: guardrail.reason ?? null },
+          },
+          rowHint: { platform: record.platform, action_type: record.action_type, target_id: record.target_id },
+        });
         return { ...action, blocked_reason: guardrail.reason ?? 'guardrail' };
       }
 
+      // Executor handles the terminal row write via persist:true.
       const execution = await executeAction(
         {
           id: record.id,
@@ -535,7 +539,7 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
           risk_level: record.risk_level,
         },
         true,
-        { source: 'auto' }
+        { source: 'auto', persist: true }
       );
       if (execution.status === 'skipped' && execution.reason === 'HUMAN_APPROVAL_REQUIRED') {
         return {
@@ -546,18 +550,6 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
 
       const nextStatus =
         execution.status === 'skipped' ? 'skipped' : execution.ok ? 'executed' : 'failed';
-      const updatePayload: Record<string, unknown> = {
-        status: nextStatus,
-        execution_result: execution,
-        updated_at: new Date().toISOString(),
-      };
-      if (nextStatus === 'executed') {
-        updatePayload.executed_at = new Date().toISOString();
-      }
-      await supabase
-        .from('community_ai_actions')
-        .update(updatePayload)
-        .eq('id', record.id);
 
       await logCommunityAiActionEvent({
         action_id: record.id,

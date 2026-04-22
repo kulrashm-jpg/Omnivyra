@@ -43,17 +43,58 @@ export default function LoginPage() {
   }, [emailParam]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    // getSession() reads from localStorage — no network request, resolves immediately.
-    // Keep checking=true until we know the user is NOT logged in so the login form
-    // is never briefly visible before a redirect fires.
-    getSupabaseBrowser().auth.getSession().then(({ data }) => {
-      if (data.session) {
-        const pinned = localStorage.getItem('pin_home') === 'true';
-        router.replace(pinned ? '/home' : '/command-center');
-      } else {
+    const supabase = getSupabaseBrowser();
+    let done = false;
+
+    async function resolve(session: { access_token: string } | null) {
+      if (done) return;
+      if (!session) {
+        done = true;
         setChecking(false);
+        return;
+      }
+      // Validate against the server — if the session is stale/ghost, let the
+      // user sign in again instead of bouncing them into a broken workspace.
+      try {
+        const res = await fetch('/api/auth/post-login-route', {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (res.status === 401 || res.status === 403) {
+          await supabase.auth.signOut();
+          done = true;
+          setChecking(false);
+          return;
+        }
+        if (!res.ok) {
+          done = true;
+          router.replace('/dashboard');
+          return;
+        }
+        const { route: dest } = (await res.json()) as { route?: string };
+        const pinned = localStorage.getItem('pin_home') === 'true';
+        const target = dest ?? '/command-center';
+        done = true;
+        router.replace(target === '/command-center' && pinned ? '/home' : target);
+      } catch {
+        const pinned = localStorage.getItem('pin_home') === 'true';
+        done = true;
+        router.replace(pinned ? '/home' : '/command-center');
+      }
+    }
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        void resolve(session);
+      } else if (event === 'SIGNED_OUT') {
+        void resolve(null);
       }
     });
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!done) void resolve(data.session);
+    });
+
+    return () => subscription.unsubscribe();
   }, [router]);
 
   // Render nothing while the session check is in-flight
@@ -114,7 +155,9 @@ export default function LoginPage() {
     setLoading('magic');
     setError(null);
 
-    // Verify account exists before sending OTP — prevents magic links going to unknown emails
+    // Pre-check: account must exist. Prevents Supabase from silently creating
+    // a new (passwordless) user for a typo, and lets us surface a clear
+    // "no account" state instead of Supabase's generic success response.
     try {
       const check = await fetch('/api/auth/magic-link', {
         method: 'POST',
@@ -137,6 +180,26 @@ export default function LoginPage() {
       return;
     }
 
+    // Supabase sends the magic-link email itself.
+    const { error: otpError } = await getSupabaseBrowser().auth.signInWithOtp({
+      email: trimmed,
+      options: {
+        shouldCreateUser:  false,
+        emailRedirectTo:   `${origin}/auth/callback?mode=passwordless`,
+      },
+    });
+
+    if (otpError) {
+      setLoading(null);
+      const msg = otpError.message.toLowerCase();
+      if (msg.includes('rate') || (otpError as any).status === 429) {
+        setError('Too many attempts. Please wait a few minutes and try again.');
+      } else {
+        setError(otpError.message);
+      }
+      return;
+    }
+
     setLoading(null);
     setMagicSent(true);
   }
@@ -156,27 +219,36 @@ export default function LoginPage() {
         body: JSON.stringify({ email: trimmed }),
       });
       const json = await response.json().catch(() => ({}));
-      setLoading(null);
       if (!response.ok) {
+        setLoading(null);
         setError(json.error ?? 'Unable to send reset link.');
         return;
       }
-      setResetSent(true);
     } catch {
       setLoading(null);
       setError('Network error. Please try again.');
+      return;
     }
+
+    // Supabase sends the reset email itself. We always claim success —
+    // never surface whether the account exists (matches /api/auth/reset).
+    await getSupabaseBrowser().auth.resetPasswordForEmail(trimmed, {
+      redirectTo: `${origin}/auth/set-password?flow=recovery`,
+    });
+
+    setLoading(null);
+    setResetSent(true);
   }
 
   // ── Magic link sent confirmation ─────────────────────────────────────────
   if (magicSent) {
     return (
       <>
-        <Head><title>Check your inbox | Omnivyra</title></Head>
+        <Head><title>Check your inbox | OmniVyra</title></Head>
         <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
           <header className="border-b border-gray-100 bg-white/95">
             <div className="mx-auto flex h-14 max-w-lg items-center px-6">
-              <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+              <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
             </div>
           </header>
           <main className="flex flex-1 items-center justify-center px-6 py-12">
@@ -205,14 +277,14 @@ export default function LoginPage() {
   return (
     <>
       <Head>
-        <title>Log in | Omnivyra</title>
-        <meta name="description" content="Log in to Omnivyra." />
+        <title>Log in | OmniVyra</title>
+        <meta name="description" content="Log in to OmniVyra." />
       </Head>
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         <header className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
-            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
             <Link href="/create-account" className="text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors">
               No account? Create one →
             </Link>
@@ -261,7 +333,7 @@ export default function LoginPage() {
               <p className="mt-2 text-sm text-[#6B7C93]">
                 {mode === 'forgot'
                   ? 'Enter your work email and we\'ll send you a reset link.'
-                  : 'Sign in to your Omnivyra account.'}
+                  : 'Sign in to your OmniVyra account.'}
               </p>
             </div>
 

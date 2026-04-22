@@ -27,6 +27,7 @@ import {
 } from '../../services/unifiedContentGenerationEngine';
 import { validateContentBlueprint } from '../../services/aiOutputValidationService';
 import { recordQuickToneFeedback } from '../../services/contentFeedbackLoop';
+import { estimateLlmCostUsd } from '../../services/pricingService';
 
 // Stubs for services not yet implemented
 const feedbackIntelligenceEngine = {
@@ -196,7 +197,7 @@ async function processSingleContentJob(job: Job): Promise<GenerationOutput> {
   // Step 7: Estimate cost & deduct credits
   void job.updateProgress(75);
   const estimatedTokens = estimateTokens(blueprint, variants, content_type as ContentType);
-  const costUsd = estimateCost(estimatedTokens, content_type as ContentType);
+  const costUsd = await estimateCost(estimatedTokens, content_type as ContentType);
 
   await deductCredits(company_id, `content_${content_type}`, costUsd);
 
@@ -302,7 +303,7 @@ async function processBulkContentJob(job: Job): Promise<any> {
     .reduce((sum, r) => sum + estimateTokens(r.blueprint, [], 'article'), 0);
 
   if (totalTokens > 0) {
-    const costUsd = estimateCost(totalTokens, 'article');
+    const costUsd = await estimateCost(totalTokens, 'article');
     await deductCredits(company_id, 'content_bulk_generation', costUsd);
   }
 
@@ -377,7 +378,7 @@ async function processEngagementResponseJob(job: Job): Promise<any> {
 
   // Deduct credits (metered)
   const tokens = Math.ceil(response.length / 4); // Rough token estimate
-  const costUsd = estimateCost(tokens, 'engagement_response');
+  const costUsd = await estimateCost(tokens, 'engagement_response');
   await deductCredits(company_id, 'content_engagement', costUsd);
 
   void job.updateProgress(80);
@@ -447,7 +448,7 @@ async function processBulkEngagementResponses(job: Job): Promise<any> {
     .reduce((sum, r) => sum + Math.ceil((r.response?.length || 0) / 4), 0);
 
   if (totalTokens > 0) {
-    const costUsd = estimateCost(totalTokens, 'engagement_response');
+    const costUsd = await estimateCost(totalTokens, 'engagement_response');
     await deductCredits(company_id, 'content_engagement_bulk', costUsd);
   }
 
@@ -491,19 +492,18 @@ function estimateTokens(blueprint: any, variants: any[] = [], contentType: Conte
   return Math.max(tokens, 50); // Minimum 50 tokens
 }
 
-function estimateCost(tokens: number, contentType: ContentType): number {
-  // Pricing based on gpt-4o-mini or gpt-4o depending on type
-  // gpt-4o-mini: $0.00015/1k input, $0.0006/1k output
-  // gpt-4o: $0.0025/1k input, $0.01/1k output
-
-  const inputTokens = tokens * 0.75; // Estimate 75% input, 25% output
+/**
+ * Advisory pre-flight USD estimator — DB-backed via pricingService. Returns
+ * BASE model cost (no multiplier, no floor, no ceiling, no credit conversion).
+ *
+ * Real billing must flow through resolveLlmCost + executeWithCredits (Phase 4).
+ * Reads llm_model_pricing so this stays consistent when the DB row changes.
+ */
+async function estimateCost(tokens: number, _contentType: ContentType): Promise<number> {
+  const inputTokens = tokens * 0.75;
   const outputTokens = tokens * 0.25;
-
-  // Use gpt-4o-mini for all (cheaper, good quality for generated content)
-  const inputCost = (inputTokens / 1000) * 0.00015;
-  const outputCost = (outputTokens / 1000) * 0.0006;
-
-  return Math.round((inputCost + outputCost) * 10000) / 10000; // Round to 4 decimals
+  const baseUsd = await estimateLlmCostUsd('openai', 'gpt-4o-mini', inputTokens, outputTokens);
+  return Math.round(baseUsd * 10000) / 10000;
 }
 
 async function buildPlatformVariantsFromMaster(

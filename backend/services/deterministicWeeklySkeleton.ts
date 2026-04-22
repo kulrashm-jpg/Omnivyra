@@ -5,6 +5,10 @@ import type { AccountContext } from '../types/accountContext';
 /** Returns true when cross-platform content sharing is enabled (one piece reused across platforms). */
 const isCrossPlatformSharingEnabled = (value: unknown): boolean => {
   if (value === true || value === 'true' || value === 'enabled' || value === 1) return true;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const enabled = (value as { enabled?: unknown }).enabled;
+    if (enabled === true || enabled === 'true' || enabled === 'enabled' || enabled === 1) return true;
+  }
   return false;
 };
 

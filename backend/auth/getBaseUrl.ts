@@ -15,10 +15,12 @@ import { config } from '@/config';
  */
 export function getBaseUrl(req: NextApiRequest): string {
   if (config.NEXT_PUBLIC_APP_URL) {
-    // Normalize: lowercase the entire URL (host names are case-insensitive per RFC)
     return config.NEXT_PUBLIC_APP_URL.replace(/\/$/, '').toLowerCase();
   }
   const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim() || 'http';
-  const host = ((req.headers['x-forwarded-host'] as string) || (req.headers.host as string) || 'localhost:3000').toLowerCase();
+  const rawHost = ((req.headers['x-forwarded-host'] as string) || (req.headers.host as string) || 'localhost:3000').toLowerCase();
+  // Browsers sometimes switch between localhost and 127.0.0.1; OAuth providers require an exact match
+  // against registered redirect URIs, so pin to localhost for loopback.
+  const host = rawHost.replace(/^127\.0\.0\.1(:|$)/, 'localhost$1');
   return `${proto}://${host}`;
 }

@@ -22,37 +22,34 @@ export interface AISuggestionPanelProps {
   className?: string;
 }
 
-function fetchSuggestions(
+async function fetchSuggestions(
   organizationId: string,
   messageId: string
-): Promise<{ suggestions: Suggestion[]; error?: string }> {
+): Promise<Suggestion[]> {
   const params = new URLSearchParams({
     message_id: messageId,
     organization_id: organizationId,
     organizationId: organizationId,
   });
-  return fetch(`/api/engagement/suggestions?${params.toString()}`, {
+  const res = await fetch(`/api/engagement/suggestions?${params.toString()}`, {
     credentials: 'include',
-  })
-    .then((res) => res.json())
-    .then((json) => {
-      if (json.error) throw new Error(json.error);
-      const list = Array.isArray(json.suggestions) ? json.suggestions : [];
-      return {
-        suggestions: list.map((s: { id?: string; text?: string; explanation_tag?: string }) => ({
-          id: s.id ?? `sug-${Math.random().toString(36).slice(2)}`,
-          text: String(s.text ?? '').trim() || 'Thank you for your message.',
-          explanation_tag: s.explanation_tag,
-        })),
-      };
-    });
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json?.error || res.statusText || 'Failed to load suggestions');
+  }
+  if (json?.error) {
+    throw new Error(json.error);
+  }
+  const list = Array.isArray(json?.suggestions) ? json.suggestions : [];
+  return list
+    .map((s: { id?: string; text?: string; explanation_tag?: string }) => ({
+      id: s.id ?? `sug-${Math.random().toString(36).slice(2)}`,
+      text: String(s.text ?? '').trim(),
+      explanation_tag: s.explanation_tag,
+    }))
+    .filter((s: Suggestion) => s.text.length > 0);
 }
-
-const FALLBACK_SUGGESTIONS: Suggestion[] = [
-  { id: 'f1', text: 'Thank you for your message. We appreciate your feedback.' },
-  { id: 'f2', text: 'Thanks for reaching out! Happy to help.' },
-  { id: 'f3', text: "Great question. Here's some context that might help." },
-];
 
 export const AISuggestionPanel = React.memo(function AISuggestionPanel({
   messageId,
@@ -73,15 +70,14 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
     setError(null);
 
     try {
-      const result = await fetchSuggestions(organizationId, messageId);
-      let list = result.suggestions ?? [];
-      while (list.length < 3) {
-        list = [...list, FALLBACK_SUGGESTIONS[list.length % 3]];
+      const list = await fetchSuggestions(organizationId, messageId);
+      setSuggestions(list);
+      if (list.length === 0) {
+        setError('AI returned no suggestions for this message.');
       }
-      setSuggestions(list.slice(0, Math.max(3, list.length)));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load suggestions');
-      setSuggestions(FALLBACK_SUGGESTIONS);
+      setSuggestions([]);
     } finally {
       setLoading(false);
     }
@@ -123,11 +119,13 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
     );
   }
 
-  if (error && suggestions.length === 0) {
+  if (suggestions.length === 0) {
     return (
       <div className={`rounded-lg border border-slate-200 bg-slate-50 p-4 ${className}`}>
         <h4 className="text-sm font-medium text-slate-800 mb-2">AI Suggestions</h4>
-        <p className="text-sm text-slate-500">{error}</p>
+        <p className="text-sm text-slate-500">
+          {error ?? 'No AI suggestions available for this message yet.'}
+        </p>
         <button
           type="button"
           onClick={loadSuggestions}
@@ -139,13 +137,11 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
     );
   }
 
-  const displayList = suggestions.length >= 3 ? suggestions : [...suggestions, ...FALLBACK_SUGGESTIONS].slice(0, 3);
-
   return (
     <div className={`rounded-lg border border-slate-200 bg-slate-50 p-4 ${className}`}>
       <h4 className="text-sm font-medium text-slate-800 mb-2">AI Suggestions</h4>
       <div className="space-y-2">
-        {displayList.map((s) => (
+        {suggestions.map((s) => (
           <div
             key={s.id}
             className="flex items-center justify-between gap-2 rounded border border-slate-200 bg-white p-2"

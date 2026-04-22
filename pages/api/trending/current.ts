@@ -193,7 +193,7 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
       suggestions.push({
         type: "twitter_trend",
         text: `🔥 "${trend.keyword}" viral on r/${trend.subreddit}`,
-        icon: "🐦",
+        icon: "𝕏",
         source: "Reddit",
         platform: "Twitter",
         category: "Community",

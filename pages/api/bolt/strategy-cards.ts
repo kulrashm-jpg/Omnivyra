@@ -67,6 +67,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     //  1. Extract a quoted phrase if present (often the real campaign title).
     //  2. Stop at the first clause-break comma/conjunction.
     //  3. Hard-cap at 45 chars on a word boundary.
+    // Words that must never be the LAST word of a topic fed into a title template
+    // ("Why Most Teams Struggle With {topic}") — they leave the sentence hanging.
+    // Covers conjunctions, prepositions, articles, auxiliary/linking verbs, and
+    // possessives. Compared case-insensitively; trailing punctuation is stripped
+    // before the lookup.
+    const DANGLING_TRAILING_WORDS = new Set<string>([
+      'and','or','but','nor','so','yet','for',
+      'of','to','in','on','at','by','with','from','into','onto',
+      'about','across','against','along','among','around','before',
+      'behind','below','beneath','beside','between','beyond','during',
+      'except','inside','near','off','outside','over','past','through',
+      'throughout','toward','towards','under','underneath','until','up','upon',
+      'the','a','an',
+      'is','are','was','were','be','been','being',
+      'have','has','had','do','does','did',
+      'can','could','will','would','shall','should','may','might','must',
+      'my','your','our','their','his','her','its',
+    ]);
+    function stripDanglingTrailingWords(s: string): string {
+      const parts = s.trim().split(/\s+/).filter(Boolean);
+      while (parts.length > 1) {
+        const last = parts[parts.length - 1]!.replace(/[.,;:!?\-—]+$/, '').toLowerCase();
+        if (DANGLING_TRAILING_WORDS.has(last)) {
+          parts.pop();
+        } else {
+          break;
+        }
+      }
+      return parts.join(' ').replace(/[.,;:!?\-—]+$/, '').trim();
+    }
+
     function compactTopic(t: string): string {
       let s = t.trim();
 
@@ -103,16 +134,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const quotedMatch = s.match(/['"'\u2018\u2019\u201C\u201D]([^\u2018\u2019\u201C\u201D'"]{5,80})['"'\u2018\u2019\u201C\u201D]/);
       if (quotedMatch?.[1]) {
         const q = quotedMatch[1].split(':')[0].split('—')[0].trim();
-        if (q.length >= 5) return q.length <= 45 ? q : (() => { const c = q.slice(0, 45); const ls2 = c.lastIndexOf(' '); return ls2 > 5 ? c.slice(0, ls2) : c; })();
+        if (q.length >= 5) {
+          const quoted = q.length <= 45
+            ? q
+            : (() => { const c = q.slice(0, 45); const ls2 = c.lastIndexOf(' '); return ls2 > 5 ? c.slice(0, ls2) : c; })();
+          return stripDanglingTrailingWords(quoted);
+        }
       }
       // 2. Stop before clause-break signals
       const clauseBreak = s.search(/,\s*(consider|including|focusing|this could|this includes|which|where|among|for the|for all)/i);
       const base = clauseBreak > 10 ? s.slice(0, clauseBreak).trim() : s;
-      // 3. Hard cap at 45 chars on a word boundary
-      if (base.length <= 45) return base;
+      // 3. Soft cap at ~45 chars. Cut on a word boundary, strip trailing dangling
+      //    words (of/and/to/the/…) so the phrase reads as a complete thought.
+      //    If stripping drops the phrase to <2 real words, extend past 45 to the
+      //    next word boundary (up to ~70 chars) and try again — better to go a bit
+      //    longer than produce titles like "The Future Belongs to Promoting New
+      //    Feature Of Creating And".
+      if (base.length <= 45) return stripDanglingTrailingWords(base);
       const cut = base.slice(0, 45);
       const ls = cut.lastIndexOf(' ');
-      return (ls > 10 ? cut.slice(0, ls) : cut).replace(/[,;:]+$/, '').trim();
+      let candidate = ls > 10 ? cut.slice(0, ls) : cut;
+      candidate = stripDanglingTrailingWords(candidate);
+      if (candidate.split(/\s+/).length < 2) {
+        const extendTo = base.indexOf(' ', 45);
+        if (extendTo > 0 && extendTo <= 70) {
+          candidate = stripDanglingTrailingWords(base.slice(0, extendTo));
+        }
+        if (candidate.split(/\s+/).length < 2) {
+          // Last resort: keep the first three words as-is.
+          candidate = base.split(/\s+/).slice(0, 3).join(' ');
+        }
+      }
+      return candidate;
     }
 
     // Detect if a compacted topic is still a question / fragment — not usable in templates.

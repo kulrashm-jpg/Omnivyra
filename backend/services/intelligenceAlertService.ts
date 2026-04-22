@@ -33,6 +33,17 @@ export interface IntelligenceAlertEvent {
   channels?: AlertChannel[];
 }
 
+export interface DeterministicIntelligenceAlert {
+  company_id: string;
+  event_type: string;
+  rule_types: string[];
+  title?: string;
+  message: string;
+  event_data?: Record<string, unknown>;
+  channels?: AlertChannel[];
+  cooldown_hours?: number;
+}
+
 const OPPORTUNITY_THRESHOLD = 85;
 const TREND_STRENGTH_THRESHOLD = 0.8;
 const HEALTH_SCORE_THRESHOLD = 50;
@@ -120,9 +131,10 @@ function computeAlertRuleKey(
 
 async function wasAlertTriggeredRecently(
   alertRuleKey: string,
-  companyId: string
+  companyId: string,
+  cooldownHours: number = ALERT_DEDUP_HOURS,
 ): Promise<boolean> {
-  const cutoff = new Date(Date.now() - ALERT_DEDUP_HOURS * 60 * 60 * 1000).toISOString();
+  const cutoff = new Date(Date.now() - cooldownHours * 60 * 60 * 1000).toISOString();
   const { data } = await supabase
     .from('intelligence_alerts')
     .select('id')
@@ -133,6 +145,26 @@ async function wasAlertTriggeredRecently(
     .maybeSingle();
 
   return data != null;
+}
+
+function computeDeterministicAlertRuleKey(
+  companyId: string,
+  eventType: string,
+  ruleTypes: string[],
+  eventData?: Record<string, unknown>,
+): string {
+  const rules = [...ruleTypes].sort().join(',');
+  const scope =
+    typeof eventData?.scope_key === 'string'
+      ? eventData.scope_key
+      : typeof eventData?.page_url === 'string'
+        ? eventData.page_url
+        : typeof eventData?.traffic_source === 'string'
+          ? `${eventData.traffic_source}|${String(eventData?.source_medium ?? '')}`
+          : '';
+
+  const payload = `${companyId}|${eventType}|${rules}|${scope}`;
+  return createHash('sha256').update(payload, 'utf8').digest('hex');
 }
 
 async function sendInApp(
@@ -283,4 +315,73 @@ export async function sendIntelligenceAlert(
   }
 
   return { fired, sent };
+}
+
+export async function sendDeterministicIntelligenceAlert(
+  alert: DeterministicIntelligenceAlert,
+): Promise<{ sent: AlertChannel[]; rate_limited?: boolean; deduplicated?: boolean }> {
+  if (!alert.rule_types.length) {
+    return { sent: [] };
+  }
+
+  if (await isRateLimited(alert.company_id)) {
+    return { sent: [], rate_limited: true };
+  }
+
+  const alertRuleKey = computeDeterministicAlertRuleKey(
+    alert.company_id,
+    alert.event_type,
+    alert.rule_types,
+    alert.event_data,
+  );
+
+  if (await wasAlertTriggeredRecently(alertRuleKey, alert.company_id, alert.cooldown_hours ?? 24)) {
+    return { sent: [], deduplicated: true };
+  }
+
+  const channels = alert.channels ?? ['in_app'];
+  const sent: AlertChannel[] = [];
+
+  const baseInsert = {
+    company_id: alert.company_id,
+    event_type: alert.event_type,
+    rule_types: alert.rule_types,
+    alert_rule_key: alertRuleKey,
+    title: alert.title ?? 'Intelligence Alert',
+    message: alert.message,
+    event_data: alert.event_data ?? {},
+    channels,
+  };
+
+  if (channels.includes('in_app')) {
+    const { error } = await supabase.from('intelligence_alerts').insert(baseInsert);
+    if (error) {
+      console.warn('[intelligenceAlertService] deterministic in_app insert failed:', error.message);
+    } else {
+      sent.push('in_app');
+    }
+  }
+
+  const syntheticEvent: IntelligenceAlertEvent = {
+    company_id: alert.company_id,
+    event_type: alert.event_type,
+    title: alert.title,
+    message: alert.message,
+    event_data: alert.event_data,
+    channels,
+  };
+  const syntheticFired: FiredAlert[] = alert.rule_types.map((rule) => ({
+    rule: rule as AlertRuleType,
+    message: alert.message,
+  }));
+
+  if (channels.includes('email') && (await sendEmail(syntheticEvent, syntheticFired))) {
+    sent.push('email');
+  }
+
+  if (channels.includes('slack') && (await sendSlack(syntheticEvent, syntheticFired))) {
+    sent.push('slack');
+  }
+
+  return { sent };
 }

@@ -90,7 +90,7 @@ export default function SystemWorkersPage() {
   return (
     <>
       <Head>
-        <title>System Workers | Omnivyra</title>
+        <title>System Workers | OmniVyra</title>
       </Head>
       <div className="min-h-[calc(100vh-4rem)] bg-slate-50 p-4">
         <div className="max-w-4xl mx-auto">

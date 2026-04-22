@@ -1,4 +1,5 @@
 import { getExecutionCategoryForContentType, executionCategoryToAiGenerated } from '../../../backend/services/plannerActivityCardService';
+import { deriveCreatorAssetTypeFromIntent } from '../../../backend/services/creatorTemplateRegistryService';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 
@@ -30,6 +31,7 @@ import { getCachedStrategyProfile } from '../../../backend/services/strategyProf
 import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
 import type { CampaignBlueprintWeek, WeeklyTopicWritingBrief } from '../../../backend/types/CampaignBlueprint';
 import { filterBoltContentTypeMix } from '../../../backend/utils/boltTextContentConfig';
+import { getPlatformBestTime, pickPlatformDayIndex } from '../../../backend/utils/platformPostingTimes';
 import {
   normalizePlatformKey,
   deriveSynthPainPoint,
@@ -238,6 +240,14 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
 
     const allFinalItems: any[] = [];
     const allRowsToInsert: any[] = [];
+    const { data: latestCampaignVersion } = await supabase
+      .from('campaign_versions')
+      .select('version')
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const currentPlanVersion = Math.max(1, Number((latestCampaignVersion as any)?.version || 1));
     let lastTopicDayMap: { dayIndex: number; day: string; topics: string[] }[] = [];
     let lastValidation: any = {};
     let lastExecutionFeedback: any = {};
@@ -715,10 +725,15 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     let executionValidationItems: any[] = [];
     const autoRebalanceEffective = useExecutionItems ? false : autoRebalance;
     const autoOptimizeDistributionEffective = useExecutionItems ? false : autoOptimizeDistribution;
+    // Per-platform counter so each platform rotates through its own best_days list
+    // (LinkedIn → Tue/Wed/Thu, Instagram → Wed/Fri/Sun, X → Tue/Thu, …) instead of
+    // every platform clustering on item.dayIndex (which effectively picked Monday
+    // for every post under sharing ON).
+    const platformDayCursor = new Map<string, number>();
 
     for (const item of finalItems) {
-      const dayName = DAYS_OF_WEEK[item.dayIndex - 1] ?? 'Monday';
-      const date = computeDayDate({
+      const fallbackDayName = DAYS_OF_WEEK[item.dayIndex - 1] ?? 'Monday';
+      const fallbackDate = computeDayDate({
         campaignStart: String(effectiveStartDate),
         weekNumber,
         dayIndex: item.dayIndex,
@@ -731,6 +746,25 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       if (useExecutionItems && platforms.length === 0) continue;
 
       for (const platform of platforms) {
+        // Platform-aware day placement. Each platform tracks how many posts we've
+        // assigned it this week, and we pick the nth entry from that platform's
+        // research-backed best_days list (falls back to Tue/Wed/Thu when unknown).
+        const platformKey = normalizePlatformKey(platform);
+        const nth = platformDayCursor.get(platformKey) ?? 0;
+        let dayName: string = fallbackDayName;
+        let date: string = fallbackDate;
+        try {
+          const dayIdx = await pickPlatformDayIndex(platformKey, nth);
+          dayName = DAYS_OF_WEEK[dayIdx - 1] ?? fallbackDayName;
+          date = computeDayDate({
+            campaignStart: String(effectiveStartDate),
+            weekNumber,
+            dayIndex: dayIdx,
+          });
+        } catch {
+          // fall back to item.dayIndex on any lookup failure
+        }
+        platformDayCursor.set(platformKey, nth + 1);
         const identitySource = {
           content_type: String(item.contentType || 'post'),
           platform: normalizePlatformKey(platform),
@@ -855,9 +889,31 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // daily_content_plans.content_type must preserve the user's selected format
         // so the block processor generates format-appropriate content.
         const contentType = String(item.contentType || 'post');
+        const normalizedContentType = contentType.toLowerCase().trim();
+        const isCreatorIntent = ['video', 'reel', 'short', 'carousel', 'image', 'story', 'podcast'].includes(normalizedContentType);
         const execCategory = getExecutionCategoryForContentType(contentType);
         const aiGenerated = executionCategoryToAiGenerated(execCategory);
 
+        // Research-backed posting time per platform (from platform_rules).
+        // Falls back to a built-in map (LinkedIn 09:00, Facebook 13:00, Instagram 19:00,
+        // X 12:00, etc.) when the row isn't in the table, so posts no longer cluster
+        // at 09:00 UTC for every platform.
+        const platformScheduledTime = await getPlatformBestTime(platform);
+
+        const creatorCardForRow: Record<string, unknown> | null =
+          (enriched as any)?.creator_card && typeof (enriched as any).creator_card === 'object'
+            ? {
+                ...((enriched as any).creator_card as Record<string, unknown>),
+                mode: 'explicit_creator_control',
+              }
+            : null;
+        if (creatorCardForRow) {
+          (enriched as any).creator_card = creatorCardForRow;
+        }
+        const derivedAssetType = isCreatorIntent ? deriveCreatorAssetTypeFromIntent({
+          contentType: normalizedContentType,
+          targetPlatforms: [normalizePlatformKey(platform)],
+        }) : null;
         const row = {
           campaign_id: campaignId,
           week_number: weekNumber,
@@ -874,12 +930,32 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           cta: item.desiredAction,
           brand_voice: item.narrativeStyle,
           format_notes: `${item.contentGuidance.primaryFormat}; max ${item.contentGuidance.maxWordTarget} words; highest limit: ${item.contentGuidance.platformWithHighestLimit}`,
-          scheduled_time: '09:00',
+          scheduled_time: platformScheduledTime,
           posting_strategy: `Week ${weekNumber} Day ${item.dayIndex} — ${item.topicReference}`,
           status: 'planned',
           priority: 'medium',
           ai_generated: aiGenerated,
           target_audience: item.whoAreWeWritingFor,
+          intent_type: isCreatorIntent ? 'creator' : 'text',
+          asset_type: isCreatorIntent
+            ? (
+                typeof creatorCardForRow?.asset_type === 'string' && creatorCardForRow.asset_type.trim()
+                  ? creatorCardForRow.asset_type.trim()
+                  : derivedAssetType
+              )
+            : null,
+          template_id: isCreatorIntent
+            ? (
+                typeof creatorCardForRow?.template_id === 'string' && creatorCardForRow.template_id.trim()
+                  ? creatorCardForRow.template_id.trim()
+                  : null
+              )
+            : null,
+          plan_version: currentPlanVersion,
+          retry_count: 0,
+          max_retries: 3,
+          failure_reason: null,
+          failure_type: null,
         };
         rowsWithContent.push({ row, contentObj: enriched });
       }

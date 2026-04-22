@@ -44,7 +44,10 @@ type InboxState = {
 export function useEngagementInbox(
   organizationId: string,
   filters: InboxFilters = {}
-): InboxState & { refresh: () => Promise<void> } {
+): InboxState & {
+  refresh: () => Promise<void>;
+  patchThread: (threadId: string, updater: (thread: InboxThread) => InboxThread) => void;
+} {
   const [items, setItems] = useState<InboxThread[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -103,5 +106,17 @@ export function useEngagementInbox(
     return () => clearInterval(interval);
   }, [organizationId, fetchInbox]);
 
-  return { items, loading, error, refresh: fetchInbox };
+  const patchThread = useCallback((threadId: string, updater: (thread: InboxThread) => InboxThread) => {
+    setItems((current) => {
+      const next = current.map((thread) => (thread.thread_id === threadId ? updater(thread) : thread));
+      next.sort((a, b) => {
+        const ta = a.latest_message_time ? new Date(a.latest_message_time).getTime() : 0;
+        const tb = b.latest_message_time ? new Date(b.latest_message_time).getTime() : 0;
+        return tb - ta;
+      });
+      return next;
+    });
+  }, []);
+
+  return { items, loading, error, refresh: fetchInbox, patchThread };
 }

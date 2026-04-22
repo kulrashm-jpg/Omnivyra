@@ -314,7 +314,7 @@ export default function MarketGrowthIntelligencePage() {
                       <p className="text-xs text-gray-500 mt-0.5">{item.desc}</p>
                     </div>
                     <button
-                      onClick={() => router.push('/integrations')}
+                      onClick={() => router.push('/integrations?focus=data')}
                       className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
                         readiness?.integration_state?.[
                           item.name === 'Google Analytics'

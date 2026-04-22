@@ -1,5 +1,6 @@
 import { runInBackgroundJobContext } from './intelligenceExecutionContext';
 import { buildAdsRunKey, ingestAdsData, type AdsCampaignRow } from './adsIngestionService';
+import { getGoogleAnalyticsStatus } from './analyticsIntegrationService';
 import { buildCrawlerRunKey, crawlCompanyWebsite } from './crawlerService';
 import { buildCrmRunKey, ingestCrmData, type CrmLeadRecord } from './crmIngestionService';
 import { buildGa4RunKey, ingestGa4Data, type Ga4SessionRow } from './ga4IngestionService';
@@ -43,6 +44,13 @@ export type CompanyIngestionSummary = {
     campaigns: number;
   };
   ready: boolean;
+};
+
+export type MultiCompanyIngestionSummary = {
+  attempted: number;
+  succeeded: number;
+  failed: number;
+  companies: CompanyIngestionSummary[];
 };
 
 type SchedulerOverrides = {
@@ -92,10 +100,10 @@ async function runCrawlerSource(companyId: string, overrides: SchedulerOverrides
 
 async function runGa4Source(
   companyId: string,
-  integration: CompanyIntegrationRow | undefined,
+  _integration: CompanyIntegrationRow | undefined,
   overrides: SchedulerOverrides['ga4']
 ): Promise<SourcePayload> {
-  const config = { ...toObject(integration?.config), ...toObject(overrides) };
+  const config = { ...toObject(overrides) };
   return (await ingestGa4Data({
     companyId,
     propertyId: typeof config.propertyId === 'string' ? config.propertyId : undefined,
@@ -198,6 +206,7 @@ export async function runIngestionForCompany(params: {
     const sources = params.sources ?? ['crawler', 'ga4', 'gsc', 'crm', 'ads'];
     const overrides = params.overrides ?? {};
     const integrations = await loadCompanyIntegrations(companyId);
+    const ga4Status = sources.includes('ga4') ? await getGoogleAnalyticsStatus(companyId) : null;
     const results: IngestionSourceResult[] = [];
 
     for (const source of sources) {
@@ -230,19 +239,24 @@ export async function runIngestionForCompany(params: {
         continue;
       }
 
-      if (!integration && source !== 'crawler' && !overrides[source]) {
+      const missingGa4Integration =
+        source === 'ga4' &&
+        !overrides.ga4 &&
+        (!ga4Status?.integration || ga4Status.integration.status !== 'connected' || !ga4Status.activeProperty || !ga4Status.tokenValid);
+
+      if ((!integration && source !== 'crawler' && source !== 'ga4' && !overrides[source]) || missingGa4Integration) {
         await setDataSourceStatus({
           companyId,
           source: statusSourceForTable(source),
           status: 'missing',
-          errorMessage: 'Integration config missing',
+          errorMessage: source === 'ga4' ? 'GA4 integration is not ready' : 'Integration config missing',
         });
         results.push({
           source,
           success: false,
           missingIntegration: true,
           details: {},
-          error: 'Integration config missing',
+          error: source === 'ga4' ? 'GA4 integration is not ready' : 'Integration config missing',
         });
         continue;
       }
@@ -286,14 +300,18 @@ export async function runIngestionForCompany(params: {
         }
 
         const processed =
-          Number(payload.pagesProcessed) ||
+          source === 'ga4'
+            ? Number(payload.eventsProcessed) || Number(payload.sessionsProcessed) || 0
+            : Number(payload.pagesProcessed) ||
           Number(payload.sessionsProcessed) ||
           Number(payload.keywordsProcessed) ||
           Number(payload.leadsProcessed) ||
           Number(payload.campaignsProcessed) ||
           0;
         const inserted =
-          Number(payload.pagesInserted) ||
+          source === 'ga4'
+            ? Number(payload.eventsInserted) || Number(payload.sessionsInserted) || 0
+            : Number(payload.pagesInserted) ||
           Number(payload.sessionsInserted) ||
           Number(payload.keywordsInserted) ||
           Number(payload.leadsInserted) ||
@@ -309,7 +327,14 @@ export async function runIngestionForCompany(params: {
         await completeIngestionRun({
           runId: run.id,
           status: 'completed',
-          counts: { processed, inserted, updated },
+          counts: {
+            processed,
+            inserted,
+            updated,
+            eventsProcessed: source === 'ga4' ? Number(payload.eventsProcessed) || 0 : 0,
+            eventsInserted: source === 'ga4' ? Number(payload.eventsInserted) || 0 : 0,
+            conversionsInserted: source === 'ga4' ? Number(payload.conversionsInserted) || 0 : 0,
+          },
         });
         await setDataSourceStatus({
           companyId,
@@ -329,7 +354,14 @@ export async function runIngestionForCompany(params: {
         await completeIngestionRun({
           runId: run.id,
           status: 'failed',
-          counts: { processed: 0, inserted: 0, updated: 0 },
+          counts: {
+            processed: 0,
+            inserted: 0,
+            updated: 0,
+            eventsProcessed: 0,
+            eventsInserted: 0,
+            conversionsInserted: 0,
+          },
           errorMessage: message,
         });
         await setDataSourceStatus({
@@ -383,4 +415,97 @@ export async function retryFailedIngestionForCompany(params: {
   }
 
   return retried;
+}
+
+export async function runIngestionForAllCompanies(params?: {
+  sources?: IngestionSource[];
+  overrides?: SchedulerOverrides;
+}): Promise<MultiCompanyIngestionSummary> {
+  const { data: integrations, error } = await supabase
+    .from('analytics_integrations')
+    .select('id, company_id')
+    .eq('provider', 'GA4')
+    .eq('status', 'connected');
+
+  if (error) {
+    throw new Error(`Failed to load connected GA4 integrations: ${error.message}`);
+  }
+
+  const integrationRows = (integrations ?? []) as Array<{ id: string; company_id: string }>;
+  if (integrationRows.length === 0) {
+    return {
+      attempted: 0,
+      succeeded: 0,
+      failed: 0,
+      companies: [],
+    };
+  }
+
+  const integrationIds = integrationRows.map((row) => row.id);
+  const { data: activeProperties, error: propertyError } = await supabase
+    .from('analytics_properties')
+    .select('integration_id')
+    .in('integration_id', integrationIds)
+    .eq('is_active', true);
+
+  if (propertyError) {
+    throw new Error(`Failed to load active GA4 properties: ${propertyError.message}`);
+  }
+
+  const activeIntegrationIds = new Set(
+    ((activeProperties ?? []) as Array<{ integration_id: string }>).map((row) => row.integration_id),
+  );
+  const companyIds = [...new Set(
+    integrationRows
+      .filter((row) => activeIntegrationIds.has(row.id))
+      .map((row) => row.company_id),
+  )];
+
+  const companies: CompanyIngestionSummary[] = [];
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const companyId of companyIds) {
+    try {
+      const summary = await runIngestionForCompany({
+        companyId,
+        sources: params?.sources ?? ['ga4'],
+        overrides: params?.overrides,
+      });
+      companies.push(summary);
+      if (summary.sources.every((source) => source.success || source.skipped)) {
+        succeeded += 1;
+      } else {
+        failed += 1;
+      }
+    } catch (ingestionError) {
+      failed += 1;
+      companies.push({
+        companyId,
+        sources: [
+          {
+            source: 'ga4',
+            success: false,
+            details: {},
+            error: ingestionError instanceof Error ? ingestionError.message : String(ingestionError),
+          },
+        ],
+        validation: {
+          pages: 0,
+          sessions: 0,
+          keywords: 0,
+          leads: 0,
+          campaigns: 0,
+        },
+        ready: false,
+      });
+    }
+  }
+
+  return {
+    attempted: companyIds.length,
+    succeeded,
+    failed,
+    companies,
+  };
 }

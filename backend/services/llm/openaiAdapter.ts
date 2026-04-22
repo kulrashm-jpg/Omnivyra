@@ -56,6 +56,8 @@ export async function runDiagnosticPrompt<T>(
       error_flag: true,
       error_type: error?.response?.status?.toString() ?? error?.message ?? 'unknown',
       pricing_snapshot: null,
+      retry_attempt: 1,
+      final_attempt: true,
     });
     throw error;
   }
@@ -66,7 +68,14 @@ export async function runDiagnosticPrompt<T>(
   const totalTokens = usage?.total_tokens ?? inputTokens + outputTokens;
   // BUG#8 fix: advisory LLM token tracking
   trackLlmTokens(totalTokens);
-  const cost = resolveLlmCost('openai', DEFAULT_MODEL, inputTokens, outputTokens);
+  const cost = await resolveLlmCost({
+    providerName: 'openai',
+    modelName: DEFAULT_MODEL,
+    inputTokens,
+    outputTokens,
+    processType: 'runDiagnosticPrompt',
+    organizationId: UNKNOWN_ORG,
+  });
   void logUsageEvent({
     organization_id: UNKNOWN_ORG,
     campaign_id: null,
@@ -82,9 +91,13 @@ export async function runDiagnosticPrompt<T>(
     total_tokens: totalTokens || null,
     latency_ms: latency,
     error_flag: false,
-    unit_cost: cost.unit_cost,
-    total_cost: cost.total_cost,
+    unit_cost: totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
+    total_cost: cost.total_cost_usd,
+    total_cost_usd: cost.total_cost_usd,
+    final_price_usd: cost.final_price_usd,
     pricing_snapshot: cost.pricing_snapshot,
+    retry_attempt: 1,
+    final_attempt: true,
   });
 
   const raw = response.choices[0]?.message?.content?.trim() || '';

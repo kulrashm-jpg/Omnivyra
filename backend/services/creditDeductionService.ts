@@ -27,6 +27,7 @@ export type CreditAction =
   | 'auto_post'           // 2
   | 'content_rewrite'     // 3
   | 'content_basic'       // 5
+  | 'content_generation'  // token-priced master content generation (activity workspace)
   | 'reply_generation'    // 2  — community reply
   // Medium — value actions
   | 'trend_analysis'      // 25
@@ -55,6 +56,7 @@ export const CREDIT_ACTIONS: CreditAction[] = [
   'auto_post',
   'content_rewrite',
   'content_basic',
+  'content_generation',
   'reply_generation',
   'trend_analysis',
   'market_insight_manual',

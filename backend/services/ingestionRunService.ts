@@ -8,6 +8,9 @@ export interface IngestionRunCounts {
   processed: number;
   inserted?: number;
   updated?: number;
+  eventsProcessed?: number;
+  eventsInserted?: number;
+  conversionsInserted?: number;
 }
 
 export interface IngestionRunRecord {
@@ -20,6 +23,9 @@ export interface IngestionRunRecord {
   records_processed: number;
   records_inserted: number;
   records_updated: number;
+  events_processed?: number;
+  events_inserted?: number;
+  conversions_inserted?: number;
   retry_count: number;
   error_message: string | null;
   cursor_payload: Record<string, unknown>;
@@ -94,6 +100,9 @@ export async function completeIngestionRun(params: {
       records_processed: params.counts.processed,
       records_inserted: params.counts.inserted ?? 0,
       records_updated: params.counts.updated ?? 0,
+      events_processed: params.counts.eventsProcessed ?? 0,
+      events_inserted: params.counts.eventsInserted ?? 0,
+      conversions_inserted: params.counts.conversionsInserted ?? 0,
       error_message: params.errorMessage ?? null,
     })
     .eq('id', params.runId);
@@ -160,6 +169,26 @@ export async function getLatestCompletedRun(
 
   if (error) {
     throw new Error(`Failed to load latest completed run for ${source}: ${error.message}`);
+  }
+
+  return (data as IngestionRunRecord | null) ?? null;
+}
+
+export async function getLatestRun(
+  companyId: string,
+  source: IngestionSource
+): Promise<IngestionRunRecord | null> {
+  const { data, error } = await supabase
+    .from('ingestion_runs')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('source', source)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to load latest ingestion run for ${source}: ${error.message}`);
   }
 
   return (data as IngestionRunRecord | null) ?? null;

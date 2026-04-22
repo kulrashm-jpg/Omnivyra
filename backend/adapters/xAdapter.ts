@@ -13,7 +13,7 @@
  * To obtain API credentials:
  * 1. Create Twitter app at https://developer.twitter.com/en/portal/dashboard
  * 2. Enable Twitter API v2 access
- * 3. Configure callback URI: {BASE_URL}/api/auth/twitter/callback
+ * 3. Configure callback URI: {BASE_URL}/auth/x/callback
  * 4. Get API Key, API Secret, Bearer Token
  * 
  * Environment Variables:

@@ -87,7 +87,7 @@ const CARD_GUIDANCE: Record<
         key: 'chrome_extension_installed',
         label: 'Install the Chrome extension',
         helpText: 'Makes replying faster and keeps engagement closer to where work actually happens.',
-        href: '/integrations',
+        href: '/integrations?focus=data',
       },
     ],
   },

@@ -76,7 +76,7 @@ export default function CompanySetupPage() {
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
   const [joinedCompanyName, setJoinedCompanyName] = useState<string | null>(null);
 
-  // Company-exists state — shown when this company is already on Omnivyra
+  // Company-exists state — shown when this company is already on OmniVyra
   const [existingCompanyId,   setExistingCompanyId]   = useState<string | null>(null);
   const [existingCompanyName, setExistingCompanyName] = useState<string | null>(null);
   /** Display name of the company's admin (name, or email local-part as fallback) */
@@ -225,7 +225,7 @@ export default function CompanySetupPage() {
   return (
     <>
       <Head>
-        <title>Set up your company | Omnivyra</title>
+        <title>Set up your company | OmniVyra</title>
         <meta name="robots" content="noindex" />
       </Head>
 
@@ -235,7 +235,7 @@ export default function CompanySetupPage() {
         <header className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
             <Link href="/">
-              <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
+              <img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" />
             </Link>
             {(step === 'website' || step === 'details') && (
               <span className="text-xs text-[#6B7C93]">
@@ -483,7 +483,7 @@ export default function CompanySetupPage() {
                 </div>
 
                 <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
-                  Your company is already on Omnivyra
+                  Your company is already on OmniVyra
                 </h1>
                 <p className="mt-3 text-sm leading-relaxed text-[#6B7C93] max-w-sm mx-auto">
                   <strong className="text-[#0B1F33]">{existingCompanyName}</strong> already has a workspace.
@@ -534,7 +534,7 @@ export default function CompanySetupPage() {
                   You've been added to {joinedCompanyName}
                 </h1>
                 <p className="mt-3 text-sm leading-relaxed text-[#6B7C93] max-w-sm mx-auto">
-                  Your company is already on Omnivyra. You've been added as a <strong>Content Creator</strong>
+                  Your company is already on OmniVyra. You've been added as a <strong>Content Creator</strong>
                   {' '}and the company admin has been notified.
                 </p>
                 <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-left space-y-2">

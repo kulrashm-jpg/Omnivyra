@@ -275,3 +275,6 @@ export const buildSocialProfilesFromScalars = (
   });
   return Array.from(deduped.values());
 };
+export default function CompanyProfileTypesPage() {
+  return null;
+}

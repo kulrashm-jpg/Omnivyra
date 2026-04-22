@@ -338,9 +338,14 @@ async function getFallbackConfig(
     // Use same model name if it exists on the fallback provider, else use platform default for that provider
     const fallbackModels = await getModelsByProvider(name);
     const sameModel = fallbackModels.find((m) => m.model_key === currentModel);
+    // Fallback model resolution order:
+    //   1. Same model name on the fallback provider (rare).
+    //   2. First model registered for the fallback provider in DB.
+    //   3. Hardcoded default — MUST exist in llm_model_pricing, otherwise the
+    //      fallback trips assertModelPricingExists and errors instead of helping.
     const model = sameModel
       ? currentModel
-      : fallbackModels[0]?.model_key ?? (name === 'anthropic' ? 'claude-sonnet-4-20250514' : 'gpt-4o-mini');
+      : fallbackModels[0]?.model_key ?? (name === 'anthropic' ? 'claude-3-5-sonnet' : 'gpt-4o-mini');
 
     // Platform key for fallback provider (BYOK not applied to fallback)
     const envMap: Record<string, string | undefined> = {
@@ -356,20 +361,60 @@ async function getFallbackConfig(
   }
 }
 
+/**
+ * Tracking context passed into the retry loop so each failed intermediate
+ * attempt can emit its own usage_events row. The final attempt (success or
+ * terminal error) is logged by the outer runCompletion with final_attempt=true.
+ */
+type RetryTrackingContext = {
+  companyId:   string | null;
+  campaignId:  string | null;
+  operation:   string;
+  featureArea: string | null;
+  startedAt:   number;
+};
+
+function logIntermediateAttempt(
+  ctx: RetryTrackingContext | undefined,
+  attempt: number,
+  provider: 'openai' | 'anthropic',
+  model: string,
+  err: any,
+): void {
+  if (!ctx) return;
+  void logUsageEvent({
+    organization_id: ctx.companyId ?? UNKNOWN_ORG,
+    campaign_id:     ctx.campaignId ?? null,
+    source_type:     'llm',
+    provider_name:   provider,
+    model_name:      model,
+    source_name:     `${provider}:${model}`,
+    process_type:    ctx.operation,
+    feature_area:    ctx.featureArea,
+    latency_ms:      Date.now() - ctx.startedAt,
+    error_flag:      true,
+    error_type:      err?.status?.toString() ?? err?.code ?? err?.message?.slice(0, 200) ?? 'unknown',
+    retry_attempt:   attempt,
+    final_attempt:   false,
+  });
+}
+
 async function callProviderWithRetry(
   provider: 'openai' | 'anthropic',
   params: Parameters<typeof callOpenAi>[0],
-): Promise<NormalizedCompletion & { usedFallback: false }>;
+): Promise<NormalizedCompletion & { usedFallback: false; retry_attempt: number }>;
 async function callProviderWithRetry(
   provider: 'openai' | 'anthropic',
   params: Parameters<typeof callOpenAi>[0],
   allowFallback: true,
-): Promise<NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string }>;
+  tracking?: RetryTrackingContext,
+): Promise<NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string; retry_attempt: number }>;
 async function callProviderWithRetry(
   provider: 'openai' | 'anthropic',
   params: Parameters<typeof callOpenAi>[0],
   allowFallback = false,
-): Promise<NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string }> {
+  tracking?: RetryTrackingContext,
+): Promise<NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string; retry_attempt: number }> {
   const dispatch = (p: 'openai' | 'anthropic', ps: typeof params) =>
     p === 'anthropic' ? callAnthropic(ps) : callOpenAi(ps);
 
@@ -387,17 +432,21 @@ async function callProviderWithRetry(
 
   try {
 
+  let attempt = 1;
+
   // ── Step 1: primary attempt ────────────────────────────────────────────────
   let primaryErr: any;
   try {
     const result = await dispatch(provider, params);
-    return { ...result, usedFallback: false };
+    return { ...result, usedFallback: false, retry_attempt: attempt };
   } catch (err) {
     primaryErr = err;
   }
 
   // ── Step 2: same-provider retry (rate limit / overload) ───────────────────
   if (isRateLimitError(primaryErr)) {
+    logIntermediateAttempt(tracking, attempt, provider, params.model, primaryErr);
+    attempt += 1;
     console.warn('[ai-gateway] rate-limit, retrying same provider after 2s', {
       provider,
       status: primaryErr?.status,
@@ -405,7 +454,7 @@ async function callProviderWithRetry(
     try {
       await sleep(2000);
       const result = await dispatch(provider, params);
-      return { ...result, usedFallback: false };
+      return { ...result, usedFallback: false, retry_attempt: attempt };
     } catch (retryErr) {
       primaryErr = retryErr; // carry latest error to fallback check
     }
@@ -415,6 +464,8 @@ async function callProviderWithRetry(
   if (allowFallback && isFallbackEligible(primaryErr)) {
     const fallback = await getFallbackConfig(provider, params.model);
     if (fallback) {
+      logIntermediateAttempt(tracking, attempt, provider, params.model, primaryErr);
+      attempt += 1;
       console.warn('[ai-gateway] falling back to alternate provider', {
         primaryProvider:  provider,
         fallbackProvider: fallback.provider,
@@ -434,6 +485,7 @@ async function callProviderWithRetry(
           usedFallback:     true,
           fallbackProvider: fallback.provider,
           fallbackModel:    fallback.model,
+          retry_attempt:    attempt,
         };
       } catch (fallbackErr: any) {
         console.error('[ai-gateway] fallback also failed', {
@@ -441,12 +493,15 @@ async function callProviderWithRetry(
           fallbackModel:    fallback.model,
           error: fallbackErr?.status ?? fallbackErr?.message,
         });
-        // throw the original primary error — it's more informative
+        // Attach attempt counter to the primary error so the outer log can
+        // report which attempt was the last; then throw the primary.
+        (primaryErr as any).__retry_attempt = attempt;
         throw primaryErr;
       }
     }
   }
 
+  (primaryErr as any).__retry_attempt = attempt;
   throw primaryErr;
 
   } finally {
@@ -570,6 +625,8 @@ const runCompletion = async (
       feature_area: FEATURE_AREA_MAP[request.operation] ?? 'Other',
       error_flag: true,
       error_type: 'PLAN_LIMIT_EXCEEDED',
+      retry_attempt: 1,
+      final_attempt: true,
     });
     throw Object.assign(
       new Error('Monthly LLM token limit exceeded for current plan.'),
@@ -585,14 +642,63 @@ const runCompletion = async (
     request.cache_version,
   );
   if (cachedContent !== null) {
+    // Emit a cache-hit usage_events row — zero tokens, zero cost — so the
+    // ledger shows avoided cost. Analytics can sum cost saved by filtering
+    // source_type='cache' and model/operation.
+    void logUsageEvent({
+      organization_id: request.companyId ?? UNKNOWN_ORG,
+      campaign_id:     request.campaignId ?? null,
+      source_type:     'cache',
+      provider_name:   activeProvider,
+      model_name:      activeModel,
+      source_name:     `${activeProvider}:${activeModel}`,
+      process_type:    request.operation,
+      feature_area:    FEATURE_AREA_MAP[request.operation] ?? 'Other',
+      input_tokens:    0,
+      output_tokens:   0,
+      total_tokens:    0,
+      latency_ms:      Date.now() - start,
+      error_flag:      false,
+      unit_cost:       0,
+      total_cost:      0,
+      metadata:        { cache_hit: true },
+    });
     return {
       output: cachedContent,
       metadata: buildMetadata(activeProvider, activeModel, null),
     };
   }
 
+  // Phase 7 final: pre-flight pricing assertion. Throws PricingMissingError
+  // BEFORE we dispatch to the provider so we never pay for a call whose
+  // cost we can't attribute. Race case (pricing deactivated after the
+  // assertion but before dispatch) is caught by the post-flight safe
+  // wrapper in usageLedgerService and logged with null cost + critical anomaly.
+  try {
+    const { assertModelPricingExists } = await import('./pricingService');
+    await assertModelPricingExists(activeProvider, activeModel, 'completion');
+  } catch (err: any) {
+    const { recordCostAnomaly } = await import('./pricingService');
+    void recordCostAnomaly({
+      organizationId: request.companyId ?? UNKNOWN_ORG,
+      type:           'pricing_missing',
+      severity:       'critical',
+      processType:    request.operation,
+      modelName:      activeModel,
+      metadata:       { preflight: true, reason: err?.message ?? 'unknown' },
+    });
+    throw err;
+  }
+
   recordGptCall();
-  let normalized: NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string };
+  const trackingCtx: RetryTrackingContext = {
+    companyId:   request.companyId ?? null,
+    campaignId:  request.campaignId ?? null,
+    operation:   request.operation,
+    featureArea: FEATURE_AREA_MAP[request.operation] ?? 'Other',
+    startedAt:   start,
+  };
+  let normalized: NormalizedCompletion & { usedFallback: boolean; fallbackProvider?: string; fallbackModel?: string; retry_attempt: number };
   try {
     normalized = await callProviderWithRetry(activeProvider, {
       apiKey:          llmConfig.apiKey,
@@ -601,11 +707,12 @@ const runCompletion = async (
       response_format: request.response_format,
       messages:        request.messages,
       max_tokens:      request.max_tokens,
-    }, true);
+    }, true, trackingCtx);
   } catch (error: any) {
     const latency = Date.now() - start;
     recordGptLatency(latency);
     recordGptFailure();
+    const finalAttempt = Number(error?.__retry_attempt ?? 1);
     void logUsageEvent({
       organization_id: request.companyId ?? UNKNOWN_ORG,
       campaign_id: request.campaignId ?? null,
@@ -621,6 +728,8 @@ const runCompletion = async (
       error_flag: true,
       error_type: error?.status?.toString() ?? error?.response?.status?.toString() ?? error?.message ?? 'unknown',
       pricing_snapshot: null,
+      retry_attempt: finalAttempt,
+      final_attempt: true,
     });
     throw error;
   }
@@ -642,7 +751,14 @@ const runCompletion = async (
   const totalTokens  = normalized.usage?.total_tokens     ?? inputTokens + outputTokens;
   // BUG#8 fix: advisory LLM token tracking
   trackLlmTokens(totalTokens);
-  const cost = resolveLlmCost(effectiveProvider, effectiveModel, inputTokens, outputTokens);
+  const cost = await resolveLlmCost({
+    providerName: effectiveProvider,
+    modelName: effectiveModel,
+    inputTokens,
+    outputTokens,
+    processType: request.operation,
+    organizationId: request.companyId ?? UNKNOWN_ORG,
+  });
   void logUsageEvent({
     organization_id: request.companyId ?? UNKNOWN_ORG,
     campaign_id: request.campaignId ?? null,
@@ -659,9 +775,15 @@ const runCompletion = async (
     total_tokens: totalTokens || null,
     latency_ms: latency,
     error_flag: false,
-    unit_cost: cost.unit_cost,
-    total_cost: cost.total_cost,
+    unit_cost: totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
+    total_cost: cost.total_cost_usd,
+    total_cost_usd: cost.total_cost_usd,
+    input_cost_usd: cost.input_cost_usd,
+    output_cost_usd: cost.output_cost_usd,
+    final_price_usd: cost.final_price_usd,
     pricing_snapshot: cost.pricing_snapshot,
+    retry_attempt: normalized.retry_attempt,
+    final_attempt: true,
   });
   void incrementUsageMeter({
     organization_id: request.companyId ?? UNKNOWN_ORG,
@@ -669,7 +791,7 @@ const runCompletion = async (
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     total_tokens: totalTokens,
-    total_cost: cost.total_cost ?? undefined,
+    total_cost: cost.total_cost_usd ?? undefined,
   });
   const contextTypeMap: Record<string, string> = {
     generateRecommendation: 'recommendation',

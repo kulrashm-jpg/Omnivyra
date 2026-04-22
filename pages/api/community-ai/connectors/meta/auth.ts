@@ -37,9 +37,6 @@ const META_SCOPES = [
   'instagram_manage_comments',
   'instagram_manage_insights',
   'instagram_content_publish',
-  // WhatsApp Business
-  'whatsapp_business_management',
-  'whatsapp_business_messaging',
   // Base
   'public_profile',
 ].join(',');

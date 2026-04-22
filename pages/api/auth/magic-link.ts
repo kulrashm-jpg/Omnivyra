@@ -2,8 +2,14 @@
 /**
  * POST /api/auth/magic-link
  *
- * Public endpoint. Validates that an email exists in public.users.
- * Returns { proceed: true } so the frontend can call signInWithOtp().
+ * Pre-check for the "Send me a magic link" button on /login. Returns
+ * { proceed: true } if a usable account exists, and the client then calls
+ * `supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo } })`.
+ *
+ * Magic link is login-only; signup requires a password. We keep this
+ * pre-check so we can return a real "no account" error code (Supabase,
+ * by design, does not distinguish) without leaking enumeration — callers
+ * only see it after passing our own rate limiter.
  *
  * Body: { email: string }
  * No auth required.
@@ -11,7 +17,6 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { sendMagicLink } from '../../../backend/services/emailService';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
@@ -35,24 +40,15 @@ export default async function handler(
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  // ── 1. Check user exists in public.users ──────────────────────────────────
   const { data: userRow } = await supabase
     .from('users')
     .select('id, is_deleted')
     .eq('email', normalizedEmail)
     .maybeSingle();
 
-  if (!userRow) {
-    // Return generic error to avoid email enumeration
+  if (!userRow || (userRow as any).is_deleted) {
     return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
   }
-
-  if ((userRow as any).is_deleted) {
-    return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
-  }
-
-  const origin = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
-  await sendMagicLink(normalizedEmail, `${origin}/auth/callback?mode=passwordless`, `auth-magic-link:${normalizedEmail}`);
 
   return res.status(200).json({ proceed: true });
 }

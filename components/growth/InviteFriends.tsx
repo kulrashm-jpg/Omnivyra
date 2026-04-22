@@ -61,7 +61,7 @@ export default function InviteFriends({ trigger, className = '' }: InviteFriends
       body: 'Know a marketing team that could use a content engine?',
     },
     manual: {
-      title: 'Enjoying Omnivyra?',
+      title: 'Enjoying OmniVyra?',
       body: 'Invite your team or share with a colleague who creates content.',
     },
   };

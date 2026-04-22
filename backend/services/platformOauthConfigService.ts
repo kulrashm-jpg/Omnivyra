@@ -29,8 +29,11 @@ export async function getPlatformOAuthConfig(
   platform: string
 ): Promise<PlatformOAuthConfig | null> {
   const raw = platform.toLowerCase();
-  // DB stores "twitter" for Twitter/X; both "twitter" and "x" resolve to same config
-  const dbPlatform = raw === 'x' || raw === 'twitter' ? 'twitter' : raw;
+  // Meta (facebook app) covers facebook + instagram + whatsapp; twitter aliases x
+  const dbPlatform =
+    raw === 'twitter' ? 'x' :
+    raw === 'meta' || raw === 'whatsapp' || raw === 'instagram' ? 'facebook' :
+    raw;
 
   const { data, error } = await supabase
     .from('platform_oauth_configs')

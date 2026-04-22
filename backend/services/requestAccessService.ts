@@ -63,6 +63,47 @@ export async function requireSuperAdminUser(
   return user;
 }
 
+/**
+ * Service-layer membership check — verify a userId belongs to an organization.
+ *
+ * Unlike `assertOrgAccess`, this helper has NO req/res coupling: it returns
+ * a boolean so service-layer callers (credit execution wrapper, background
+ * jobs, queue processors) can gate work on membership without bringing in
+ * HTTP plumbing. Platform super-admins are treated as members of every org.
+ *
+ * Throws only on unexpected DB errors. Returns `false` for plain non-members
+ * so callers can produce the right domain-level error (credit execution
+ * returns a typed result; background jobs should log + skip).
+ */
+export async function assertOrgMembership(
+  userId:         string,
+  organizationId: string,
+): Promise<boolean> {
+  if (!userId || !organizationId) return false;
+
+  if (await isPlatformSuperAdmin(userId)) return true;
+
+  const { data, error } = await supabase
+    .from('user_company_roles')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('company_id', organizationId)
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    logger.error('assert_org_membership_db_error', {
+      userId,
+      organizationId,
+      message: error.message,
+    });
+    throw new Error(`[assertOrgMembership] DB error: ${error.message}`);
+  }
+
+  return !!data;
+}
+
 export async function assertOrgAccess(
   req: NextApiRequest,
   res: NextApiResponse,

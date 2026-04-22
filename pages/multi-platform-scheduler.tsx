@@ -371,7 +371,7 @@ export default function MultiPlatformSchedulerPage() {
   return (
     <>
       <Head>
-        <title>Share to Social | Omnivyra</title>
+        <title>Share to Social | OmniVyra</title>
       </Head>
 
       <div className="min-h-screen bg-slate-50 p-6">

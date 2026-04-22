@@ -22,7 +22,19 @@ CREATE INDEX IF NOT EXISTS manual_credit_grants_org_idx ON manual_credit_grants(
 CREATE INDEX IF NOT EXISTS manual_credit_grants_created_idx ON manual_credit_grants(created_at DESC);
 
 ALTER TABLE manual_credit_grants ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "service_role_all" ON manual_credit_grants FOR ALL USING (auth.role() = 'service_role');
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename  = 'manual_credit_grants'
+      AND policyname = 'service_role_all'
+  ) THEN
+    CREATE POLICY "service_role_all" ON manual_credit_grants
+      FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;
 
 -- 2. Patch access_requests to match service code expectations (idempotent)
 ALTER TABLE access_requests

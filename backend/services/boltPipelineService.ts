@@ -14,7 +14,7 @@ import { fromStructuredPlan } from './campaignBlueprintAdapter';
 import { scheduleStructuredPlan } from './structuredPlanScheduler';
 import { retryWithBackoff } from '../utils/retryWithBackoff';
 import { getUserFriendlyMessage } from '../utils/userFriendlyErrors';
-import { getAvailablePlatformsFromProfile } from '../utils/platformEligibility';
+import { getConnectedPlatformsForCompany, CONTENT_PLATFORM_AFFINITY } from '../utils/platformEligibility';
 import { filterBoltPlatforms, sanitizeBoltPlanForTextOnly } from '../utils/boltTextContentConfig';
 import { aggregateBoltAiMetrics } from './boltMetricsAggregator';
 import { getBlueprintCacheMetrics } from './contentBlueprintCache';
@@ -337,8 +337,8 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
         : 5;
 
   // Build default platform requests from the company's configured platforms (eligiblePlatforms).
-  // Fall back to LinkedIn only if none are configured.
-  // Use user-configured content type prefs per platform when available.
+  // eligiblePlatforms is already narrowed by execConfig.selected_platforms upstream
+  // (see executeBoltPipeline), so we just fall back to LinkedIn if nothing is configured.
   const configuredPlatforms = eligiblePlatforms && eligiblePlatforms.length > 0
     ? eligiblePlatforms
     : ['linkedin'];
@@ -367,10 +367,31 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     return 'post';
   };
 
+  // Frequency semantics: `frequency_per_week` and `format_frequency[type]` are
+  // TOTALS across all selected platforms, not per-platform. How the skeleton turns
+  // these into unique pieces depends on `cross_platform_sharing`:
+  //   • sharing OFF → per-platform counts sum to `total`; each count is a solo piece.
+  //     Total scheduled = sum(counts) = total.
+  //   • sharing ON  → the skeleton uses `max(counts)` unique pieces. The first piece
+  //     cross-posts to all platforms; any remaining per-platform capacity becomes
+  //     SOLO extras on the platforms that still have leftover count. So distributing
+  //     `total` with remainder (e.g. 9 across 4 platforms → [3,2,2,2] if the first
+  //     platform is the affinity winner for the content type) yields 2 shared pieces
+  //     × 4 platforms + 1 solo piece on platform 0 = 9 scheduled exactly.
+  // In both modes, distribute with remainder — the skeleton picks the right unique-
+  // piece reduction.
+  const distributeAcrossPlatforms = (total: number, platformCount: number): number[] => {
+    if (platformCount <= 0 || total <= 0) return [];
+    const base = Math.floor(total / platformCount);
+    const remainder = total % platformCount;
+    return Array.from({ length: platformCount }, (_, i) => base + (i < remainder ? 1 : 0));
+  };
+
+  const defaultDistribution = distributeAcrossPlatforms(Math.max(1, parsedFreq), configuredPlatforms.length);
   const defaultPlatformRequests = configuredPlatforms.map((p, idx) => ({
     platform: p,
     content_type: getPrimaryContentType(p),
-    count_per_week: Math.max(1, idx === 0 ? Math.ceil(parsedFreq * 0.6) : Math.floor(parsedFreq * 0.4 / Math.max(1, configuredPlatforms.length - 1))),
+    count_per_week: Math.max(1, defaultDistribution[idx] ?? 1),
   }));
   // When format_frequency is provided (multi-format BOLT: e.g. 3 posts + 3 articles),
   // expand into one entry per (platform × content_type) so all selected formats appear
@@ -381,13 +402,32 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     !Array.isArray(execConfig.format_frequency)
       ? (execConfig.format_frequency as Record<string, number>)
       : null;
+  // Under sharing OFF the remainder (`total % P`) becomes an EXTRA post on the
+  // first platforms in the list. To land the remainder on the platform most
+  // natural for each content type (e.g. an `article` remainder should prefer
+  // LinkedIn, not X), we reorder configuredPlatforms by CONTENT_PLATFORM_AFFINITY
+  // for that type before distributing.
+  const sortPlatformsByAffinity = (platforms: string[], contentType: string): string[] => {
+    const affinity = CONTENT_PLATFORM_AFFINITY[String(contentType).toLowerCase()] ?? [];
+    if (affinity.length === 0) return platforms;
+    const rank = (p: string): number => {
+      const idx = affinity.indexOf(p.toLowerCase());
+      return idx >= 0 ? idx : Number.MAX_SAFE_INTEGER;
+    };
+    return [...platforms].sort((a, b) => rank(a) - rank(b));
+  };
+
   const formatDerivedRequests: Array<{ platform?: string; content_type?: string; count_per_week?: number }> | null =
     !execConfig.platform_content_requests && formatFreqMap && Object.keys(formatFreqMap).length > 0
-      ? configuredPlatforms.flatMap((p) =>
-          Object.entries(formatFreqMap)
-            .filter(([, cnt]) => Number(cnt) > 0)
-            .map(([ct, cnt]) => ({ platform: p, content_type: ct, count_per_week: Number(cnt) }))
-        )
+      ? Object.entries(formatFreqMap)
+          .filter(([, cnt]) => Number(cnt) > 0)
+          .flatMap(([ct, cnt]) => {
+            const orderedPlatforms = sortPlatformsByAffinity(configuredPlatforms, ct);
+            const perPlatform = distributeAcrossPlatforms(Number(cnt), orderedPlatforms.length);
+            return orderedPlatforms
+              .map((p, i) => ({ platform: p, content_type: ct, count_per_week: perPlatform[i] ?? 0 }))
+              .filter((r) => r.count_per_week > 0);
+          })
       : null;
   const rawPlatformRequests = (execConfig.platform_content_requests ?? formatDerivedRequests ?? defaultPlatformRequests) as Array<{ platform?: string; content_type?: string; count_per_week?: number }>;
   const boltPlatformRequests = rawPlatformRequests
@@ -688,6 +728,7 @@ async function runScheduleStructuredPlan(
   campaignId: string,
   plan: { weeks: unknown[] },
   executionConfig: Record<string, unknown>,
+  campaignMode: string | undefined,
   onProgress?: (stage: string) => void,
   eligiblePlatforms?: string[],
   runId?: string
@@ -719,6 +760,7 @@ async function runScheduleStructuredPlan(
       onProgress,
       frequencyPerWeek,
       eligiblePlatforms: eligiblePlatforms?.length ? eligiblePlatforms : undefined,
+      campaignMode,
     }
   );
   await supabase
@@ -793,13 +835,15 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
   const payload = run.payload as BoltPayload;
   const { companyId, outcomeView } = payload;
   const campaignMode = (payload.executionConfig as Record<string, unknown>)?.campaign_mode as string | undefined;
-  const isCreatorDependent = campaignMode === 'creator_dependent';
+  const isUnifiedCreator = campaignMode === 'creator';
+  const isLegacyCreatorDependent = campaignMode === 'creator_dependent';
+  const isCreatorDependent = isUnifiedCreator || isLegacyCreatorDependent;
   // Combined mode: text + creator formats together. Scheduling applies to the text portion only.
   const isCombined = campaignMode === 'combined';
 
-  // Creator-only campaigns stop at daily_plan — a human creator must produce the content.
-  // Combined campaigns can schedule (text posts get auto-scheduled; creator pieces get daily slots).
-  const shouldSchedule = !isCreatorDependent && (outcomeView === 'schedule' || outcomeView === 'campaign_schedule');
+  // Legacy creator-dependent campaigns stop at daily_plan.
+  // Unified creator campaigns schedule through the creator execution engine.
+  const shouldSchedule = (isUnifiedCreator || !isCreatorDependent) && (outcomeView === 'schedule' || outcomeView === 'campaign_schedule');
   const isWeekPlanOnly = outcomeView === 'week_plan';
 
   const missing = validateExecutionConfig(payload.executionConfig);
@@ -815,13 +859,37 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
 
   let eligiblePlatforms: string[] = [];
   try {
-    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
-    const rawPlatforms = getAvailablePlatformsFromProfile(profile);
+    // Use the same "connected at company admin level" source the BOLT picker
+    // endpoint uses (social_accounts, with profile-URL fallback). Both must
+    // agree, otherwise selected_platforms gets intersected to a smaller set
+    // than the user saw in the picker and platforms silently disappear.
+    const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false }).catch(() => null);
+    const rawPlatforms = await getConnectedPlatformsForCompany(companyId, profile);
     // Creator and Combined campaigns include all platforms (YouTube, TikTok valid for video/reel).
     // Text-only BOLT excludes video-first platforms that can't accept text posts.
     eligiblePlatforms = (isCreatorDependent || isCombined) ? rawPlatforms : filterBoltPlatforms(rawPlatforms);
-    // Only use company-configured platforms; never add unconfigured ones
-  } catch {
+
+    // Honor execConfig.selected_platforms (per-campaign platform picker from the
+    // BOLT Text strategy builder). Intersect with eligiblePlatforms so the user
+    // can narrow scope but never target unconfigured platforms.
+    const rawSelected = (payload.executionConfig as Record<string, unknown> | undefined)?.selected_platforms;
+    const selectedList = Array.isArray(rawSelected)
+      ? rawSelected
+          .map((p) => String(p ?? '').trim().toLowerCase().replace(/^twitter$/i, 'x'))
+          .filter(Boolean)
+      : [];
+    if (selectedList.length > 0 && eligiblePlatforms.length > 0) {
+      const narrowed = eligiblePlatforms.filter((p) => selectedList.includes(p.toLowerCase()));
+      if (narrowed.length > 0) eligiblePlatforms = narrowed;
+    }
+    console.log('[bolt] eligiblePlatforms resolved', {
+      companyId,
+      connected: rawPlatforms,
+      selected_platforms: selectedList,
+      eligible: eligiblePlatforms,
+    });
+  } catch (err) {
+    console.error('[bolt] Failed to resolve eligible platforms', err);
     eligiblePlatforms = [];
   }
 
@@ -981,6 +1049,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             campaignId,
             plan,
             payload.executionConfig,
+            campaignMode,
             (s) => updateRun(runId, { current_stage: s }),
             eligiblePlatforms.length > 0 ? eligiblePlatforms : undefined,
             runId

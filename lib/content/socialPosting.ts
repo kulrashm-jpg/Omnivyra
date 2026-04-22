@@ -9,7 +9,13 @@ export type SocialPostingContentType =
   | 'story'
   | 'whitepaper'
   | 'case-study'
-  | 'newsletter';
+  | 'newsletter'
+  | 'carousel'
+  | 'image'
+  | 'banner'
+  | 'infographic'
+  | 'pdf'
+  | 'slider';
 
 export type SocialPostingDraft = {
   title: string;

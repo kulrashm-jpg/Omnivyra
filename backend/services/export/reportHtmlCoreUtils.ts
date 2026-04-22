@@ -52,7 +52,7 @@ export function isOmnivyraPayload(payload: PdfReportPayload): boolean {
 export function getBrandProfile(payload: PdfReportPayload): BrandProfile | null {
   if (!isOmnivyraPayload(payload)) return null;
   return {
-    companyName: 'Omnivyra',
+    companyName: 'OmniVyra',
     websiteUrl: 'www.omnivyra.com',
     primaryFocus: 'AI marketing operating system',
     executiveSummary: 'The site should communicate one operating system for readiness, strategy, creation, publishing, and optimization, then convert that understanding into action.',

@@ -12,7 +12,8 @@
 
 import { supabase } from '../db/supabaseClient';
 import { getScheduledPost } from '../db/queries';
-import { getToken } from '../auth/tokenStore';
+import { getToken, isTokenExpiringSoon } from '../auth/tokenStore';
+import { refreshPlatformToken } from '../auth/tokenRefresh';
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { syncFromPostComments } from './engagementNormalizationService';
 import { getPlatformAdapter } from './platformAdapters';
@@ -186,6 +187,13 @@ function normalizeTwitterComments(
   }).filter((r: IngestCommentRow) => r.platform_comment_id && r.content !== undefined);
 }
 
+/**
+ * Facebook Graph API comment shape:
+ *   { data: [{ id, message, from: { id, name, username, profile_url }, created_time, like_count, comment_count }] }
+ *
+ * Facebook's `from` block includes both display name and username. `like_count`
+ * and `comment_count` are the documented fields.
+ */
 function normalizeFacebookComments(
   scheduledPostId: string,
   platform: string,
@@ -211,6 +219,47 @@ function normalizeFacebookComments(
       platform_created_at: createdAt ? new Date(createdAt).toISOString() : null,
       like_count: typeof c.like_count === 'number' ? c.like_count : 0,
       reply_count: typeof c.comment_count === 'number' ? c.comment_count : 0,
+    };
+  }).filter((r: IngestCommentRow) => r.platform_comment_id && r.content !== undefined);
+}
+
+/**
+ * Instagram Graph API comment shape (differs from Facebook):
+ *   { data: [{ id, text, username, timestamp, like_count, replies: { data: [...] } }] }
+ *
+ * Notes:
+ *   - Instagram uses `text` (not `message`).
+ *   - `username` is top-level, not nested in a `from` block.
+ *   - `timestamp` instead of `created_time`.
+ *   - Replies are a nested `replies.data[]`, not a scalar `comment_count`.
+ */
+function normalizeInstagramComments(
+  scheduledPostId: string,
+  platform: string,
+  raw: any
+): IngestCommentRow[] {
+  const data = raw?.data ?? [];
+  if (!Array.isArray(data)) return [];
+  return data.map((c: any) => {
+    const id = c.id ?? '';
+    const text = c.text ?? c.message ?? '';
+    const username = typeof c.username === 'string' ? c.username : null;
+    const createdAt = c.timestamp ?? c.created_time ?? null;
+    const replyCount = Array.isArray(c?.replies?.data)
+      ? c.replies.data.length
+      : typeof c.reply_count === 'number' ? c.reply_count : 0;
+    return {
+      scheduled_post_id: scheduledPostId,
+      platform_comment_id: String(id),
+      platform,
+      author_name: username ?? 'Unknown',
+      author_username: username,
+      author_profile_url: username ? `https://www.instagram.com/${username}` : null,
+      author_avatar_url: null,
+      content: typeof text === 'string' ? text : JSON.stringify(text) || '',
+      platform_created_at: createdAt ? new Date(createdAt).toISOString() : null,
+      like_count: typeof c.like_count === 'number' ? c.like_count : 0,
+      reply_count: replyCount,
     };
   }).filter((r: IngestCommentRow) => r.platform_comment_id && r.content !== undefined);
 }
@@ -286,9 +335,8 @@ function normalizeCommentsForPlatform(
   const p = platform.toLowerCase().trim();
   if (p === 'linkedin') return normalizeLinkedInComments(scheduledPostId, platform, raw);
   if (p === 'twitter' || p === 'x') return normalizeTwitterComments(scheduledPostId, platform, raw);
-  if (p === 'facebook' || p === 'instagram') {
-    return normalizeFacebookComments(scheduledPostId, platform, raw);
-  }
+  if (p === 'facebook') return normalizeFacebookComments(scheduledPostId, platform, raw);
+  if (p === 'instagram') return normalizeInstagramComments(scheduledPostId, platform, raw);
   if (p === 'youtube') return normalizeYouTubeComments(scheduledPostId, platform, raw);
   if (p === 'reddit') return normalizeRedditComments(scheduledPostId, platform, raw);
   return [];
@@ -380,9 +428,15 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
   if (!platformPostId) {
     return { success: false, ingested: 0, error: 'Post not yet published (no platform_post_id)' };
   }
-  const token = await getToken(post.social_account_id);
+  let token = await getToken(post.social_account_id);
   if (!token?.access_token) {
     return { success: false, ingested: 0, error: 'No access token for social account' };
+  }
+  if (isTokenExpiringSoon(token, 5)) {
+    const refreshedToken = await refreshPlatformToken(post.platform, post.social_account_id, token);
+    if (refreshedToken?.access_token) {
+      token = refreshedToken;
+    }
   }
   try {
     const raw = await fetchCommentsWithAdapterFallback(

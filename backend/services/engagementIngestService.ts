@@ -11,6 +11,7 @@
 
 import OpenAI from 'openai';
 import { supabase } from '../db/supabaseClient';
+import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
 
 export type SentimentLabel = 'positive' | 'neutral' | 'negative' | 'intent';
 
@@ -31,16 +32,32 @@ function fastClassify(text: string): SentimentLabel | null {
   return null;
 }
 
-/** Classify a single comment via LLM. Fast-path avoids API cost for obvious cases. */
-export async function classifySentiment(comment: string): Promise<SentimentResult> {
+/**
+ * Classify a single comment via LLM. Fast-path avoids API cost for obvious cases.
+ *
+ * Cost tracking: this is a background-ingest path (not user-triggered), so LLM
+ * calls are logged with source_type='system' for cost visibility without user
+ * billing. companyId is required for attribution (D4: best-effort user_id).
+ */
+export async function classifySentiment(
+  comment: string,
+  opts: { companyId: string; userId?: string | null },
+): Promise<SentimentResult> {
   if (!comment?.trim()) return { label: 'neutral', confidence: 1, reasoning: 'empty' };
 
   const fast = fastClassify(comment);
   if (fast) return { label: fast, confidence: 0.85, reasoning: 'rule-based fast path' };
 
+  if (!opts?.companyId) {
+    throw new Error('classifySentiment requires opts.companyId for cost attribution');
+  }
+
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const startedAt = Date.now();
+
   try {
     const response = await getClient().chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model,
       max_tokens: 60,
       response_format: { type: 'json_object' },
       messages: [
@@ -51,6 +68,37 @@ export async function classifySentiment(comment: string): Promise<SentimentResul
       ],
     });
 
+    const promptTokens     = Number(response.usage?.prompt_tokens ?? 0);
+    const completionTokens = Number(response.usage?.completion_tokens ?? 0);
+    const totalTokens      = Number(response.usage?.total_tokens ?? promptTokens + completionTokens);
+    const cost = await resolveLlmCost({
+      providerName: 'openai',
+      modelName: model,
+      inputTokens: promptTokens,
+      outputTokens: completionTokens,
+      processType: 'sentiment_classification',
+      organizationId: opts.companyId,
+    });
+    void logUsageEvent({
+      organization_id: opts.companyId,
+      user_id:         opts.userId ?? null,
+      source_type:     'system',
+      provider_name:   'openai',
+      model_name:      model,
+      source_name:     'openai',
+      process_type:    'sentiment_classification',
+      feature_area:    'engagement_ingest',
+      input_tokens:    promptTokens,
+      output_tokens:   completionTokens,
+      total_tokens:    totalTokens,
+      latency_ms:      Date.now() - startedAt,
+      unit_cost:       totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
+      total_cost:      cost.total_cost_usd,
+      total_cost_usd:  cost.total_cost_usd,
+      final_price_usd: cost.final_price_usd,
+      pricing_snapshot: cost.pricing_snapshot,
+    });
+
     const raw = response.choices[0]?.message?.content?.trim() ?? '{}';
     const parsed = JSON.parse(raw);
     return {
@@ -58,7 +106,20 @@ export async function classifySentiment(comment: string): Promise<SentimentResul
       confidence: Number(parsed.confidence) || 0.7,
       reasoning: String(parsed.reasoning ?? ''),
     };
-  } catch {
+  } catch (err: any) {
+    void logUsageEvent({
+      organization_id: opts.companyId,
+      user_id:         opts.userId ?? null,
+      source_type:     'system',
+      provider_name:   'openai',
+      model_name:      model,
+      source_name:     'openai',
+      process_type:    'sentiment_classification',
+      feature_area:    'engagement_ingest',
+      latency_ms:      Date.now() - startedAt,
+      error_flag:      true,
+      error_type:      err?.message?.slice(0, 200) ?? 'unknown',
+    });
     return { label: 'neutral', confidence: 0.5, reasoning: 'classification failed' };
   }
 }
@@ -74,7 +135,9 @@ export async function ingestComment(input: {
   comment: string;
   author_id?: string | null;
 }): Promise<{ action_id: string | null; sentiment: SentimentResult }> {
-  const sentiment = await classifySentiment(input.comment);
+  const sentiment = await classifySentiment(input.comment, {
+    companyId: input.organization_id,
+  });
 
   try {
     const { data, error } = await supabase

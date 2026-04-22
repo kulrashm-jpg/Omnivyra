@@ -27,8 +27,8 @@ export default function FreeAuditReport() {
   return (
     <>
       <Head>
-        <title>Your Website Audit Report | Omnivyra</title>
-        <meta name="description" content="Your free website intelligence audit results from Omnivyra." />
+        <title>Your Website Audit Report | OmniVyra</title>
+        <meta name="description" content="Your free website intelligence audit results from OmniVyra." />
       </Head>
       <div className="min-h-screen bg-[#F5F9FF]">
         <div className="mx-auto max-w-2xl px-4 py-12 sm:px-6 sm:py-16">
@@ -81,7 +81,7 @@ export default function FreeAuditReport() {
                 href="/"
                 className="rounded-xl border border-gray-200 py-3.5 px-6 text-center font-medium text-gray-700 hover:bg-gray-50"
               >
-                Back to Omnivyra
+                Back to OmniVyra
               </Link>
             </div>
           </div>

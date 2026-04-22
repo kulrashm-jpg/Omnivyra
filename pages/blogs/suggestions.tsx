@@ -255,7 +255,7 @@ export default function BlogSuggestionsPage() {
   return (
     <>
       <Head>
-        <title>Suggestions | Omnivyra</title>
+        <title>Suggestions | OmniVyra</title>
       </Head>
       <GenerationProgressTracker
         open={generating}

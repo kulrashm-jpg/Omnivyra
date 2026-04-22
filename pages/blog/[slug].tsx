@@ -65,7 +65,7 @@ function SoftProductInsert() {
           Understanding is only useful if you can act on it.
         </p>
         <p className="text-sm text-[#6B7C93] leading-relaxed mb-5">
-          Omnivyra helps you apply these insights directly — from campaign planning
+          OmniVyra helps you apply these insights directly — from campaign planning
           to execution and optimization, all in one structured system.
         </p>
         <Link
@@ -267,7 +267,7 @@ export default function BlogDetailPage() {
   return (
     <>
       <Head>
-        <title>{metaTitle} — Omnivyra</title>
+        <title>{metaTitle} — OmniVyra</title>
         <meta name="description" content={metaDesc} />
         <link rel="canonical" href={canonical} />
         <meta property="og:title" content={metaTitle} />
@@ -293,7 +293,7 @@ export default function BlogDetailPage() {
               url: canonical,
               publisher: {
                 '@type': 'Organization',
-                name: 'Omnivyra',
+                name: 'OmniVyra',
                 url: siteUrl,
               },
             }),

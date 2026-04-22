@@ -2,7 +2,13 @@
 /**
  * POST /api/engagement/like
  * Like an engagement message.
- * Inserts into comment_likes when post_comment_id exists, then executes via communityAiActionExecutor.
+ *
+ * Contract (post-hardening):
+ *   - Every (platform, like) pair is resolved against engagementCapabilityMap
+ *     before dispatch. Unsupported pairs return 400 with code
+ *     ACTION_NOT_SUPPORTED; never a silent success.
+ *   - Verified pairs execute via executeAction({ execution_mode: 'api' });
+ *     the connector's response is returned verbatim. No manual-mode simulation.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -13,6 +19,8 @@ import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/commun
 import { supabase } from '../../../backend/db/supabaseClient';
 import { executeAction } from '../../../backend/services/communityAiActionExecutor';
 import { incrementReplyLike } from '../../../backend/services/responsePerformanceService';
+import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
+import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 
 type LikeBody = {
   organization_id?: string;
@@ -31,7 +39,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = (req.body || {}) as LikeBody;
     const organizationId = (body.organization_id ?? user?.defaultCompanyId) as string | undefined;
     const messageId = body.message_id;
-    const platform = (body.platform ?? '').toString().trim();
+    // Normalize 'x' → 'twitter' on entry so downstream paths never see the alias.
+    const rawPlatform = (body.platform ?? '').toString().trim().toLowerCase();
+    const platform = rawPlatform === 'x' ? 'twitter' : rawPlatform;
 
     if (!organizationId) {
       return res.status(400).json({ error: 'organization_id required' });
@@ -54,6 +64,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!roleGate) return;
 
+    const capability = resolveEngagementCapability(platform, 'like');
+    if (capability.status !== 'api_verified') {
+      void logAuditEvent({
+        operation: 'INSERT',
+        table: 'engagement_like_rejected',
+        companyId: organizationId,
+        userId: roleGate.userId ?? 'unknown',
+        success: false,
+        errorMessage: capability.reason ?? 'Unsupported action',
+        metadata: { platform, action: 'like', code: 'ACTION_NOT_SUPPORTED' },
+      }).catch(() => {});
+      return res.status(400).json({
+        error: capability.reason ?? `Like is not supported on ${platform}.`,
+        code: 'ACTION_NOT_SUPPORTED',
+        platform,
+        action: 'like',
+      });
+    }
+
     const { data: message, error: msgError } = await supabase
       .from('engagement_messages')
       .select('id, thread_id, platform_message_id, post_comment_id, platform')
@@ -74,6 +103,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: 'Message thread not found or access denied' });
     }
 
+    // comment_likes is upserted only after the platform confirms — same
+    // invariant as reply: local state only reflects platform-acknowledged
+    // actions. Upsert is idempotent so this is safe on retry.
+    const actionId = crypto.randomUUID();
+    const result = await executeAction(
+      {
+        id: actionId,
+        tenant_id: organizationId,
+        organization_id: organizationId,
+        platform,
+        action_type: 'like',
+        target_id: message.platform_message_id ?? messageId,
+        suggested_text: null,
+        playbook_id: null,
+        execution_mode: capability.mode ?? 'api',
+      },
+      true,
+      { source: 'manual', persist: true, auto_insert: true }
+    );
+
+    if (!result.ok || result.status !== 'executed') {
+      return res.status(502).json({
+        error: typeof result.error === 'string' ? result.error : (result.error as any)?.code ?? 'Execution failed',
+        code: 'PLATFORM_EXECUTION_FAILED',
+        status: result.status,
+        response: result.response,
+      });
+    }
+
+    const confirmed = typeof result.platform_id === 'string' && result.platform_id.length > 0;
+
     if (message.post_comment_id && roleGate.userId) {
       const { error: insertError } = await supabase.from('comment_likes').upsert(
         {
@@ -87,30 +147,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    const actionId = crypto.randomUUID();
-    const result = await executeAction(
-      {
-        id: actionId,
-        tenant_id: organizationId,
-        organization_id: organizationId,
-        platform,
-        action_type: 'like',
-        target_id: message.platform_message_id ?? messageId,
-        suggested_text: null,
-        playbook_id: null,
-        execution_mode: 'manual',
-      },
-      true,
-      { source: 'manual' }
-    );
-
-    if (!result.ok) {
-      return res.status(500).json({
-        error: result.error ?? 'Execution failed',
-        status: result.status,
-      });
-    }
-
     void incrementReplyLike(messageId).catch((err) =>
       console.warn('[engagement/like] incrementReplyLike', (err as Error)?.message)
     );
@@ -118,6 +154,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       success: true,
       status: result.status,
+      confirmed,
+      platform_id: result.platform_id ?? null,
       response: result.response,
     });
   } catch (err) {

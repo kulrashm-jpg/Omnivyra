@@ -1,5 +1,3 @@
-import { chromium, type Browser, type Page } from 'playwright';
-
 type RedditRpaTask = {
   tenant_id: string;
   organization_id: string;
@@ -15,19 +13,33 @@ type RedditRpaResult = {
   error?: string;
 };
 
-const ensureSession = async (_page: Page) => {
+async function loadPlaywright(): Promise<any | null> {
+  try {
+    const importer = new Function('specifier', 'return import(specifier);') as (specifier: string) => Promise<any>;
+    return await importer('playwright');
+  } catch {
+    return null;
+  }
+}
+
+const ensureSession = async (_page: any) => {
   // Placeholder for session cookie injection.
 };
 
-const takeScreenshot = async (page: Page, filename: string) => {
+const takeScreenshot = async (page: any, filename: string) => {
   await page.screenshot({ path: filename, fullPage: true });
   return filename;
 };
 
 export const executeRedditRpaTask = async (task: RedditRpaTask): Promise<RedditRpaResult> => {
-  let browser: Browser | null = null;
+  let browser: any = null;
   try {
-    browser = await chromium.launch({ headless: true });
+    const pw = await loadPlaywright();
+    if (!pw?.chromium?.launch) {
+      return { success: false, error: 'PLAYWRIGHT_NOT_INSTALLED' };
+    }
+
+    browser = await pw.chromium.launch({ headless: true });
     const context = await browser.newContext();
     const page = await context.newPage();
 

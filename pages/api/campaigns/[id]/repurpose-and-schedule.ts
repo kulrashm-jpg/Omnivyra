@@ -81,6 +81,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    const { data: versionRow } = await supabase
+      .from('campaign_versions')
+      .select('campaign_snapshot')
+      .eq('campaign_id', campaignId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const campaignMode = String(((versionRow as any)?.campaign_snapshot?.execution_config?.campaign_mode) || 'text');
+
     const eligibility = evaluateScheduleEligibility(plans as Array<{
       id?: string | null;
       title?: string | null;
@@ -89,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       execution_mode?: string | null;
       creator_asset?: unknown;
     }>);
-    if (!eligibility.eligible) {
+    if (campaignMode !== 'creator' && !eligibility.eligible) {
       return res.status(409).json({
         success: false,
         error: 'Campaign has creator-dependent activities waiting for media links.',
@@ -108,6 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const result = await scheduleStructuredPlan(plan, campaignId, {
       generateContent: true,
       skipExisting: true,
+      campaignMode,
     });
 
     // FIX 4: Return enhanced schedule summary

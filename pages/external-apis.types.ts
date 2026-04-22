@@ -191,7 +191,7 @@ export const API_META: Record<string, { icon: string; color: string }> = {
   'GDELT Events':                     { icon: '🌍',  color: 'border-teal-200 bg-teal-50' },
   'Google Trends (PyTrends Bridge)':  { icon: '📈',  color: 'border-green-200 bg-green-50' },
   // Social
-  'X (Twitter) Recent Search':        { icon: '🐦',  color: 'border-sky-200 bg-sky-50' },
+  'X (Twitter) Recent Search':        { icon: '𝕏',  color: 'border-gray-200 bg-gray-50' },
   // Community
   'Reddit Search':                    { icon: '🟠',  color: 'border-orange-200 bg-orange-50' },
   'Hacker News Trends':               { icon: '🔶',  color: 'border-orange-200 bg-orange-50' },
@@ -231,3 +231,6 @@ export const TEST_SCENARIOS = [
   { id: 'ai', label: 'AI Technology', category: 'AI technology', geo: 'US' },
   { id: 'marketing', label: 'Marketing', category: 'marketing', geo: 'US' },
 ] as const;
+export default function ExternalApisTypesPage() {
+  return null;
+}

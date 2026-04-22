@@ -22,7 +22,7 @@ export default function LeadGenerationCheck() {
   return (
     <>
       <Head>
-        <title>Lead Generation Check | Free AI Audit | Omnivyra</title>
+        <title>Lead Generation Check | Free AI Audit | OmniVyra</title>
         <meta name="description" content="Find out why your website isn't generating leads. Get an instant AI audit with clear fixes." />
       </Head>
 

@@ -3,9 +3,10 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
+import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
+import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -13,8 +14,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
-  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
-  const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
+  const earlyState = decodeOAuthState(state as string);
+  const { returnTo: earlyReturnTo, flow: earlyFlow } = earlyState;
+  const errDest = earlyFlow === 'community-ai'
+    ? ((earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/community-ai/connectors')
+    : ((earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms');
 
   if (error) {
     return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
@@ -26,7 +30,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'youtube';
-    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+    const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
+    if (valid === false) {
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Invalid OAuth state')}`);
+    }
 
     const credentials = await getOAuthCredentialsForPlatform(platform);
     if (!credentials?.client_id || !credentials?.client_secret) {
@@ -84,6 +91,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const accountName = channel.snippet?.title || 'YouTube Channel';
     const expiresIn = tokenData.expires_in || 3600; // Default 1 hour
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+    const grantedScopes = String(tokenData.scope || '')
+      .split(/\s+/)
+      .map((scope: string) => scope.trim())
+      .filter(Boolean);
 
     // Prepare token object
     const tokenObj: TokenObject = {
@@ -91,17 +102,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       refresh_token: tokenData.refresh_token || undefined,
       expires_at: expiresAt,
       token_type: 'Bearer',
+      scope: grantedScopes.join(' '),
     };
     const encryptedCols = encryptTokenColumns(tokenObj);
 
     // Create or update social account
-    const { data: existingAccount } = await supabase
-      .from('social_accounts')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('platform', 'youtube')
-      .eq('platform_user_id', channel.id)
-      .single();
+    const companyIdUuid = companyId && /^[0-9a-f-]{36}$/i.test(companyId) ? companyId : null;
+    let existingAccount: { id: string } | null = null;
+    if (companyIdUuid) {
+      const { data: tenantRow } = await supabase
+        .from('social_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('company_id', companyIdUuid)
+        .eq('platform', 'youtube')
+        .eq('platform_user_id', channel.id)
+        .maybeSingle();
+      if (tenantRow) existingAccount = tenantRow;
+    }
+    if (!existingAccount) {
+      const { data: legacyRow } = await supabase
+        .from('social_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .is('company_id', null)
+        .eq('platform', 'youtube')
+        .eq('platform_user_id', channel.id)
+        .maybeSingle();
+      existingAccount = legacyRow;
+    }
 
     let accountId: string;
 
@@ -114,10 +143,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           username: channel.snippet?.customUrl || null,
           profile_picture_url: channel.snippet?.thumbnails?.default?.url || null,
           is_active: true,
-          permissions: ['youtube', 'youtube.upload'],
+          permissions: grantedScopes.length > 0 ? grantedScopes : [
+            'openid',
+            'email',
+            'profile',
+            'https://www.googleapis.com/auth/youtube',
+            'https://www.googleapis.com/auth/youtube.upload',
+            'https://www.googleapis.com/auth/youtube.force-ssl',
+          ],
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+          ...(companyIdUuid ? { company_id: companyIdUuid } : {}),
         })
         .eq('id', accountId);
     } else {
@@ -125,14 +162,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('social_accounts')
         .insert({
           user_id: userId,
-          company_id: companyId || null,
+          company_id: companyIdUuid,
           platform: 'youtube',
           platform_user_id: channel.id,
           account_name: accountName,
           username: channel.snippet?.customUrl || null,
           profile_picture_url: channel.snippet?.thumbnails?.default?.url || null,
           is_active: true,
-          permissions: ['youtube', 'youtube.upload'],
+          permissions: grantedScopes.length > 0 ? grantedScopes : [
+            'openid',
+            'email',
+            'profile',
+            'https://www.googleapis.com/auth/youtube',
+            'https://www.googleapis.com/auth/youtube.upload',
+            'https://www.googleapis.com/auth/youtube.force-ssl',
+          ],
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           access_token: encryptedCols.access_token,
@@ -156,6 +200,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (companyId && userId) {
       checkAndGrantSetupCredits(companyId, userId)
         .catch(e => console.warn('[youtube/callback] setup credits check failed:', e?.message));
+    }
+
+    const { flow: stateFlow, tenantId: stateTenantId } = decodeOAuthState(state as string);
+    if (stateFlow === 'community-ai' && stateTenantId) {
+      await saveCommunityAiToken(stateTenantId, stateTenantId, 'youtube', {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || null,
+        expires_at: expiresAt,
+        connected_by_user_id: userId,
+      });
+      const communityDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/community-ai/connectors';
+      return res.redirect(`${communityDest}?connected=youtube&status=success`);
     }
 
     const successDest = returnTo || '/social-platforms';

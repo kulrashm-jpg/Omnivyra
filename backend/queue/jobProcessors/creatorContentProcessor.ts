@@ -26,7 +26,13 @@ import {
 import { validateCreatorContentQuality } from '../../services/creatorContentValidation';
 import { recordCreatorFeedback } from '../../services/contentFeedbackLoop';
 import { runCompletionWithOperation } from '../../services/aiGateway';
+import { estimateLlmCostUsd } from '../../services/pricingService';
 import type { ContentAngle, ContentBlueprint } from '../../services/unifiedContentGenerationEngine';
+import { createCreatorExecutionEngine } from '../../services/executionEngines/creatorExecutionEngine';
+
+function safeObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
 
 export async function processCreatorContentJob(job: Job): Promise<any> {
   const {
@@ -48,69 +54,43 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
     if (!creator_context || !creator_context.target_platforms?.length) {
       throw new Error('Creator context missing: need target_platforms, campaign_description, content_theme');
     }
+    const engine = createCreatorExecutionEngine();
 
-    // Step 2: Generate 3 narrative angles tailored to visual storytelling
-    void job.updateProgress(15);
-    const angles = await generateCreatorAngles(
-      topic,
-      audience,
-      creator_context,
-      content_type
-    );
-    console.log(`[creatorContentProcessor] Generated ${angles.length} angles:`, angles.map(a => ({ type: a.type, label: a.label })));
-
-    // Step 3: Select optimal angle based on feedback & creator context
-    void job.updateProgress(25);
-    const selectedAngle = await selectOptimalCreatorAngle(
-      angles,
-      angle_preference,
-      company_id
-    );
-
-    // Step 4: Generate master creator content (script/carousel/story)
     void job.updateProgress(35);
-    const masterBlueprint = await generateCreatorMasterContent(
+    const canonicalOutput = await engine.generateFromIntent({
+      campaignId: String((activity_workspace as any)?.campaign_id || `creator-${company_id}`),
+      companyId: company_id,
+      userId: String((activity_workspace as any)?.user_id || ''),
       topic,
+      contentType: content_type === 'carousel' ? 'carousel' : content_type === 'story' ? 'story' : 'video',
+      targetPlatforms: creator_context.target_platforms,
       audience,
-      selectedAngle,
-      creator_context,
-      content_type
-    );
+      objective: String(creator_context.campaign_description || ''),
+      summary: String((activity_workspace as any)?.summary || ''),
+      creatorCard: creator_context,
+      enrichedIntent: activity_workspace && typeof activity_workspace === 'object' ? activity_workspace : null,
+      existingContent: null,
+    });
 
-    // Step 5: Validate content quality with creator-specific rules
-    void job.updateProgress(50);
-    const validationResult = await validateCreatorContentQuality(
-      masterBlueprint,
-      content_type
-    );
-    if (!validationResult.pass && validationResult.severity === 'blocking') {
-      throw new Error(`Content validation failed: ${validationResult.issues?.join(', ')}`);
-    }
-
-    // Step 6: Generate platform-specific variants
-    void job.updateProgress(60);
-    let platformVariants: Record<string, any> = {};
-    if (content_type === 'video_script') {
-      platformVariants = await repurposeVideoScriptForPlatforms(
-        masterBlueprint,
-        creator_context.target_platforms
-      );
-    } else if (content_type === 'carousel') {
-      platformVariants = await repurposeCarouselForPlatforms(
-        masterBlueprint,
-        creator_context.target_platforms
-      );
-    } else if (content_type === 'story') {
-      platformVariants = await repurposeVideoScriptForPlatforms(
-        masterBlueprint,
-        creator_context.target_platforms
-      );
+    void job.updateProgress(55);
+    const validationResult = safeObject(canonicalOutput.metadata.validation_result);
+    const platformVariants: Record<string, any> = {};
+    for (const platform of creator_context.target_platforms) {
+      const adapted = await engine.adaptForPlatform(canonicalOutput, platform);
+      platformVariants[platform] = {
+        asset_payload: safeObject((adapted.asset_payload as Record<string, unknown>).platform_payload) || adapted.asset_payload,
+        packaging: adapted.packaging.platform_variants[platform] ?? {
+          caption: adapted.packaging.caption,
+          hashtags: adapted.packaging.hashtags,
+        },
+        asset_type: adapted.asset_type,
+      };
     }
 
     // Step 7: Estimate cost & deduct credits
     void job.updateProgress(75);
-    const estimatedTokens = estimateCreatorTokens(masterBlueprint, content_type);
-    const costUsd = estimateCost(estimatedTokens, content_type);
+    const estimatedTokens = estimateCreatorTokens(canonicalOutput.asset_instruction.blueprint, content_type);
+    const costUsd = await estimateCost(estimatedTokens, content_type);
     await deductCredits(company_id, `content_${content_type}`, costUsd);
 
     // Step 8: Build decision trace
@@ -119,7 +99,7 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
       source_topic: topic,
       objective: creator_context.campaign_description,
       content_theme: creator_context.content_theme,
-      selected_angle: selectedAngle.type,
+      selected_angle: 'creator_execution_engine',
       platform_targets: creator_context.target_platforms,
       platforms_generated: Object.keys(platformVariants),
     };
@@ -131,7 +111,7 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
       content_type,
       platforms: creator_context.target_platforms,
       theme_used: creator_context.content_theme,
-      angle_used: selectedAngle.type,
+      angle_used: 'creator_execution_engine',
       timestamp: new Date(),
     });
 
@@ -140,12 +120,13 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
     return {
       success: true,
       content_type,
-      master_content: masterBlueprint,
+      master_content: canonicalOutput.asset_instruction.blueprint,
       platform_variants: platformVariants,
       generation_trace: decisionTrace,
       estimated_cost_usd: costUsd,
       validation_result: validationResult,
       target_platforms: creator_context.target_platforms,
+      canonical_output: canonicalOutput,
     };
   } catch (error) {
     console.error(`[creatorContentProcessor] Error processing ${content_type}:`, error);
@@ -328,19 +309,18 @@ function estimateCreatorTokens(blueprint: any, contentType: string): number {
 }
 
 /**
- * Cost estimation for creator content
- * Creator content often requires more complex generation
+ * Advisory pre-flight USD estimator — DB-backed via pricingService. Returns
+ * BASE model cost only (no multiplier); applies a creator-type scaling factor
+ * to account for the heavier prompt/output shape of video/carousel scripts.
+ *
+ * Real billing must flow through resolveLlmCost + executeWithCredits (Phase 4).
  */
-function estimateCost(tokens: number, contentType: string): number {
-  const creatorMultiplier = contentType === 'video_script' ? 1.5 : 1.2; // Video more complex
-
+async function estimateCost(tokens: number, contentType: string): Promise<number> {
+  const creatorMultiplier = contentType === 'video_script' ? 1.5 : 1.2;
   const inputTokens = tokens * 0.75;
   const outputTokens = tokens * 0.25;
-
-  const inputCost = (inputTokens / 1000) * 0.00015;
-  const outputCost = (outputTokens / 1000) * 0.0006;
-
-  return Math.round((inputCost + outputCost) * creatorMultiplier * 10000) / 10000;
+  const baseUsd = await estimateLlmCostUsd('openai', 'gpt-4o-mini', inputTokens, outputTokens);
+  return Math.round(baseUsd * creatorMultiplier * 10000) / 10000;
 }
 
 /**

@@ -12,7 +12,9 @@ create table if not exists usage_events (
   source_type text not null,
   -- 'llm' | 'external_api' | 'automation_execution'
 
+  provider text null,
   provider_name text null,
+  model text null,
   model_name text null,
   model_version text null,
 
@@ -31,6 +33,8 @@ create table if not exists usage_events (
 
   unit_cost numeric null,
   total_cost numeric null,
+  total_cost_usd numeric null,
+  final_price_usd numeric null,
 
   pricing_snapshot jsonb null,
 

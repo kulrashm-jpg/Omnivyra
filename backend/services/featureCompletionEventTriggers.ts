@@ -95,7 +95,7 @@ export const FEATURE_SYNC_TRIGGERS = [
     event: 'After OAuth callback success',
     files: [
       'pages/api/auth/linkedin/callback.ts',
-      'pages/api/auth/twitter/callback.ts',
+      'pages/api/auth/x/callback.ts',
       'pages/api/auth/instagram/callback.ts',
       'pages/api/auth/youtube/callback.ts',
       'pages/api/integrations/social-connect.ts (if exists)',
@@ -228,7 +228,7 @@ export const FEATURE_SYNC_TRIGGERS = [
  *
  * Files to update:
  * - pages/api/auth/linkedin/callback.ts
- * - pages/api/auth/twitter/callback.ts
+ * - pages/api/auth/x/callback.ts
  * - pages/api/auth/instagram/callback.ts
  * - pages/api/auth/youtube/callback.ts
  * - pages/api/auth/pinterest/callback.ts

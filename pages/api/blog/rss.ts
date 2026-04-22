@@ -27,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rss = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>The Marketing Intelligence Journal by Omnivera</title>
+    <title>The Marketing Intelligence Journal by OmniVyra</title>
     <link>${base}/blog</link>
     <description>Strategic insight on AI-driven campaign architecture, execution intelligence, and momentum modeling.</description>
     <language>en-us</language>

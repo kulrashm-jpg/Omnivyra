@@ -31,12 +31,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS invitations_idempotency_key_unique
 CREATE UNIQUE INDEX IF NOT EXISTS invitations_token_hash_unique
   ON invitations (token_hash);
 
-ALTER TABLE invitations
-  ADD CONSTRAINT invitations_token_consumed_acceptance_ck
-  CHECK (
-    accepted_at IS NULL
-    OR token_consumed_at IS NOT NULL
-  );
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'invitations_token_consumed_acceptance_ck'
+  ) THEN
+    ALTER TABLE invitations
+      ADD CONSTRAINT invitations_token_consumed_acceptance_ck
+      CHECK (
+        accepted_at IS NULL
+        OR token_consumed_at IS NOT NULL
+      );
+  END IF;
+END $$;
 
 ALTER TABLE super_admin_audit_logs
   ADD COLUMN IF NOT EXISTS idempotency_key TEXT;

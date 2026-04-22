@@ -11,9 +11,12 @@ import PlatformIcon from '@/components/ui/PlatformIcon';
 import {
   Bookmark,
   ExternalLink,
-  MessageSquare,
+  Lightbulb,
   Send,
+  ShieldCheck,
+  Sparkles,
   UserPlus,
+  Zap,
 } from 'lucide-react';
 
 type CampaignSignal = {
@@ -33,7 +36,10 @@ type CampaignSignal = {
 const SIGNAL_STATUSES = ['new', 'reviewed', 'actioned', 'ignored'] as const;
 
 const SIGNAL_TYPES = ['comment', 'reply', 'mention', 'quote', 'discussion', 'buyer_intent_signal'];
-const PLATFORMS = ['linkedin', 'twitter', 'discord', 'slack', 'reddit', 'github'];
+// Must match the backend's PLATFORMS allow-list in /api/engagement/campaign-signals.
+// 'x' is included so signals with platform='x' are reachable; the backend
+// normalizes 'x' → 'twitter' on filter.
+const PLATFORMS = ['linkedin', 'twitter', 'x', 'discord', 'slack', 'reddit', 'github'];
 const TIME_RANGES = [
   { value: '7d', label: 'Last 7 days' },
   { value: '14d', label: 'Last 14 days' },
@@ -56,6 +62,37 @@ export default function EngagementInboxPage() {
   const [replying, setReplying] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   const [replySuccess, setReplySuccess] = useState(false);
+  const [bookmarkBusy, setBookmarkBusy] = useState(false);
+  const [leadBusy, setLeadBusy] = useState(false);
+  const [crmBusy, setCrmBusy] = useState(false);
+  const [actionNotice, setActionNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  // ── AI-suggestion state ───────────────────────────────────────────────────
+  // A suggestion's full lifecycle is:
+  //   shown → accepted-as-is   → execution uses it verbatim
+  //         → edited           → treat edit as reject('edited') + do NOT link acceptance
+  //         → dismissed        → reject('dismissed') on panel change / clear
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [suggestionId, setSuggestionId] = useState<string | null>(null);
+  const [suggestionCorrelationId, setSuggestionCorrelationId] = useState<string | null>(null);
+  const [suggestionModel, setSuggestionModel] = useState<string | null>(null);
+  const [suggestionBusy, setSuggestionBusy] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [suggestionUsed, setSuggestionUsed] = useState(false);
+  // ── Intelligence state ────────────────────────────────────────────────────
+  // Fetched from /api/intelligence/context on signal select and on
+  // suggestion generate. UI rules:
+  //   · max 1 insight, max 2 hints
+  //   · recommendation CTA only when confidence.level === 'high'
+  //   · hide everything if no useful data (all fields nullish)
+  type ConfidenceLevel = 'high' | 'medium' | 'low';
+  type IntelligenceState = {
+    insight: string | null;
+    hints: string[];
+    confidence: { level: ConfidenceLevel; score: number };
+    recommendation?: { type: string; label: string } | null;
+  } | null;
+  const [intelligence, setIntelligence] = useState<IntelligenceState>(null);
+  const [intelligenceBusy, setIntelligenceBusy] = useState(false);
 
   const sendReply = async () => {
     if (!selectedSignal || !replyText.trim() || !companyId) return;
@@ -63,26 +100,282 @@ export default function EngagementInboxPage() {
     setReplyError(null);
     setReplySuccess(false);
     try {
+      // Determine suggestion linkage. If we have a suggestion, the text
+      // was either accepted verbatim OR edited. Only verbatim matches
+      // count as accepted; edits record a reject('edited') AFTER the
+      // reply succeeds so execution still completes.
+      const verbatim = Boolean(
+        suggestion && suggestionId && replyText.trim() === suggestion.trim()
+      );
+      const body: Record<string, unknown> = {
+        organization_id: companyId,
+        // The inbox UI works on campaign_activity_engagement_signals rows,
+        // so we pass signal_id; the API translates to target/platform
+        // internally. message_id path is reserved for engagement_messages.
+        signal_id: selectedSignal.id,
+        reply_text: replyText.trim(),
+        platform: selectedSignal.platform,
+      };
+      if (verbatim && suggestionId) body.suggestion_id = suggestionId;
+      if (suggestionCorrelationId) body.correlation_id = suggestionCorrelationId;
+
       const res = await fetch('/api/engagement/reply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          organization_id: companyId,
-          message_id: selectedSignal.activity_id,
-          reply_text: replyText.trim(),
-          platform: selectedSignal.platform,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Reply failed');
       setReplyText('');
       setReplySuccess(true);
+      setSuggestionUsed(true);
+
+      // Edited suggestion: record rejection with reason='edited'. Verbatim
+      // acceptance was already recorded server-side via suggestion_id.
+      if (suggestion && suggestionId && !verbatim) {
+        fetch('/api/engagement/ai-suggestion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            event: 'rejected',
+            suggestion_id: suggestionId,
+            reason: 'edited',
+          }),
+        }).catch(() => {});
+      }
+
       await updateSignalStatus(selectedSignal.id, 'actioned');
     } catch (err: any) {
       setReplyError(err.message);
     } finally {
       setReplying(false);
+    }
+  };
+
+  const fetchIntelligence = async (signal: CampaignSignal) => {
+    if (!companyId) return;
+    setIntelligenceBusy(true);
+    try {
+      const res = await fetch('/api/intelligence/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          organization_id: companyId,
+          platform: signal.platform,
+          action_type: 'reply',
+          target_id: signal.id,
+        }),
+      });
+      if (!res.ok) {
+        setIntelligence(null);
+        return;
+      }
+      const data = await res.json();
+      setIntelligence({
+        insight: data.insight ?? null,
+        hints: Array.isArray(data.hints) ? data.hints.slice(0, 2) : [],
+        confidence: data.confidence ?? { level: 'low', score: 0 },
+        recommendation: data.recommendation ?? null,
+      });
+    } catch {
+      setIntelligence(null);
+    } finally {
+      setIntelligenceBusy(false);
+    }
+  };
+
+  const resetSuggestion = (fromSignalChange: boolean) => {
+    // If the user is switching signals or clearing the UI and the shown
+    // suggestion was never used, record it as dismissed so intelligence
+    // can distinguish "user didn't engage" from "user rejected content".
+    if (suggestion && suggestionId && !suggestionUsed) {
+      fetch('/api/engagement/ai-suggestion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          event: 'rejected',
+          suggestion_id: suggestionId,
+          reason: fromSignalChange ? 'dismissed' : 'cleared',
+        }),
+      }).catch(() => {});
+    }
+    setSuggestion(null);
+    setSuggestionId(null);
+    setSuggestionCorrelationId(null);
+    setSuggestionModel(null);
+    setSuggestionError(null);
+    setSuggestionUsed(false);
+  };
+
+  const generateSuggestion = async () => {
+    if (!selectedSignal || !companyId) return;
+    resetSuggestion(false);
+    setSuggestionBusy(true);
+    setSuggestionError(null);
+    try {
+      // 1. Generate a reply. /api/engagement/generate-response is the
+      //    existing path the UI uses for inline AI. Any reply-generating
+      //    endpoint that returns { text, model } would work.
+      const genRes = await fetch('/api/engagement/generate-response', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          organization_id: companyId,
+          platform: selectedSignal.platform,
+          original_message: selectedSignal.content ?? '',
+          author_name: selectedSignal.author ?? null,
+          signal_id: selectedSignal.id,
+        }),
+      });
+      const genData = await genRes.json().catch(() => ({} as Record<string, unknown>));
+      if (!genRes.ok) {
+        throw new Error(((genData as { error?: string }).error) ?? 'Suggestion generation failed');
+      }
+      const text =
+        (genData as { text?: string; suggested_text?: string }).text ??
+        (genData as { suggested_text?: string }).suggested_text ??
+        '';
+      const model = (genData as { model?: string }).model ?? null;
+      if (!text) throw new Error('Suggestion text was empty');
+
+      // 2. Record suggestion shown.
+      const shownRes = await fetch('/api/engagement/ai-suggestion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          event: 'shown',
+          organization_id: companyId,
+          platform: selectedSignal.platform,
+          action_type: 'reply',
+          content: text,
+          model,
+          target_id: selectedSignal.id,
+        }),
+      });
+      const shownData = (await shownRes.json().catch(() => ({}))) as {
+        suggestion_id?: string;
+        correlation_id?: string;
+        error?: string;
+      };
+      if (!shownRes.ok) {
+        throw new Error(shownData.error ?? 'Could not record suggestion');
+      }
+
+      setSuggestion(text);
+      setSuggestionId(shownData.suggestion_id ?? null);
+      setSuggestionCorrelationId(shownData.correlation_id ?? null);
+      setSuggestionModel(model);
+
+      // Refresh intelligence after generating a suggestion — the
+      // acceptance-rate signal changes as soon as the suggestion row
+      // lands. Fire-and-forget; the UI already has the prior snapshot.
+      if (selectedSignal) fetchIntelligence(selectedSignal);
+    } catch (err: any) {
+      setSuggestionError(err?.message ?? 'Suggestion failed');
+    } finally {
+      setSuggestionBusy(false);
+    }
+  };
+
+  const acceptSuggestion = () => {
+    if (!suggestion) return;
+    setReplyText(suggestion);
+  };
+
+  const dismissSuggestion = () => {
+    resetSuggestion(false);
+  };
+
+  const toggleBookmark = async () => {
+    if (!selectedSignal || !companyId) return;
+    setBookmarkBusy(true);
+    setActionNotice(null);
+    try {
+      // Status-first bookmarking: 'reviewed' is the closest standing state
+      // in the signal_status enum. Switches back to 'new' on a second click.
+      const next = selectedSignal.signal_status === 'reviewed' ? 'new' : 'reviewed';
+      await updateSignalStatus(selectedSignal.id, next);
+      setActionNotice({
+        kind: 'success',
+        text: next === 'reviewed' ? 'Bookmarked.' : 'Bookmark removed.',
+      });
+    } catch (err: any) {
+      setActionNotice({ kind: 'error', text: err?.message ?? 'Bookmark failed' });
+    } finally {
+      setBookmarkBusy(false);
+    }
+  };
+
+  const markAsLead = async () => {
+    if (!selectedSignal || !companyId) return;
+    setLeadBusy(true);
+    setActionNotice(null);
+    try {
+      const res = await fetch('/api/engagement/signal/status', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          signalId: selectedSignal.id,
+          status: 'actioned',
+          companyId,
+          lead: true,
+        }),
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(msg || 'Mark as lead failed');
+      }
+      setSelectedSignal((s) =>
+        s?.id === selectedSignal.id ? { ...s, signal_status: 'actioned' } : s,
+      );
+      setSignals((prev) =>
+        prev.map((x) => (x.id === selectedSignal.id ? { ...x, signal_status: 'actioned' } : x)),
+      );
+      setActionNotice({ kind: 'success', text: 'Marked as lead.' });
+    } catch (err: any) {
+      setActionNotice({ kind: 'error', text: err?.message ?? 'Mark as lead failed' });
+    } finally {
+      setLeadBusy(false);
+    }
+  };
+
+  const exportToCrm = async () => {
+    if (!selectedSignal || !companyId) return;
+    setCrmBusy(true);
+    setActionNotice(null);
+    try {
+      const res = await fetch('/api/engagement/crm-export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          organization_id: companyId,
+          signal_id: selectedSignal.id,
+          platform: selectedSignal.platform,
+          author: selectedSignal.author,
+          content: selectedSignal.content,
+          conversation_url: selectedSignal.conversation_url,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? 'Export failed');
+      }
+      setActionNotice({
+        kind: 'success',
+        text: (data as { message?: string }).message ?? 'Exported to CRM.',
+      });
+    } catch (err: any) {
+      setActionNotice({ kind: 'error', text: err?.message ?? 'Export failed' });
+    } finally {
+      setCrmBusy(false);
     }
   };
 
@@ -237,7 +530,17 @@ export default function EngagementInboxPage() {
                   {signals.map((sig) => (
                     <li
                       key={sig.id}
-                      onClick={() => { setSelectedSignal(sig); setReplyText(''); setReplyError(null); setReplySuccess(false); }}
+                      onClick={() => {
+                        // Switching signals resets reply state + dismisses
+                        // any unused suggestion on the prior signal.
+                        resetSuggestion(true);
+                        setSelectedSignal(sig);
+                        setReplyText('');
+                        setReplyError(null);
+                        setReplySuccess(false);
+                        setIntelligence(null);
+                        fetchIntelligence(sig);
+                      }}
                       className={`p-3 cursor-pointer hover:bg-gray-50 ${
                         selectedSignal?.id === sig.id ? 'bg-indigo-50' : ''
                       }`}
@@ -325,13 +628,142 @@ export default function EngagementInboxPage() {
                   <div className="text-xs text-gray-500 pt-2">
                     Linked activity: {selectedSignal.activity_id}
                   </div>
-                  {/* Reply input */}
+                  {/* AI suggestion panel */}
                   <div className="pt-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-medium text-gray-700">
+                        AI suggestion
+                      </label>
+                      <button
+                        type="button"
+                        disabled={suggestionBusy}
+                        onClick={generateSuggestion}
+                        className="text-xs text-indigo-600 hover:underline disabled:opacity-50 inline-flex items-center gap-1"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        {suggestionBusy ? 'Generating...' : suggestion ? 'Regenerate' : 'Generate'}
+                      </button>
+                    </div>
+                    {suggestion && (
+                      <div className="rounded border border-indigo-200 bg-indigo-50 px-3 py-2 space-y-2">
+                        <p className="text-sm text-gray-900 whitespace-pre-wrap">{suggestion}</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={acceptSuggestion}
+                            className="px-2 py-1 rounded bg-indigo-600 text-white text-xs hover:bg-indigo-700"
+                          >
+                            Use suggestion
+                          </button>
+                          <button
+                            type="button"
+                            onClick={dismissSuggestion}
+                            className="px-2 py-1 rounded border border-gray-300 text-xs hover:bg-white"
+                          >
+                            Dismiss
+                          </button>
+                          {suggestionModel && (
+                            <span className="text-[10px] text-gray-500 ml-auto">model: {suggestionModel}</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {suggestionError && (
+                      <p className="text-xs text-red-600">{suggestionError}</p>
+                    )}
+
+                    {/*
+                      Intelligence block.
+                      · Insight line (max 1) under the suggestion panel.
+                      · Confidence badge always shown when intelligence loaded.
+                      · Recommendation CTA only when confidence === 'high'.
+                      Hidden entirely if no useful data arrived.
+                    */}
+                    {intelligence && (intelligence.insight || intelligence.confidence) && (
+                      <div className="space-y-1.5 pt-1">
+                        {intelligence.insight && (
+                          <div className="flex items-start gap-1.5 text-xs text-gray-700">
+                            <Lightbulb className="h-3.5 w-3.5 mt-0.5 text-amber-500 shrink-0" />
+                            <span>{intelligence.insight}</span>
+                          </div>
+                        )}
+                        {intelligence.confidence && (
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <ShieldCheck
+                              className={`h-3.5 w-3.5 ${
+                                intelligence.confidence.level === 'high'
+                                  ? 'text-green-600'
+                                  : intelligence.confidence.level === 'medium'
+                                  ? 'text-yellow-600'
+                                  : 'text-gray-400'
+                              }`}
+                            />
+                            <span className="text-gray-600">
+                              Execution Confidence:{' '}
+                              <span className="font-medium capitalize">
+                                {intelligence.confidence.level}
+                              </span>{' '}
+                              ({intelligence.confidence.score}%)
+                            </span>
+                          </div>
+                        )}
+                        {intelligence.confidence?.level === 'high' &&
+                          intelligence.recommendation && (
+                            <div className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs flex items-center justify-between gap-2">
+                              <div className="flex items-start gap-1.5 min-w-0">
+                                <Zap className="h-3.5 w-3.5 text-emerald-600 mt-0.5 shrink-0" />
+                                <div className="min-w-0">
+                                  <div className="font-medium text-emerald-900">
+                                    Suggested Action
+                                  </div>
+                                  <div className="text-emerald-800 truncate">
+                                    {intelligence.recommendation.label}
+                                  </div>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  // "Try This" opts into the recommendation type.
+                                  // For short_reply / ask_question we nudge the
+                                  // text state; for dm_followup we leave the
+                                  // action explicit to the user.
+                                  const rec = intelligence.recommendation;
+                                  if (!rec) return;
+                                  if (rec.type === 'ask_question' && !replyText.trim()) {
+                                    setReplyText('What specifically are you trying to solve? ');
+                                  } else if (rec.type === 'short_reply' && replyText.length > 160) {
+                                    setReplyText(replyText.slice(0, 160));
+                                  }
+                                }}
+                                className="px-2 py-1 rounded bg-emerald-600 text-white text-[11px] hover:bg-emerald-700 shrink-0"
+                              >
+                                Try This
+                              </button>
+                            </div>
+                          )}
+                      </div>
+                    )}
+                    {intelligenceBusy && !intelligence && (
+                      <p className="text-[11px] text-gray-400">Analyzing context…</p>
+                    )}
+                  </div>
+
+                  {/* Reply input */}
+                  <div className="pt-2 space-y-2">
                     <label className="block text-xs font-medium text-gray-700">Reply</label>
                     <textarea
                       rows={3}
                       value={replyText}
-                      onChange={(e) => { setReplyText(e.target.value); setReplyError(null); setReplySuccess(false); }}
+                      onChange={(e) => {
+                        setReplyText(e.target.value);
+                        setReplyError(null);
+                        setReplySuccess(false);
+                        // Once the user types, the suggestion is no longer
+                        // "fresh" — resets used flag so dismiss records
+                        // truthfully on panel change.
+                        setSuggestionUsed(false);
+                      }}
                       placeholder="Type your reply..."
                       className="w-full rounded border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
@@ -340,6 +772,21 @@ export default function EngagementInboxPage() {
                     )}
                     {replySuccess && (
                       <p className="text-xs text-green-600">Reply sent successfully.</p>
+                    )}
+                    {/*
+                      Hints block. Max 2, rendered as a tight bulleted list
+                      immediately below the reply input so they sit at the
+                      user's decision point. Hidden when no hints returned.
+                    */}
+                    {intelligence && intelligence.hints && intelligence.hints.length > 0 && (
+                      <ul className="text-xs text-gray-600 space-y-0.5 pt-1">
+                        {intelligence.hints.slice(0, 2).map((hint, i) => (
+                          <li key={i} className="flex items-start gap-1.5">
+                            <span className="text-gray-400 mt-0.5">•</span>
+                            <span>{hint}</span>
+                          </li>
+                        ))}
+                      </ul>
                     )}
                     <button
                       type="button"
@@ -352,36 +799,49 @@ export default function EngagementInboxPage() {
                     </button>
                   </div>
 
+                  {/*
+                    Secondary actions. The primary "Reply" submit lives in
+                    the textarea above; the earlier orphan Reply button
+                    here was removed so there is exactly one way to send.
+                  */}
                   <div className="flex flex-wrap gap-2 pt-2">
                     <button
                       type="button"
-                      className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 flex items-center gap-1.5"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                      Reply
-                    </button>
-                    <button
-                      type="button"
-                      className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 flex items-center gap-1.5"
+                      disabled={bookmarkBusy}
+                      onClick={toggleBookmark}
+                      className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5"
                     >
                       <Bookmark className="h-4 w-4" />
-                      Bookmark
+                      {selectedSignal.signal_status === 'reviewed' ? 'Bookmarked' : 'Bookmark'}
                     </button>
                     <button
                       type="button"
-                      className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 flex items-center gap-1.5"
+                      disabled={leadBusy}
+                      onClick={markAsLead}
+                      className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5"
                     >
                       <UserPlus className="h-4 w-4" />
                       Mark as lead
                     </button>
                     <button
                       type="button"
-                      className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 flex items-center gap-1.5"
+                      disabled={crmBusy}
+                      onClick={exportToCrm}
+                      className="px-3 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1.5"
                     >
                       <Send className="h-4 w-4" />
                       Export to CRM
                     </button>
                   </div>
+                  {actionNotice && (
+                    <p
+                      className={`text-xs ${
+                        actionNotice.kind === 'success' ? 'text-green-600' : 'text-red-600'
+                      }`}
+                    >
+                      {actionNotice.text}
+                    </p>
+                  )}
                 </div>
               </>
             ) : (

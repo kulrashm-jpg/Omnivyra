@@ -1,4 +1,5 @@
 import { composeReport } from './reportComposerService';
+import { supabase } from '../db/supabaseClient';
 import {
   listCompanyIntelligenceUnits,
   mapDecisionToIntelligenceUnit,
@@ -13,6 +14,44 @@ import {
 } from './reportDecisionUtils';
 import { buildPublicDomainAuditDecisions } from './publicDomainAuditService';
 import { buildDecisionBusinessImpact } from './businessImpactFormatter';
+import { getAnalyticsReadiness } from './analyticsDataReadinessService';
+import {
+  getTrafficSources,
+  getTopPages,
+  getSessionMetrics,
+  getDropOffPages,
+  getBasicFunnel,
+  getConversionSummary,
+  type BehaviorQueryOpts,
+  type TrafficSourceRow,
+  type TopPageRow,
+  type SessionMetrics,
+  type DropOffPageRow,
+  type FunnelResult,
+  type ConversionSummary,
+} from './behaviorAnalyticsService';
+import {
+  generateBehaviorInsights,
+  type BehaviorInsight,
+  type BehaviorInsightReportData,
+} from './behaviorInsightService';
+import {
+  generateBehaviorRecommendations,
+  type BehaviorRecommendation,
+  type BehaviorRecommendationReportData,
+} from './behaviorRecommendationService';
+import { performanceSections } from './performanceReportSections';
+import {
+  performanceRendererMap,
+  performanceReportStyles,
+  renderPerformanceDocument,
+  renderPerformanceStateDocument,
+  type PerformanceRenderMeta,
+} from './performanceHtmlRenderer';
+import {
+  mapPerformanceReportData,
+  type PerformanceReportMappedData,
+} from './performanceReportMapper';
 
 const PERFORMANCE_SECTION_DEFINITIONS = [
   {
@@ -193,5 +232,197 @@ export async function composePerformanceReport(
       label: null,
     },
     sections,
+  };
+}
+
+// =============================================================================
+// Report 2 — Behavior + Funnel Intelligence
+//
+// Data-layer aggregation of the six behaviorAnalyticsService queries into a
+// single structured JSON, gated on analytics readiness. Does NOT touch the
+// sections-based `composeReport` above or the snapshot report pipeline.
+// =============================================================================
+
+export interface BehaviorReportData {
+  traffic_sources: TrafficSourceRow[];
+  top_pages:       TopPageRow[];
+  session_metrics: SessionMetrics;
+  drop_off_pages:  DropOffPageRow[];
+  funnel:          FunnelResult;
+  conversions:     ConversionSummary;
+  insights:        BehaviorInsight[];
+  recommendations: BehaviorRecommendation[];
+}
+
+export type BehaviorReportResponse =
+  | {
+      status: 'no_data' | 'low_data';
+      message: string;
+      readiness: {
+        reason: string;
+        last_successful_ingestion_at: string | null;
+        events_last_30_days: number;
+      };
+    }
+  | ({ status: 'partial'; generated_at: string; window_days: number; warnings: string[] } & BehaviorReportData)
+  | ({ status: 'ready'; generated_at: string; window_days: number; warnings: string[] } & BehaviorReportData);
+
+export type PerformanceIntelligenceReportResponse =
+  | {
+      report_type: 'performance_intelligence';
+      status: 'no_data' | 'low_data';
+      message: string;
+      readiness: {
+        reason: string;
+        last_successful_ingestion_at: string | null;
+        events_last_30_days: number;
+      };
+      html: string;
+    }
+  | {
+      report_type: 'performance_intelligence';
+      status: 'ready' | 'partial';
+      generated_at: string;
+      window_days: number;
+      warnings: string[];
+      sections: typeof performanceSections;
+      mapped_data: PerformanceReportMappedData;
+      html: string;
+      source_data: BehaviorReportData;
+    };
+
+type ReadyBehaviorReportResponse = Extract<BehaviorReportResponse, { status: 'ready' | 'partial' }>;
+
+function isReadyBehaviorReportResponse(value: BehaviorReportResponse): value is ReadyBehaviorReportResponse {
+  return value.status === 'ready' || value.status === 'partial';
+}
+
+/**
+ * Build the Behavior + Funnel Intelligence report for a company.
+ *
+ * Gating: calls getAnalyticsReadiness(companyId) first. If not ready, returns
+ * { status: 'not_ready', reason } without running any behavior queries.
+ *
+ * Window: default 30 days, overridable via opts.sinceDays. All six underlying
+ * queries use the same window so their counts are directly comparable.
+ */
+export async function composeBehaviorReport(
+  companyId: string,
+  opts?: BehaviorQueryOpts,
+): Promise<BehaviorReportResponse> {
+  const readiness = await getAnalyticsReadiness(companyId);
+  if (!readiness.ready) {
+    return {
+      status: readiness.events_last_30_days === 0 ? 'no_data' : 'low_data',
+      message: readiness.events_last_30_days === 0 ? 'No analytics data available' : 'Not enough data yet',
+      readiness,
+    };
+  }
+
+  const [trafficSources, topPages, sessionMetrics, dropOffPages, funnel, conversions] = await Promise.all([
+    getTrafficSources(companyId, opts),
+    getTopPages(companyId, opts),
+    getSessionMetrics(companyId, opts),
+    getDropOffPages(companyId, opts),
+    getBasicFunnel(companyId, opts),
+    getConversionSummary(companyId, opts),
+  ]);
+  const warnings: string[] = [];
+  if (funnel.inferred_entry) {
+    warnings.push('Funnel entry inferred from first event per session because session_start was missing.');
+  }
+  if (trafficSources.length === 0) warnings.push('Traffic source breakdown is empty.');
+  if (topPages.length === 0) warnings.push('Top pages section is empty.');
+  if (dropOffPages.length === 0) warnings.push('Drop-off page section is empty.');
+  if (conversions.total_conversions === 0) warnings.push('No conversions found in the reporting window.');
+
+  const insights = generateBehaviorInsights({
+    traffic_sources: trafficSources,
+    top_pages: topPages,
+    drop_off_pages: dropOffPages,
+    funnel,
+    conversions,
+  });
+  const reportData: BehaviorRecommendationReportData = {
+    traffic_sources: trafficSources,
+    top_pages: topPages,
+    drop_off_pages: dropOffPages,
+    funnel,
+    conversions,
+    session_metrics: sessionMetrics,
+  };
+  const recommendations = generateBehaviorRecommendations(insights, reportData);
+
+  return {
+    status: warnings.length > 0 ? 'partial' : 'ready',
+    generated_at: new Date().toISOString(),
+    window_days: opts?.sinceDays ?? 30,
+    warnings,
+    traffic_sources: trafficSources,
+    top_pages: topPages,
+    session_metrics: sessionMetrics,
+    drop_off_pages: dropOffPages,
+    funnel,
+    conversions,
+    insights,
+    recommendations,
+  };
+}
+
+export function renderPerformanceReport(
+  data: PerformanceReportMappedData,
+  meta?: PerformanceRenderMeta,
+): string {
+  const renderedSections = performanceSections
+    .map((sectionKey) => performanceRendererMap[sectionKey](data))
+    .join('');
+
+  return renderPerformanceDocument(renderedSections, meta);
+}
+
+export async function composePerformanceIntelligenceReport(
+  companyId: string,
+  opts?: BehaviorQueryOpts,
+): Promise<PerformanceIntelligenceReportResponse> {
+  const base = await composeBehaviorReport(companyId, opts);
+
+  if (base.status === 'no_data' || base.status === 'low_data') {
+    return {
+      report_type: 'performance_intelligence',
+      status: base.status,
+      message: base.message,
+      readiness: base.readiness,
+      html: renderPerformanceStateDocument({
+        status: base.status,
+        message: base.message,
+      }),
+    };
+  }
+
+  if (!isReadyBehaviorReportResponse(base)) {
+    throw new Error('Unexpected behavior report status');
+  }
+
+  const reportData: ReadyBehaviorReportResponse = base;
+  const mappedData = mapPerformanceReportData(reportData);
+
+  return {
+    report_type: 'performance_intelligence',
+    status: reportData.status,
+    generated_at: reportData.generated_at,
+    window_days: reportData.window_days,
+    warnings: reportData.warnings,
+    sections: performanceSections,
+    mapped_data: mappedData,
+    html: renderPerformanceDocument(
+      performanceSections.map((sectionKey) => performanceRendererMap[sectionKey](mappedData)).join(''),
+      {
+        dateRangeLabel: `Last ${reportData.window_days} days`,
+        warning: reportData.status === 'partial'
+          ? 'Some sections are incomplete. Review the warnings before acting on this report.'
+          : null,
+      },
+    ),
+    source_data: reportData,
   };
 }

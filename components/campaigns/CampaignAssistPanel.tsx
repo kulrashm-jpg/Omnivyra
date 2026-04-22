@@ -8,7 +8,7 @@
  *
  * Blogs shown in two tabs:
  *   "Your Content"     — company's own published blogs
- *   "Omnivyra Library" — platform knowledge library (public_blogs)
+ *   "OmniVyra Library" — platform knowledge library (public_blogs)
  *
  * Fully optional — skipping sends null for all context fields so the
  * existing campaign flow is completely unaffected.
@@ -314,7 +314,7 @@ export function CampaignAssistPanel({
                     }`}
                   >
                     <Globe className="h-3 w-3" />
-                    Omnivyra Insights
+                    OmniVyra Insights
                     {omnivyraBlogs.length > 0 && (
                       <span className="rounded-full bg-gray-200 px-1.5 py-0.5 text-[10px] font-semibold text-gray-600">
                         {omnivyraBlogs.length}
@@ -375,7 +375,7 @@ export function CampaignAssistPanel({
                       const sel = selectedIds.has(b.id);
                       const isNew = b.views_count === 0 && b.likes_count === 0;
                       const popularity = b.source === 'company' ? b.views_count : b.views_count + b.likes_count;
-                      const sourceLabel = b.source === 'company' ? 'Company Blog' : 'Omnivyra Insight';
+                      const sourceLabel = b.source === 'company' ? 'Company Blog' : 'OmniVyra Insight';
                       const sourceLabelCls = b.source === 'company'
                         ? 'bg-blue-50 text-[#0B5ED7]'
                         : 'bg-purple-50 text-purple-600';

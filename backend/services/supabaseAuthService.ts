@@ -56,6 +56,24 @@ function extractCookieToken(req: NextApiRequest): string | null {
   return null;
 }
 
+function decodeJwtClaims(token: string): { sub?: string; email?: string | null } | null {
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const payload = parts[1]
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(parts[1].length / 4) * 4, '=');
+    const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+    return {
+      sub: typeof decoded?.sub === 'string' ? decoded.sub : undefined,
+      email: typeof decoded?.email === 'string' ? decoded.email : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function resolveAuthUser(token: string): Promise<{ id: string; email?: string | null } | null> {
   let authResult: Awaited<ReturnType<typeof db.auth.getUser>>;
   try {
@@ -64,9 +82,26 @@ async function resolveAuthUser(token: string): Promise<{ id: string; email?: str
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Supabase auth timeout')), 5_000)),
     ]);
   } catch (error) {
-    logger.error('supabase_auth_lookup_failed', {
-      message: error instanceof Error ? error.message : String(error),
-    });
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('supabase_auth_lookup_failed', { message });
+
+    // Local-dev fallback: if Supabase auth is timing out but we do have a JWT-shaped
+    // session token cookie, use its claims to resolve the app user row. This keeps
+    // local callbacks and protected routes usable during transient Supabase auth timeouts.
+    if (process.env.NODE_ENV === 'development' && /timeout/i.test(message)) {
+      const claims = decodeJwtClaims(token);
+      if (claims?.sub) {
+        logger.warn('supabase_auth_timeout_fallback_claims', {
+          sub: claims.sub,
+          hasEmail: !!claims.email,
+        });
+        return {
+          id: claims.sub,
+          email: claims.email ?? null,
+        };
+      }
+    }
+
     return null;
   }
 

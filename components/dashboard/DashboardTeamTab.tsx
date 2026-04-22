@@ -124,7 +124,7 @@ export function DashboardIntegrationsTab() {
           </div>
           <p className="text-sm text-gray-600">Build embeddable forms for your website, connect external forms via webhook, and view all captured leads in one place.</p>
           <button
-            onClick={() => router.push('/leads')}
+            onClick={() => router.push('/integrations?focus=website')}
             className="mt-auto w-full px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
           >
             Open Lead Capture →
@@ -142,7 +142,7 @@ export function DashboardIntegrationsTab() {
           </div>
           <p className="text-sm text-gray-600">Connect WordPress, custom blog APIs, and outbound lead webhooks to automate publishing and data routing.</p>
           <button
-            onClick={() => router.push('/integrations')}
+            onClick={() => router.push('/integrations?focus=data')}
             className="mt-auto w-full px-4 py-2 bg-purple-600 text-white text-sm font-semibold rounded-lg hover:bg-purple-700 transition-colors"
           >
             Open Integrations →

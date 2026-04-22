@@ -1,45 +1,93 @@
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { getAuthToken } from '@/utils/getAuthToken';
-import { Bell, RefreshCw, TrendingDown, TrendingUp, Lightbulb } from 'lucide-react';
-import EmptyState from '../shared/EmptyState';
-import ExamplePreview from '../shared/ExamplePreview';
+import { Bell, RefreshCw, ArrowRight, CircleCheck, Clock3, AlertTriangle } from 'lucide-react';
 
-type AutomationEvent = {
+type HighlightTone = 'good' | 'warn' | 'neutral';
+
+type HighlightItem = {
   id: string;
-  type: 'scheduled' | 'content_change' | 'traffic_change';
-  domain: string;
-  triggered_at: string;
-  report_id: string | null;
-  details?: Record<string, unknown>;
+  title: string;
+  detail: string;
+  tone: HighlightTone;
+  sourceLabel?: string;
+  sourceHref?: string;
 };
 
-type NotificationEvent = {
-  id: string;
-  type: 'improvement' | 'decline' | 'opportunity';
-  domain: string;
-  message: string;
-  linked_report_id: string | null;
-  created_at: string;
+type FeedResponse = {
+  automationPrioritySignal?: HighlightItem | null;
+  snapshotPrioritySignal?: HighlightItem | null;
+  showSection?: boolean;
 };
 
-function timeAgo(iso: string): string {
-  const deltaSeconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
-  if (deltaSeconds < 60) return 'just now';
-  if (deltaSeconds < 3600) return `${Math.floor(deltaSeconds / 60)}m ago`;
-  if (deltaSeconds < 86400) return `${Math.floor(deltaSeconds / 3600)}h ago`;
-  return `${Math.floor(deltaSeconds / 86400)}d ago`;
+function toneMeta(tone: HighlightTone): { icon: React.ReactNode; accent: string; label: string } {
+  if (tone === 'good') {
+    return {
+      icon: <CircleCheck className="h-4 w-4 text-emerald-600" />,
+      accent: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      label: 'Healthy',
+    };
+  }
+  if (tone === 'warn') {
+    return {
+      icon: <AlertTriangle className="h-4 w-4 text-amber-600" />,
+      accent: 'bg-amber-50 text-amber-700 border-amber-200',
+      label: 'Attention',
+    };
+  }
+  return {
+    icon: <Clock3 className="h-4 w-4 text-sky-600" />,
+    accent: 'bg-sky-50 text-sky-700 border-sky-200',
+    label: 'Review',
+  };
 }
 
-function notifIcon(type: NotificationEvent['type']) {
-  if (type === 'improvement') return <TrendingUp className="h-4 w-4 text-emerald-600" />;
-  if (type === 'decline') return <TrendingDown className="h-4 w-4 text-red-600" />;
-  return <Lightbulb className="h-4 w-4 text-amber-600" />;
+function SummaryRow({
+  label,
+  highlight,
+  fallback,
+}: {
+  label: string;
+  highlight: HighlightItem | null;
+  fallback: string;
+}) {
+  const meta = toneMeta(highlight?.tone ?? 'neutral');
+
+  return (
+    <div className="grid gap-3 border-t border-slate-100 py-4 first:border-t-0 first:pt-0 last:pb-0 md:grid-cols-[150px_minmax(0,1fr)_auto] md:items-start">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</div>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold leading-6 text-slate-900">
+          {highlight?.title || 'Not available yet'}
+        </p>
+        <p className="mt-1 text-sm leading-6 text-slate-600">
+          {highlight?.detail || fallback}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 md:flex-col md:items-end">
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${meta.accent}`}>
+          {meta.icon}
+          {meta.label}
+        </span>
+        {highlight?.sourceHref && highlight?.sourceLabel ? (
+          <Link
+            href={highlight.sourceHref}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 transition-colors hover:text-indigo-700"
+          >
+            {highlight.sourceLabel}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 export default function ReportAutomationActivityFeed({ companyId }: { companyId: string | null }) {
   const [loading, setLoading] = useState(false);
-  const [automationEvents, setAutomationEvents] = useState<AutomationEvent[]>([]);
-  const [notificationEvents, setNotificationEvents] = useState<NotificationEvent[]>([]);
+  const [showSection, setShowSection] = useState(false);
+  const [automationPrioritySignal, setAutomationPrioritySignal] = useState<HighlightItem | null>(null);
+  const [snapshotPrioritySignal, setSnapshotPrioritySignal] = useState<HighlightItem | null>(null);
 
   useEffect(() => {
     if (!companyId) return;
@@ -54,10 +102,11 @@ export default function ReportAutomationActivityFeed({ companyId }: { companyId:
           headers: { Authorization: `Bearer ${token}` },
         });
         if (!response.ok) return;
-        const json = await response.json();
+        const json = (await response.json()) as FeedResponse;
         if (cancelled) return;
-        setAutomationEvents(Array.isArray(json.automationEvents) ? json.automationEvents : []);
-        setNotificationEvents(Array.isArray(json.notificationEvents) ? json.notificationEvents : []);
+        setShowSection(Boolean(json.showSection));
+        setAutomationPrioritySignal(json.automationPrioritySignal ?? null);
+        setSnapshotPrioritySignal(json.snapshotPrioritySignal ?? null);
       } catch {
         // non-fatal
       } finally {
@@ -65,7 +114,7 @@ export default function ReportAutomationActivityFeed({ companyId }: { companyId:
       }
     }
 
-    load();
+    void load();
     const timer = setInterval(load, 60_000);
     return () => {
       cancelled = true;
@@ -73,78 +122,46 @@ export default function ReportAutomationActivityFeed({ companyId }: { companyId:
     };
   }, [companyId]);
 
+  if (!loading && !showSection) {
+    return null;
+  }
+
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <div className="flex items-center gap-2">
           <Bell className="h-4 w-4 text-indigo-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Snapshot Automation Activity</h3>
+          <h3 className="text-sm font-semibold text-gray-900">Latest Snapshot</h3>
         </div>
-        <div className="text-xs text-gray-500">Live feed</div>
+        <Link
+          href="/reports"
+          className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-900"
+        >
+          Open reports
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
       </div>
 
-      <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Latest Automation Triggers</p>
-          {loading ? (
-            <div className="text-sm text-gray-500 flex items-center gap-2">
-              <RefreshCw className="h-4 w-4 animate-spin" />
-              Loading automation events...
-            </div>
-          ) : automationEvents.length === 0 ? (
-            <EmptyState
-              title="See your first automation trigger"
-              description="Once snapshot monitoring is active, this feed will show what changed and why a new report was created."
-              primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
-              secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
-              examplePreview={<ExamplePreview variant="insight" />}
+      <div className="p-5">
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            Loading latest snapshot summary...
+          </div>
+        ) : (
+          <div>
+            <SummaryRow
+              label="Automation"
+              highlight={automationPrioritySignal}
+              fallback="The most important automation update should explain whether meaningful changes have justified a refresh yet."
             />
-          ) : (
-            <ul className="space-y-3">
-              {automationEvents.slice(0, 5).map((item) => (
-                <li key={item.id} className="rounded-lg border border-gray-100 px-3 py-2 bg-gray-50">
-                  <p className="text-sm text-gray-900">
-                    <span className="font-medium">{item.domain}</span> triggered by{' '}
-                    <span className="capitalize">{item.type.replace('_', ' ')}</span>
-                  </p>
-                  <p className="text-xs text-gray-500 mt-1">{timeAgo(item.triggered_at)}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Latest Snapshot Alerts</p>
-          {loading ? (
-            <div className="text-sm text-gray-500 flex items-center gap-2">
-              <RefreshCw className="h-4 w-4 animate-spin" />
-              Loading alert feed...
-            </div>
-          ) : notificationEvents.length === 0 ? (
-            <EmptyState
-              title="See your first report alert"
-              description="Alerts will call out wins, declines, and opportunities as soon as the system has enough signal."
-              primaryAction={{ label: 'Generate your first insight', href: '/dashboard?tab=intelligence&intelTab=market-pulse' }}
-              secondaryAction={{ label: 'Try with sample data', href: '/campaigns?sample=1' }}
-              examplePreview={<ExamplePreview variant="insight" />}
+            <SummaryRow
+              label="Snapshot"
+              highlight={snapshotPrioritySignal}
+              fallback="The latest snapshot should surface one clear, high-value takeaway from the report."
             />
-          ) : (
-            <ul className="space-y-3">
-              {notificationEvents.slice(0, 5).map((item) => (
-                <li key={item.id} className="rounded-lg border border-gray-100 px-3 py-2 bg-gray-50">
-                  <div className="flex items-start gap-2">
-                    <div className="mt-0.5">{notifIcon(item.type)}</div>
-                    <div>
-                      <p className="text-sm text-gray-900">{item.message}</p>
-                      <p className="text-xs text-gray-500 mt-1">{timeAgo(item.created_at)}</p>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -29,6 +29,13 @@ const postJson = async (path: string, body: Record<string, any>, authToken: stri
   return { status: response.status, data: payload };
 };
 
+const extractInstagramId = (result: { data?: any } | null): string | null => {
+  const data = result?.data;
+  if (!data || typeof data !== 'object') return null;
+  const candidate = data.id ?? null;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+};
+
 export const executeAction: PlatformConnector['executeAction'] = async (action, authToken) => {
   if (action.execution_mode && action.execution_mode !== 'api') {
     return { success: false, error: 'EXECUTION_MODE_NOT_ALLOWED' };
@@ -44,7 +51,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         { message: action.suggested_text },
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractInstagramId(result), platform_response: result };
     }
 
     if (action.action_type === 'like') {
@@ -53,7 +60,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         {},
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractInstagramId(result), platform_response: result };
     }
 
     if (action.action_type === 'share' || action.action_type === 'follow') {

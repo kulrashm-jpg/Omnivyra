@@ -72,3 +72,6 @@ export type WorkspaceNotice = {
   type: 'success' | 'error' | 'info';
   message: string;
 } | null;
+export default function ActivityWorkspaceTypesPage() {
+  return null;
+}

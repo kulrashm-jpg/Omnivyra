@@ -55,6 +55,29 @@ interface Token {
   token_type?: string;
 }
 
+async function downloadRemoteVideo(videoUrl: string): Promise<{
+  buffer: Buffer;
+  contentType: string;
+  contentLength: number;
+}> {
+  if (!/^https?:\/\//i.test(videoUrl)) {
+    throw new Error('YouTube upload expects an HTTP(S) video URL');
+  }
+
+  const response = await axios.get<ArrayBuffer>(videoUrl, {
+    responseType: 'arraybuffer',
+    maxContentLength: 1024 * 1024 * 1024,
+    maxBodyLength: 1024 * 1024 * 1024,
+  });
+
+  const buffer = Buffer.from(response.data);
+  return {
+    buffer,
+    contentType: response.headers['content-type'] || 'application/octet-stream',
+    contentLength: buffer.byteLength,
+  };
+}
+
 /**
  * Upload video file to YouTube
  * 
@@ -72,17 +95,12 @@ async function uploadVideoToYouTube(
   channelId: string,
   token: Token
 ): Promise<string> {
-  // For URL-based videos, we need to download and re-upload
-  // In production, you'd fetch the video file and upload it
-  
-  // Step 1: Initialize resumable upload
-  const initiateUrl = 'https://www.googleapis.com/upload/youtube/v3/videos';
-  
-  // Video metadata
+  const { buffer, contentType, contentLength } = await downloadRemoteVideo(videoUrl);
+
   const videoMetadata = {
     snippet: {
-      title: title,
-      description: description,
+      title,
+      description,
       tags: tags.slice(0, 50), // YouTube max 50 tags
       categoryId: '22', // People & Blogs (default)
       defaultLanguage: 'en',
@@ -94,9 +112,45 @@ async function uploadVideoToYouTube(
     },
   };
 
-  // For now, we'll use a simplified approach with video URL
-  // In production, implement full resumable upload protocol
-  throw new Error('YouTube video upload from URL requires downloading and re-uploading. Full implementation needed.');
+  const initiateResponse = await axios.post(
+    'https://www.googleapis.com/upload/youtube/v3/videos',
+    videoMetadata,
+    {
+      params: {
+        uploadType: 'resumable',
+        part: 'snippet,status',
+      },
+      headers: {
+        Authorization: `Bearer ${token.access_token}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Length': String(contentLength),
+        'X-Upload-Content-Type': contentType,
+      },
+      validateStatus: () => true,
+    }
+  );
+
+  const uploadUrl = initiateResponse.headers.location as string | undefined;
+  if (!uploadUrl) {
+    throw new Error(initiateResponse.data?.error?.message || 'Failed to initialize YouTube upload session');
+  }
+
+  const uploadResponse = await axios.put(uploadUrl, buffer, {
+    headers: {
+      Authorization: `Bearer ${token.access_token}`,
+      'Content-Length': String(contentLength),
+      'Content-Type': contentType,
+    },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    validateStatus: () => true,
+  });
+
+  if (uploadResponse.status < 200 || uploadResponse.status >= 300 || !uploadResponse.data?.id) {
+    throw new Error(uploadResponse.data?.error?.message || 'YouTube upload failed');
+  }
+
+  return String(uploadResponse.data.id);
 }
 
 /**
@@ -205,9 +259,6 @@ export async function publishToYouTube(
       videoTitle = videoTitle.substring(0, 97) + '...';
     }
 
-    // YouTube API endpoint for video upload
-    const apiUrl = 'https://www.googleapis.com/upload/youtube/v3/videos';
-    
     // Video metadata
     const videoMetadata = {
       snippet: {
@@ -265,15 +316,20 @@ export async function publishToYouTube(
       };
     }
 
-    // For new video uploads, full implementation needed
-    // This is a placeholder - full video upload requires resumable upload protocol
+    const uploadedVideoId = await uploadVideoToYouTube(
+      videoUrl,
+      videoTitle,
+      description.substring(0, 5000),
+      tags,
+      account.platform_user_id,
+      token
+    );
+
     return {
-      success: false,
-      error: {
-        code: 'YOUTUBE_UPLOAD_NOT_IMPLEMENTED',
-        message: 'Full video upload requires downloading and uploading video files. Please upload video to YouTube first, then use video ID.',
-        retryable: false,
-      },
+      success: true,
+      platform_post_id: uploadedVideoId,
+      post_url: `https://www.youtube.com/watch?v=${uploadedVideoId}`,
+      published_at: new Date(),
     };
   } catch (error: any) {
     console.error('YouTube API error:', error.response?.data || error.message);

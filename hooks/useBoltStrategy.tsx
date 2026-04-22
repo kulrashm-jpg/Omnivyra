@@ -588,6 +588,13 @@ export function useBoltStrategy() {
   // Content sharing mode
   const [sharingMode, setSharingMode] = useState<SharingMode>('ai');
 
+  // Campaign-level platform selection — user picks which connected platforms
+  // this campaign should target. Defaults to all BOLT-eligible platforms configured
+  // at company admin level once loaded.
+  const [availablePlatforms, setAvailablePlatforms] = useState<string[]>([]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [platformsLoading, setPlatformsLoading] = useState(false);
+
   // Campaign start date (YYYY-MM-DD) — defaults to today
   const [campaignStartDate, setCampaignStartDate] = useState<string>(
     () => new Date().toISOString().split('T')[0]
@@ -636,6 +643,7 @@ export function useBoltStrategy() {
       if (s.outcomeView)        setOutcomeView(s.outcomeView);
       if (s.sharingMode)        setSharingMode(s.sharingMode);
       if (s.campaignStartDate)  setCampaignStartDate(s.campaignStartDate);
+      if (Array.isArray(s.selectedPlatforms)) setSelectedPlatforms(s.selectedPlatforms);
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -653,10 +661,10 @@ export function useBoltStrategy() {
     try {
       sessionStorage.setItem(BOLT_STATE_KEY, JSON.stringify({
         topic, goals, audience, strategicFocus, offerings,
-        contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate,
+        contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms,
       }));
     } catch {}
-  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate]);
+  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms]);
 
   useEffect(() => {
     if (authChecked && !user?.userId) router.replace('/login');
@@ -675,6 +683,34 @@ export function useBoltStrategy() {
       .catch(() => {})
       .finally(() => setSuggestionsLoading(false));
   }, [companyId]);
+
+  // Load BOLT-eligible connected platforms for the campaign picker.
+  // On first load, default selectedPlatforms = all available (nothing deselected).
+  // Restored state from sessionStorage is preserved and filtered to the current
+  // available set (in case platforms were disconnected since last session).
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    setPlatformsLoading(true);
+    fetchWithAuth(`/api/bolt/available-platforms?companyId=${encodeURIComponent(companyId)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data?.platforms) ? (data.platforms as string[]) : [];
+        setAvailablePlatforms(list);
+        setSelectedPlatforms((prev) => {
+          const filtered = prev.filter((p) => list.includes(p));
+          return filtered.length > 0 ? filtered : list;
+        });
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setPlatformsLoading(false); });
+    return () => { cancelled = true; };
+  }, [companyId]);
+
+  function togglePlatform(p: string) {
+    setSelectedPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]);
+  }
 
   const _ef1 = !authChecked || isLoading;
   const _ef2 = !user?.userId;
@@ -779,6 +815,9 @@ export function useBoltStrategy() {
         : sharingMode === 'unique'
           ? { enabled: false }
           : true, // 'ai' → let AI decide
+      // User-picked platforms for this campaign (subset of company's connected platforms).
+      // Omitted when empty so the pipeline falls back to all eligible platforms.
+      ...(selectedPlatforms.length > 0 ? { selected_platforms: selectedPlatforms } : {}),
     };
 
     try {
@@ -1002,6 +1041,11 @@ export function useBoltStrategy() {
     setTopic,
     sharingMode,
     showChat,
+    availablePlatforms,
+    selectedPlatforms,
+    setSelectedPlatforms,
+    togglePlatform,
+    platformsLoading,
     sourceContentToken,
     sourcePayload,
     strategicFocus,

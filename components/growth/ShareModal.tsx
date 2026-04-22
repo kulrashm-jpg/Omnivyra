@@ -128,7 +128,7 @@ export default function ShareModal({ open, onClose, payload, onDownload }: Share
           {/* Footer: branding */}
           <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50">
             <p className="text-xs text-gray-400 text-center">
-              Shared with <a href="https://omnivyra.com" target="_blank" rel="noopener noreferrer" className="font-medium text-gray-500 hover:text-blue-600">Omnivyra</a>
+              Shared with <a href="https://omnivyra.com" target="_blank" rel="noopener noreferrer" className="font-medium text-gray-500 hover:text-blue-600">OmniVyra</a>
             </p>
           </div>
         </div>

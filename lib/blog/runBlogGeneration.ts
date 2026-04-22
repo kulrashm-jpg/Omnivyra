@@ -50,7 +50,7 @@ import {
 } from '../content/contentGenerationOrchestrator';
 import { getDefaultBlogTemplates, instantiateBlogTemplate } from './defaultBlogTemplates';
 import { deriveTemplateDepthGuidance } from './runBlogGenerationPureHelpers';
-import { buildStrategyInstructions } from '../content/companyStrategyPerspective';
+import { type CompanyIdentity } from '../content/companyContextBlock';
 import {
   defaultFetchAngleData,
   defaultFetchSeriesData,
@@ -247,12 +247,9 @@ export async function runBlogGeneration(
     }
   }
 
-  if (!contextualAnswers.strategy_perspective && companyContext?.strategyProfile) {
-    const strategyInstructions = buildStrategyInstructions(companyContext.strategyProfile);
-    if (strategyInstructions) {
-      contextualAnswers.strategy_perspective = strategyInstructions;
-    }
-  }
+  // Strategy perspective is NO LONGER injected into contextualAnswers (A2).
+  // It is now a MANDATORY part of the system prompt via buildIdentityLock +
+  // buildAntiGenericRules — propagated through companyIdentity below.
 
   if (!contextualAnswers.trend_context && companyContext) {
     const trendParts: string[] = [];
@@ -286,6 +283,24 @@ export async function runBlogGeneration(
 
   const hasContextualAnswers = Object.keys(contextualAnswers).length > 0;
 
+  // Build CompanyIdentity from companyContext for system-prompt-level enforcement.
+  // This is the SAME identity shape consumed by buildIdentityLock + buildAntiGenericRules.
+  const companyIdentity: CompanyIdentity | undefined = companyContext ? {
+    companyName: companyContext.companyName,
+    industry: companyContext.industry,
+    targetAudience: companyContext.audience,
+    coreProblem: companyContext.coreProblemStatement,
+    painPoints: companyContext.painSymptoms,
+    uniqueValue: companyContext.uniqueValue,
+    productsServices: companyContext.productsServices,
+    desiredTransformation: companyContext.desiredTransformation,
+    competitiveAdvantages: companyContext.competitiveAdvantages,
+    authorityDomains: companyContext.authorityDomains,
+    keyMessages: companyContext.keyMessages,
+    brandVoice: companyContext.brand_voice,
+    strategyProfile: companyContext.strategyProfile,
+  } : undefined;
+
   const baseInput: BlogGenerationInput = {
     ...themeInput,
     answers:        hasContextualAnswers ? contextualAnswers : undefined,
@@ -313,7 +328,7 @@ export async function runBlogGeneration(
           temperature:     0.7,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: buildAnglesSystemPrompt(contentType) },
+            { role: 'system', content: buildAnglesSystemPrompt(contentType, companyIdentity) },
             { role: 'user',   content: buildAnglesUserPrompt(baseInput) },
           ],
         });
@@ -414,6 +429,7 @@ export async function runBlogGeneration(
         company_id, topic, blogTable, cache_version, contentType, formatType,
         effectiveTemplateBlocks, effectiveTemplateName, targetWc, maxTokens,
         generationInput, ctx, confidence, selected_angle: selected_angle as BlogAngle | undefined,
+        companyIdentity,
       });
       if (templateResult !== null) return templateResult;
     }
@@ -431,9 +447,17 @@ export async function runBlogGeneration(
       effectiveTemplateName,
       confidence,
       ctx,
+      companyIdentity,
     });
 
-  } catch {
+  } catch (err) {
+    // C3: CompanyContextEnforcementError must propagate to the API route so
+    // the caller returns a 422 quality-gate response instead of silently
+    // shipping a weak fallback.
+    if (err instanceof Error && err.name === 'CompanyContextEnforcementError') {
+      throw err;
+    }
+
     const fallback       = buildGenerationFallback(generationInput);
     let content_blocks = htmlToBlocks(fallback.content_html);
 

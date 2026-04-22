@@ -14,7 +14,7 @@ export default function EngagementLeadsRedirectPage() {
   return (
     <>
       <Head>
-        <title>Redirecting to Active Leads | Omnivyra</title>
+        <title>Redirecting to Active Leads | OmniVyra</title>
       </Head>
       <div className="flex h-[calc(100vh-4rem)] items-center justify-center p-8 text-sm text-slate-500">
         Redirecting to Active Leads...

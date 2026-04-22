@@ -1,6 +1,16 @@
+/**
+ * POST /api/auth/reset
+ *
+ * Rate-limit gate for password reset. Always returns { ok: true } to avoid
+ * email enumeration. The client calls
+ * `supabase.auth.resetPasswordForEmail(email, { redirectTo })`
+ * directly afterwards; Supabase sends the email itself.
+ *
+ * Body: { email: string }
+ * No auth required.
+ */
+
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { sendReset } from '../../../backend/services/emailService';
-import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
@@ -20,17 +30,6 @@ export default async function handler(
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   if (!email) return res.status(400).json({ error: 'email is required' });
-
-  const origin = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
-  const { data: userRow } = await supabase
-    .from('users')
-    .select('id, is_deleted, has_password')
-    .eq('email', email)
-    .maybeSingle();
-
-  if (userRow && !(userRow as any).is_deleted && (userRow as any).has_password) {
-    await sendReset(email, `${origin}/auth/set-password?flow=recovery`, `auth-reset:${email}`);
-  }
 
   return res.status(200).json({ ok: true });
 }

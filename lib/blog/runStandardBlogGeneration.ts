@@ -35,7 +35,20 @@ import { injectInternalLinks } from './runBlogGenerationDataAccess';
 import type { OrchestratorResult } from '../content/contentGenerationOrchestrator';
 import type { BlogGenerationResult } from './blogRunnerTypes';
 import { getProfile } from '../../backend/services/companyProfileService';
-import { extractCompanyIdentity, scoreCompanyContext } from '../content/companyContextBlock';
+import {
+  extractCompanyIdentity,
+  scoreCompanyContext,
+  buildDiagnosticRetryReasons,
+  assertCompanyContextAcceptable,
+  CompanyContextEnforcementError,
+  validateSectionCompanyContext,
+  validateStrategyPresence,
+  getDynamicContextThreshold,
+  splitIntoSections,
+  MAX_CONTEXT_RETRIES,
+  MIN_RETRY_IMPROVEMENT_POINTS,
+  type CompanyIdentity,
+} from '../content/companyContextBlock';
 
 export interface StandardBlogGenerationParams {
   company_id: string;
@@ -50,6 +63,12 @@ export interface StandardBlogGenerationParams {
   effectiveTemplateName: string | undefined;
   confidence: 'high' | 'medium';
   ctx: OrchestratorResult | null;
+  /**
+   * Company identity for mandatory prompt-level enforcement.
+   * When present, every system prompt (initial + retries) is wrapped
+   * with buildIdentityLock + buildAntiGenericRules.
+   */
+  companyIdentity?: CompanyIdentity;
 }
 
 export async function runStandardHtmlBlogGeneration(
@@ -68,6 +87,7 @@ export async function runStandardHtmlBlogGeneration(
     effectiveTemplateName,
     confidence,
     ctx,
+    companyIdentity,
   } = params;
 
   const aiResult = await runCompletionWithOperation({
@@ -79,7 +99,7 @@ export async function runStandardHtmlBlogGeneration(
     response_format: { type: 'json_object' },
     max_tokens:      maxTokens,
     messages: [
-      { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any) },
+      { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity) },
       { role: 'user',   content: buildGenerationUserPrompt(generationInput) },
     ],
   });
@@ -95,6 +115,10 @@ export async function runStandardHtmlBlogGeneration(
     contentType === 'guide' ||
     contentType === 'story' ||
     contentType === 'whitepaper';
+
+  // Risk 3 metric: tally retries across the full generation so the final log
+  // reports a single retry_count even if the retry loop exits early.
+  let retryAttemptCount = 0;
 
   if (targetWc && targetWc >= 300) {
     const profileIdentity = extractCompanyIdentity(
@@ -125,6 +149,12 @@ export async function runStandardHtmlBlogGeneration(
       mustIncludePoints,
     });
     const initialContextScore = scoreCompanyContext(htmlText, profileIdentity, { contentType });
+    // C2: include company-context score in retry trigger criteria.
+    // Threshold is dynamic — long-form/whitepaper is held to stricter standards
+    // than a short story. See getDynamicContextThreshold.
+    const contextThreshold = getDynamicContextThreshold(contentType, targetWc);
+    const contextScoreWeak = !!companyIdentity && initialContextScore.score < contextThreshold;
+
     const classicDepthWeak =
       isClassicTemplate && (
         summaryCount === 0 ||
@@ -149,7 +179,9 @@ export async function runStandardHtmlBlogGeneration(
         (contentType === 'story' && (avgParagraphWords < 60 || h2Count < 3 || shortParagraphs >= 3))
       );
 
-    if (actualWords < minAcceptable || classicDepthWeak || managedLongformWeak) {
+    let finalContextScore = initialContextScore;
+
+    if (actualWords < minAcceptable || classicDepthWeak || managedLongformWeak || contextScoreWeak) {
       try {
         const contentLabel =
           contentType === 'whitepaper' ? 'whitepaper'
@@ -186,10 +218,21 @@ export async function runStandardHtmlBlogGeneration(
         let bestContextScore = initialContextScore;
         let previousAssistantOutput = aiResult.output ?? '';
 
-        const retryAttempts = isManagedLongformStandard ? 3 : (targetWc < 1200 ? 3 : 2);
+        // Risk 3: retry cap. Bound generation calls to MAX_CONTEXT_RETRIES
+        // (no more than 2 retries per request). Reduces the previous
+        // 3-attempt ceiling for managed longform — early exit on plateau
+        // recovers most of the missing ground.
+        const retryAttempts = MAX_CONTEXT_RETRIES;
+        let previousContextScore = bestContextScore.score;
+        let flatImprovementCount = 0;
+
         for (let attempt = 0; attempt < retryAttempts; attempt++) {
+          retryAttemptCount += 1;
+          // C2: context-score weakness is a retry trigger alongside depth/word/ref criteria.
+          const bestContextScoreWeak = !!companyIdentity && bestContextScore.score < contextThreshold;
           const currentWeak =
-            isManagedLongformStandard
+            bestContextScoreWeak ||
+            (isManagedLongformStandard
               ? (
                   bestWords < minAcceptable ||
                   bestSummaryCount === 0 ||
@@ -210,7 +253,7 @@ export async function runStandardHtmlBlogGeneration(
                   (targetWc >= 1600 && targetWc < 2000 && (bestAvgParagraphWords < 85 || bestShortParagraphs >= 3 || bestH2Count < 4)) ||
                   (targetWc >= 1200 && targetWc < 1600 && (bestAvgParagraphWords < 75 || bestShortParagraphs >= 2 || bestH2Count < 4)) ||
                   (targetWc < 1200 && (bestAvgParagraphWords < 70 || bestShortParagraphs >= 1 || bestH2Count < 3))
-                );
+                ));
 
           if (bestWords >= minAcceptable && !currentWeak) break;
 
@@ -225,6 +268,13 @@ export async function runStandardHtmlBlogGeneration(
           ];
           const depthFailureLines = missingDepthLines.length > 0 ? missingDepthLines : initialMissingDepthLines;
 
+          // B1 Step 4: diagnostic failure reasons — call out company-context,
+          // generic-language, and strategy-perspective failures explicitly so
+          // the model treats them as mandatory fixes, not soft suggestions.
+          const companyContextDiagnostic = companyIdentity
+            ? buildDiagnosticRetryReasons(bestContextScore, companyIdentity)
+            : '';
+
           const retryResult = await runCompletionWithOperation({
             operation:       'blogGeneration',
             companyId:       company_id,
@@ -234,7 +284,7 @@ export async function runStandardHtmlBlogGeneration(
             response_format: { type: 'json_object' },
             max_tokens:      maxTokens,
             messages: [
-              { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any) },
+              { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity) },
               { role: 'user',   content: buildGenerationUserPrompt(generationInput) },
               ...(previousAssistantOutput ? [{ role: 'assistant' as const, content: previousAssistantOutput }] : []),
               { role: 'user', content: `REJECTED: ${retryReason}\n\nRegenerate the COMPLETE ${contentLabel} from scratch with:\n- ${targetWc} words minimum\n- At least ${targetWc >= 1200 ? 4 : 3} strong H2 sections${contentType === 'story' ? '' : ', each with 3–5 full paragraphs (60–120 words per paragraph)'}\n- A fully written Summary that synthesizes the argument instead of repeating section labels\n- At least ${minimumRefs} credible reference entries for GEO authority${contentType === 'story' ? ' where appropriate' : ''}\n- Provide a real excerpt suitable for listings and a real meta description suitable for search engines\n- Use concrete examples, data, practitioner implications, and actionable analysis to fill each section\n- Make every major section feel complete, not merely adequate\n- Do NOT pad with filler — add genuine depth and detail\n- Do NOT create more than 6 H2 sections — make each section deeper instead of adding more thin sections\n- End each H2 section with a clear takeaway sentence\n\nReturn the same JSON format. The full ${contentLabel} must be ${targetWc}+ words and substantively deeper.` },
@@ -243,9 +293,12 @@ export async function runStandardHtmlBlogGeneration(
                     role: 'user' as const,
                     content:
                       `The previous draft is invalid because it failed to cover:\n${depthFailureLines.join('\n')}\n\n` +
-                      `You must explicitly include these in the revised draft.`,
+                      `You must explicitly include these in the revised draft.` +
+                      companyContextDiagnostic,
                   }]
-                : []),
+                : companyContextDiagnostic
+                  ? [{ role: 'user' as const, content: companyContextDiagnostic }]
+                  : []),
             ],
           });
           previousAssistantOutput = retryResult.output ?? previousAssistantOutput;
@@ -292,10 +345,50 @@ export async function runStandardHtmlBlogGeneration(
             bestDepthAudit = retryDepthAudit;
             bestContextScore = retryContextScore;
           }
+
+          // Risk 3: early exit on plateau. If the retry moved the context
+          // score by fewer than MIN_RETRY_IMPROVEMENT_POINTS, the model has
+          // stopped improving — further retries are latency for no gain.
+          const improvement = bestContextScore.score - previousContextScore;
+          if (improvement < MIN_RETRY_IMPROVEMENT_POINTS) {
+            flatImprovementCount += 1;
+          } else {
+            flatImprovementCount = 0;
+          }
+          previousContextScore = bestContextScore.score;
+
+          // Flat-trend guard: if the last attempt plateaued AND section /
+          // strategy checks are still failing, stop retrying — a third retry
+          // won't fix structural issues the first two couldn't.
+          if (flatImprovementCount >= 1 && companyIdentity) {
+            const peekSections = splitIntoSections(bestGenerated.content_html, contentType);
+            if (peekSections.length > 0) {
+              const peekCtx = validateSectionCompanyContext(peekSections, companyIdentity);
+              const peekStrat = validateStrategyPresence(peekSections);
+              if (peekCtx.shouldRetry && peekStrat.shouldRetry) {
+                break;
+              }
+            }
+          }
         }
 
         generated = ensureGeneratedMetadata(bestGenerated);
-      } catch { /* retry is best-effort — use original if it fails */ }
+        finalContextScore = bestContextScore;
+
+        // C3: hard-fail when retries could not bring the context score up to
+        // threshold. Do NOT silently ship the "best weak attempt" — surface
+        // the failure to the caller as CompanyContextEnforcementError so the
+        // API route can return 422.
+        if (companyIdentity) {
+          assertCompanyContextAcceptable(bestContextScore, contextThreshold);
+        }
+      } catch (retryError) {
+        // Re-throw enforcement errors; swallow only transient/transport errors.
+        if (retryError instanceof Error && retryError.name === 'CompanyContextEnforcementError') {
+          throw retryError;
+        }
+        /* retry is best-effort for non-enforcement failures — use original */
+      }
     }
 
     if (isManagedLongformStandard) {
@@ -304,6 +397,45 @@ export async function runStandardHtmlBlogGeneration(
       if (finalWords < Math.round(targetWc * 0.4)) {
         throw new Error(`Generated ${contentType} draft was incomplete (${finalWords} words for a ${targetWc}-word target).`);
       }
+    }
+
+    // C5 + C6: section-level enforcement. Run once after all retries have
+    // been applied. Uses shared splitIntoSections so the segmentation is
+    // consistent with the retry-loop plateau peek and with the template path.
+    if (companyIdentity) {
+      const sectionChunks = splitIntoSections(generated.content_html, contentType);
+
+      if (sectionChunks.length > 0) {
+        const sectionContextCheck = validateSectionCompanyContext(sectionChunks, companyIdentity);
+        const strategyCheck = validateStrategyPresence(sectionChunks);
+
+        if (sectionContextCheck.shouldRetry || strategyCheck.shouldRetry) {
+          const issues: string[] = [];
+          if (sectionContextCheck.shouldRetry) {
+            issues.push(`${sectionContextCheck.failingSections}/${sectionContextCheck.totalSections} sections lack company-specific context`);
+          }
+          if (strategyCheck.shouldRetry) {
+            issues.push(`${strategyCheck.failingSections}/${strategyCheck.totalSections} sections missing contrarian/POV/strategic markers`);
+          }
+          // Reuse existing enforcement error so the API route handler treats
+          // this uniformly with the C1 threshold failure.
+          throw new CompanyContextEnforcementError(
+            0,
+            contextThreshold,
+            issues,
+          );
+        }
+      }
+
+      // Risk 1: observability. Emit a single structured log per generation
+      // capturing the threshold, final score, and retry count.
+        console.info('[content-enforcement]', {
+          contentType,
+          target_words: targetWc,
+          threshold: contextThreshold,
+          final_score: finalContextScore.score,
+          retry_count: retryAttemptCount,
+        });
     }
   }
 
@@ -336,6 +468,16 @@ export async function runStandardHtmlBlogGeneration(
 
     if (qualityScore.total < 75 && qualityScore.issues.length > 0) {
       try {
+        // B1 Step 4: pull a fresh company-context score so the quality retry
+        // also surfaces generic / missing-identity / perspective failures.
+        const qualityRetryText = generated.content_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        const qualityContextScore = companyIdentity
+          ? scoreCompanyContext(qualityRetryText, companyIdentity, { contentType })
+          : null;
+        const qualityCompanyDiagnostic = (qualityContextScore && companyIdentity)
+          ? buildDiagnosticRetryReasons(qualityContextScore, companyIdentity)
+          : '';
+
         const qualityRetry = await runCompletionWithOperation({
           operation:       'blogGeneration',
           companyId:       company_id,
@@ -345,7 +487,7 @@ export async function runStandardHtmlBlogGeneration(
           response_format: { type: 'json_object' },
           max_tokens:      maxTokens,
           messages: [
-            { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any) },
+            { role: 'system', content: buildGenerationSystemPrompt(targetWc, contentType as any, formatType as any, companyIdentity) },
             { role: 'user',   content: buildGenerationUserPrompt(generationInput) },
             ...(aiResult.output ? [{ role: 'assistant' as const, content: aiResult.output }] : []),
             {
@@ -359,7 +501,8 @@ export async function runStandardHtmlBlogGeneration(
                 `- Fill every required structural block so the visible quality suggestions are actually resolved\n` +
                 `- Provide a real excerpt, meta title, and meta description\n` +
                 `- Include enough references for GEO authority and internal links where possible\n` +
-                `- Return the same JSON format only.`,
+                `- Return the same JSON format only.` +
+                qualityCompanyDiagnostic,
             },
           ],
         });

@@ -62,7 +62,9 @@ import { archiveOldSignals } from '../jobs/engagementSignalArchiveJob';
 import { runEngagementOpportunityScanner } from '../jobs/engagementOpportunityScanner';
 import { runDailyIntelligence } from '../schedulers/intelligenceScheduler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
+import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runConnectorTokenRefreshJob } from '../jobs/connectorTokenRefreshJob';
+import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
   getLeadThreadRecomputeQueue,
@@ -115,12 +117,22 @@ const PERFORMANCE_AGGREGATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const CAMPAIGN_HEALTH_EVALUATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const DAILY_INTELLIGENCE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 3 AM daily (0 3 * * *)
 const INTELLIGENCE_EVENT_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+const WEEKLY_PRICING_ANALYSIS_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // weekly
 const ENGAGEMENT_DIGEST_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const ENGAGEMENT_SIGNAL_SCHEDULER_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
 const ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS = 24 * 60 * 60 * 1000; // nightly
 const ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS = 4 * 60 * 60 * 1000; // every 4 hours
 const CONNECTOR_TOKEN_REFRESH_INTERVAL_MS      = 6 * 60 * 60 * 1000;  // every 6 hours
+const GA4_INGESTION_INTERVAL_MS                = 6 * 60 * 60 * 1000;  // every 6 hours
 const CONFIDENCE_CALIBRATION_INTERVAL_MS       = 7 * 24 * 60 * 60 * 1000; // weekly
+const COMMUNITY_AI_LEASE_REAP_INTERVAL_MS      = 30 * 1000;               // every 30 seconds
+const COMMUNITY_AI_METRIC_DLQ_FLUSH_INTERVAL_MS = 60 * 1000;              // every 60 seconds
+const COMMUNITY_AI_METRICS_ROLLUP_INTERVAL_MS   = 60 * 60 * 1000;         // hourly
+const RECENT_POSTS_COMMENT_INGEST_INTERVAL_MS   = 10 * 60 * 1000;         // every 10 minutes
+const RPA_ARTIFACT_PRUNE_INTERVAL_MS            = 6 * 60 * 60 * 1000;     // every 6 hours
+const RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS      = 60 * 1000;              // every 60 seconds
+const RPA_RETRY_FLUSH_INTERVAL_MS               = 90 * 1000;              // every 90 seconds
+const INTELLIGENCE_PATTERN_LEARN_INTERVAL_MS    = 12 * 60 * 1000;         // every 12 minutes
 
 // ── Publish safety-net scheduler ─────────────────────────────────────────────
 // Posts are now enqueued with a BullMQ `delay` at the moment they are scheduled
@@ -225,11 +237,13 @@ let lastPerformanceAggregationRun = 0;
 let lastCampaignHealthEvaluationRun = 0;
 let lastDailyIntelligenceRun = 0;
 let lastIntelligenceEventCleanupRun = 0;
+let lastWeeklyPricingAnalysisRun = 0;
 let lastEngagementDigestRun = 0;
 let lastEngagementSignalSchedulerRun = 0;
 let lastEngagementSignalArchiveRun = 0;
 let lastEngagementOpportunityScannerRun = 0;
 let lastConnectorTokenRefreshRun = 0;
+let lastGa4IngestionRun = 0;
 let lastLeadThreadQueueCleanupRun = 0;
 let lastConfidenceCalibrationRun = 0;
 let lastScheduledLeadRunHour = -1;
@@ -316,11 +330,13 @@ async function startCron() {
     lastCampaignHealthEvaluationRun     = saved.campaignHealthEvaluation    ?? 0;
     lastDailyIntelligenceRun            = saved.dailyIntelligence           ?? 0;
     lastIntelligenceEventCleanupRun     = saved.intelligenceEventCleanup    ?? 0;
+    lastWeeklyPricingAnalysisRun        = saved.weeklyPricingAnalysis       ?? 0;
     lastEngagementDigestRun             = saved.engagementDigest            ?? 0;
     lastEngagementSignalSchedulerRun    = saved.engagementSignalScheduler   ?? 0;
     lastEngagementSignalArchiveRun      = saved.engagementSignalArchive     ?? 0;
     lastEngagementOpportunityScannerRun = saved.engagementOpportunityScanner ?? 0;
     lastConnectorTokenRefreshRun        = saved.connectorTokenRefresh       ?? 0;
+    lastGa4IngestionRun                 = saved.ga4Ingestion                ?? 0;
     lastLeadThreadQueueCleanupRun       = saved.leadThreadQueueCleanup      ?? 0;
     console.info('[cron-guard] last-run timestamps restored — tasks will respect their intervals on startup');
   }
@@ -415,6 +431,197 @@ async function startCron() {
     ['organizations_processed', 'accounts_upserted', 'errors']
   );
 
+  // ── Community AI lease reaper (every 30s) ─────────────────────────────────
+  // Cleans up dispatch leases that expired before the extension acked, stuck
+  // `executing` rows from dead API/RPA workers, and terminal rows still
+  // carrying lease metadata. RPC contract: returns a jsonb counter struct.
+  scheduleWorker(
+    async () => {
+      const { supabase: db } = await import('../db/supabaseClient');
+      const { data, error } = await db.rpc('reap_community_ai_action_leases');
+      if (error) {
+        // Surface as an errors counter so scheduleWorker's activity log fires.
+        console.warn('[communityAiLeaseReaper] rpc error:', error.message);
+        return { errors: 1 };
+      }
+      const row = (data || {}) as Record<string, number>;
+      return {
+        reaped_pending:    row.reaped_pending    ?? 0,
+        reaped_dispatched: row.reaped_dispatched ?? 0,
+        reaped_executing:  row.reaped_executing  ?? 0,
+        lease_cleared:     row.lease_cleared     ?? 0,
+        errors:            0,
+      };
+    },
+    COMMUNITY_AI_LEASE_REAP_INTERVAL_MS, 'communityAiLeaseReaper',
+    ['reaped_pending', 'reaped_dispatched', 'reaped_executing', 'lease_cleared', 'errors']
+  );
+
+  // ── Community AI metric-event DLQ flush (every 60s) ──────────────────────
+  // Retries metric inserts that failed against the primary events table.
+  // Alerts (via error log + alert flag) when DLQ depth exceeds threshold.
+  scheduleWorker(
+    async () => {
+      const { flushMetricDlq, getMetricFailureCounters } =
+        await import('../services/communityAiActionExecutor');
+      const outcome = await flushMetricDlq({ alertThreshold: 500 });
+      const counters = getMetricFailureCounters();
+      return {
+        claimed:              outcome.claimed,
+        flushed:              outcome.flushed,
+        remaining:            outcome.remaining,
+        metric_insert_failed: counters.metric_insert_failed,
+        dlq_insert_failed:    counters.dlq_insert_failed,
+        alert:                outcome.alert ? 1 : 0,
+        errors:               outcome.error ? 1 : 0,
+      };
+    },
+    COMMUNITY_AI_METRIC_DLQ_FLUSH_INTERVAL_MS, 'communityAiMetricDlqFlush',
+    ['claimed', 'flushed', 'remaining', 'metric_insert_failed', 'dlq_insert_failed', 'alert', 'errors']
+  );
+
+  // ── Recent-post comment ingestion (every 10 minutes) ────────────────────
+  // Pulls fresh comments for recently-published posts into the unified
+  // engagement store so the inbox + signals layers stay current.
+  scheduleWorker(
+    async () => {
+      const { ingestRecentPublishedPosts } =
+        await import('../services/engagementIngestionService');
+      try {
+        const outcome = await ingestRecentPublishedPosts();
+        return {
+          processed:      outcome.processed,
+          total_ingested: outcome.totalIngested,
+          errors:         outcome.errors.length,
+        };
+      } catch (err: any) {
+        console.warn('[recentPublishedPostsIngest] exception:', err?.message || err);
+        return { processed: 0, total_ingested: 0, errors: 1 };
+      }
+    },
+    RECENT_POSTS_COMMENT_INGEST_INTERVAL_MS, 'recentPublishedPostsIngest',
+    ['processed', 'total_ingested', 'errors']
+  );
+
+  // ── RPA backpressure observer (every 60s) ────────────────────────────────
+  // Enumerates orgs with recent RPA activity and computes per-org
+  // READY/DEGRADED/BLOCKED state. One row per org in rpa_queue_state.
+  // Per-org state is read by the admission gate so one tenant cannot
+  // push others into BLOCKED.
+  scheduleWorker(
+    async () => {
+      const { rpaSchedulerHooks } =
+        await import('../services/rpaWorker/rpaWorkerService');
+      try {
+        const agg = await rpaSchedulerHooks.observeBackpressure();
+        return {
+          orgs_observed:   agg.observed,
+          orgs_blocked:    agg.blocked,
+          orgs_degraded:   agg.degraded,
+          orgs_ready:      agg.ready,
+          errors:          agg.errors,
+        };
+      } catch (err: any) {
+        console.warn('[rpaBackpressureObserver] exception:', err?.message || err);
+        return { errors: 1 };
+      }
+    },
+    RPA_BACKPRESSURE_OBSERVE_INTERVAL_MS, 'rpaBackpressureObserver',
+    ['orgs_observed', 'orgs_blocked', 'orgs_degraded', 'orgs_ready', 'errors']
+  );
+
+  // ── RPA retry queue flush (every 90s) ────────────────────────────────────
+  // Fair round-robin: visits each org with a due retry, drains up to
+  // `limit_per_org` rows per tick. Successes delete the row; failures
+  // bump attempts with exponential backoff (capped 2h).
+  scheduleWorker(
+    async () => {
+      const { rpaSchedulerHooks } =
+        await import('../services/rpaWorker/rpaWorkerService');
+      try {
+        const result = await rpaSchedulerHooks.flushRetries({
+          limit_per_org: 10,
+          max_orgs: 100,
+        });
+        return {
+          orgs_visited: result.orgs_visited,
+          claimed:      result.claimed,
+          succeeded:    result.succeeded,
+          failed:       result.failed,
+          remaining:    result.remaining,
+          errors:       result.errors,
+        };
+      } catch (err: any) {
+        console.warn('[rpaRetryQueueFlush] exception:', err?.message || err);
+        return { errors: 1 };
+      }
+    },
+    RPA_RETRY_FLUSH_INTERVAL_MS, 'rpaRetryQueueFlush',
+    ['orgs_visited', 'claimed', 'succeeded', 'failed', 'remaining', 'errors']
+  );
+
+  // ── Intelligence pattern learner (every ~12m) ────────────────────────────
+  // Periodic aggregation over community_ai_actions that populates the
+  // intelligence_patterns table. Read path is on /api/intelligence/context
+  // and stays cheap because the learner pre-computes success_rate,
+  // baseline_rate, and uplift_ratio per (org, platform, action, pattern).
+  scheduleWorker(
+    async () => {
+      const { learnAllOrgs } =
+        await import('../services/intelligence/patternLearningService');
+      try {
+        const result = await learnAllOrgs();
+        return {
+          orgs:              result.orgs,
+          patterns_upserted: result.patterns_upserted,
+          errors:            result.errors,
+        };
+      } catch (err: any) {
+        console.warn('[intelligencePatternLearner] exception:', err?.message || err);
+        return { errors: 1 };
+      }
+    },
+    INTELLIGENCE_PATTERN_LEARN_INTERVAL_MS, 'intelligencePatternLearner',
+    ['orgs', 'patterns_upserted', 'errors']
+  );
+
+  // ── RPA artifact prune (every 6h) ────────────────────────────────────────
+  // Deletes rpa_artifacts rows past their retained_until and removes the
+  // backing object-storage blobs in the same tick. 7-day retention is
+  // enforced in-DB; this worker is the cleanup hand.
+  scheduleWorker(
+    async () => {
+      const { pruneRpaArtifacts } =
+        await import('../services/rpaWorker/rpaArtifactStore');
+      try {
+        const removed = await pruneRpaArtifacts(500);
+        return { removed: removed.length, errors: 0 };
+      } catch (err: any) {
+        console.warn('[rpaArtifactPrune] exception:', err?.message || err);
+        return { removed: 0, errors: 1 };
+      }
+    },
+    RPA_ARTIFACT_PRUNE_INTERVAL_MS, 'rpaArtifactPrune',
+    ['removed', 'errors']
+  );
+
+  // ── Community AI metrics rollup (every hour) ─────────────────────────────
+  // Rebuilds the daily per-(org, platform, action) counters from the raw
+  // metric-events stream so dashboards query a small, stable table.
+  scheduleWorker(
+    async () => {
+      const { refreshMetricsRollup } =
+        await import('../services/communityAiActionExecutor');
+      const outcome = await refreshMetricsRollup(7);
+      return {
+        rows_upserted: outcome.rows_upserted,
+        errors:        outcome.error ? 1 : 0,
+      };
+    },
+    COMMUNITY_AI_METRICS_ROLLUP_INTERVAL_MS, 'communityAiMetricsRollup',
+    ['rows_upserted', 'errors']
+  );
+
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n Received ${signal}. Shutting down cron...`);
@@ -481,11 +688,13 @@ async function runSchedulerCycle() {
     campaignHealthEvaluation:     lastCampaignHealthEvaluationRun,
     dailyIntelligence:            lastDailyIntelligenceRun,
     intelligenceEventCleanup:     lastIntelligenceEventCleanupRun,
+    weeklyPricingAnalysis:        lastWeeklyPricingAnalysisRun,
     engagementDigest:             lastEngagementDigestRun,
     engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
     connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
     scheduledLeadHour:            lastScheduledLeadRunHour,
@@ -870,6 +1079,26 @@ async function runSchedulerCycle() {
     }
   }
 
+  // Weekly pricing analysis — rolls up trailing ISO-week of usage_events +
+  // credit_usage_log per org into org_weekly_metrics, emits cost_anomalies
+  // for negative-margin / cost-spike / over-limit. Idempotent via upsert.
+  if (shouldRunCronJob("weeklyPricingAnalysis", WEEKLY_PRICING_ANALYSIS_INTERVAL_MS, lastWeeklyPricingAnalysisRun)) {
+    lastWeeklyPricingAnalysisRun = Date.now();
+    try {
+      const result = await runWeeklyPricingAnalysis();
+      if (result.orgs_processed > 0 || result.errors.length > 0) {
+        console.log(
+          `✅ Weekly pricing analysis (week ${result.week_start}): orgs=${result.orgs_processed}, rows=${result.rows_written}, neg_margin=${result.negative_margin}, spikes=${result.cost_spikes}, over_limit=${result.over_limit}, intel_rows=${result.intelligence_rows}, deviations=${result.deviations_detected}, queued=${result.adjustments_queued}, leaks=${result.leaks_detected}`
+        );
+      }
+      if (result.errors.length > 0) {
+        result.errors.slice(0, 3).forEach((e) => console.warn('Weekly pricing analysis:', e));
+      }
+    } catch (error: any) {
+      console.error('❌ Weekly pricing analysis error:', error.message);
+    }
+  }
+
   // Run engagement digest once per day (daily summary per organization)
   if (shouldRunCronJob("engagementDigest", ENGAGEMENT_DIGEST_INTERVAL_MS, lastEngagementDigestRun)) {
     lastEngagementDigestRun = Date.now();
@@ -937,6 +1166,32 @@ async function runSchedulerCycle() {
     }
   }
 
+  // Run GA4 -> canonical ingestion every 6 hours for all companies with an active GA integration
+  if (shouldRunCronJob("ga4Ingestion", GA4_INGESTION_INTERVAL_MS, lastGa4IngestionRun)) {
+    lastGa4IngestionRun = Date.now();
+    console.log('[ga4Ingestion] starting run for all connected companies');
+    try {
+      const result = await runIngestionForAllCompanies({ sources: ['ga4'] });
+      console.log(
+        `[ga4Ingestion] completed attempted=${result.attempted} succeeded=${result.succeeded} failed=${result.failed}`,
+      );
+      for (const company of result.companies) {
+        const ga4Result = company.sources.find((source) => source.source === 'ga4');
+        if (ga4Result?.success || ga4Result?.skipped) {
+          console.log(
+            `[ga4Ingestion] company=${company.companyId} success=${ga4Result?.success === true} skipped=${ga4Result?.skipped === true}`,
+          );
+        } else {
+          console.error(
+            `[ga4Ingestion] company=${company.companyId} failed error=${ga4Result?.error ?? 'unknown_error'}`,
+          );
+        }
+      }
+    } catch (error: any) {
+      console.error('❌ GA4 ingestion scheduler error:', error.message);
+    }
+  }
+
   // Archive signals older than 180 days (nightly)
   if (shouldRunCronJob("engagementSignalArchive", ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS, lastEngagementSignalArchiveRun)) {
     lastEngagementSignalArchiveRun = Date.now();
@@ -987,11 +1242,13 @@ async function runSchedulerCycle() {
     campaignHealthEvaluation:     lastCampaignHealthEvaluationRun,
     dailyIntelligence:            lastDailyIntelligenceRun,
     intelligenceEventCleanup:     lastIntelligenceEventCleanupRun,
+    weeklyPricingAnalysis:        lastWeeklyPricingAnalysisRun,
     engagementDigest:             lastEngagementDigestRun,
     engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
     connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
     scheduledLeadHour:            lastScheduledLeadRunHour,
@@ -1022,11 +1279,13 @@ async function runSchedulerCycle() {
     campaignHealthEvaluation:     lastCampaignHealthEvaluationRun,
     dailyIntelligence:            lastDailyIntelligenceRun,
     intelligenceEventCleanup:     lastIntelligenceEventCleanupRun,
+    weeklyPricingAnalysis:        lastWeeklyPricingAnalysisRun,
     engagementDigest:             lastEngagementDigestRun,
     engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
     connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
   });

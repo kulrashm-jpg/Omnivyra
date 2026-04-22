@@ -613,7 +613,7 @@ export function renderNextLevelCtaFlow(payload: PdfReportPayload, vars: Record<s
   </article>`;
 
   const footer = `<div style="padding:8px 14px;border-top:1px solid #D4DDE6;text-align:center;">
-    <p style="font-size:9px;color:#8C9DAB;line-height:1.5;margin:0;">Generated for ${escapeHtml(companyName)} &middot; ${escapeHtml(vars.report_date)} &middot; Powered by Omnivyra Digital Authority Engine v2.0</p>
+    <p style="font-size:9px;color:#8C9DAB;line-height:1.5;margin:0;">Generated for ${escapeHtml(companyName)} &middot; ${escapeHtml(vars.report_date)} &middot; Powered by OmniVyra Digital Authority Engine v2.0</p>
   </div>`;
 
   return renderNarrativeGroup('section-cta', 'Next Steps', 'Unlock Deeper Intelligence', [

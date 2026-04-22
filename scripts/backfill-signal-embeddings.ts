@@ -33,7 +33,7 @@ async function main() {
   while (true) {
     const { data: signals, error } = await supabase
       .from('intelligence_signals')
-      .select('id, topic')
+      .select('id, company_id, topic')
       .is('topic_embedding', null)
       .not('topic', 'is', null)
       .limit(BATCH_SIZE);
@@ -48,12 +48,16 @@ async function main() {
       break;
     }
 
-    for (const s of signals as { id: string; topic: string }[]) {
+    for (const s of signals as { id: string; company_id: string; topic: string }[]) {
       const topic = (s.topic ?? '').trim();
-      if (!topic) continue;
+      if (!topic || !s.company_id) continue;
 
       try {
-        const embedding = await generateTopicEmbedding(topic);
+        const embedding = await generateTopicEmbedding(topic, {
+          companyId: s.company_id,
+          system:    true,
+          metadata:  { caller: 'backfill-signal-embeddings', signal_id: s.id },
+        });
         const vecStr = embeddingToPgVector(embedding);
 
         const { error: updErr } = await supabase
@@ -92,8 +96,29 @@ async function main() {
     const topic = (c.cluster_topic ?? '').trim();
     if (!topic) continue;
 
+    // Clusters carry no company_id; attribute the embedding cost to any one
+    // member signal's org (system-logged, not user-billed, so representative
+    // attribution is sufficient for cost visibility).
+    const { data: member } = await supabase
+      .from('intelligence_signals')
+      .select('company_id')
+      .eq('cluster_id', c.cluster_id)
+      .not('company_id', 'is', null)
+      .limit(1)
+      .maybeSingle();
+    const attributeToCompanyId = (member as any)?.company_id as string | undefined;
+    if (!attributeToCompanyId) {
+      console.warn(`Skipping cluster ${c.cluster_id}: no member signal with company_id`);
+      clusterProcessed++;
+      continue;
+    }
+
     try {
-      const embedding = await generateTopicEmbedding(topic);
+      const embedding = await generateTopicEmbedding(topic, {
+        companyId: attributeToCompanyId,
+        system:    true,
+        metadata:  { caller: 'backfill-signal-embeddings:cluster', cluster_id: c.cluster_id },
+      });
       const vecStr = embeddingToPgVector(embedding);
       const { error: updErr } = await supabase
         .from('signal_clusters')

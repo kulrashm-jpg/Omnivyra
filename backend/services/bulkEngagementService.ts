@@ -46,12 +46,13 @@ export async function sendReply(
   const playbookId = playbooks[0]?.id ?? null;
   if (!playbookId) return { ok: false, error: 'No active playbook' };
 
+  const normalizedPlatform = ((platform || 'linkedin').toLowerCase() === 'x') ? 'twitter' : (platform || 'linkedin');
   const result = await executeAction(
     {
       id: crypto.randomUUID(),
       tenant_id: organizationId,
       organization_id: organizationId,
-      platform: platform || 'linkedin',
+      platform: normalizedPlatform,
       action_type: 'reply',
       target_id: message.platform_message_id ?? messageId,
       suggested_text: replyText,
@@ -59,7 +60,7 @@ export async function sendReply(
       execution_mode: 'manual',
     },
     true,
-    { source: 'bulk' }
+    { source: 'bulk', persist: true, auto_insert: true, final_text: replyText }
   );
 
   if (!result.ok) return { ok: false, error: typeof result.error === 'string' ? result.error : JSON.stringify(result.error ?? '') };

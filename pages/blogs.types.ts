@@ -86,3 +86,6 @@ export type TemplateSessionPayload = {
   topic?: string;
   target_words?: number;
 };
+export default function BlogsTypesPage() {
+  return null;
+}

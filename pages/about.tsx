@@ -82,7 +82,7 @@ export default function AboutPage({ hero, chaos, disconnected, connected, bluepr
         <div className="relative mx-auto max-w-5xl px-6 pt-24 pb-20 sm:pt-32 sm:pb-28 text-center">
           {/* Eyebrow */}
           <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-xs font-medium uppercase tracking-widest text-white/80 mb-8">
-            About Omnivyra
+            About OmniVyra
           </div>
 
           <h1 className="text-4xl font-bold tracking-tight text-white sm:text-6xl lg:text-7xl leading-[1.1]">
@@ -93,7 +93,7 @@ export default function AboutPage({ hero, chaos, disconnected, connected, bluepr
           </h1>
 
           <p className="mt-6 mx-auto max-w-2xl text-lg text-white/75 leading-relaxed sm:text-xl">
-            Omnivyra helps you understand your marketing — before you spend, before you scale, before you guess.
+            OmniVyra helps you understand your marketing — before you spend, before you scale, before you guess.
           </p>
 
           <p className="mt-4 text-base text-white/50 italic">
@@ -390,7 +390,7 @@ export default function AboutPage({ hero, chaos, disconnected, connected, bluepr
                 </span>
               </h2>
               <p className="mt-5 text-white/60 text-sm leading-relaxed">
-                Omnivyra starts before execution — not during it.
+                OmniVyra starts before execution — not during it.
               </p>
 
               {/* 4-step connected flow */}
@@ -561,7 +561,7 @@ export default function AboutPage({ hero, chaos, disconnected, connected, bluepr
                 </p>
                 <p className="text-sm text-white/60 mt-1">Clarity enables growth.</p>
               </div>
-              <p className="text-xs text-white/30 mt-4 uppercase tracking-widest">Omnivyra</p>
+              <p className="text-xs text-white/30 mt-4 uppercase tracking-widest">OmniVyra</p>
             </div>
           </div>
         </div>

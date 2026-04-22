@@ -146,7 +146,7 @@ export default function ThreadIntelligenceView() {
   return (
     <>
       <Head>
-        <title>Thread Intelligence | Omnivyra</title>
+        <title>Thread Intelligence | OmniVyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-purple-50 px-4 py-8">

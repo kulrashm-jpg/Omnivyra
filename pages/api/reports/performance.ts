@@ -1,22 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { composePerformanceReport } from '../../../backend/services/performanceReportService';
+import {
+  composePerformanceIntelligenceReport,
+  type PerformanceIntelligenceReportResponse,
+} from '../../../backend/services/performanceReportService';
 
-type PerformanceReportApiResponse = {
-  report_type?: 'performance';
-  score?: {
-    available: true;
-    value: null;
-    label: null;
-  };
-  sections?: Array<{
-    section_name: string;
-    IU_ids: string[];
-    insights: unknown[];
-    opportunities: unknown[];
-    actions: unknown[];
-  }>;
+type PerformanceReportApiResponse = PerformanceIntelligenceReportResponse | {
   error?: string;
   code?: string;
 };
@@ -77,7 +67,14 @@ export default async function handler(
       });
     }
 
-    const performanceReport = await composePerformanceReport(companyId);
+    const sinceDaysParam = Array.isArray(req.query.since_days)
+      ? req.query.since_days[0]
+      : req.query.since_days;
+    const sinceDays = sinceDaysParam ? Number.parseInt(sinceDaysParam, 10) : undefined;
+
+    const performanceReport = await composePerformanceIntelligenceReport(companyId, {
+      sinceDays: Number.isFinite(sinceDays) && sinceDays && sinceDays > 0 ? sinceDays : undefined,
+    });
     return res.status(200).json(performanceReport);
   } catch (error) {
     console.error('[reports/performance] error:', error);

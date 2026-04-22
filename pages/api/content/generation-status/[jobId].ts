@@ -22,7 +22,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { getContentQueue } = await import('../../../../backend/queue/contentGenerationQueues');
 
     // Try each queue to find the job
-    const queueNames = ['content-blog', 'content-post', 'content-whitepaper', 'content-story', 'content-newsletter', 'content-engagement'];
+    const queueNames = [
+      'content-blog',
+      'content-post',
+      'content-whitepaper',
+      'content-story',
+      'content-newsletter',
+      'content-engagement',
+      'creator-video',
+      'creator-carousel',
+      'creator-story',
+      'bolt-content-jobs',
+    ];
     let job = null;
 
     for (const queueName of queueNames) {

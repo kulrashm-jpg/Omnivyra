@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getGoogleAnalyticsStatus } from '../../../backend/services/analyticsIntegrationService';
 import { resolveOrganizationPlanLimits, type ResolvedPlanLimits } from '../../../backend/services/planResolutionService';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 
@@ -427,9 +428,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     }),
   ].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
 
-  const googleAnalyticsConnected =
-    companyIntegrations.some((row) => integrationMatches(row, ['google analytics', 'ga4'])) ||
-    externalApiSources.some((row) => integrationMatches(row, ['google analytics', 'ga4']));
+  const googleAnalyticsStatus = await getGoogleAnalyticsStatus(companyId).catch(() => null);
+  const googleAnalyticsConnected = googleAnalyticsStatus?.ready === true;
   const crmConnected =
     companyIntegrations.some((row) => integrationMatches(row, ['hubspot', 'salesforce', 'pipedrive', 'zoho crm', 'crm'])) ||
     externalApiSources.some((row) => integrationMatches(row, ['hubspot', 'salesforce', 'pipedrive', 'zoho crm', 'crm']));

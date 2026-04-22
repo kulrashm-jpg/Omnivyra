@@ -72,6 +72,9 @@ export default function HeroSection() {
           <div className="mt-10 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
             <Link
               href="/audit/website-growth-check"
+              data-ga-primary-cta
+              data-ga-label="Run Free Audit"
+              data-ga-location="hero"
               className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-7 py-3.5 text-[15px] font-semibold text-white shadow-[0_4px_20px_rgba(10,102,194,0.45)] transition hover:shadow-[0_6px_28px_rgba(10,102,194,0.6)] hover:opacity-95"
             >
               Run Free Audit

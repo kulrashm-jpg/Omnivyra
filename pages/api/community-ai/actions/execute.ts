@@ -17,9 +17,20 @@ type ExecuteRequest = {
   organization_id?: string;
   action_id?: string;
   approved?: boolean;
-  execution_mode?: 'manual' | 'api' | 'rpa' | string;
+  execution_mode?: 'manual' | 'api' | 'rpa' | 'browser' | string;
   final_text?: string;
+  idempotency_key?: string;
 };
+
+// Statuses from which an action may legally transition into execution.
+const EXECUTABLE_FROM_STATUSES = new Set(['pending', 'approved', 'scheduled']);
+
+function readIdempotencyKey(req: NextApiRequest, body: ExecuteRequest): string | null {
+  const headerVal = req.headers['idempotency-key'];
+  const fromHeader = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+  const candidate = (fromHeader || body.idempotency_key || '').toString().trim();
+  return candidate.length > 0 ? candidate : null;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -46,6 +57,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'APPROVAL_REQUIRED' });
   }
 
+  const idempotencyKey = readIdempotencyKey(req, body);
+
+  // Idempotent replay: a prior call with the same key returns its terminal
+  // result rather than re-executing. Scoped to (organization_id, key) by the
+  // unique index in 20260522_community_ai_execution_integrity.sql.
+  if (idempotencyKey) {
+    const { data: prior } = await supabase
+      .from('community_ai_actions')
+      .select('id, status, execution_result, execution_mode')
+      .eq('organization_id', scope.organizationId)
+      .eq('idempotency_key', idempotencyKey)
+      .maybeSingle();
+    if (prior && prior.id) {
+      return res.status(200).json({
+        tenant_id: scope.tenantId,
+        organization_id: scope.organizationId,
+        action_id: prior.id,
+        status: prior.status,
+        execution: prior.execution_result,
+        idempotent: true,
+      });
+    }
+  }
+
   const { data: action, error } = await getCommunityAiActionById(actionId);
 
   if (error || !action) {
@@ -56,17 +91,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'TENANT_SCOPE_VIOLATION' });
   }
 
-  if (action.status && !['pending', 'approved', 'scheduled'].includes(action.status)) {
-    return res.status(409).json({ error: 'ACTION_NOT_PENDING' });
+  if (!action.status || !EXECUTABLE_FROM_STATUSES.has(action.status)) {
+    return res.status(409).json({ error: 'ACTION_NOT_PENDING', current_status: action.status });
   }
 
-  const executionMode = (body.execution_mode || action.execution_mode || 'manual').toString();
-  if (executionMode !== 'manual') {
-    return res.status(400).json({ error: 'EXECUTION_MODE_NOT_ALLOWED' });
+  // Approval-integrity gate: any human-approval-required action MUST carry an
+  // approved_at before it may execute. Mirrors the DB CHECK constraint so the
+  // API can return a precise error rather than a generic CHECK violation.
+  if (action.requires_human_approval === true && !action.approved_at) {
+    return res.status(403).json({ error: 'APPROVAL_REQUIRED', reason: 'NOT_APPROVED' });
   }
+
+  const requestedMode = (body.execution_mode || action.execution_mode || '').toString();
+  // Manual is the human-driven simulation path; everything else is delegated
+  // to the central router inside the executor (which itself handles fallback).
+  const executionMode = requestedMode || 'manual';
 
   const finalText = (body.final_text ?? action.suggested_text ?? '').toString();
-  if (finalText.trim().length === 0) {
+  if (action.action_type === 'reply' && finalText.trim().length === 0) {
     return res.status(400).json({ error: 'FINAL_TEXT_REQUIRED' });
   }
 
@@ -78,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         scope.tenantId,
         scope.organizationId
       );
-    } catch (error: any) {
+    } catch {
       return res.status(404).json({ error: 'PLAYBOOK_NOT_FOUND' });
     }
   }
@@ -99,6 +141,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
+  // ── Atomic state-machine transition: pending/approved/scheduled → executing.
+  // Persists the executor's `execution_mode` choice up front and stamps
+  // `idempotency_key` (race-safe via the unique index — a concurrent caller
+  // with the same key fails the update and we surface the prior row).
+  const transitionAt = new Date().toISOString();
+  const transitionPayload: Record<string, any> = {
+    status: 'executing',
+    execution_mode: executionMode,
+    final_text: finalText,
+    updated_at: transitionAt,
+  };
+  if (idempotencyKey) transitionPayload.idempotency_key = idempotencyKey;
+
+  const { data: claimed, error: claimError } = await supabase
+    .from('community_ai_actions')
+    .update(transitionPayload)
+    .eq('id', actionId)
+    .in('status', Array.from(EXECUTABLE_FROM_STATUSES))
+    .select('id, status')
+    .maybeSingle();
+
+  if (claimError) {
+    // Most likely an idempotency-key uniqueness collision. Resolve by
+    // returning the prior row's terminal state.
+    if (idempotencyKey) {
+      const { data: prior } = await supabase
+        .from('community_ai_actions')
+        .select('id, status, execution_result')
+        .eq('organization_id', scope.organizationId)
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      if (prior?.id) {
+        return res.status(200).json({
+          action_id: prior.id,
+          status: prior.status,
+          execution: prior.execution_result,
+          idempotent: true,
+        });
+      }
+    }
+    console.error('[community-ai/execute] state transition failed:', claimError.message);
+    return res.status(500).json({ error: 'STATE_TRANSITION_FAILED' });
+  }
+  if (!claimed) {
+    return res.status(409).json({ error: 'ACTION_NOT_PENDING' });
+  }
+
+  const approvedAtIso = (action.approved_at as string | null | undefined) ?? null;
   await logCommunityAiActionEvent({
     action_id: actionId,
     tenant_id: scope.tenantId,
@@ -108,18 +198,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       approved: true,
       execution_mode: executionMode,
       user_id: roleGate.userId,
-      timestamp: new Date().toISOString(),
+      timestamp: transitionAt,
     },
   });
 
-  await notifyCommunityAi({
-    tenant_id: scope.tenantId,
-    organization_id: scope.organizationId,
-    action_id: actionId,
-    event_type: 'approved',
-    message: `Action approved for ${action.platform}`,
-  });
+  try {
+    await notifyCommunityAi({
+      tenant_id: scope.tenantId,
+      organization_id: scope.organizationId,
+      action_id: actionId,
+      event_type: 'approved',
+      message: `Action approved for ${action.platform}`,
+    });
+  } catch (notifyErr: any) {
+    console.warn('[community-ai/execute] notify failed:', notifyErr?.message || notifyErr);
+  }
 
+  // The executor now owns the terminal row write (persist:true). It stamps
+  // status, execution_mode, execution_result, idempotency_key, the
+  // correlation id, and clears lease fields on terminal transitions.
   const result = await executeAction(
     {
       id: action.id,
@@ -133,44 +230,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       requires_approval: action.requires_approval,
       requires_human_approval: action.requires_human_approval,
       risk_level: action.risk_level as 'high' | 'medium' | 'low',
-      execution_mode: executionMode,
+      execution_mode: executionMode as any,
       tone_used: action.tone_used,
+      approved_at: approvedAtIso,
     },
-    body.approved === true
+    body.approved === true,
+    {
+      source: 'manual',
+      persist: true,
+      idempotency_key: idempotencyKey ?? undefined,
+      final_text: finalText,
+    }
   );
-  const nextStatus = result.ok ? 'executed' : 'failed';
 
-  await supabase
-    .from('community_ai_actions')
-    .update({
-      status: nextStatus,
-      execution_result: {
+  const nextStatus = result.status === 'dispatched' ? 'pending' : result.status;
+
+  if (result.response?.persist_error) {
+    return res.status(500).json({ error: 'TERMINAL_WRITE_FAILED', execution: result });
+  }
+
+  // Skip the outcome event for in-flight browser dispatches — the extension's
+  // /action-result writes the real terminal event once the command lands.
+  if (result.status !== 'dispatched') {
+    await logCommunityAiActionEvent({
+      action_id: actionId,
+      tenant_id: scope.tenantId,
+      organization_id: scope.organizationId,
+      event_type:
+        result.status === 'executed' || result.status === 'sent_unverified'
+          ? 'executed'
+          : 'failed',
+      event_payload: {
         ...result,
-        execution_mode: executionMode,
+        execution_mode: result.execution_mode || executionMode,
         final_text: finalText,
         playbook_id: action.playbook_id ?? null,
+        intent: action.intent_classification ?? null,
+        user_id: roleGate.userId,
+        timestamp: new Date().toISOString(),
       },
-      final_text: finalText,
-      execution_mode: executionMode,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', actionId);
-
-  await logCommunityAiActionEvent({
-    action_id: actionId,
-    tenant_id: scope.tenantId,
-    organization_id: scope.organizationId,
-    event_type: nextStatus === 'executed' ? 'executed' : 'failed',
-    event_payload: {
-      ...result,
-      execution_mode: executionMode,
-      final_text: finalText,
-      playbook_id: action.playbook_id ?? null,
-      intent: action.intent_classification ?? null,
-      user_id: roleGate.userId,
-      timestamp: new Date().toISOString(),
-    },
-  });
+    });
+  }
 
   if (!result.ok) {
     const { data: failureLogs } = await supabase
@@ -180,18 +280,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('event_type', 'failed')
       .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
     if (failureLogs && failureLogs.length >= 3) {
-      void sendCommunityAiWebhooks({
-        tenant_id: scope.tenantId,
-        organization_id: scope.organizationId,
-        event_type: 'failed',
-        action_id: actionId,
-        message: 'Repeated action failures detected',
-        metadata: { failure_count: failureLogs.length },
-      });
+      try {
+        await sendCommunityAiWebhooks({
+          tenant_id: scope.tenantId,
+          organization_id: scope.organizationId,
+          event_type: 'failed',
+          action_id: actionId,
+          message: 'Repeated action failures detected',
+          metadata: { failure_count: failureLogs.length },
+        });
+      } catch (webhookErr: any) {
+        console.warn('[community-ai/execute] failure webhook failed:', webhookErr?.message || webhookErr);
+      }
     }
   }
 
-  return res.status(result.ok ? 200 : 400).json({
+  const httpStatus = result.ok ? 200 : 400;
+  return res.status(httpStatus).json({
     tenant_id: scope.tenantId,
     organization_id: scope.organizationId,
     action_id: actionId,

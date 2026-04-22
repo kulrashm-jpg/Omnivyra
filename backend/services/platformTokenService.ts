@@ -9,9 +9,11 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { getToken as getTokenFromStore } from '../auth/tokenStore';
+import { getToken as getTokenFromStore, isTokenExpiringSoon } from '../auth/tokenStore';
+import { refreshPlatformToken } from '../auth/tokenRefresh';
 import { encryptCredential, decryptCredential } from '../auth/credentialEncryption';
 import { normalizePlatform } from '../constants/platforms';
+import { getOAuthCredentialsForPlatform } from '../auth/oauthCredentialResolver';
 
 type TokenInput = {
   access_token: string;
@@ -128,13 +130,139 @@ async function resolveTokenFromSocialAccounts(
   const account = (saRows ?? [])[0] as { id: string } | undefined;
   if (!account?.id) return null;
 
-  const tokenObj = await getTokenFromStore(account.id);
+  let tokenObj = await getTokenFromStore(account.id);
   if (!tokenObj?.access_token) return null;
+  if (isTokenExpiringSoon(tokenObj, 5)) {
+    const refreshed = await refreshPlatformToken(platform, account.id, tokenObj);
+    if (refreshed?.access_token) {
+      tokenObj = refreshed;
+    }
+  }
   return {
     access_token: tokenObj.access_token,
     refresh_token: tokenObj.refresh_token,
     expires_at: tokenObj.expires_at,
   };
+}
+
+async function refreshCommunityYouTubeTokenIfNeeded(row: {
+  tenant_id: string;
+  organization_id: string;
+  refresh_token?: string | null;
+  expires_at?: string | null;
+  access_token?: string | null;
+}): Promise<{ access_token: string; refresh_token?: string | null; expires_at?: string | null } | null> {
+  if (!row.access_token) return null;
+  if (!row.refresh_token || !row.expires_at || !isTokenExpiringSoon({ access_token: row.access_token, refresh_token: row.refresh_token, expires_at: row.expires_at }, 5)) {
+    return {
+      access_token: row.access_token,
+      refresh_token: row.refresh_token ?? null,
+      expires_at: row.expires_at ?? null,
+    };
+  }
+
+  const credentials = await getOAuthCredentialsForPlatform('youtube');
+  const clientId = credentials?.client_id || process.env.YOUTUBE_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || process.env.YOUTUBE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return {
+      access_token: row.access_token,
+      refresh_token: row.refresh_token ?? null,
+      expires_at: row.expires_at ?? null,
+    };
+  }
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: row.refresh_token,
+      grant_type: 'refresh_token',
+    }),
+  });
+
+  if (!response.ok) {
+    return {
+      access_token: row.access_token,
+      refresh_token: row.refresh_token ?? null,
+      expires_at: row.expires_at ?? null,
+    };
+  }
+
+  const data = await response.json();
+  if (!data?.access_token) {
+    return {
+      access_token: row.access_token,
+      refresh_token: row.refresh_token ?? null,
+      expires_at: row.expires_at ?? null,
+    };
+  }
+
+  const refreshed = {
+    access_token: data.access_token as string,
+    refresh_token: (data.refresh_token as string | undefined) || row.refresh_token,
+    expires_at: new Date(Date.now() + ((data.expires_in || 3600) * 1000)).toISOString(),
+  };
+
+  await saveToken(row.tenant_id, row.organization_id, 'youtube', refreshed);
+  return refreshed;
+}
+
+async function refreshCommunityXTokenIfNeeded(row: {
+  tenant_id: string;
+  organization_id: string;
+  refresh_token?: string | null;
+  expires_at?: string | null;
+  access_token?: string | null;
+}): Promise<{ access_token: string; refresh_token?: string | null; expires_at?: string | null } | null> {
+  if (!row.access_token) return null;
+  const passthrough = {
+    access_token: row.access_token,
+    refresh_token: row.refresh_token ?? null,
+    expires_at: row.expires_at ?? null,
+  };
+  if (!row.refresh_token || !row.expires_at || !isTokenExpiringSoon({ access_token: row.access_token, refresh_token: row.refresh_token, expires_at: row.expires_at }, 5)) {
+    return passthrough;
+  }
+
+  const credentials = await getOAuthCredentialsForPlatform('x');
+  const clientId = credentials?.client_id || process.env.X_CLIENT_ID || process.env.TWITTER_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || process.env.X_CLIENT_SECRET || process.env.TWITTER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return passthrough;
+
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const response = await fetch('https://api.twitter.com/2/oauth2/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: `Basic ${basic}`,
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: row.refresh_token,
+    }),
+  });
+
+  if (!response.ok) {
+    console.warn('[platformTokenService] X refresh failed:', response.status);
+    return passthrough;
+  }
+
+  const data = await response.json();
+  if (!data?.access_token) return passthrough;
+
+  const refreshed = {
+    access_token: data.access_token as string,
+    refresh_token: (data.refresh_token as string | undefined) || row.refresh_token,
+    expires_at: new Date(Date.now() + ((data.expires_in || 7200) * 1000)).toISOString(),
+  };
+
+  await saveToken(row.tenant_id, row.organization_id, 'x', refreshed);
+  return refreshed;
 }
 
 export const getToken = async (tenant_id: string, organization_id: string, platform: string) => {
@@ -153,10 +281,27 @@ export const getToken = async (tenant_id: string, organization_id: string, platf
     const accessToken = decryptTokenOrLegacy(catRow.access_token);
     const refreshToken = catRow.refresh_token ? decryptTokenOrLegacy(catRow.refresh_token) : null;
     if (!accessToken) return null;
+    const refreshArgs = {
+      tenant_id: tenant_id,
+      organization_id,
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_at: catRow.expires_at ?? null,
+    };
+    const maybeRefreshed =
+      normalized === 'youtube' ? await refreshCommunityYouTubeTokenIfNeeded(refreshArgs) :
+      normalized === 'x' ? await refreshCommunityXTokenIfNeeded(refreshArgs) :
+      {
+        access_token: accessToken,
+        refresh_token: refreshToken ?? null,
+        expires_at: catRow.expires_at ?? null,
+      };
+    if (!maybeRefreshed?.access_token) return null;
     return {
       ...catRow,
-      access_token: accessToken,
-      refresh_token: refreshToken ?? null,
+      access_token: maybeRefreshed.access_token,
+      refresh_token: maybeRefreshed.refresh_token ?? null,
+      expires_at: maybeRefreshed.expires_at ?? catRow.expires_at ?? null,
     };
   }
 

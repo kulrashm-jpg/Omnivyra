@@ -5,6 +5,8 @@ import { getScheduledPost } from '../../../backend/db/queries';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
 import { publishNow } from '../../../backend/services/publishNowService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
+import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -25,6 +27,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const post = await getScheduledPost(post_id);
     if (!post) {
       return res.status(404).json({ error: 'Scheduled post not found' });
+    }
+
+    const capability = resolveEngagementCapability(post.platform, 'post_create');
+    if (capability.status !== 'api_verified') {
+      void logAuditEvent({
+        operation: 'INSERT',
+        table: 'social_publish_rejected',
+        companyId: post.user_id ?? 'unknown',
+        userId: user.id,
+        success: false,
+        errorMessage: capability.reason ?? 'Unsupported action',
+        metadata: {
+          platform: post.platform,
+          action: 'post_create',
+          code: 'ACTION_NOT_SUPPORTED',
+          post_id,
+        },
+      }).catch(() => {});
+      return res.status(400).json({
+        error: capability.reason ?? `Publishing is not supported on ${post.platform}.`,
+        code: 'ACTION_NOT_SUPPORTED',
+        platform: post.platform,
+        action: 'post_create',
+      });
     }
 
     // Allow: post owner OR super-admin

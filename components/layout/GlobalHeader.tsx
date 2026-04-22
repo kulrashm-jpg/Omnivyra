@@ -74,9 +74,11 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
     label: 'Content',
     href: '/command-center/content',
     icon: FileText,
-    description: 'Nine content formats available from one navigation cluster.',
+    description: 'Writer and creator content workflows from one navigation cluster.',
     matchers: [
       '/command-center/content',
+      '/command-center/writer-content',
+      '/command-center/creator-content',
       '/content-studio',
       '/blogs',
       '/stories',
@@ -86,17 +88,12 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       '/content-creation',
       '/guides',
       '/newsletters',
+      '/posts',
+      '/threads',
     ],
     children: [
-      { label: 'Post', href: '/posts/create', description: 'Short-form post creation.' },
-      { label: 'Blog', href: '/blogs/create', description: 'Long-form blog workflow.' },
-      { label: 'Story', href: '/stories/create', description: 'Story content workflow.' },
-      { label: 'Article', href: '/articles/create', description: 'Article planning and creation.' },
-      { label: 'Whitepaper', href: '/whitepapers/create', description: 'Whitepaper creation flow.' },
-      { label: 'Case Study', href: '/case-studies/create', description: 'Case study creation flow.' },
-      { label: 'Thread', href: '/threads/create', description: 'Thread and multi-part post flow.' },
-      { label: 'Guide', href: '/guides/create', description: 'Guide creation workflow.' },
-      { label: 'Newsletter', href: '/newsletters/create', description: 'Newsletter creation flow.' },
+      { label: 'Writer Content', href: '/command-center/writer-content', description: 'Open the writer lane with 9 text-first content types.' },
+      { label: 'Creator Content', href: '/command-center/creator-content', description: 'Open the creator lane with 6 AI-supported creator content types.' },
     ],
   },
   {
@@ -495,7 +492,7 @@ function UserMenu({
               <Users className="h-4 w-4 text-slate-400" />
               Team
             </Link>
-            <Link href="/integrations" className={itemClassName}>
+            <Link href="/integrations?focus=website" className={itemClassName}>
               <Link2 className="h-4 w-4 text-slate-400" />
               Integrations
             </Link>
@@ -554,7 +551,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
       <header className="sticky top-0 z-[70] border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-screen-xl items-center gap-3 px-3 sm:px-4 lg:px-6">
           <Link href="/command-center" className="shrink-0" title="Command Center">
-            <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
+            <img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" />
           </Link>
 
           <div className="hidden h-5 w-px shrink-0 bg-slate-200 md:block" />

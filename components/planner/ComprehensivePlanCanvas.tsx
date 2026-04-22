@@ -35,7 +35,7 @@ export const OverviewTab = React.memo(function OverviewTab({
               onChange={(e) => onStrategyChange({ objective: e.target.value })}
               className="w-full p-3 border rounded-lg"
               rows={3}
-              placeholder="Build brand awareness and audience engagement for Omnivyra using existing content catalog"
+              placeholder="Build brand awareness and audience engagement for OmniVyra using existing content catalog"
             />
           </div>
           <div>

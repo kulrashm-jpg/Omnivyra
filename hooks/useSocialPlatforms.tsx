@@ -62,7 +62,7 @@ const HIDDEN_COMMUNITY_API_KEY   = 'hidden_community_apis';
 
 const PLATFORM_META: Record<string, { icon: string; color: string }> = {
   linkedin:      { icon: '🔵', color: 'border-blue-200 bg-blue-50' },
-  twitter:       { icon: '🐦', color: 'border-sky-200 bg-sky-50' },
+  x:             { icon: '𝕏', color: 'border-gray-200 bg-gray-50' },
   youtube:       { icon: '▶️', color: 'border-red-200 bg-red-50' },
   instagram:     { icon: '📷', color: 'border-pink-200 bg-pink-50' },
   facebook:      { icon: '👤', color: 'border-indigo-200 bg-indigo-50' },
@@ -174,6 +174,15 @@ export function useSocialPlatforms() {
         setPlatforms(data.accounts || []);
         setUserRole(data.user_role ?? null);
       }
+      // Fire-and-forget: refresh any expiring connector tokens for this org so the
+      // first action after login doesn't hit an expired token. Backend is idempotent.
+      if (selectedCompanyId) {
+        apiFetch('/api/social-accounts/refresh-tokens', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyId: selectedCompanyId }),
+        }).catch(() => { /* non-fatal */ });
+      }
     } catch (e) {
       console.error('Failed to load social accounts', e);
     } finally {
@@ -207,7 +216,6 @@ export function useSocialPlatforms() {
     linkedin:      ['post', 'article', 'blog', 'carousel', 'video', 'poll', 'newsletter'],
     instagram:     ['post', 'reel', 'story', 'carousel'],
     facebook:      ['post', 'video', 'story', 'carousel', 'blog'],
-    twitter:       ['post', 'thread', 'poll'],
     x:             ['post', 'thread', 'poll'],
     youtube:       ['video', 'short'],
     tiktok:        ['video', 'short'],
@@ -435,21 +443,32 @@ export function useSocialPlatforms() {
 
   const handleConnect = async (p: PlatformStatus) => {
     if (!p.auth_path) return;
-    // Route through community-ai connectors so one OAuth connect writes to both
-    // social_accounts (publishing) and community_ai_platform_tokens (engagement).
-    if (selectedCompanyId) {
-      const redirect = encodeURIComponent('/social-platforms');
-      const tid = encodeURIComponent(selectedCompanyId);
-      window.open(`/api/community-ai/connectors/${p.platform_key}/auth?tenant_id=${tid}&organization_id=${tid}&redirect=${redirect}`, '_blank');
-      return;
-    }
-    // Fallback: legacy per-user flow (no company context)
     const params = new URLSearchParams({ returnTo: '/social-platforms' });
     try {
       const { supabase: sbClient } = await import('../utils/supabaseClient');
       const { data } = await sbClient.auth.getSession();
       if (data.session?.user?.id) params.set('userId', data.session.user.id);
     } catch { /* non-fatal */ }
+
+    // Route through community-ai connectors so one OAuth connect writes to both
+    // social_accounts (publishing) and community_ai_platform_tokens (engagement).
+    // YouTube does not have a community-ai connector route yet, so it must keep
+    // using the legacy OAuth flow with explicit company context.
+    const connectorPlatforms = new Set(['linkedin', 'x', 'facebook', 'instagram', 'reddit', 'youtube']);
+    if (selectedCompanyId && connectorPlatforms.has(p.platform_key)) {
+      const connectorKey = p.platform_key;
+      const connectorParams = new URLSearchParams({
+        tenant_id: selectedCompanyId,
+        organization_id: selectedCompanyId,
+        redirect: '/social-platforms',
+      });
+      window.location.href = `/api/community-ai/connectors/${connectorKey}/auth?${connectorParams.toString()}`;
+      return;
+    }
+
+    if (selectedCompanyId) {
+      params.set('companyId', selectedCompanyId);
+    }
     window.location.href = `${p.auth_path}?${params.toString()}`;
   };
 
@@ -606,7 +625,14 @@ export function useSocialPlatforms() {
                 </div>
               )}
               {p.oauth_configured && !p.connected && p.auth_path && (
-                <div className="mt-0.5 text-xs text-gray-400">Ready to connect</div>
+                <div className="mt-0.5 text-xs text-gray-400">
+                  Ready to connect
+                  {(p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp') && (
+                    <span className="ml-1 italic text-amber-600">
+                      — connects Facebook, Instagram & WhatsApp in one Meta consent
+                    </span>
+                  )}
+                </div>
               )}
               {checks[p.platform_key] && (
                 <div className="mt-1">{getCheckBadge(p.platform_key)}</div>
@@ -680,6 +706,11 @@ export function useSocialPlatforms() {
             ) : p.oauth_configured && p.auth_path ? (
               <button
                 onClick={() => handleConnect(p)}
+                title={
+                  p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp'
+                    ? 'Meta requires one consent for Facebook, Instagram, and WhatsApp — all three will be connected together.'
+                    : `Connect ${p.platform_label}`
+                }
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
               >
                 <Link2 className="h-3.5 w-3.5" /> Connect

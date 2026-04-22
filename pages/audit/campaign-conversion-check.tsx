@@ -22,7 +22,7 @@ export default function CampaignConversionCheck() {
   return (
     <>
       <Head>
-        <title>Campaign Conversion Check | Free AI Audit | Omnivyra</title>
+        <title>Campaign Conversion Check | Free AI Audit | OmniVyra</title>
         <meta name="description" content="Find out why your campaign traffic isn't converting. Get an instant AI audit with clear, prioritised fixes." />
       </Head>
 

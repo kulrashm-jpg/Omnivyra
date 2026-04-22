@@ -31,6 +31,14 @@ const postForm = async (path: string, body: Record<string, string>, authToken: s
   return { status: response.status, data: payload };
 };
 
+const extractRedditId = (result: { data?: any } | null): string | null => {
+  // Reddit's /api/comment wraps a created comment as
+  // { json: { errors: [], data: { things: [{ data: { id, name } }] } } }
+  const thing = result?.data?.json?.data?.things?.[0]?.data;
+  const candidate = thing?.name ?? thing?.id ?? null;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+};
+
 export const executeAction: PlatformConnector['executeAction'] = async (action, authToken) => {
   if (action.execution_mode && action.execution_mode !== 'api') {
     return { success: false, error: 'EXECUTION_MODE_NOT_ALLOWED' };
@@ -46,7 +54,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         { api_type: 'json', thing_id: action.target_id, text: action.suggested_text },
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractRedditId(result), platform_response: result };
     }
 
     if (action.action_type === 'like') {
@@ -55,7 +63,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         { id: action.target_id, dir: '1' },
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractRedditId(result), platform_response: result };
     }
 
     if (action.action_type === 'share' || action.action_type === 'follow') {

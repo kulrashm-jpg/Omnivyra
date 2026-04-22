@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getOAuthCredentialsForPlatform } from '../../../backend/auth/oauthCredentialResolver';
-import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
 import { encodeOAuthState } from '../../../backend/auth/oauthState';
+import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -30,10 +30,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: `${getBaseUrl(req)}/api/auth/youtube/callback`,
-      scope: 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.upload',
+      scope: [
+        'openid',
+        'email',
+        'profile',
+        'https://www.googleapis.com/auth/youtube',
+        'https://www.googleapis.com/auth/youtube.upload',
+        'https://www.googleapis.com/auth/youtube.force-ssl',
+      ].join(' '),
       response_type: 'code',
       access_type: 'offline',
       prompt: 'consent',
+      include_granted_scopes: 'true',
       state,
     });
 

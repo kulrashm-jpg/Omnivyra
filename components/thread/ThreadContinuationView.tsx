@@ -272,7 +272,7 @@ export default function ThreadContinuationView() {
   return (
     <>
       <Head>
-        <title>Thread Continuation | Omnivyra</title>
+        <title>Thread Continuation | OmniVyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-purple-50 px-4 py-8">
@@ -394,7 +394,7 @@ export default function ThreadContinuationView() {
                             <Link href="/engagement" className="inline-flex items-center justify-center rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700">
                               Open engagement
                             </Link>
-                            {!extensionReady ? <Link href="/integrations" className="inline-flex items-center justify-center rounded-xl border border-violet-200 px-4 py-3 text-sm font-semibold text-violet-700 transition hover:border-violet-300">Install extension</Link> : null}
+                            {!extensionReady ? <Link href="/integrations?focus=data" className="inline-flex items-center justify-center rounded-xl border border-violet-200 px-4 py-3 text-sm font-semibold text-violet-700 transition hover:border-violet-300">Install extension</Link> : null}
                           </div>
                         )}
                       </>

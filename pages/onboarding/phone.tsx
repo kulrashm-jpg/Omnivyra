@@ -114,7 +114,7 @@ export default function PhoneVerificationPage() {
   return (
     <>
       <Head>
-        <title>Set Up Account | Omnivyra</title>
+        <title>Set Up Account | OmniVyra</title>
       </Head>
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
@@ -122,7 +122,7 @@ export default function PhoneVerificationPage() {
         <header className="border-b border-gray-100 bg-white/95">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
             <Link href="/">
-              <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
+              <img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" />
             </Link>
             {step !== 'done' && step !== 'error' && (
               <span className="text-xs text-[#6B7C93]">{stepLabel}</span>

@@ -62,8 +62,8 @@ export default function LandingNavbar() {
       <div className="mx-auto flex h-16 max-w-[1280px] items-center justify-between px-6 lg:px-8">
 
         {/* Logo */}
-        <Link href="/" className="flex shrink-0 items-center" aria-label="Omnivyra home">
-          <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain sm:h-14" />
+        <Link href="/" className="flex shrink-0 items-center" aria-label="OmniVyra home">
+          <img src="/logo.png" alt="OmniVyra" className="h-12 w-auto object-contain sm:h-14" />
         </Link>
 
         {/* Center nav — desktop only */}
@@ -94,6 +94,9 @@ export default function LandingNavbar() {
               {/* Get Free Credits — full text on desktop, compact icon on mobile */}
               <Link
                 href="/get-free-credits"
+                data-ga-primary-cta
+                data-ga-label="Get Free Credits"
+                data-ga-location="landing_nav"
                 className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-3 py-2 text-sm font-semibold text-white shadow-[0_2px_12px_rgba(10,102,194,0.30)] transition hover:shadow-[0_4px_20px_rgba(10,102,194,0.45)] hover:opacity-95 sm:px-5"
                 aria-label="Get Free Credits"
               >

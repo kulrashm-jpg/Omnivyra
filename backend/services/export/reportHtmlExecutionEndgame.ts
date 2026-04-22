@@ -52,7 +52,7 @@ export function renderOmnivyraExecutionEndgameHtml(
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Omnivyra Execution Endgame</title>
+    <title>OmniVyra Execution Endgame</title>
     <style>
       @page { size: A4; margin: 14mm; }
       * { box-sizing:border-box; margin:0; padding:0; }

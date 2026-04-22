@@ -53,6 +53,10 @@ const AUTO_START_REDIS = process.env.DEV_AUTO_START_REDIS === '1';
 const FALLBACK_APP_ONLY = process.env.DEV_FALLBACK_APP_ONLY !== '0'; // default true
 const FORCE_UNLOCK_NEXT = process.env.DEV_FORCE_UNLOCK_NEXT === '1';
 
+function hasExistingDevArtifacts() {
+  return fs.existsSync(path.join(process.cwd(), '.next', 'dev'));
+}
+
 function parseRedisUrl(url) {
   if (url.includes('://')) {
     try {
@@ -133,6 +137,11 @@ function spawnProcess(name, command, args, opts = {}) {
 }
 
 function cleanNextCache() {
+  if (hasExistingDevArtifacts()) {
+    console.log('   ⚠️  Skipping .next cleanup because .next/dev already exists.');
+    console.log('      A Next.js dev server may already be running in this workspace.\n');
+    return;
+  }
   const cleanScript = path.join(process.cwd(), 'scripts', 'clean.js');
   try {
     execSync(`${process.execPath} "${cleanScript}"`, { stdio: 'ignore' });
@@ -143,6 +152,10 @@ function cleanNextCache() {
 }
 
 function cleanupStaleNextLockArtifacts() {
+  if (hasExistingDevArtifacts()) {
+    console.log('   ⚠️  Skipping stale .next/dev cleanup because dev artifacts already exist.\n');
+    return;
+  }
   const lockPaths = [
     path.join(process.cwd(), '.next', 'dev', 'lock'),
     path.join(process.cwd(), '.next', 'dev', 'trace'),

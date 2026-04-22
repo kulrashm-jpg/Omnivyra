@@ -56,3 +56,6 @@ export function defaultScheduleValue() {
   next.setHours(next.getHours() + 1, 0, 0, 0);
   return toDatetimeLocal(next);
 }
+export default function MultiPlatformSchedulerSharedPage() {
+  return null;
+}

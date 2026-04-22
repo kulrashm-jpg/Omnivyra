@@ -284,3 +284,6 @@ export function PresetModal({
     </div>
   );
 }
+export default function ExternalApisModalsPage() {
+  return null;
+}

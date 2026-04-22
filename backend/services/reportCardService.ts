@@ -6,19 +6,26 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import {
+  persistAnalyticsReportInputs,
+  resolveAnalyticsReportInput,
+} from './analyticsInputResolver';
 import { extractDomain } from './companyMatchService';
 import { getUserRole, Role } from './rbacService';
 import { deductCreditsAwaited } from './creditExecutionService';
 import {
-  persistResolvedReportInputs,
-  resolveReportInput,
   type ReportRequestPayload,
   type ResolvedReportCategory,
+  type ResolvedReportInput,
 } from './reportInputResolver';
 import { evaluateResolvedReportReadiness } from './reportReadinessService';
+import {
+  persistSnapshotReportInputs,
+  resolveSnapshotReportInput,
+} from './snapshotInputResolver';
 
 export type ReportStatus = 'generating' | 'completed' | 'failed';
-export type ReportType = 'content_readiness' | 'competitor_analysis' | 'gap_analysis';
+export type ReportType = 'content_readiness' | 'competitor_analysis' | 'gap_analysis' | 'performance_intelligence';
 export type ReportCategory = 'snapshot' | 'performance' | 'growth';
 export type ReportCardAvailabilityState = 'free_available' | 'generating' | 'used';
 
@@ -79,13 +86,13 @@ type ReportGenerationPayload = {
 
 function mapCategoryToReportType(category: ReportCategory): ReportType {
   if (category === 'growth') return 'competitor_analysis';
-  if (category === 'performance') return 'gap_analysis';
+  if (category === 'performance') return 'performance_intelligence';
   return 'content_readiness';
 }
 
 function mapReportTypeToCategory(reportType: ReportType): ReportCategory {
   if (reportType === 'competitor_analysis') return 'growth';
-  if (reportType === 'gap_analysis') return 'performance';
+  if (reportType === 'gap_analysis' || reportType === 'performance_intelligence') return 'performance';
   return 'snapshot';
 }
 
@@ -409,10 +416,41 @@ function getCreditActionForCategory(category: ReportCategory): 'website_audit' |
   return 'website_audit';
 }
 
+async function resolveInputForReportCategory(params: {
+  companyId: string;
+  reportCategory: ReportCategory;
+  requestPayload?: ReportRequestPayload | null;
+}): Promise<ResolvedReportInput> {
+  if (params.reportCategory === 'snapshot') {
+    return resolveSnapshotReportInput({
+      companyId: params.companyId,
+      requestPayload: params.requestPayload,
+    });
+  }
+
+  return resolveAnalyticsReportInput({
+    companyId: params.companyId,
+    reportCategory: params.reportCategory,
+    requestPayload: params.requestPayload,
+  });
+}
+
+async function persistInputsForReportCategory(
+  reportCategory: ReportCategory,
+  resolvedInput: ResolvedReportInput,
+): Promise<void> {
+  if (reportCategory === 'snapshot') {
+    await persistSnapshotReportInputs(resolvedInput);
+    return;
+  }
+
+  await persistAnalyticsReportInputs(resolvedInput);
+}
+
 function enrichComposedReportWithInputContext(params: {
   composedReport: Record<string, unknown> | undefined;
-  resolvedInput: Awaited<ReturnType<typeof resolveReportInput>>;
-  readiness: ReturnType<typeof evaluateResolvedReportReadiness>;
+  resolvedInput: ResolvedReportInput;
+  readiness: Awaited<ReturnType<typeof evaluateResolvedReportReadiness>>;
 }): Record<string, unknown> | undefined {
   if (!params.composedReport) return undefined;
 
@@ -506,14 +544,14 @@ export async function generateReportPayload(
   const requestedCategory: ReportCategory =
     mapRequestedCategory(requestedCategoryRaw, mapReportTypeToCategory(report.report_type));
   const requestPayload = (metadata.request_payload ?? null) as ReportRequestPayload | null;
-  const resolvedInput = await resolveReportInput({
+  const resolvedInput = await resolveInputForReportCategory({
     companyId: report.company_id,
     reportCategory: toResolvedReportCategory(requestedCategory),
     requestPayload,
   });
-  const readiness = evaluateResolvedReportReadiness(resolvedInput);
+  const readiness = await evaluateResolvedReportReadiness(resolvedInput);
 
-  await persistResolvedReportInputs(resolvedInput);
+  await persistInputsForReportCategory(requestedCategory, resolvedInput);
 
   const intelligence = await runCompanyBlogIntelligence(report.company_id);
 
@@ -523,10 +561,8 @@ export async function generateReportPayload(
       const { composeGrowthReport } = await import('./growthReportService');
       composed_report = await composeGrowthReport(report.company_id) as unknown as Record<string, unknown>;
     } else if (requestedCategory === 'performance') {
-      const { composePerformanceReport } = await import('./performanceReportService');
-      composed_report = await composePerformanceReport(report.company_id, {
-        resolvedInput,
-      }) as unknown as Record<string, unknown>;
+      const { composePerformanceIntelligenceReport } = await import('./performanceReportService');
+      composed_report = await composePerformanceIntelligenceReport(report.company_id) as unknown as Record<string, unknown>;
     } else {
       const { composeSnapshotReport } = await import('./snapshotReportService');
       composed_report = await composeSnapshotReport(report.company_id, {

@@ -142,7 +142,7 @@ export default function ReportsHubPage() {
   return (
     <>
       <Head>
-        <title>Reports Hub | Omnivyra</title>
+        <title>Reports Hub | OmniVyra</title>
         <meta
           name="description"
           content="Choose your report type: Digital Authority Snapshot, Performance Intelligence, or Market & Growth Intelligence."
@@ -183,7 +183,7 @@ export default function ReportsHubPage() {
                 </div>
                 <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Workspace</p>
-                  <p className="mt-1 text-base font-semibold text-gray-900">{selectedCompanyName || 'Omnivyra'}</p>
+                  <p className="mt-1 text-base font-semibold text-gray-900">{selectedCompanyName || 'OmniVyra'}</p>
                 </div>
               </div>
             </div>

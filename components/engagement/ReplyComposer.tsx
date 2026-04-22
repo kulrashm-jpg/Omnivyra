@@ -2,8 +2,9 @@
  * ReplyComposer — compose and send replies.
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { recordEngagementEvent } from '@/lib/engagementTelemetry';
+import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
 
 export interface ReplyComposerProps {
   threadId: string;
@@ -18,7 +19,7 @@ export interface ReplyComposerProps {
     messageId: string;
     platform: string;
     replyText: string;
-  }) => Promise<void>;
+  }) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
   onRequestSuggestions?: () => void;
   disabled?: boolean;
   className?: string;
@@ -59,22 +60,38 @@ export const ReplyComposer = React.memo(function ReplyComposer({
   const text = isControlled ? controlledValue : internalValue;
   const setText = isControlled ? (onChange ?? (() => {})) : setInternalValue;
 
+  const capability = useMemo(
+    () => resolveEngagementCapability(platform, 'reply'),
+    [platform],
+  );
+  const unsupportedReason =
+    capability.status === 'api_verified' ? null : capability.reason ?? 'Reply is not supported on this platform.';
+
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || sending || disabled) return;
+    if (unsupportedReason) {
+      setError(unsupportedReason);
+      return;
+    }
 
     setSending(true);
     setError(null);
     setSuccessMessage(null);
 
     try {
+      let executionMessage: string | null = null;
+
       if (onExecuteReply) {
-        await onExecuteReply({
+        const executionResult = await onExecuteReply({
           threadId,
           messageId,
           platform,
           replyText: trimmed,
         });
+        if (executionResult && typeof executionResult === 'object' && executionResult.message) {
+          executionMessage = executionResult.message;
+        }
       } else {
         const res = await fetch('/api/engagement/reply', {
           method: 'POST',
@@ -89,8 +106,28 @@ export const ReplyComposer = React.memo(function ReplyComposer({
           }),
         });
 
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || res.statusText);
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          status?: string;
+          confirmed?: boolean;
+          platform_id?: string | null;
+          success?: boolean;
+        };
+        if (!res.ok) {
+          throw new Error(json.error || res.statusText || 'Failed to send reply');
+        }
+        if (json.status !== 'executed' || json.success !== true) {
+          throw new Error(json.error || 'Platform did not confirm the reply was sent');
+        }
+        // Three visible states:
+        //   confirmed=true  → "Confirmed by X (id: ...)" — platform returned a verifiable id.
+        //   confirmed=false → "Sent to X" — platform ack'd the write but no id to verify against.
+        // We never say "confirmed" without a platform_id.
+        if (json.confirmed && json.platform_id) {
+          executionMessage = `Reply confirmed by ${platform} (id: ${json.platform_id}).`;
+        } else {
+          executionMessage = `Reply sent to ${platform}. Awaiting platform confirmation.`;
+        }
       }
 
       setText('');
@@ -100,14 +137,16 @@ export const ReplyComposer = React.memo(function ReplyComposer({
         thread_id: threadId,
         metadata: { platform },
       });
-      setSuccessMessage('Reply submitted. LinkedIn may take a few seconds to reflect it.');
+      setSuccessMessage(executionMessage || 'Reply confirmed by the platform.');
       onReplySent?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send reply');
     } finally {
       setSending(false);
     }
-  }, [text, sending, disabled, organizationId, threadId, messageId, platform, onReplySent, onExecuteReply, isControlled, setText]);
+  }, [text, sending, disabled, unsupportedReason, onExecuteReply, threadId, messageId, platform, organizationId, isControlled, setText, onReplySent]);
+
+  const composerDisabled = disabled || Boolean(unsupportedReason);
 
   return (
     <div className={`space-y-2 ${className}`}>
@@ -116,9 +155,9 @@ export const ReplyComposer = React.memo(function ReplyComposer({
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Write a reply..."
+          placeholder={unsupportedReason ? 'Replies are not available for this platform.' : 'Write a reply...'}
           rows={3}
-          disabled={disabled}
+          disabled={composerDisabled}
           className="flex-1 rounded border border-slate-300 p-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
         />
       </div>
@@ -127,7 +166,7 @@ export const ReplyComposer = React.memo(function ReplyComposer({
           <button
             type="button"
             onClick={onRequestSuggestions}
-            disabled={disabled}
+            disabled={composerDisabled}
             className="text-sm text-blue-600 hover:text-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             AI suggestions
@@ -136,12 +175,17 @@ export const ReplyComposer = React.memo(function ReplyComposer({
         <button
           type="button"
           onClick={handleSend}
-          disabled={disabled || !text.trim() || sending}
+          disabled={composerDisabled || !text.trim() || sending}
           className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {sending ? 'Sending…' : 'Send'}
         </button>
       </div>
+      {unsupportedReason && (
+        <p className="text-xs text-slate-500" role="note">
+          {unsupportedReason}
+        </p>
+      )}
       {error && (
         <p className="text-sm text-red-600" role="alert">
           {error}

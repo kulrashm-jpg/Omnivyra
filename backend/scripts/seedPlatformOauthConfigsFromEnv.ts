@@ -29,11 +29,12 @@ const PLATFORMS: {
     scopes: ['openid', 'profile', 'email', 'w_member_social'],
   },
   {
-    platform: 'twitter',
-    envId: 'TWITTER_CLIENT_ID',
-    envSecret: 'TWITTER_CLIENT_SECRET',
+    platform: 'x',
+    envId: 'X_CLIENT_ID',
+    envSecret: 'X_CLIENT_SECRET',
     authUrl: 'https://twitter.com/i/oauth2/authorize',
     tokenUrl: 'https://api.twitter.com/2/oauth2/token',
+    scopes: ['tweet.read', 'tweet.write', 'users.read', 'like.write', 'follows.write', 'offline.access'],
   },
   {
     platform: 'facebook',
@@ -70,9 +71,12 @@ async function seed() {
   let skipped = 0;
 
   for (const p of PLATFORMS) {
-    const clientId = process.env[p.envId] || process.env[p.envId.replace('_CLIENT_ID', '_APP_ID')] || '';
-    const clientSecret =
-      process.env[p.envSecret] || process.env[p.envSecret.replace('_CLIENT_SECRET', '_APP_SECRET')] || '';
+    const candidateIds = [p.envId, p.envId.replace('_CLIENT_ID', '_APP_ID')];
+    if (p.platform === 'x') candidateIds.push('TWITTER_CLIENT_ID');
+    const candidateSecrets = [p.envSecret, p.envSecret.replace('_CLIENT_SECRET', '_APP_SECRET')];
+    if (p.platform === 'x') candidateSecrets.push('TWITTER_CLIENT_SECRET');
+    const clientId = candidateIds.map((k) => process.env[k]).find((v) => v && v.trim()) || '';
+    const clientSecret = candidateSecrets.map((k) => process.env[k]).find((v) => v && v.trim()) || '';
 
     if (!clientId?.trim() || !clientSecret?.trim() || clientId.includes('your_')) {
       console.log(`  [${p.platform}] Skipped — no credentials in env`);

@@ -18,6 +18,7 @@ import axios from 'axios';
 import { getToken, setToken, TokenObject } from './tokenStore';
 import { supabase } from '../db/supabaseClient';
 import { config } from '@/config';
+import { getOAuthCredentialsForPlatform } from './oauthCredentialResolver';
 
 /**
  * Refresh token for LinkedIn
@@ -31,8 +32,9 @@ export async function refreshLinkedInToken(
     return null;
   }
 
-  const clientId = config.LINKEDIN_CLIENT_ID;
-  const clientSecret = config.LINKEDIN_CLIENT_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('linkedin');
+  const clientId = credentials?.client_id || config.LINKEDIN_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || config.LINKEDIN_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     console.error('❌ LinkedIn credentials not configured');
@@ -100,8 +102,9 @@ export async function refreshTwitterToken(
     return null;
   }
 
-  const clientId = config.TWITTER_CLIENT_ID || config.X_CLIENT_ID;
-  const clientSecret = config.TWITTER_CLIENT_SECRET || config.X_CLIENT_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('x');
+  const clientId = credentials?.client_id || config.X_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || config.X_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     console.error('❌ Twitter credentials not configured');
@@ -164,8 +167,9 @@ export async function refreshFacebookToken(
   socialAccountId: string,
   currentToken: TokenObject
 ): Promise<TokenObject | null> {
-  const appId = config.FACEBOOK_APP_ID;
-  const appSecret = config.FACEBOOK_APP_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('facebook');
+  const appId = credentials?.client_id || config.FACEBOOK_APP_ID || config.FACEBOOK_CLIENT_ID;
+  const appSecret = credentials?.client_secret || config.FACEBOOK_APP_SECRET || config.FACEBOOK_CLIENT_SECRET;
 
   if (!appId || !appSecret) {
     console.error('❌ Facebook credentials not configured');
@@ -291,8 +295,9 @@ export async function refreshYouTubeToken(
     return null;
   }
 
-  const clientId = process.env.YOUTUBE_CLIENT_ID;
-  const clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
+  const credentials = await getOAuthCredentialsForPlatform('youtube');
+  const clientId = credentials?.client_id || process.env.YOUTUBE_CLIENT_ID;
+  const clientSecret = credentials?.client_secret || process.env.YOUTUBE_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     console.error('❌ YouTube credentials not configured');

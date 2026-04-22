@@ -82,7 +82,7 @@ export default function ShortformTopicPage({
   return (
     <>
       <Head>
-        <title>{pageTitle} | Omnivyra</title>
+        <title>{pageTitle} | OmniVyra</title>
       </Head>
 
       <div className={`min-h-screen bg-gradient-to-br ${accentSurfaceClassName} p-6`}>

@@ -143,7 +143,7 @@ export default function EngagementControlsPage() {
   return (
     <>
       <Head>
-        <title>Engagement Controls | Omnivyra</title>
+        <title>Engagement Controls | OmniVyra</title>
       </Head>
       <div className="min-h-[calc(100vh-4rem)] bg-slate-50 p-4">
         <div className="max-w-2xl mx-auto">

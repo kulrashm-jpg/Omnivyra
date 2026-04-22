@@ -29,8 +29,8 @@ type EnhancedCardLike = {
 
 const CARD_ACTION_LABELS: Record<string, string> = {
   reports: 'Generate',
-  blogs: 'Write',
-  campaigns: 'Create',
+  blogs: 'Create',
+  campaigns: 'Build',
   engagement: 'Engage',
 };
 

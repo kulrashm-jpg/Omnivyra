@@ -189,10 +189,12 @@
       "Bash(echo \"Exit: $?\")",
       "Bash(find /c/virality -type f -name \"*.ts\" -exec grep -l \"newsletter.*linkedin\\\\|linkedin.*newsletter\" {} \\\\;)",
       "Bash(find /c/virality/backend -type f -name \"*.ts\" -exec grep -l \"Newsletter\\\\|NEWSLETTER\" {} \\\\;)",
-      "Read(//c/tmp/**)"
+      "Read(//c/tmp/**)",
+      "mcp__supabase__apply_migration"
     ],
     "additionalDirectories": [
-      "c:\\virality\\pages\\api\\blog\\[slug]"
+      "c:\\virality\\pages\\api\\blog\\[slug]",
+      "C:\\Users\\Admin\\OneDrive\\Desktop\\omnivyra chrome ext\\extension\\core"
     ]
   },
   "enabledMcpjsonServers": [

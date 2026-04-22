@@ -1,4 +1,9 @@
 import { enqueueRpaTask, startRpaWorker } from './rpaTaskQueue';
+import { buildScript } from './rpaPlatformScripts';
+import { runRpaScript } from './rpaPlaywrightRunner';
+import { rpaEnvReady, assertRpaEnvReady, isProbeFailure } from './rpaEnv';
+import { admitRpaTask, observeAllActiveOrgs } from './rpaQueueState';
+import { enqueueRpaRetry, flushRpaRetryQueueRoundRobin } from './rpaRetryQueue';
 
 export type RpaTask = {
   tenant_id: string;
@@ -12,7 +17,12 @@ export type RpaTask = {
 
 export type RpaResult = {
   success: boolean;
+  /** Platform-native id surfaced by the runner when the script extracted one. */
+  platform_id?: string;
+  /** Local filesystem path of the audit screenshot (legacy / fallback). */
   screenshot_path?: string;
+  /** Durable public URL of the screenshot stored in the rpa-artifacts bucket. */
+  screenshot_url?: string;
   error?: string;
 };
 
@@ -20,12 +30,60 @@ type RpaHandler = (task: RpaTask) => Promise<RpaResult>;
 
 const normalizePlatform = (platform: string) => platform.trim().toLowerCase();
 
+/**
+ * Worker-startup gate: call this from the long-running RPA worker's main
+ * loop so a misconfigured environment fails loudly rather than silently
+ * draining the queue with RPA_ENV_NOT_READY failures.
+ */
+export { assertRpaEnvReady };
+
+/**
+ * Scheduler entry points. The cron worker calls these on its own cadence
+ * to observe state and drain deferred retries. Both are per-org aware:
+ *
+ *   observeBackpressure — enumerates organizations with recent RPA
+ *     activity, computes per-org state, upserts rpa_queue_state.
+ *
+ *   flushRetries — round-robin over orgs with due retries; each org gets
+ *     at most `limit_per_org` sweep slots. No single tenant can
+ *     monopolise the worker's attention.
+ */
+export const rpaSchedulerHooks = {
+  observeBackpressure: observeAllActiveOrgs,
+  flushRetries: async (opts?: { limit_per_org?: number; max_orgs?: number }) =>
+    flushRpaRetryQueueRoundRobin({
+      handler: async (task) => {
+        // Retry path bypasses the admission gate to avoid infinite
+        // deferral during partial outages. Env readiness is still
+        // enforced downstream by the playwright runner.
+        const h = handlers[normalizePlatform(task.platform)];
+        if (!h) return { success: false, error: 'RPA_PLATFORM_NOT_SUPPORTED' };
+        return h(task);
+      },
+      limitPerOrg: opts?.limit_per_org,
+      maxOrgs: opts?.max_orgs,
+    }),
+};
+
+/**
+ * Unified Playwright-backed handler for every platform. Script selection
+ * is delegated to `buildScript(task)`; a platform that has no script for
+ * the requested action is surfaced as a structured failure.
+ */
+const playwrightHandler: RpaHandler = async (task) => {
+  const script = buildScript(task);
+  if ('error' in script) {
+    return { success: false, error: script.error };
+  }
+  return runRpaScript(task, script);
+};
+
 const handlers: Record<string, RpaHandler> = {
-  facebook: async () => ({ success: false, error: 'RPA_NOT_IMPLEMENTED' }),
-  instagram: async () => ({ success: false, error: 'RPA_NOT_IMPLEMENTED' }),
-  twitter: async () => ({ success: false, error: 'RPA_NOT_IMPLEMENTED' }),
-  reddit: async () => ({ success: false, error: 'RPA_NOT_IMPLEMENTED' }),
-  linkedin: async () => ({ success: false, error: 'RPA_NOT_IMPLEMENTED' }),
+  facebook:  playwrightHandler,
+  instagram: playwrightHandler,
+  twitter:   playwrightHandler,
+  reddit:    playwrightHandler,
+  linkedin:  playwrightHandler,
 };
 
 const validateTask = (task: RpaTask) => {
@@ -35,6 +93,9 @@ const validateTask = (task: RpaTask) => {
   if (!task?.action_type) return { ok: false, error: 'ACTION_TYPE_REQUIRED' };
   if (!task?.target_url) return { ok: false, error: 'TARGET_URL_REQUIRED' };
   if (!task?.action_id) return { ok: false, error: 'ACTION_ID_REQUIRED' };
+  if (task.action_type !== 'reply' && task.action_type !== 'like') {
+    return { ok: false, error: 'ACTION_TYPE_NOT_SUPPORTED' };
+  }
   return { ok: true };
 };
 
@@ -42,6 +103,27 @@ export const executeRpaTask = async (task: RpaTask): Promise<RpaResult> => {
   const validation = validateTask(task);
   if (!validation.ok) {
     return { success: false, error: validation.error };
+  }
+
+  // Environment gate: fail fast when Playwright isn't ready rather than
+  // draining the queue with identical failures.
+  const ready = await rpaEnvReady();
+  if (isProbeFailure(ready)) {
+    // Defer to the retry buffer so the scheduler's backpressure worker
+    // can drain once the env is fixed, rather than losing the task.
+    await enqueueRpaRetry(task, {
+      error: `RPA_ENV_NOT_READY:${ready.reason}`,
+      delaySeconds: 120,
+    });
+    return { success: false, error: `RPA_ENV_NOT_READY:${ready.reason}` };
+  }
+
+  // Per-org backpressure gate. Each tenant gets its own READY / DEGRADED
+  // / BLOCKED state; a noisy org cannot push others into BLOCKED.
+  const admission = await admitRpaTask({ organization_id: task.organization_id });
+  if (!admission.admit) {
+    await enqueueRpaRetry(task, { error: `RPA_DEFERRED:${admission.reason || admission.status}`, delaySeconds: 60 });
+    return { success: false, error: `RPA_DEFERRED:${admission.status}` };
   }
 
   const handler = handlers[normalizePlatform(task.platform)];

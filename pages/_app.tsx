@@ -1,6 +1,7 @@
 import '../styles/globals.css';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
+import Script from 'next/script';
 import { CompanyProvider } from '../components/CompanyContext';
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
@@ -8,6 +9,14 @@ import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 import { TourProvider } from '../components/tour/TourContext';
 import AppLayout from '../components/layout/AppLayout';
+import {
+  WEBSITE_GA_HOSTNAME,
+  WEBSITE_GA_MEASUREMENT_ID,
+  canTrackWebsiteAnalytics,
+  isWebsiteAnalyticsHost,
+  trackWebsiteEvent,
+  trackWebsitePageView,
+} from '../lib/websiteAnalytics';
 
 // NOTE: clearSupabaseSession() was removed here.  It wiped sb-* localStorage
 // keys (including PKCE code-verifiers) on every page load, which broke magic-
@@ -15,7 +24,66 @@ import AppLayout from '../components/layout/AppLayout';
 // refreshes.  The Firebase→Supabase migration it was originally added for is
 // long complete.
 
-const LANDING_PUBLIC_ROUTES = ['/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
+const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
+
+const WebsiteAnalytics: React.FC = () => {
+  const router = useRouter();
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    setEnabled(isWebsiteAnalyticsHost() && canTrackWebsiteAnalytics(router.pathname));
+  }, [router.pathname]);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const handleRouteChange = (url: string) => {
+      if (!canTrackWebsiteAnalytics(url)) return;
+      trackWebsitePageView(url);
+    };
+
+    const handleDocumentClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const cta = target?.closest<HTMLElement>('[data-ga-primary-cta]');
+      if (!cta) return;
+
+      trackWebsiteEvent('cta_click', {
+        cta_label: cta.dataset.gaLabel || cta.textContent?.trim() || 'primary_cta',
+        cta_location: cta.dataset.gaLocation || router.pathname,
+      });
+    };
+
+    router.events.on('routeChangeComplete', handleRouteChange);
+    document.addEventListener('click', handleDocumentClick);
+
+    return () => {
+      router.events.off('routeChangeComplete', handleRouteChange);
+      document.removeEventListener('click', handleDocumentClick);
+    };
+  }, [enabled, router.events, router.pathname]);
+
+  if (!enabled) return null;
+
+  return (
+    <>
+      <Script
+        src="https://www.googletagmanager.com/gtag/js?id=G-LZVBC8FEHP"
+        strategy="afterInteractive"
+      />
+      <Script id="google-analytics" strategy="afterInteractive">
+        {`
+          if (window.location.hostname === '${WEBSITE_GA_HOSTNAME}') {
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            window.gtag = gtag;
+            gtag('js', new Date());
+            gtag('config', '${WEBSITE_GA_MEASUREMENT_ID}');
+          }
+        `}
+      </Script>
+    </>
+  );
+};
 
 const RouteProgressBar: React.FC = () => {
   const router = useRouter();
@@ -86,8 +154,13 @@ const RouteProgressBar: React.FC = () => {
 const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const { isAuthenticated, authChecked } = useCompanyContext();
+  const [mounted, setMounted] = useState(false);
 
-  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite'];
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite'];
   const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
   const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');
@@ -118,15 +191,16 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Next.js to attempt a hard navigation while a soft navigation is in flight, which
   // triggers "Invariant: attempted to hard navigate to the same URL".
   useEffect(() => {
+    if (!mounted) return;
     if (!isPublic && authChecked && !isAuthenticated) {
       router.replace('/login');
     }
-  }, [isPublic, authChecked, isAuthenticated, router]);
+  }, [mounted, isPublic, authChecked, isAuthenticated, router]);
 
   // Protected routes: hold the render until the backend probe has resolved.
   // This prevents a flash of protected content before we know the user's auth state,
   // and prevents a premature redirect to /login before we know the user is NOT authenticated.
-  if (!isPublic && !authChecked) {
+  if (!isPublic && (!mounted || !authChecked)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
@@ -166,6 +240,7 @@ function MyApp({ Component, pageProps }: AppProps) {
         <Head>
           <link rel="icon" href="/favicon.jpg" />
         </Head>
+        <WebsiteAnalytics />
         <RouteProgressBar />
         <AuthGate>
           <Component {...pageProps} />

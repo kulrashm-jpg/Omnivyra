@@ -60,7 +60,7 @@ export function useDashboardState() {
     // Allow deep-linking to a specific tab via ?tab=calendar etc.
     if (typeof window !== 'undefined') {
       const p = new URLSearchParams(window.location.search).get('tab');
-      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics' || p === 'integrations') return p;
+      if (p === 'calendar' || p === 'campaigns' || p === 'team' || p === 'analytics') return p;
     }
     return 'overview';
   });
@@ -994,8 +994,11 @@ export function useDashboardState() {
 
   const openIntelligenceTab = useCallback((view: IntelligenceWorkspaceView = 'market-pulse') => {
     setIntelligenceView(view);
-    setActiveTab('intelligence');
-  }, []);
+    const params = new URLSearchParams();
+    if (selectedCompanyId) params.set('companyId', selectedCompanyId);
+    params.set('intelTab', view);
+    void router.push(`/dashboard/intelligence?${params.toString()}`);
+  }, [router, selectedCompanyId]);
 
   // Status flags for early returns (component handles rendering)
   const showLoadingSpinner = isLoading;

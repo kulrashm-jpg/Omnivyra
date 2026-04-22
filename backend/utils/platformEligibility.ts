@@ -6,6 +6,7 @@
  */
 
 import type { CompanyProfile } from '../services/companyProfileService';
+import { supabase } from '../db/supabaseClient';
 
 const PLATFORM_URL_KEYS: Record<string, keyof CompanyProfile> = {
   linkedin: 'linkedin_url',
@@ -88,6 +89,8 @@ export function sortPlatformsByPriority(platforms: string[]): string[] {
  */
 export const CONTENT_PLATFORM_AFFINITY: Record<string, string[]> = {
   post:        ['linkedin', 'facebook', 'instagram', 'x', 'reddit'],
+  tweet:       ['x', 'twitter', 'linkedin', 'facebook'],
+  feed_post:   ['instagram', 'facebook', 'linkedin'],
   article:     ['linkedin', 'facebook', 'medium', 'devto', 'github'],
   blog:        ['linkedin', 'facebook', 'medium', 'devto'],
   newsletter:  ['linkedin', 'medium', 'facebook', 'x'],
@@ -107,6 +110,48 @@ export const CONTENT_PLATFORM_AFFINITY: Record<string, string[]> = {
  * Max platforms per content piece for multi-platform posting.
  */
 export const MAX_PLATFORMS_PER_CONTENT = 3;
+
+/**
+ * "Connected at company admin level" platforms for a company.
+ *
+ * Source of truth is `social_accounts` (active OAuth-backed rows) — the same
+ * signal the admin UI uses for the Connected badge. Falls back to profile URL
+ * fields via `getAvailablePlatformsFromProfile` when no OAuth rows exist, so
+ * pre-OAuth setups (just URLs) still produce a non-empty platform list.
+ *
+ * Both the BOLT picker endpoint and the BOLT pipeline should use this helper so
+ * they agree on which platforms count as available for a campaign.
+ */
+export async function getConnectedPlatformsForCompany(
+  companyId: string,
+  profile?: CompanyProfile | null
+): Promise<string[]> {
+  if (!companyId) return [];
+
+  try {
+    const { data } = await supabase
+      .from('social_accounts')
+      .select('platform')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .not('platform_user_id', 'like', 'planning_%');
+
+    const seen = new Set<string>();
+    const connected: string[] = [];
+    for (const row of data ?? []) {
+      const norm = String((row as { platform?: string }).platform ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/^twitter$/i, 'x');
+      if (!norm || seen.has(norm)) continue;
+      seen.add(norm);
+      connected.push(norm);
+    }
+    if (connected.length > 0) return sortPlatformsByPriority(connected);
+  } catch { /* fall through to profile-URL source */ }
+
+  return profile ? getAvailablePlatformsFromProfile(profile) : [];
+}
 
 /**
  * Filter platforms to only those available in the company profile.

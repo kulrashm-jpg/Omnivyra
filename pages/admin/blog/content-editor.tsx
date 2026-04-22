@@ -402,7 +402,7 @@ export default function AdminBlogContentEditorPage() {
               <Link href="/dashboard" className="flex shrink-0 items-center" aria-label="Home">
                 <img
                   src="/logo.png"
-                  alt="Omnivyra"
+                  alt="OmniVyra"
                   width={100}
                   height={40}
                   className="h-10 w-auto object-contain"

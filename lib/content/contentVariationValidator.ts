@@ -127,7 +127,16 @@ export function validateContentVariation(
     };
   }
 
-  if (validationMode === 'short_form') {
+  // D2: short-form mode no longer short-circuits for array input.
+  //
+  //   - Array input (multiple short-form items, e.g. campaign posts/threads):
+  //     run duplicate detection so two posts on the same topic can't ship
+  //     with identical hooks. Uses a looser threshold than long-form.
+  //   - String input (a single short-form item's internal paragraphs):
+  //     keep the skip because a single post has no meaningful "sections" —
+  //     it's one short piece and per-paragraph duplication is expected noise.
+  const isArrayInput = Array.isArray(sectionsOrContent);
+  if (validationMode === 'short_form' && !isArrayInput) {
     return {
       duplicateContentDetected: false,
       lowVariationDetected: false,
@@ -144,8 +153,10 @@ export function validateContentVariation(
   const lowVariationSections: LowVariationSectionIssue[] = [];
   const seenConcepts = new Set<string>();
   let maxSectionSimilarity = 0;
-  const duplicateThreshold = validationMode === 'mid_form' ? 0.8 : 0.7;
-  const lowVariationThreshold = validationMode === 'mid_form' ? 0.7 : 0.55;
+  // Looser thresholds for short-form cross-item check (less context per item,
+  // so a strict 0.7 would over-fire on legitimate same-topic variations).
+  const duplicateThreshold = validationMode === 'short_form' ? 0.85 : (validationMode === 'mid_form' ? 0.8 : 0.7);
+  const lowVariationThreshold = validationMode === 'short_form' ? 0.75 : (validationMode === 'mid_form' ? 0.7 : 0.55);
 
   for (let index = 0; index < sections.length; index += 1) {
     const currentTokens = tokenSets[index];

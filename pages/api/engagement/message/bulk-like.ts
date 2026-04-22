@@ -49,12 +49,13 @@ async function likeMessage(
   const playbookId = playbooks[0]?.id ?? null;
   if (!playbookId) return false;
 
+  const normalizedPlatform = ((platform || 'linkedin').toLowerCase() === 'x') ? 'twitter' : (platform || 'linkedin');
   const result = await executeAction(
     {
       id: crypto.randomUUID(),
       tenant_id: organizationId,
       organization_id: organizationId,
-      platform: platform || 'linkedin',
+      platform: normalizedPlatform,
       action_type: 'like',
       target_id: message.platform_message_id ?? messageId,
       suggested_text: null,
@@ -62,7 +63,7 @@ async function likeMessage(
       execution_mode: 'manual',
     },
     true,
-    { source: 'bulk' }
+    { source: 'bulk', persist: true, auto_insert: true }
   );
 
   if (result.ok) {

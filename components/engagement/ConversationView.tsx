@@ -9,6 +9,7 @@ import { ReplyComposer } from './ReplyComposer';
 import { AISuggestionPanel } from './AISuggestionPanel';
 import type { EngagementMessage } from '@/hooks/useEngagementMessages';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
+import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
 
 function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -25,6 +26,7 @@ function formatTimestamp(iso: string | null | undefined): string {
 }
 
 function authorDisplay(authorId: string | null, threadAuthor: string | null): string {
+  if (authorId === '__self__') return 'You';
   if (threadAuthor) return threadAuthor;
   if (authorId) return authorId.slice(0, 8) + '…';
   return 'Unknown';
@@ -44,7 +46,7 @@ export interface ConversationViewProps {
     messageId: string;
     platform: string;
     replyText: string;
-  }) => Promise<void>;
+  }) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
   onLike?: (messageId: string, platform: string) => void;
   onIgnore?: (threadId: string) => void;
   onMarkResolved?: () => void;
@@ -247,23 +249,36 @@ export const ConversationView = React.memo(function ConversationView({
           </div>
           <p className="text-sm text-slate-700 mt-0.5 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
           <div className="flex items-center gap-2 mt-1">
-            <button
-              type="button"
-              onClick={() => handleLike(msg)}
-              className="text-xs text-slate-500 hover:text-blue-600"
-            >
-              Like {typeof msg.like_count === 'number' && msg.like_count > 0 ? `(${msg.like_count})` : ''}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setReplyingTo(msg);
-                setShowSuggestions(true);
-              }}
-              className="text-xs text-slate-500 hover:text-blue-600"
-            >
-              Reply
-            </button>
+            {(() => {
+              const msgPlatform = msg.platform ?? '';
+              const likeCap = resolveEngagementCapability(msgPlatform, 'like');
+              const replyCap = resolveEngagementCapability(msgPlatform, 'reply');
+              return (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleLike(msg)}
+                    disabled={likeCap.status !== 'api_verified'}
+                    title={likeCap.status === 'api_verified' ? undefined : likeCap.reason}
+                    className="text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Like {typeof msg.like_count === 'number' && msg.like_count > 0 ? `(${msg.like_count})` : ''}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReplyingTo(msg);
+                      setShowSuggestions(true);
+                    }}
+                    disabled={replyCap.status !== 'api_verified'}
+                    title={replyCap.status === 'api_verified' ? undefined : replyCap.reason}
+                    className="text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Reply
+                  </button>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>

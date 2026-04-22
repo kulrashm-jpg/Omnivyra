@@ -7,7 +7,15 @@ export type CampaignSourceContentType =
   | 'guide'
   | 'story'
   | 'whitepaper'
-  | 'case-study';
+  | 'case-study'
+  | 'carousel'
+  | 'image'
+  | 'post'
+  | 'thread'
+  | 'banner'
+  | 'infographic'
+  | 'pdf'
+  | 'slider';
 
 export type CampaignSourcePayload = {
   origin: 'content_editor';

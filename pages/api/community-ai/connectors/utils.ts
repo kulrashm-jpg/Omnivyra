@@ -19,9 +19,9 @@ export function getCommunityAiConnectorCallbackUrl(platform: string, req?: impor
   let baseUrl: string;
 
   if (req) {
-    // Prefer the actual request origin so local dev and prod both work without env changes
     const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-    const host = (req.headers['x-forwarded-host'] as string | undefined) || req.headers.host || 'localhost:3000';
+    const rawHost = ((req.headers['x-forwarded-host'] as string | undefined) || req.headers.host || 'localhost:3000').toString();
+    const host = rawHost.replace(/^127\.0\.0\.1(:|$)/, 'localhost$1');
     baseUrl = `${proto}://${host}`;
   } else {
     baseUrl = (

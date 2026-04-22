@@ -27,15 +27,23 @@ type LinkedInSyncResult = {
 interface LinkedInOperationsPanelProps {
   loading: boolean;
   syncing: boolean;
+  surfaceActionBusy?: 'sales_navigator' | 'recruiter' | null;
   error: string | null;
+  surfaceActionStatus?: string | null;
   overview: LinkedInOverview | null;
   lastSyncResult: LinkedInSyncResult | null;
   extensionAuthenticated: boolean;
   browserAssistAvailable: boolean;
   browserTabOpen: boolean;
+  browserMessagingTabOpen: boolean;
+  browserFeedTabOpen: boolean;
+  browserSalesNavigatorTabOpen: boolean;
+  browserRecruiterTabOpen: boolean;
   onRefresh: () => void;
   onSyncNow: () => Promise<void>;
   onRunBrowserAssist: (() => Promise<void>) | null;
+  onCaptureSalesNavigator?: (() => Promise<void>) | null;
+  onCaptureRecruiter?: (() => Promise<void>) | null;
 }
 
 function formatRelativeTimestamp(value: string | null) {
@@ -74,17 +82,29 @@ function StatusPill({
 export function LinkedInOperationsPanel({
   loading,
   syncing,
+  surfaceActionBusy = null,
   error,
+  surfaceActionStatus = null,
   overview,
   lastSyncResult,
   extensionAuthenticated,
   browserAssistAvailable,
   browserTabOpen,
+  browserMessagingTabOpen,
+  browserFeedTabOpen,
+  browserSalesNavigatorTabOpen,
+  browserRecruiterTabOpen,
   onRefresh,
   onSyncNow,
   onRunBrowserAssist,
+  onCaptureSalesNavigator,
+  onCaptureRecruiter,
 }: LinkedInOperationsPanelProps) {
   const blockers = overview?.blockers ?? [];
+  const browserSurfaceActive =
+    browserMessagingTabOpen ||
+    browserSalesNavigatorTabOpen ||
+    browserRecruiterTabOpen;
 
   return (
     <div className="mt-4 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-sm">
@@ -99,16 +119,16 @@ export function LinkedInOperationsPanel({
                 LinkedIn Operations
               </p>
               <h3 className="text-xl font-semibold text-slate-900">
-                Run engagement from Omnivyra
+                Run engagement from OmniVyra
               </h3>
             </div>
           </div>
 
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
             This workspace now treats the company LinkedIn connection as the primary path.
-            Omnivyra can pull comment activity from published LinkedIn posts into the unified inbox,
+            OmniVyra can pull comment activity from published LinkedIn posts into the unified inbox,
             while the browser extension stays available as a fallback for browser-assisted coverage,
-            including LinkedIn messaging capture.
+            including LinkedIn messaging capture, Sales Navigator lead workflows, and Recruiter candidate workflows.
           </p>
 
           <div className="mt-3 flex flex-wrap gap-2">
@@ -125,12 +145,18 @@ export function LinkedInOperationsPanel({
               }
             />
             <StatusPill
-              tone={browserAssistAvailable && browserTabOpen ? 'green' : browserAssistAvailable ? 'amber' : 'slate'}
+              tone={browserAssistAvailable && browserSurfaceActive ? 'green' : browserAssistAvailable ? 'amber' : 'slate'}
               label={
-                browserAssistAvailable && browserTabOpen
+                browserAssistAvailable && browserMessagingTabOpen
                   ? 'Browser fallback live'
+                  : browserAssistAvailable && browserSalesNavigatorTabOpen
+                    ? 'Sales Navigator fallback live'
+                    : browserAssistAvailable && browserRecruiterTabOpen
+                      ? 'Recruiter fallback live'
                   : browserAssistAvailable
-                    ? 'Browser fallback available'
+                    ? browserFeedTabOpen || browserTabOpen
+                      ? 'Messaging tab needed for DM actions'
+                      : 'Browser fallback available'
                     : 'Browser fallback unavailable'
               }
             />
@@ -167,6 +193,26 @@ export function LinkedInOperationsPanel({
               Run browser assist
             </button>
           ) : null}
+          {onCaptureSalesNavigator ? (
+            <button
+              type="button"
+              onClick={() => void onCaptureSalesNavigator()}
+              disabled={loading || syncing || surfaceActionBusy !== null || !browserSalesNavigatorTabOpen}
+              className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {surfaceActionBusy === 'sales_navigator' ? 'Capturing leads...' : 'Capture Sales Navigator'}
+            </button>
+          ) : null}
+          {onCaptureRecruiter ? (
+            <button
+              type="button"
+              onClick={() => void onCaptureRecruiter()}
+              disabled={loading || syncing || surfaceActionBusy !== null || !browserRecruiterTabOpen}
+              className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-medium text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {surfaceActionBusy === 'recruiter' ? 'Capturing candidates...' : 'Capture Recruiter'}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -179,12 +225,12 @@ export function LinkedInOperationsPanel({
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Published posts</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{overview?.publishedPosts ?? 0}</p>
-          <p className="mt-1 text-xs text-slate-500">LinkedIn posts published from Omnivyra in the last 30 days.</p>
+          <p className="mt-1 text-xs text-slate-500">LinkedIn posts published from OmniVyra in the last 30 days.</p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Raw comments</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{overview?.rawComments ?? 0}</p>
-          <p className="mt-1 text-xs text-slate-500">LinkedIn comments already pulled into Omnivyra storage.</p>
+          <p className="mt-1 text-xs text-slate-500">LinkedIn comments already pulled into OmniVyra storage.</p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Inbox threads</p>
@@ -194,7 +240,7 @@ export function LinkedInOperationsPanel({
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">DM threads</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{overview?.dmThreads ?? 0}</p>
-          <p className="mt-1 text-xs text-slate-500">LinkedIn direct-message threads captured into Omnivyra.</p>
+          <p className="mt-1 text-xs text-slate-500">LinkedIn direct-message threads captured into OmniVyra.</p>
         </div>
       </div>
 
@@ -202,7 +248,7 @@ export function LinkedInOperationsPanel({
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
           <p className="text-sm font-semibold text-slate-900">What works in this view</p>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Omnivyra can already use the company LinkedIn connection to ingest comments on published
+            OmniVyra can already use the company LinkedIn connection to ingest comments on published
             LinkedIn posts and turn them into inbox threads. Centralized reply coverage is still partial,
             so the extension remains available as a browser-assisted fallback where LinkedIn requires it.
           </p>
@@ -216,12 +262,44 @@ export function LinkedInOperationsPanel({
               <p className="mt-1">{formatRelativeTimestamp(overview?.latestInboxActivityAt ?? null)}</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+              <p className="font-medium text-slate-900">Browser surface</p>
+              <p className="mt-1">
+                {browserMessagingTabOpen
+                  ? 'LinkedIn Messaging is open'
+                  : browserSalesNavigatorTabOpen
+                    ? 'Sales Navigator is open'
+                    : browserRecruiterTabOpen
+                      ? 'Recruiter is open'
+                  : browserFeedTabOpen
+                    ? 'LinkedIn feed is open'
+                    : browserTabOpen
+                      ? 'A LinkedIn tab is open'
+                      : 'No LinkedIn tab detected'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+              <p className="font-medium text-slate-900">Sales Navigator</p>
+              <p className="mt-1">
+                {browserSalesNavigatorTabOpen
+                  ? 'Surface is open and browser fallback can attach to lead workflows.'
+                  : 'Open Sales Navigator to activate lead-specific browser assistance.'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+              <p className="font-medium text-slate-900">Recruiter</p>
+              <p className="mt-1">
+                {browserRecruiterTabOpen
+                  ? 'Surface is open and browser fallback can attach to candidate workflows.'
+                  : 'Open Recruiter to activate recruiter-specific browser assistance.'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
               <p className="font-medium text-slate-900">Sync-ready posts</p>
               <p className="mt-1">{overview?.syncCandidates ?? 0} post(s) can be pulled right now.</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
               <p className="font-medium text-slate-900">Inbox messages</p>
-              <p className="mt-1">{overview?.inboxMessages ?? 0} LinkedIn message records are in Omnivyra.</p>
+              <p className="mt-1">{overview?.inboxMessages ?? 0} LinkedIn message records are in OmniVyra.</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
               <p className="font-medium text-slate-900">DM messages</p>
@@ -247,6 +325,12 @@ export function LinkedInOperationsPanel({
               LinkedIn is in a healthy operating state for published-post engagement sync.
             </p>
           )}
+
+          {surfaceActionStatus ? (
+            <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-800">
+              {surfaceActionStatus}
+            </div>
+          ) : null}
 
           {lastSyncResult ? (
             <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">

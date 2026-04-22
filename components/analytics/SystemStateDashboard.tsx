@@ -661,7 +661,7 @@ export default function SystemStateDashboard({
         <Link href="/engagement" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-950">
           Engagement
         </Link>
-        <Link href="/settings/integrations" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-950">
+        <Link href="/integrations?focus=data" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-950">
           Integrations
         </Link>
       </div>
@@ -671,7 +671,7 @@ export default function SystemStateDashboard({
           title="Traffic State"
           description="Traffic metrics are shown only when Google Analytics data is connected."
           lastUpdated={trafficState.lastUpdated}
-          linkHref="/settings/integrations"
+          linkHref="/integrations?focus=data"
           linkLabel="Manage integrations"
         >
           {!featureFlags?.trafficState ? (
@@ -734,7 +734,7 @@ export default function SystemStateDashboard({
               title="Connect Google Analytics to view traffic data"
               body="Traffic state appears automatically here once Google Analytics is connected and session data starts syncing."
               ctaLabel="Connect Integration"
-              ctaHref="/settings/integrations"
+              ctaHref="/integrations?focus=data"
             />
           )}
         </SectionShell>
@@ -743,7 +743,7 @@ export default function SystemStateDashboard({
           title="API / Integration Health"
           description="Current API connection state and last successful sync time."
           lastUpdated={integrationStatus.lastUpdated}
-          linkHref="/settings/integrations"
+          linkHref="/integrations?focus=data"
           linkLabel="Open integrations"
         >
           {integrationStatus.loading ? (
@@ -758,7 +758,7 @@ export default function SystemStateDashboard({
               title="No integrations configured yet"
               body="Connected APIs and sync health will appear here after setup."
               ctaLabel="Connect Integration"
-              ctaHref="/settings/integrations"
+              ctaHref="/integrations?focus=data"
             />
           ) : (
             <div className="space-y-3">
@@ -785,7 +785,7 @@ export default function SystemStateDashboard({
         title="Platform State"
         description="Per-platform connection state, publishing volume, and raw engagement counts."
         lastUpdated={integrationStatus.lastUpdated}
-        linkHref="/settings/integrations"
+        linkHref="/integrations?focus=data"
         linkLabel="View platform setup"
       >
         <div className="clear-both min-w-0">
@@ -806,7 +806,7 @@ export default function SystemStateDashboard({
             title="No social platforms connected yet"
             body="Connected social accounts will appear here with publishing volume and sync health."
             ctaLabel="Connect Integration"
-            ctaHref="/settings/integrations"
+            ctaHref="/integrations?focus=data"
           />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

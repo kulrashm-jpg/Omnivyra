@@ -61,7 +61,8 @@ const HIDDEN_COMMUNITY_API_KEY   = 'hidden_community_apis';
 
 const PLATFORM_META: Record<string, { icon: string; color: string }> = {
   linkedin:      { icon: '🔵', color: 'border-blue-200 bg-blue-50' },
-  twitter:       { icon: '🐦', color: 'border-sky-200 bg-sky-50' },
+  twitter:       { icon: '𝕏', color: 'border-gray-200 bg-gray-50' },
+  x:             { icon: '𝕏', color: 'border-gray-200 bg-gray-50' },
   youtube:       { icon: '▶️', color: 'border-red-200 bg-red-50' },
   instagram:     { icon: '📷', color: 'border-pink-200 bg-pink-50' },
   facebook:      { icon: '👤', color: 'border-indigo-200 bg-indigo-50' },

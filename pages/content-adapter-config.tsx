@@ -65,8 +65,8 @@ const PLATFORM_DATA: PlatformGuidelines[] = [
   },
   {
     platform: 'twitter',
-    name: 'Twitter / X',
-    icon: '🐦',
+    name: 'X',
+    icon: '𝕏',
     characterLimits: { min: 1, max: 280, recommended: 240 },
     hashtagLimits: { min: 0, max: 10, recommended: 2 },
     contentTypes: [

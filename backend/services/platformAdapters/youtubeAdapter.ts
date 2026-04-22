@@ -75,7 +75,7 @@ export const youtubeAdapter: IPlatformAdapter = {
         },
       };
       const res = await fetch(
-        `${YOUTUBE_API}/commentThreads?part=snippet`,
+        `${YOUTUBE_API}/comments?part=snippet`,
         {
           method: 'POST',
           headers: {
@@ -106,7 +106,7 @@ export const youtubeAdapter: IPlatformAdapter = {
   async fetchComments(params: FetchCommentsParams): Promise<unknown> {
     return withRateLimit('youtube', async () => {
     const response = await fetch(
-      `${YOUTUBE_API}/commentThreads?part=snippet&videoId=${encodeURIComponent(params.platformPostId)}&order=time&maxResults=100`,
+      `${YOUTUBE_API}/commentThreads?part=snippet,replies&videoId=${encodeURIComponent(params.platformPostId)}&order=time&maxResults=100`,
       {
         headers: {
           Authorization: `Bearer ${params.accessToken}`,

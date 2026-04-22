@@ -20,7 +20,7 @@ const stages: {
     icon: Search,
     title: 'Discover',
     description:
-      'Omnivyra analyzes your website, messaging, and campaign structure to understand how prepared you are to attract and convert your audience.',
+      'OmniVyra analyzes your website, messaging, and campaign structure to understand how prepared you are to attract and convert your audience.',
   },
   {
     icon: Crosshair,
@@ -32,7 +32,7 @@ const stages: {
     icon: Map,
     title: 'Plan',
     description:
-      'Based on insights, Omnivyra recommends the most effective marketing approach, including content direction and engagement strategy.',
+      'Based on insights, OmniVyra recommends the most effective marketing approach, including content direction and engagement strategy.',
   },
   {
     icon: PenLine,
@@ -50,7 +50,7 @@ const stages: {
     icon: LineChart,
     title: 'Learn',
     description:
-      'Omnivyra continuously analyzes campaign signals and engagement patterns to refine and improve marketing outcomes.',
+      'OmniVyra continuously analyzes campaign signals and engagement patterns to refine and improve marketing outcomes.',
   },
 ];
 
@@ -72,10 +72,10 @@ export default function MarketingLifecycle() {
     <section className="bg-[#F5F9FF] px-4 py-20 sm:px-6 sm:py-24">
       <div className="mx-auto max-w-6xl">
         <h2 className="text-center text-3xl font-semibold tracking-tight text-gray-900 sm:text-4xl">
-          How Omnivyra Powers Your Marketing
+          How OmniVyra Powers Your Marketing
         </h2>
         <p className="mx-auto mt-4 max-w-2xl text-center text-lg leading-relaxed text-gray-600">
-          From insight to engagement — Omnivyra helps you understand, plan, create, and amplify marketing impact.
+          From insight to engagement — OmniVyra helps you understand, plan, create, and amplify marketing impact.
         </p>
 
         {/* Desktop: 2 rows of 3 cards with flow arrows */}

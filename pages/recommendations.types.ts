@@ -132,3 +132,6 @@ export const TREND_SOURCE_LEGEND: TrendSourceLegendItem[] = [
   { key: 'serpapi',   label: 'SerpAPI',   description: 'SerpAPI Google Trends signals.',               badgeClass: 'bg-green-100 text-green-700' },
   { key: 'omnivyra',  label: 'OmniVyra',  description: 'OmniVyra intelligence curated trends.',        badgeClass: 'bg-purple-100 text-purple-700' },
 ];
+export default function RecommendationsTypesPage() {
+  return null;
+}

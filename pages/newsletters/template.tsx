@@ -158,7 +158,7 @@ export default function NewsletterTemplatePage() {
     return (
       <>
         <Head>
-          <title>Customize Newsletter Template | Omnivyra</title>
+          <title>Customize Newsletter Template | OmniVyra</title>
         </Head>
         <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50 p-6">
           <div className="mx-auto max-w-3xl">
@@ -186,7 +186,7 @@ export default function NewsletterTemplatePage() {
   return (
     <>
       <Head>
-        <title>Choose Newsletter Template | Omnivyra</title>
+        <title>Choose Newsletter Template | OmniVyra</title>
       </Head>
       <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50 p-6">
         <div className="mx-auto max-w-6xl">

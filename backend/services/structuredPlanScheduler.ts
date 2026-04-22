@@ -3,9 +3,18 @@ import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceSer
 import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
 import { processBlockSchedule } from './boltScheduleBlockProcessor';
 import { evaluateScheduleEligibility } from './campaignScheduleEligibilityService';
+import { getExecutionEngine } from './executionEngines';
+import { deriveCreatorAssetTypeFromIntent } from './creatorTemplateRegistryService';
+import { validateCreatorExecutionOutput, validateCreatorSchedulingContract } from './creatorExecutionContracts';
+import { validateAssetReadiness } from './creatorAssetValidationService';
+import { logCreatorExecutionAudit } from './creatorExecutionAuditService';
+import { acquireCreatorExecutionLock, CreatorExecutionLockError, extendCreatorExecutionLease, releaseCreatorExecutionLock } from './creatorExecutionLockService';
+import { assertCreatorExecutionWithinRateLimits, CreatorExecutionRateLimitError } from './creatorExecutionRateLimitService';
+import { recordCreatorExecutionMetric, upsertCreatorExecutionSummary, writeCreatorDeadLetter } from './creatorExecutionObservabilityService';
 import { getContentQueue } from '../queue/contentGenerationQueues';
 import type { BoltContentJobData } from '../queue/jobProcessors/boltContentJobProcessor';
 import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
+import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -119,15 +128,18 @@ function buildAllocationSchedule(
   return posts;
 }
 
-/** Map internal content type to DB schema values (platform-specific constraints). Includes image, carousel, reel, short for activity alignment. */
+/** Map internal content type to DB schema values (platform-specific constraints). Includes image, carousel, reel, short for activity alignment.
+ *  Keys include both strategy-level formats and platform-native types (tweet/feed_post) so cross-platform requests
+ *  like `{platform: 'instagram', content_type: 'tweet'}` remap to the platform's native type instead of falling
+ *  through to a value the chk_content_type constraint rejects. */
 const FALLBACK_CONTENT_TYPE_MAP: Record<string, Record<string, string>> = {
-  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'post', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
-  x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
-  instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
-  youtube:   { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video', blog: 'video' },
-  facebook:  { post: 'post', video: 'video', article: 'post', newsletter: 'post', short_story: 'post', white_paper: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'post' },
-  medium:    { post: 'post', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', blog: 'article', thread: 'post' },
-  devto:     { post: 'post', article: 'article', white_paper: 'article', blog: 'article', thread: 'post' },
+  linkedin:  { post: 'post', tweet: 'post', feed_post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'post', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  x:         { post: 'tweet', tweet: 'tweet', feed_post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
+  instagram: { post: 'feed_post', tweet: 'feed_post', feed_post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
+  youtube:   { post: 'video', tweet: 'video', feed_post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video', blog: 'video' },
+  facebook:  { post: 'post', tweet: 'post', feed_post: 'post', video: 'video', article: 'post', newsletter: 'post', short_story: 'post', white_paper: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'post' },
+  medium:    { post: 'post', tweet: 'post', feed_post: 'post', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', blog: 'article', thread: 'post' },
+  devto:     { post: 'post', tweet: 'post', feed_post: 'post', article: 'article', white_paper: 'article', blog: 'article', thread: 'post' },
 };
 
 function extractTypeMapFromPlatformRules(bundle: any): Record<string, string> | null {
@@ -255,7 +267,83 @@ type DailyPlanRow = {
   topic?: string | null;
   scheduled_time?: string | null;
   content?: string | null;
+  content_status?: string | null;
+  intent_type?: string | null;
+  asset_type?: string | null;
+  template_id?: string | null;
+  plan_version?: number | null;
+  locked_by?: string | null;
+  lease_expires_at?: string | null;
+  attempt_count?: number | null;
+  retry_count?: number | null;
+  max_retries?: number | null;
+  failure_reason?: string | null;
+  failure_type?: string | null;
 };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toNumericValue(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+async function getCurrentCampaignPlanVersion(campaignId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from('campaign_versions')
+    .select('version')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`Failed to resolve current campaign plan version: ${error.message}`);
+  }
+  return Math.max(1, toNumericValue((data as any)?.version, 1));
+}
+
+function classifyCreatorFailure(error: unknown): 'transient' | 'permanent' {
+  const message = error instanceof Error ? error.message : String(error || '');
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes('timeout') ||
+    normalized.includes('network') ||
+    normalized.includes('429') ||
+    normalized.includes('failed to schedule creator output') ||
+    normalized.includes('rate limit')
+  ) {
+    return 'transient';
+  }
+  return 'permanent';
+}
+
+function startCreatorLeaseHeartbeat(input: {
+  dailyPlanId: string;
+  lockOwner: string;
+  leaseSeconds?: number;
+}): { stop: () => Promise<void> } {
+  const intervalMs = Math.max(15000, Math.floor((Number(input.leaseSeconds ?? 300) * 1000) / 2));
+  const timer = setInterval(() => {
+    void extendCreatorExecutionLease({
+      dailyPlanId: input.dailyPlanId,
+      lockOwner: input.lockOwner,
+      leaseSeconds: input.leaseSeconds,
+    }).catch((error) => {
+      console.warn('[creatorExecutionLock] heartbeat failed', {
+        dailyPlanId: input.dailyPlanId,
+        error: (error as Error)?.message,
+      });
+    });
+  }, intervalMs);
+
+  return {
+    async stop() {
+      clearInterval(timer);
+    },
+  };
+}
 
 function tryParseDailyPlanContent(value: unknown): Record<string, unknown> | null {
   if (value == null) return null;
@@ -656,7 +744,20 @@ export type ScheduleStructuredPlanOptions = {
    * to BullMQ instead of processed inline — required for large campaigns (10+ platforms).
    */
   run_id?: string;
+  campaignMode?: string;
 };
+
+function tryParseExecutionContent(value: unknown): Record<string, unknown> {
+  if (value == null) return {};
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  }
+  return typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
 
 // ---------------------------------------------------------------------------
 // Queue-based BOLT content job creation
@@ -875,6 +976,567 @@ async function queueBoltContentJobs(
   return queued;
 }
 
+async function processCreatorStructuredSchedule(input: {
+  campaignId: string;
+  companyId: string | null;
+  userId: string;
+  dailyPlans: DailyPlanRow[];
+  accountMap: Map<string, string>;
+  normalize: PlatformNormalizer;
+  typeMapByPlatform: Record<string, Record<string, string>>;
+  currentPlanVersion: number;
+  onProgress?: (stage: string) => void;
+}): Promise<{
+  scheduled_count: number;
+  skipped_count: number;
+  skipped_platforms: string[];
+}> {
+  const {
+    campaignId,
+    companyId,
+    userId,
+    dailyPlans,
+    accountMap,
+    normalize,
+    typeMapByPlatform,
+    currentPlanVersion,
+    onProgress,
+  } = input;
+  const engine = getExecutionEngine('creator');
+  const skippedPlatforms: string[] = [];
+  let scheduledCount = 0;
+  let skippedCount = 0;
+
+  for (const row of dailyPlans) {
+    if (row.failure_type === 'permanent' && toNumericValue(row.plan_version, 1) === currentPlanVersion) {
+      if (!skippedPlatforms.includes(String(row.platform || '').toLowerCase())) {
+        skippedPlatforms.push(String(row.platform || '').toLowerCase());
+      }
+      skippedCount++;
+      continue;
+    }
+    const platform = normalize(String(row.platform || '').trim().toLowerCase());
+    if (!platform) {
+      skippedCount++;
+      continue;
+    }
+
+    const socialAccountId = accountMap.get(platform);
+    if (!socialAccountId) {
+      if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
+      skippedCount++;
+      continue;
+    }
+
+    const parsed = tryParseExecutionContent(row.content);
+    const topic = String(row.topic || row.title || parsed.topicTitle || 'Untitled').trim();
+    const targetPlatforms = [platform];
+    const creatorCard = parsed.creator_card && typeof parsed.creator_card === 'object'
+      ? parsed.creator_card as Record<string, unknown>
+      : null;
+    const templateId = typeof parsed.template_id === 'string' ? parsed.template_id : row.template_id ?? null;
+    const assetType = deriveCreatorAssetTypeFromIntent({
+      contentType: String(row.content_type || 'video'),
+      targetPlatforms: [platform],
+    });
+    const planVersion = Math.max(1, toNumericValue(row.plan_version, 1));
+    const lockOwner = `creator:${campaignId}:${row.id}:${Date.now()}`;
+    let lockState: Awaited<ReturnType<typeof acquireCreatorExecutionLock>> | null = null;
+    let leaseHeartbeat: { stop: () => Promise<void> } | null = null;
+    const executionStartedAt = Date.now();
+
+    try {
+      lockState = await acquireCreatorExecutionLock({
+        dailyPlanId: row.id,
+        lockOwner,
+        expectedPlanVersion: currentPlanVersion,
+      });
+      leaseHeartbeat = startCreatorLeaseHeartbeat({
+        dailyPlanId: row.id,
+        lockOwner,
+      });
+      const maxRetries = Math.max(1, lockState.max_retries);
+      let retryCount = Math.max(0, lockState.retry_count);
+      let lastError: Error | null = null;
+      let finalOutput: CanonicalCreatorOutput | null = null;
+      let finalScheduling: CreatorScheduleResult | null = null;
+      let readinessFailure: string | null = null;
+      let failureType: 'transient' | 'permanent' | 'stale' | null = null;
+
+      await assertCreatorExecutionWithinRateLimits({
+        campaignId,
+        userId,
+      });
+      await logCreatorExecutionAudit({
+        campaignId,
+        companyId,
+        userId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        stage: 'intent',
+        attemptCount: lockState.attempt_count,
+        retryCount,
+        planVersion,
+        status: 'started',
+        payload: {
+          topic,
+          content_type: row.content_type,
+          template_id: templateId,
+          target_platforms: targetPlatforms,
+          content_status: row.content_status ?? null,
+        },
+      });
+
+      for (let attempt = retryCount; attempt < maxRetries; attempt++) {
+        onProgress?.(`schedule-creator-${platform}`);
+        retryCount = attempt;
+        try {
+          const planVersionAtGenerate = await getCurrentCampaignPlanVersion(campaignId);
+          if (planVersionAtGenerate !== planVersion) {
+            failureType = 'stale';
+            throw new Error(`Stale creator plan version ${planVersion}; current version is ${planVersionAtGenerate}`);
+          }
+          const generated = await (engine as any).generateFromIntent({
+            campaignId,
+            companyId,
+            userId,
+            topic,
+            contentType: String(row.content_type || 'video'),
+            targetPlatforms,
+            audience: String((parsed.whoAreWeWritingFor ?? parsed.target_audience ?? creatorCard?.target_audience ?? '') || ''),
+            objective: String((parsed.dailyObjective ?? parsed.objective ?? creatorCard?.objective ?? '') || ''),
+            summary: String((parsed.summary ?? parsed.whatProblemAreWeAddressing ?? creatorCard?.summary ?? '') || ''),
+            creatorCard,
+            enrichedIntent: parsed,
+            templateId,
+            existingContent: parsed,
+          }, { companyId }, {
+            assetOverride:
+              parsed.asset_payload && typeof parsed.asset_payload === 'object'
+                ? parsed.asset_payload as Record<string, unknown>
+                : parsed.creator_asset && typeof parsed.creator_asset === 'object'
+                  ? parsed.creator_asset as Record<string, unknown>
+                  : null,
+          });
+
+          const generatedValidation = validateCreatorExecutionOutput(generated);
+          if (!generatedValidation.ok) {
+            throw new Error(`Generated creator output failed validation: ${generatedValidation.issues.join('; ')}`);
+          }
+          await logCreatorExecutionAudit({
+            campaignId,
+            companyId,
+            userId,
+            dailyPlanId: row.id,
+            platform,
+            assetType,
+            stage: 'generated',
+            attemptCount: lockState.attempt_count,
+            retryCount,
+            planVersion,
+            status: 'ok',
+            payload: {
+              output: generated,
+            },
+          });
+
+          const planVersionAtAdapt = await getCurrentCampaignPlanVersion(campaignId);
+          if (planVersionAtAdapt !== planVersion) {
+            failureType = 'stale';
+            throw new Error(`Stale creator plan version ${planVersion}; current version is ${planVersionAtAdapt}`);
+          }
+          const adapted = await (engine as any).adaptForPlatform(generated, platform) as CanonicalCreatorOutput;
+          const schedulingValidation = validateCreatorSchedulingContract({
+            output: adapted,
+            platform,
+          });
+          if (!schedulingValidation.ok) {
+            throw new Error(`Adapted creator output failed validation: ${schedulingValidation.issues.join('; ')}`);
+          }
+          await logCreatorExecutionAudit({
+            campaignId,
+            companyId,
+            userId,
+            dailyPlanId: row.id,
+            platform,
+            assetType,
+            stage: 'adapted',
+            attemptCount: lockState.attempt_count,
+            retryCount,
+            planVersion,
+            status: 'ok',
+            payload: {
+              output: adapted,
+            },
+          });
+
+          const readiness = await validateAssetReadiness({
+            output: adapted,
+            platform,
+          });
+          await logCreatorExecutionAudit({
+            campaignId,
+            companyId,
+            userId,
+            dailyPlanId: row.id,
+            platform,
+            assetType,
+            stage: 'asset_validation',
+            attemptCount: lockState.attempt_count,
+            retryCount,
+            planVersion,
+            status: readiness.ready ? 'ready' : 'blocked',
+            payload: {
+              validation: readiness,
+            },
+          });
+          if (!readiness.ready) {
+            readinessFailure = readiness.failure_reason;
+            failureType = 'permanent';
+            finalOutput = adapted;
+            break;
+          }
+
+          const planVersionAtSchedule = await getCurrentCampaignPlanVersion(campaignId);
+          if (planVersionAtSchedule !== planVersion) {
+            failureType = 'stale';
+            throw new Error(`Stale creator plan version ${planVersion}; current version is ${planVersionAtSchedule}`);
+          }
+          const scheduledFor = buildScheduledForFromDailyPlan(row.date, row.scheduled_time);
+          const scheduled = await (engine as any).schedule(adapted, {
+            dailyPlanId: row.id,
+            userId,
+            platform,
+            contentType: String(row.content_type || 'video'),
+            topic,
+            scheduledForIso: scheduledFor.toISOString(),
+            socialAccountId,
+            dbPlatform: toDbPlatformKey(platform),
+            dbContentType: toDbContentType(platform, String(row.content_type || 'video'), typeMapByPlatform),
+            status: 'scheduled',
+            templateId: adapted.asset_instruction?.template_id ?? templateId,
+          }) as CreatorScheduleResult;
+
+          await logCreatorExecutionAudit({
+            campaignId,
+            companyId,
+            userId,
+            dailyPlanId: row.id,
+            platform,
+            assetType,
+            stage: 'schedule',
+            attemptCount: lockState.attempt_count,
+            retryCount,
+            planVersion,
+            status: scheduled.status,
+            failureType: scheduled.failure_reason ? classifyCreatorFailure(scheduled.failure_reason) : null,
+            payload: {
+              scheduling: scheduled,
+            },
+          });
+          await logCreatorExecutionAudit({
+            campaignId,
+            companyId,
+            userId,
+            dailyPlanId: row.id,
+            platform,
+            assetType,
+            stage: 'confirmation',
+            attemptCount: lockState.attempt_count,
+            retryCount,
+            planVersion,
+            status: scheduled.published ? 'published' : scheduled.verified ? 'verified' : scheduled.status,
+            payload: {
+              confirmation: scheduled,
+            },
+          });
+
+          if (scheduled.status === 'failed') {
+            throw new Error(scheduled.failure_reason || 'Creator scheduling failed');
+          }
+
+          finalOutput = adapted;
+          finalScheduling = scheduled;
+          lastError = null;
+          break;
+        } catch (attemptError) {
+          lastError = attemptError as Error;
+          const classifiedFailure =
+            failureType === 'stale'
+              ? 'permanent'
+              : classifyCreatorFailure(lastError);
+          failureType = failureType === 'stale' ? 'stale' : classifiedFailure;
+          await logCreatorExecutionAudit({
+            campaignId,
+            companyId,
+            userId,
+            dailyPlanId: row.id,
+            platform,
+            assetType,
+            stage: 'failure',
+            attemptCount: lockState.attempt_count,
+            retryCount: attempt + 1,
+            planVersion,
+            status: classifiedFailure === 'transient' ? 'retrying' : 'failed',
+            failureType,
+            payload: {
+              message: lastError.message,
+            },
+          });
+          if (classifiedFailure !== 'transient' || failureType === 'stale') {
+            break;
+          }
+          if (attempt + 1 < maxRetries) {
+            await sleep(Math.min(4000, 500 * Math.pow(2, attempt)));
+          }
+        }
+      }
+
+      const nextRetryCount =
+        finalScheduling || readinessFailure || failureType === 'permanent' || failureType === 'stale'
+          ? retryCount
+          : Math.min(maxRetries, retryCount + 1);
+
+      const persisted = {
+        ...parsed,
+        ...(finalOutput || {}),
+        intent_type: 'creator',
+        asset_type: assetType,
+        template_id: finalOutput?.asset_instruction?.template_id ?? templateId,
+        scheduled_post_status: finalScheduling?.status ?? null,
+        scheduled_post_id: finalScheduling?.scheduledPostId ?? null,
+        schedule_confirmation: finalScheduling
+          ? {
+              status: finalScheduling.status,
+              publish_source: finalScheduling.publish_source,
+              platform_id: finalScheduling.platform_id,
+              verified: finalScheduling.verified,
+              published: finalScheduling.published,
+              idempotency_key: finalScheduling.idempotency_key ?? null,
+            }
+          : null,
+        content_status: finalScheduling ? 'scheduled' : failureType === 'stale' ? 'stale' : readinessFailure ? 'generated' : 'failed',
+        failure_reason: readinessFailure ?? finalScheduling?.failure_reason ?? lastError?.message ?? null,
+        failure_type: failureType,
+        finalized_at: new Date().toISOString(),
+      };
+      const finalStatus =
+        finalScheduling
+          ? finalScheduling.status
+          : readinessFailure
+            ? 'generated'
+            : persisted.content_status;
+
+      const currentVersionBeforePersist = await getCurrentCampaignPlanVersion(campaignId);
+      if (currentVersionBeforePersist !== planVersion) {
+        persisted.content_status = 'stale';
+        persisted.failure_reason = `Stale creator plan version ${planVersion}; current version is ${currentVersionBeforePersist}`;
+        persisted.failure_type = 'stale';
+      }
+      await supabase
+        .from('daily_content_plans')
+        .update({
+          content: JSON.stringify(persisted),
+          intent_type: 'creator',
+          asset_type: assetType,
+          template_id: finalOutput?.asset_instruction?.template_id ?? templateId,
+          plan_version: planVersion,
+          retry_count: nextRetryCount,
+          max_retries: maxRetries,
+          failure_reason: persisted.failure_reason,
+          failure_type: persisted.failure_type,
+          content_status: persisted.content_status,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', row.id);
+
+      await upsertCreatorExecutionSummary({
+        campaignId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        totalAttempts: lockState.attempt_count,
+        retryCount: nextRetryCount,
+        finalStatus,
+        failureReason: persisted.failure_reason,
+      });
+      await recordCreatorExecutionMetric({
+        campaignId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        metricName: finalScheduling ? 'execution_success_count' : 'execution_failure_count',
+        metricValue: 1,
+      });
+      await recordCreatorExecutionMetric({
+        campaignId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        metricName: 'retry_count',
+        metricValue: nextRetryCount,
+      });
+      await recordCreatorExecutionMetric({
+        campaignId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        metricName: 'avg_execution_latency',
+        metricValue: Date.now() - executionStartedAt,
+      });
+      if (readinessFailure) {
+        await recordCreatorExecutionMetric({
+          campaignId,
+          dailyPlanId: row.id,
+          platform,
+          assetType,
+          metricName: 'validation_failure_count',
+          metricValue: 1,
+        });
+      }
+
+      if (finalScheduling) {
+        scheduledCount++;
+      } else {
+        if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
+        skippedCount++;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isLockConflict =
+        error instanceof CreatorExecutionLockError &&
+        /already locked/i.test(message);
+      await logCreatorExecutionAudit({
+        campaignId,
+        companyId,
+        userId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        stage: 'failure',
+        attemptCount: lockState?.attempt_count ?? Math.max(1, toNumericValue(row.attempt_count, 0) + 1),
+        retryCount: Math.min(
+          Math.max(1, toNumericValue(row.max_retries, 3)),
+          Math.max(0, toNumericValue(row.retry_count, 0) + 1)
+        ),
+        planVersion,
+        status: error instanceof CreatorExecutionLockError ? 'locked' : 'failed',
+        failureType:
+          error instanceof CreatorExecutionLockError
+            ? 'transient'
+            : error instanceof CreatorExecutionRateLimitError
+              ? 'transient'
+              : classifyCreatorFailure(error),
+        payload: {
+          message,
+        },
+      });
+      if (!isLockConflict) {
+        await supabase
+          .from('daily_content_plans')
+          .update({
+            plan_version: planVersion,
+            retry_count: Math.min(
+              Math.max(1, toNumericValue(row.max_retries, 3)),
+              Math.max(0, toNumericValue(row.retry_count, 0) + 1)
+            ),
+            max_retries: Math.max(1, toNumericValue(row.max_retries, 3)),
+            failure_reason: message,
+            failure_type:
+              message.toLowerCase().includes('stale creator plan version')
+                ? 'stale'
+                : classifyCreatorFailure(error),
+            content_status: message.toLowerCase().includes('stale creator plan version') ? 'stale' : 'failed',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.id);
+      }
+      await upsertCreatorExecutionSummary({
+        campaignId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        totalAttempts: lockState?.attempt_count ?? Math.max(1, toNumericValue(row.attempt_count, 0) + 1),
+        retryCount: Math.min(
+          Math.max(1, toNumericValue(row.max_retries, 3)),
+          Math.max(0, toNumericValue(row.retry_count, 0) + 1)
+        ),
+        finalStatus: message.toLowerCase().includes('stale creator plan version') ? 'stale' : 'failed',
+        failureReason: message,
+      });
+      await recordCreatorExecutionMetric({
+        campaignId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        metricName: 'execution_failure_count',
+        metricValue: 1,
+      });
+      if (classifyCreatorFailure(error) === 'permanent') {
+        await recordCreatorExecutionMetric({
+          campaignId,
+          dailyPlanId: row.id,
+          platform,
+          assetType,
+          metricName: 'validation_failure_count',
+          metricValue: 1,
+        });
+      }
+      await recordCreatorExecutionMetric({
+        campaignId,
+        dailyPlanId: row.id,
+        platform,
+        assetType,
+        metricName: 'avg_execution_latency',
+        metricValue: Date.now() - executionStartedAt,
+      });
+      if (classifyCreatorFailure(error) === 'permanent') {
+        await writeCreatorDeadLetter({
+          campaignId,
+          dailyPlanId: row.id,
+          platform,
+          assetType,
+          failureReason: message,
+          payloadSnapshot: {
+            content: parsed,
+            row,
+          },
+        });
+      }
+      if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
+      skippedCount++;
+      console.warn('[schedule][creator] failed to process row', {
+        rowId: row.id,
+        platform,
+        topic,
+        error: message,
+      });
+    } finally {
+      if (leaseHeartbeat) {
+        await leaseHeartbeat.stop().catch(() => undefined);
+      }
+      if (lockState) {
+        await releaseCreatorExecutionLock({
+          dailyPlanId: row.id,
+          lockOwner,
+        }).catch((releaseError) => {
+          console.warn('[schedule][creator] failed to release lock', {
+            rowId: row.id,
+            error: (releaseError as Error)?.message,
+          });
+        });
+      }
+    }
+  }
+
+  return {
+    scheduled_count: scheduledCount,
+    skipped_count: skippedCount,
+    skipped_platforms: skippedPlatforms,
+  };
+}
+
 export class ScheduleEligibilityError extends Error {
   code = 'SCHEDULE_NOT_READY';
   details: ReturnType<typeof evaluateScheduleEligibility>;
@@ -936,7 +1598,7 @@ export async function scheduleStructuredPlan(
   // G2.1: Resolve company_id for tenant-scoped account lookup
   const { data: versionRow } = await supabase
     .from('campaign_versions')
-    .select('company_id')
+    .select('company_id, campaign_snapshot, version')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -944,6 +1606,10 @@ export async function scheduleStructuredPlan(
   const companyId = (versionRow as { company_id?: string } | null)?.company_id
     ?? (campaign as any).company_id
     ?? null;
+  const executionConfig = (((versionRow as any)?.campaign_snapshot ?? {})?.execution_config ?? {}) as Record<string, unknown>;
+  const campaignMode = String(options?.campaignMode || executionConfig.campaign_mode || 'text');
+  const isUnifiedCreatorMode = campaignMode === 'creator';
+  const currentPlanVersion = Math.max(1, toNumericValue((versionRow as any)?.version, 1));
 
   // Resolve user_id: campaign.user_id may be null if auth fell back to dev context.
   // In that case, look up the first user in the company's role table.
@@ -1016,7 +1682,7 @@ export async function scheduleStructuredPlan(
   // content. We select only guaranteed-to-exist core columns and handle optional ones gracefully.
   const { data: dailyPlans, error: dailyPlansError } = await supabase
     .from('daily_content_plans')
-    .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content')
+    .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content, content_status, intent_type, asset_type, template_id, plan_version, locked_by, lease_expires_at, attempt_count, retry_count, max_retries, failure_reason, failure_type')
     .eq('campaign_id', campaignId)
     .order('date', { ascending: true })
     .order('week_number', { ascending: true });
@@ -1030,16 +1696,18 @@ export async function scheduleStructuredPlan(
   if (hasDailyPlans && Array.isArray(dailyPlans)) {
     // execution_mode and creator_asset are optional columns not always selected —
     // pass them as undefined so eligibility check treats all rows as text-schedulable.
-    const eligibility = evaluateScheduleEligibility(dailyPlans.map((r: any) => ({
-      id: r.id ?? null,
-      title: r.title ?? null,
-      platform: r.platform ?? null,
-      content_type: r.content_type ?? null,
-      execution_mode: r.execution_mode ?? null,
-      creator_asset: r.creator_asset ?? null,
-    })));
-    if (!eligibility.eligible) {
-      throw new ScheduleEligibilityError(eligibility);
+    if (!isUnifiedCreatorMode) {
+      const eligibility = evaluateScheduleEligibility(dailyPlans.map((r: any) => ({
+        id: r.id ?? null,
+        title: r.title ?? null,
+        platform: r.platform ?? null,
+        content_type: r.content_type ?? null,
+        execution_mode: r.execution_mode ?? null,
+        creator_asset: r.creator_asset ?? null,
+      })));
+      if (!eligibility.eligible) {
+        throw new ScheduleEligibilityError(eligibility);
+      }
     }
   }
 
@@ -1055,6 +1723,26 @@ export async function scheduleStructuredPlan(
   });
 
   if (hasDailyPlans && options?.generateContent && dailyPlans) {
+    if (isUnifiedCreatorMode) {
+      options?.onProgress?.('schedule-creating-assets');
+      const creatorResult = await processCreatorStructuredSchedule({
+        campaignId,
+        companyId,
+        userId: effectiveUserId,
+        dailyPlans: dailyPlans as DailyPlanRow[],
+        accountMap,
+        normalize,
+        typeMapByPlatform,
+        currentPlanVersion,
+        onProgress: options?.onProgress,
+      });
+      return {
+        scheduled_count: creatorResult.scheduled_count,
+        skipped_count: creatorResult.skipped_count,
+        skipped_platforms: creatorResult.skipped_platforms,
+        already_scheduled_count: 0,
+      };
+    }
     // ── QUEUE PATH: run_id present → queue jobs for async processing ────────
     // Required for large campaigns (10+ platforms × 5+ content types × 3+/week)
     // where in-process generation would exceed HTTP timeout limits.

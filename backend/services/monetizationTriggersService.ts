@@ -132,7 +132,7 @@ export function checkEngagementIntegrationTrigger(
     badge: 'Requires Setup',
     hint: 'Connect your social accounts to monitor conversations and reply directly',
     cta: 'Connect Social',
-    ctaRoute: '/integrations?tab=social',
+    ctaRoute: '/integrations?focus=data',
     tier: 'free',
     priority: 'high',
   };

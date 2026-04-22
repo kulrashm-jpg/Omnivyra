@@ -52,6 +52,13 @@ const normalizeTargetUrn = (targetId: string) => targetId.trim();
 
 const isUrl = (value: string) => /^https?:\/\//i.test(value);
 
+const extractLinkedInId = (result: { data?: any } | null): string | null => {
+  const data = result?.data;
+  if (!data || typeof data !== 'object') return null;
+  const candidate = data.id ?? data.object ?? data?.value?.id ?? null;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+};
+
 export const executeAction: PlatformConnector['executeAction'] = async (action, authToken) => {
   if (action.execution_mode && action.execution_mode !== 'api') {
     return { success: false, error: 'EXECUTION_MODE_NOT_ALLOWED' };
@@ -73,7 +80,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         },
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractLinkedInId(result), platform_response: result };
     }
 
     if (action.action_type === 'like') {
@@ -82,7 +89,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         { actor },
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractLinkedInId(result), platform_response: result };
     }
 
     if (action.action_type === 'share') {
@@ -113,7 +120,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         },
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractLinkedInId(result), platform_response: result };
     }
 
     return { success: false, error: 'ACTION_TYPE_NOT_SUPPORTED' };

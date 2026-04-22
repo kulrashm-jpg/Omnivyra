@@ -326,6 +326,13 @@ export function useLeadsPage() {
   const [deleting, setDeleting] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, { loading: boolean; ok?: boolean; msg?: string }>>({});
 
+  useEffect(() => {
+    const requestedTab = typeof router.query.tab === 'string' ? router.query.tab : null;
+    if (requestedTab === 'leads' || requestedTab === 'forms' || requestedTab === 'connections') {
+      setActiveTab(requestedTab);
+    }
+  }, [router.query.tab]);
+
   const fetchAll = useCallback(async () => {
     if (!selectedCompanyId) return;
     setLoading(true); setError('');

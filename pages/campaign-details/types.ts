@@ -150,3 +150,6 @@ export interface PerformanceSummary {
   recommendation_confidence?: number | null;
   last_collected_at?: string | null;
 }
+export default function CampaignDetailsTypesPage() {
+  return null;
+}

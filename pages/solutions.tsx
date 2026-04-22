@@ -57,10 +57,10 @@ const MARKETER_VISUALS: React.ReactNode[] = [
     </div>
   </div>,
 
-  // 1 — What Omnivyra does: unified signal
+  // 1 — What OmniVyra does: unified signal
   <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
     <div className="mb-3 flex items-center justify-between">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Omnivyra Signal Layer</p>
+      <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">OmniVyra Signal Layer</p>
       <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-600">
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />Live
       </span>
@@ -196,7 +196,7 @@ const FOUNDER_VISUALS: React.ReactNode[] = [
     <p className="mt-3 text-[10px] text-red-500 font-semibold">Marketing always slides to the bottom</p>
   </div>,
 
-  // 1 — What Omnivyra does: action list
+  // 1 — What OmniVyra does: action list
   <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
     <div className="mb-3 flex items-center justify-between">
       <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Your next 30 minutes</p>
@@ -290,7 +290,7 @@ const FOUNDER_VISUALS: React.ReactNode[] = [
         </div>
       </div>
       <div className="rounded-xl bg-[#F0F7FF] border border-[#0A66C2]/15 p-3">
-        <p className="text-[9px] text-[#0A66C2] font-semibold mb-1">Omnivyra</p>
+        <p className="text-[9px] text-[#0A66C2] font-semibold mb-1">OmniVyra</p>
         <p className="text-xl font-bold text-[#0A66C2]">Fraction</p>
         <p className="text-[8px] text-[#0A66C2]/70">of that cost</p>
         <div className="mt-2 space-y-1">
@@ -336,7 +336,7 @@ const CREATOR_VISUALS: React.ReactNode[] = [
     </div>
   </div>,
 
-  // 1 — What Omnivyra does: content patterns
+  // 1 — What OmniVyra does: content patterns
   <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
     <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">What performs for your audience</p>
     <div className="space-y-2">
@@ -466,7 +466,7 @@ const PERSONAS = [
         ],
       },
       {
-        title: 'What Omnivyra does for you',
+        title: 'What OmniVyra does for you',
         body: 'It surfaces the decisions that matter: which channel is underperforming, which segment is converting, which content is being ignored. No setup, no data engineering — just intelligence ready when you open it.',
         bullets: [
           'Underperforming channels flagged instantly with context',
@@ -512,7 +512,7 @@ const PERSONAS = [
       },
       {
         title: 'Your reporting, done',
-        body: 'Stop assembling slide decks. Omnivyra compiles the story of your marketing performance — what worked, what did not, and what you did about it — so your next review takes minutes, not a weekend.',
+        body: 'Stop assembling slide decks. OmniVyra compiles the story of your marketing performance — what worked, what did not, and what you did about it — so your next review takes minutes, not a weekend.',
         bullets: [
           'Performance narrative auto-compiled across channels',
           'Covers what worked, what didn\'t, and the reasons why',
@@ -550,7 +550,7 @@ const PERSONAS = [
         ],
       },
       {
-        title: 'What Omnivyra does for you',
+        title: 'What OmniVyra does for you',
         body: 'It tells you exactly what to do, when to do it, and why — so you spend less time wondering and more time executing. Even 30 minutes a week becomes productive when you know where to focus.',
         bullets: [
           'Exact next actions — no guessing required',
@@ -566,7 +566,7 @@ const PERSONAS = [
       },
       {
         title: 'A plan you can actually follow',
-        body: 'Answer a few questions about your goals and audience. Omnivyra builds a realistic weekly marketing plan — content types, channels, timing — tailored to how much time you actually have.',
+        body: 'Answer a few questions about your goals and audience. OmniVyra builds a realistic weekly marketing plan — content types, channels, timing — tailored to how much time you actually have.',
         bullets: [
           'Realistic plan built around your actual available time',
           'Content types, channels, and timing all decided for you',
@@ -596,7 +596,7 @@ const PERSONAS = [
       },
       {
         title: 'Grow without hiring',
-        body: 'Omnivyra gives you the thinking of a marketing team without the headcount. Strategy, execution priorities, and performance signals — all in one place, built for one person moving fast.',
+        body: 'OmniVyra gives you the thinking of a marketing team without the headcount. Strategy, execution priorities, and performance signals — all in one place, built for one person moving fast.',
         bullets: [
           'Strategy, execution, and reporting — all in one place',
           'Built for solo operators who move fast and need results',
@@ -634,7 +634,7 @@ const PERSONAS = [
         ],
       },
       {
-        title: 'What Omnivyra does for you',
+        title: 'What OmniVyra does for you',
         body: 'It analyses your content performance across platforms and shows you the patterns: which topics drive engagement, which formats get reach, which times your audience is actually active.',
         bullets: [
           'Content performance analysed across all your platforms',
@@ -650,7 +650,7 @@ const PERSONAS = [
       },
       {
         title: 'Strategy behind the content',
-        body: 'Great content is not just creative — it is structured. Omnivyra helps you build a content strategy that maps your themes, formats, and cadence to your growth goals, not just your inspiration.',
+        body: 'Great content is not just creative — it is structured. OmniVyra helps you build a content strategy that maps your themes, formats, and cadence to your growth goals, not just your inspiration.',
         bullets: [
           'Content themes mapped to audience growth goals',
           'Format and cadence decided — not left to inspiration',
@@ -665,7 +665,7 @@ const PERSONAS = [
       },
       {
         title: 'Channel-by-channel intelligence',
-        body: 'LinkedIn is different from Instagram. Instagram is different from YouTube. Omnivyra tells you where your specific audience is, how they behave, and what kind of content drives them to follow, share, or act.',
+        body: 'LinkedIn is different from Instagram. Instagram is different from YouTube. OmniVyra tells you where your specific audience is, how they behave, and what kind of content drives them to follow, share, or act.',
         bullets: [
           'Each platform treated differently, as it should be',
           'Where your specific audience actually spends time',
@@ -680,7 +680,7 @@ const PERSONAS = [
       },
       {
         title: 'From creator to brand',
-        body: 'When you are ready to monetise, partner, or scale — Omnivyra gives you the data story that makes the case. Engagement rates, audience profile, content consistency: everything a brand or investor needs to see.',
+        body: 'When you are ready to monetise, partner, or scale — OmniVyra gives you the data story that makes the case. Engagement rates, audience profile, content consistency: everything a brand or investor needs to see.',
         bullets: [
           'Data story ready for brand partnerships and investors',
           'Engagement rate, audience profile, and consistency tracked',
@@ -769,10 +769,10 @@ export default function SolutionsPage() {
   return (
     <>
       <Head>
-        <title>Solutions | Omnivyra</title>
+        <title>Solutions | OmniVyra</title>
         <meta
           name="description"
-          content="Marketing clarity for every role. Whether you run a team, do it all yourself, or build a personal brand — Omnivyra gives you the intelligence to act with confidence."
+          content="Marketing clarity for every role. Whether you run a team, do it all yourself, or build a personal brand — OmniVyra gives you the intelligence to act with confidence."
         />
       </Head>
 
@@ -803,7 +803,7 @@ export default function SolutionsPage() {
               <span className="text-[#3FA9F5]">Clarity shouldn&rsquo;t.</span>
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-white/75">
-              Whether you lead a team, run your business solo, or build a personal brand — Omnivyra gives you the intelligence to act with confidence, not guesswork.
+              Whether you lead a team, run your business solo, or build a personal brand — OmniVyra gives you the intelligence to act with confidence, not guesswork.
             </p>
           </div>
         </section>
@@ -965,7 +965,7 @@ export default function SolutionsPage() {
                 One platform. Every role. Real decisions.
               </h2>
               <p className="mt-4 text-base leading-relaxed text-[#6B7C93]">
-                Omnivyra is not a collection of tools bolted together. It is a single intelligence layer built to give every kind of marketer the clarity they need.
+                OmniVyra is not a collection of tools bolted together. It is a single intelligence layer built to give every kind of marketer the clarity they need.
               </p>
             </div>
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -990,7 +990,7 @@ export default function SolutionsPage() {
                   Everything you need.<br />Nothing you don&rsquo;t.
                 </h2>
                 <p className="mt-4 text-base leading-relaxed text-[#6B7C93]">
-                  Every feature in Omnivyra exists to reduce the distance between information and a good decision.
+                  Every feature in OmniVyra exists to reduce the distance between information and a good decision.
                 </p>
               </div>
               <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">

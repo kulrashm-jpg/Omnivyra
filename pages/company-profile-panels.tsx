@@ -257,3 +257,6 @@ export function CreateCompanyModal({
     </div>
   );
 }
+export default function CompanyProfilePanelsPage() {
+  return null;
+}

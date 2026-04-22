@@ -20,6 +20,7 @@ const TOKEN_WEIGHT = 0.3;
 
 type SignalRow = {
   id: string;
+  company_id: string;
   topic: string | null;
   normalized_payload: Record<string, unknown> | null;
   detected_at: string;
@@ -168,7 +169,11 @@ async function ensureSignalEmbedding(signal: SignalRow): Promise<SignalRow> {
   if (emb && emb.length > 0) return { ...signal, topic_embedding: emb };
 
   try {
-    emb = await generateTopicEmbedding(topic);
+    emb = await generateTopicEmbedding(topic, {
+      companyId: signal.company_id,
+      system:    true,
+      metadata:  { caller: 'signalClusterEngine.ensureSignalEmbedding', signal_id: signal.id },
+    });
     const vecStr = embeddingToPgVector(emb);
     await supabase
       .from('intelligence_signals')
@@ -186,7 +191,7 @@ async function ensureSignalEmbedding(signal: SignalRow): Promise<SignalRow> {
 async function fetchUnclusteredSignals(): Promise<SignalRow[]> {
   const { data, error } = await supabase
     .from('intelligence_signals')
-    .select('id, topic, normalized_payload, detected_at, source_api_id, topic_embedding')
+    .select('id, company_id, topic, normalized_payload, detected_at, source_api_id, topic_embedding')
     .gt('detected_at', new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString())
     .is('cluster_id', null)
     .order('detected_at', { ascending: true });
@@ -453,7 +458,20 @@ export async function clusterRecentSignals(): Promise<ClusterRecentSignalsResult
     const sourceApiId = group[0]!.source_api_id ?? null;
     let clusterEmb: number[] | null = null;
     try {
-      clusterEmb = await generateTopicEmbedding(topicToUse);
+      // Attribute cluster embedding to the first signal's org. Clusters can
+      // span multiple orgs in rare cross-org runs; the metadata flag captures
+      // that so analytics can distinguish pure-org vs cross-org clusters.
+      const primaryCompanyId = group[0]!.company_id;
+      const distinctCompanyIds = Array.from(new Set(group.map((s) => s.company_id).filter(Boolean)));
+      clusterEmb = await generateTopicEmbedding(topicToUse, {
+        companyId: primaryCompanyId,
+        system:    true,
+        metadata:  {
+          caller:             'signalClusterEngine.cluster_new',
+          signal_count:       group.length,
+          distinct_org_count: distinctCompanyIds.length,
+        },
+      });
     } catch { /* use token-only cluster */ }
     const clusterId = await createClusterAndAssign(
       topicToUse,

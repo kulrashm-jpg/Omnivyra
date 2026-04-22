@@ -204,7 +204,6 @@ async function loadCompanyIntegrationState(
     if (row.type === 'custom_blog_api') markConnected(integrations, 'custom_blog_api', 'company_integrations');
     if (row.type === 'lead_webhook') markConnected(integrations, 'lead_webhook', 'company_integrations');
 
-    if (includesKeyword(row, ['google analytics', 'ga4'])) markConnected(integrations, 'google_analytics', 'company_integrations');
     if (includesKeyword(row, ['search console', 'gsc'])) markConnected(integrations, 'google_search_console', 'company_integrations');
     if (includesKeyword(row, ['google ads'])) markConnected(integrations, 'google_ads', 'company_integrations');
     if (includesKeyword(row, ['linkedin ads'])) markConnected(integrations, 'linkedin_ads', 'company_integrations');

@@ -160,3 +160,6 @@ export interface Blog {
   internal_links?: number;
   references_count?: number;
 }
+export default function BlogsHelpersPage() {
+  return null;
+}

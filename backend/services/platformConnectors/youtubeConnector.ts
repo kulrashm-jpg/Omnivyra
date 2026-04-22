@@ -1,30 +1,43 @@
-import type { CommunityAiAction } from '../communityAiActionExecutor';
 import type { PlatformConnector } from './baseConnector';
 
-const buildPayload = (action: CommunityAiAction) => {
-  switch (action.action_type) {
-    case 'reply':
-      return { type: 'COMMENT', target_id: action.target_id, text: action.suggested_text };
-    case 'like':
-      return { type: 'LIKE', target_id: action.target_id };
-    case 'share':
-      return { type: 'SHARE', target_id: action.target_id };
-    case 'follow':
-      return { type: 'SUBSCRIBE', target_id: action.target_id };
-    case 'schedule':
-      return { type: 'SCHEDULE', target_id: action.target_id, text: action.suggested_text };
-    default:
-      return { type: 'UNKNOWN', target_id: action.target_id };
+export const executeAction: PlatformConnector['executeAction'] = async (action, authToken) => {
+  if (action.action_type !== 'reply') {
+    return {
+      success: false,
+      error: `YouTube connector only supports reply right now. Unsupported action: ${action.action_type}`,
+    };
   }
-};
 
-export const executeAction: PlatformConnector['executeAction'] = async (action, _authToken) => {
-  const payload = buildPayload(action);
-  console.log('COMMUNITY_AI_YOUTUBE_EXECUTE', {
-    action_id: action.id,
-    platform: action.platform,
-    action_type: action.action_type,
-    payload_type: payload.type,
+  const response = await fetch('https://www.googleapis.com/youtube/v3/comments?part=snippet', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      snippet: {
+        parentId: action.target_id,
+        textOriginal: action.suggested_text || '',
+      },
+    }),
   });
-  return { success: true, platform_response: payload };
+
+  const text = await response.text();
+  let data: any = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!response.ok) {
+    return {
+      success: false,
+      error: data?.error?.message || `YouTube reply failed (${response.status})`,
+    };
+  }
+
+  const platformId =
+    typeof data?.id === 'string' && data.id.length > 0 ? data.id : null;
+  return { success: true, platform_id: platformId, platform_response: data };
 };

@@ -31,6 +31,8 @@ import { listDecisionObjects } from '../services/decisionObjectService';
 import { enforceDecisionGenerationThrottle } from '../services/decisionGenerationControlService';
 import { runDataDrivenIntelligenceForCompany } from '../services/dataDrivenIntelligenceScheduler';
 import { recomputePrioritiesForCompany } from '../services/prioritizationService';
+import { evaluateBehaviorAlerts } from '../services/behaviorAlertService';
+import { evaluateBehaviorActionOutcomes } from '../services/behaviorActionTrackingService';
 
 const MAX_CAMPAIGNS_PER_RUN = 500;
 const EVALUATED_WITHIN_MS = 24 * 60 * 60 * 1000;
@@ -554,6 +556,12 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
         advancedRevenueAttributionDecisionsGenerated += intelligenceRun.advancedRevenueAttribution;
 
         await recomputePrioritiesForCompany({ companyId, limit: 500 });
+
+        const behaviorAlertResult = await evaluateBehaviorAlerts(companyId);
+        alertsSentCount += behaviorAlertResult.sent;
+        alertsDeduplicated += behaviorAlertResult.deduplicated;
+
+        await evaluateBehaviorActionOutcomes(companyId);
       } catch (err) {
         errors.push(`Opportunity company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
       }

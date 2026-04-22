@@ -5,6 +5,13 @@ const GRAPH_API = 'https://graph.facebook.com/v19.0';
 
 const isUrl = (value: string) => /^https?:\/\//i.test(value);
 
+const extractFacebookId = (result: { data?: any } | null): string | null => {
+  const data = result?.data;
+  if (!data || typeof data !== 'object') return null;
+  const candidate = data.id ?? data.post_id ?? null;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+};
+
 const postJson = async (path: string, body: Record<string, any>, authToken: string) => {
   const response = await fetch(`${GRAPH_API}/${path}`, {
     method: 'POST',
@@ -46,7 +53,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         { message: action.suggested_text },
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractFacebookId(result), platform_response: result };
     }
 
     if (action.action_type === 'like') {
@@ -55,7 +62,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         {},
         authToken
       );
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractFacebookId(result), platform_response: result };
     }
 
     if (action.action_type === 'share') {
@@ -66,7 +73,7 @@ export const executeAction: PlatformConnector['executeAction'] = async (action, 
         ? { link: action.target_id, message: action.suggested_text }
         : { message: action.suggested_text };
       const result = await postJson('me/feed', shareBody, authToken);
-      return { success: true, platform_response: result };
+      return { success: true, platform_id: extractFacebookId(result), platform_response: result };
     }
 
     if (action.action_type === 'follow') {

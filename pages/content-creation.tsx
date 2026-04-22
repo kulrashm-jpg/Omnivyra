@@ -94,7 +94,7 @@ export default function ContentCreation() {
     { id: 'linkedin', name: 'LinkedIn', color: 'bg-blue-600', icon: '💼' },
     { id: 'facebook', name: 'Facebook', color: 'bg-blue-700', icon: '👥' },
     { id: 'instagram', name: 'Instagram', color: 'bg-pink-500', icon: '📸' },
-    { id: 'twitter', name: 'Twitter', color: 'bg-sky-500', icon: '🐦' },
+    { id: 'twitter', name: 'X', color: 'bg-gray-900', icon: '𝕏' },
     { id: 'youtube', name: 'YouTube', color: 'bg-red-600', icon: '📺' },
     { id: 'tiktok', name: 'TikTok', color: 'bg-black', icon: '🎵' }
   ];

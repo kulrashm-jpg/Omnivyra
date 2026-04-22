@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Target, Play, Edit3, CheckCircle, MoreHorizontal, Loader2, Trash2, Link2, FileText, ChevronRight, Brain, Eye, Calendar, Users, Settings } from 'lucide-react';
+import { Target, Play, Loader2, Trash2, Link2, FileText, Eye, Calendar, Users, Settings, Globe, BarChart3, Database } from 'lucide-react';
 import PlatformIcon from '../ui/PlatformIcon';
 import { getPlatformLabel } from '../../utils/platformIcons';
 import CampaignProgress from './CampaignProgress';
@@ -18,7 +18,7 @@ export default function DashboardOverviewSection({ d }: { d: DashboardState }) {
     expandingCampaignId, handleDeleteCampaign, pendingDeleteCampaignId,
     setPendingDeleteCampaignId, isDeletingCampaign, confirmDeleteCampaign,
     getStageLabel, buildPlanningWorkspaceUrl, selectedCompanyId,
-    isLoadingData, openIntelligenceTab, setActiveTab,
+    isLoadingData, setActiveTab,
   } = d;
 
   return (
@@ -58,8 +58,7 @@ export default function DashboardOverviewSection({ d }: { d: DashboardState }) {
                             accountId: selectedCompanyId,
                             context: 'dashboard_insight',
                           });
-                          setActiveTab('intelligence');
-                          openIntelligenceTab?.('market-pulse');
+                          window.location.href = `/dashboard/intelligence${selectedCompanyId ? `?companyId=${encodeURIComponent(selectedCompanyId)}&intelTab=market-pulse` : '?intelTab=market-pulse'}`;
                         },
                       }}
                       secondaryAction={{
@@ -271,40 +270,38 @@ export default function DashboardOverviewSection({ d }: { d: DashboardState }) {
                   Manage Connections
                 </button>
               </div>
-              <div data-tour-id="recommendations-card" className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+              <div className="bg-white border border-gray-200 border-l-4 border-l-emerald-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="p-2 bg-emerald-50 rounded-lg">
-                    <Brain className="h-5 w-5 text-emerald-600" />
+                    <Globe className="h-5 w-5 text-emerald-600" />
                   </div>
-                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Intelligence Hub</h3>
+                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Website &amp; Lead Capture</h3>
                 </div>
-                <p className="text-sm text-gray-500 mb-4 flex-1 leading-relaxed">
-                  Bring together strategic intelligence, market pulse, and active leads in one place
+                <p className="text-sm text-gray-500 mb-4 flex-1">
+                  Set up website intake, lead capture forms, and inbound demand collection
                 </p>
                 <button
-                  onClick={() => openIntelligenceTab('market-pulse')}
+                  onClick={() => { window.location.href = '/integrations?focus=website'; }}
                   className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
-                  Open Intelligence
+                  View Integrations
                 </button>
               </div>
-              <div className="bg-white border border-gray-200 border-l-4 border-l-green-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
+              <div className="bg-white border border-gray-200 border-l-4 border-l-cyan-500 rounded-xl p-5 flex flex-col h-full min-h-[180px] shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex items-center gap-3 mb-3">
-                  <div className="p-2 bg-green-50 rounded-lg">
-                    <Calendar className="h-5 w-5 text-green-600" />
+                  <div className="p-2 bg-cyan-50 rounded-lg">
+                    <Database className="h-5 w-5 text-cyan-600" />
                   </div>
-                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Schedule Content</h3>
+                  <h3 className="text-base font-semibold text-gray-900 leading-snug">Data &amp; CRM Sources</h3>
                 </div>
-                <p className="text-sm text-gray-500 mb-4 flex-1">Plan and schedule your content calendar</p>
+                <p className="text-sm text-gray-500 mb-4 flex-1">
+                  Connect CRM, uploaded files, Google Analytics, and external business data sources
+                </p>
                 <button
-                  onClick={() => setActiveTab('calendar')}
-                  disabled={!canScheduleContent}
-                  title={
-                    canScheduleContent ? '' : 'You do not have permission to schedule content.'
-                  }
-                  className="bg-green-50 hover:bg-green-100 text-green-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                  onClick={() => { window.location.href = '/integrations?focus=data'; }}
+                  className="bg-cyan-50 hover:bg-cyan-100 text-cyan-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                 >
-                  Schedule Now
+                  View Integrations
                 </button>
               </div>
             </div>

@@ -6,8 +6,8 @@ export default function PrivacyPolicy() {
   return (
     <>
       <Head>
-        <title>Privacy Policy | Omnivyra</title>
-        <meta name="description" content="Omnivyra Privacy Policy — how we collect, use, and protect your personal data." />
+        <title>Privacy Policy | OmniVyra</title>
+        <meta name="description" content="OmniVyra Privacy Policy — how we collect, use, and protect your personal data." />
       </Head>
       <div className="min-h-screen bg-[#F5F9FF]">
         <main className="mx-auto max-w-3xl px-6 py-16 lg:px-8 lg:py-24">
@@ -25,14 +25,14 @@ export default function PrivacyPolicy() {
             <section>
               <h2 className="text-xl font-semibold">2. How we use your data</h2>
               <p className="mt-3 text-base leading-relaxed text-[#6B7C93]">
-                We use your data to provide and improve the Omnivyra platform, generate personalised marketing intelligence, send service-related communications, and comply with legal obligations. We do not sell your personal data to third parties.
+                We use your data to provide and improve the OmniVyra platform, generate personalised marketing intelligence, send service-related communications, and comply with legal obligations. We do not sell your personal data to third parties.
               </p>
             </section>
 
             <section>
               <h2 className="text-xl font-semibold">3. Third-party integrations</h2>
               <p className="mt-3 text-base leading-relaxed text-[#6B7C93]">
-                Omnivyra integrates with third-party services including Facebook / Meta, LinkedIn, and Google. When you connect these accounts, we access only the permissions you explicitly grant. You can revoke access at any time from your account settings or directly from the third-party platform.
+                OmniVyra integrates with third-party services including Facebook / Meta, LinkedIn, and Google. When you connect these accounts, we access only the permissions you explicitly grant. You can revoke access at any time from your account settings or directly from the third-party platform.
               </p>
             </section>
 

@@ -133,3 +133,6 @@ export function getConfidenceBadgeColor(confidence?: DiagnosticSummary['diagnost
     default: return 'bg-gray-100 text-gray-700';
   }
 }
+export default function CampaignDetailsHelpersPage() {
+  return null;
+}

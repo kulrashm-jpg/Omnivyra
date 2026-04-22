@@ -12,6 +12,10 @@ type ExtensionAuthState = {
 type ExtensionPlatformState = {
   openTabCount: number;
   hasOpenTab: boolean;
+  hasMessagingTab?: boolean;
+  hasFeedTab?: boolean;
+  hasSalesNavigatorTab?: boolean;
+  hasRecruiterTab?: boolean;
   enabled: boolean;
 };
 
@@ -21,6 +25,10 @@ export type ExtensionPlatformRow = {
   browserEnabled: boolean;
   hasOpenTab: boolean;
   openTabCount: number;
+  hasMessagingTab: boolean;
+  hasFeedTab: boolean;
+  hasSalesNavigatorTab: boolean;
+  hasRecruiterTab: boolean;
 };
 
 type ExtensionStatus = {
@@ -49,7 +57,7 @@ type ExtensionTokenPayload = {
 const RESPONSE_TIMEOUT_MS = 1500;
 const AUTH_RESPONSE_TIMEOUT_MS = 15000;
 const PLATFORM_SYNC_TIMEOUT_MS = 15000;
-const PLATFORM_ACTION_TIMEOUT_MS = 20000;
+const PLATFORM_ACTION_TIMEOUT_MS = 45000;
 
 function waitForWindowMessage<T>(responseType: string, timeoutMs = RESPONSE_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -94,16 +102,44 @@ async function updatePlatformState(platform: string, enabled: boolean) {
   return await responsePromise;
 }
 
-async function authenticateExtensionToken(payload: ExtensionTokenPayload) {
+async function authenticateExtensionToken(_payload: ExtensionTokenPayload) {
+  // LEGACY PATH DISABLED. The web app must no longer forward session
+  // tokens to the extension via postMessage. Use redeemWithClaimCode()
+  // below, which sends only a one-time claim code; the extension service
+  // worker fetches the real token + HMAC secret directly from the backend.
+  return {
+    success: false,
+    message: 'Direct token forwarding is disabled. Use redeemWithClaimCode() instead.',
+  };
+}
+
+async function redeemWithClaimCode(claimCode: string) {
   const responsePromise = waitForWindowMessage<{ success?: boolean; message?: string }>(
-    'OMNIVYRA_EXTENSION_AUTH_RESULT',
-    AUTH_RESPONSE_TIMEOUT_MS
+    'OMNIVYRA_CLAIM_CODE_RESULT',
+    AUTH_RESPONSE_TIMEOUT_MS,
   );
-  window.postMessage({
-    type: 'OMNIVYRA_TOKEN',
-    data: payload
-  }, '*');
+  window.postMessage(
+    {
+      type: 'OMNIVYRA_CLAIM_CODE',
+      data: { claim_code: claimCode },
+    },
+    window.location.origin,
+  );
   return await responsePromise;
+}
+
+async function fetchClaimCode(organizationId: string) {
+  const res = await fetch('/api/extension/bootstrap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ organization_id: organizationId }),
+  });
+  const json = (await res.json().catch(() => ({}))) as { success?: boolean; data?: { claim_code?: string }; error?: string };
+  if (!res.ok || !json?.success || !json?.data?.claim_code) {
+    throw new Error(json?.error || `Bootstrap failed (${res.status})`);
+  }
+  return json.data.claim_code;
 }
 
 async function triggerPlatformSyncRequest(platform: string) {
@@ -167,6 +203,31 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      void refresh();
+    }, 5000);
+
+    const handleFocus = () => {
+      void refresh();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refresh();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [refresh]);
+
   const setBrowserPlatformEnabled = useCallback(
     async (platform: string, enabled: boolean) => {
       setUpdatingPlatform(platform);
@@ -185,9 +246,15 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
 
   const authenticateExtensionSession = useCallback(
     async (payload: ExtensionTokenPayload) => {
+      // BACKWARD-COMPAT SHIM. Callers that used to forward a raw session
+      // token are redirected to the claim-code flow. We fetch a fresh
+      // claim code for this org and send only the code to the extension.
       setAuthenticating(true);
       try {
-        const result = await authenticateExtensionToken(payload);
+        const orgId = payload?.orgId;
+        if (!orgId) throw new Error('authenticateExtensionSession requires orgId');
+        const claimCode = await fetchClaimCode(String(orgId));
+        const result = await redeemWithClaimCode(claimCode);
         if (!result?.success) {
           throw new Error(result?.message || 'Unable to authenticate browser extension');
         }
@@ -196,7 +263,23 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
         setAuthenticating(false);
       }
     },
-    [refresh]
+    [refresh],
+  );
+
+  const authenticateExtensionViaClaimCode = useCallback(
+    async (organizationId: string) => {
+      setAuthenticating(true);
+      try {
+        const claimCode = await fetchClaimCode(organizationId);
+        const result = await redeemWithClaimCode(claimCode);
+        if (!result?.success) throw new Error(result?.message || 'Unable to authenticate browser extension');
+        await refresh();
+        return result;
+      } finally {
+        setAuthenticating(false);
+      }
+    },
+    [refresh],
   );
 
   const triggerPlatformSync = useCallback(
@@ -212,15 +295,16 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
   );
 
   const executePlatformAction = useCallback(
-    async (platform: string, action: string, payload: Record<string, unknown>) => {
-      const result = await executePlatformActionRequest(platform, action, payload);
-      if (!result?.success) {
-        throw new Error(result?.message || `Unable to execute ${platform}.${action}`);
-      }
-      await refresh();
-      return result;
+    async (_platform: string, _action: string, _payload: Record<string, unknown>) => {
+      // HARD-REFUSED. Direct in-page platform action dispatch is no longer
+      // supported — browser actions must arrive as server-issued commands
+      // through the extension's queue. Keep this function so existing
+      // callers get a clear error instead of a silent failure.
+      throw new Error(
+        'Direct browser action execution is disabled. The action will be dispatched by the server command queue when the target platform tab is open.',
+      );
     },
-    [refresh]
+    [],
   );
 
   const mergedPlatforms = useMemo(() => {
@@ -240,7 +324,11 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
         configured: configured.includes(platform),
         browserEnabled: platformState.enabled !== false,
         hasOpenTab: Boolean(platformState.hasOpenTab),
-        openTabCount: platformState.openTabCount ?? 0
+        openTabCount: platformState.openTabCount ?? 0,
+        hasMessagingTab: Boolean(platformState.hasMessagingTab),
+        hasFeedTab: Boolean(platformState.hasFeedTab),
+        hasSalesNavigatorTab: Boolean(platformState.hasSalesNavigatorTab),
+        hasRecruiterTab: Boolean(platformState.hasRecruiterTab),
       };
     });
   }, [configuredPlatforms, status?.platforms]);
@@ -256,7 +344,8 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
     authenticating,
     setBrowserPlatformEnabled,
     authenticateExtensionSession,
+    authenticateExtensionViaClaimCode,
     triggerPlatformSync,
-    executePlatformAction
+    executePlatformAction,
   };
 }

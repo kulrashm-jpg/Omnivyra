@@ -3,7 +3,7 @@ import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
 
-type EmailJobName = 'magic_link' | 'invite' | 'reset';
+type EmailJobName = 'magic_link' | 'invite' | 'reset' | 'company_referral';
 type EmailJobStatus = 'pending' | 'processing' | 'failed' | 'sent' | 'dead';
 
 type EmailEnvelope = {
@@ -33,14 +33,10 @@ function getAppUrl(): string {
   return (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
 }
 
-function getEmailConfig() {
+function getEmailConfig(): { apiKey: string; from: string } | null {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const from = process.env.EMAIL_FROM?.trim() || process.env.RESEND_FROM_EMAIL?.trim();
-
-  if (!apiKey || !from) {
-    throw new Error('EMAIL_TRANSPORT_NOT_CONFIGURED');
-  }
-
+  if (!apiKey || !from) return null;
   return { apiKey, from };
 }
 
@@ -56,7 +52,30 @@ function payloadHash(name: EmailJobName, envelope: EmailEnvelope): string {
 }
 
 async function sendViaResend(envelope: EmailEnvelope): Promise<void> {
-  const { apiKey, from } = getEmailConfig();
+  const config = getEmailConfig();
+
+  if (!config) {
+    // Dev fallback: when no email transport is configured, log the envelope
+    // (including any action link embedded in the HTML) to stdout so the
+    // developer can use it without an external mail provider. Treat the send
+    // as successful so the signup / invite / reset flows complete locally.
+    const linkMatch = envelope.html.match(/href="([^"]+)"/);
+    logger.warn('email_dev_fallback_no_transport', {
+      to: envelope.to,
+      subject: envelope.subject,
+      actionLink: linkMatch?.[1] ?? null,
+    });
+
+    console.warn(
+      `\n[email dev fallback] RESEND_API_KEY/EMAIL_FROM not set. Email NOT sent.\n` +
+      `  to:      ${envelope.to}\n` +
+      `  subject: ${envelope.subject}\n` +
+      (linkMatch ? `  link:    ${linkMatch[1]}\n` : `  (no http link found in HTML body)\n`),
+    );
+    return;
+  }
+
+  const { apiKey, from } = config;
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -378,9 +397,9 @@ export async function sendMagicLink(
     'magic_link',
     {
       to: email,
-      subject: 'Your Omnivyra sign-in link',
+      subject: 'Your OmniVyra sign-in link',
       html: renderActionEmail(
-        'Sign in to Omnivyra',
+        'Sign in to OmniVyra',
         'Use the secure sign-in link below to continue to your account.',
         'Sign in',
         actionLink,
@@ -392,12 +411,55 @@ export async function sendMagicLink(
   return { actionLink };
 }
 
+/**
+ * Sent when someone tries to self-signup for a domain that already has an
+ * active COMPANY_ADMIN. Tells the would-be signer who to contact to get
+ * invited. If the admin can't be identified (orphaned company), `admin` is
+ * null and the body falls back to pointing at support.
+ */
+export async function sendCompanyAdminReferral(
+  recipientEmail: string,
+  opts: {
+    admin: { name: string | null; email: string } | null;
+    companyName: string | null;
+    supportEmail: string;
+  },
+  idempotencyKey?: string,
+): Promise<void> {
+  const who = opts.admin?.name?.trim() || opts.admin?.email || null;
+  const companyLine = opts.companyName
+    ? `Your company <strong>${opts.companyName}</strong> already has an Omnivyra account.`
+    : `Your company already has an Omnivyra account.`;
+
+  const body = opts.admin
+    ? `${companyLine} Please reach out to your administrator to request access:<br/><br/>` +
+      `<strong>${who}</strong><br/>` +
+      `<a href="mailto:${opts.admin.email}">${opts.admin.email}</a>`
+    : `${companyLine} Its administrator is not currently active. ` +
+      `Please email <a href="mailto:${opts.supportEmail}">${opts.supportEmail}</a> for help joining your team.`;
+
+  await enqueueAndSend(
+    'company_referral',
+    {
+      to: recipientEmail,
+      subject: 'Your company is already using Omnivyra',
+      html: renderActionEmail(
+        'Your company is already on Omnivyra',
+        body,
+        'Go to log in',
+        `${getAppUrl()}/login?email=${encodeURIComponent(recipientEmail)}`,
+      ),
+    },
+    idempotencyKey,
+  );
+}
+
 export async function sendInvite(email: string, inviteLink: string, idempotencyKey?: string): Promise<void> {
   await enqueueAndSend(
     'invite',
     {
       to: email,
-      subject: 'You have been invited to Omnivyra',
+      subject: 'You have been invited to OmniVyra',
       html: renderActionEmail(
         'You have been invited',
         'Use the invitation link below to accept access to your organization account.',
@@ -409,31 +471,3 @@ export async function sendInvite(email: string, inviteLink: string, idempotencyK
   );
 }
 
-export async function sendReset(
-  email: string,
-  redirectUrl?: string,
-  idempotencyKey?: string,
-): Promise<{ actionLink: string }> {
-  const actionLink = await generateSupabaseEmailLink(
-    email,
-    'recovery',
-    redirectUrl || `${getAppUrl()}/auth/set-password?flow=recovery`,
-  );
-
-  await enqueueAndSend(
-    'reset',
-    {
-      to: email,
-      subject: 'Reset your Omnivyra password',
-      html: renderActionEmail(
-        'Reset your password',
-        'Use the secure reset link below to set a new password.',
-        'Reset password',
-        actionLink,
-      ),
-    },
-    idempotencyKey,
-  );
-
-  return { actionLink };
-}

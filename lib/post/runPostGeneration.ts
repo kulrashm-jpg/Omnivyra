@@ -5,6 +5,15 @@ import {
   type PlatformVariantPayload,
 } from '../../backend/services/contentGenerationPipeline';
 import { getDefaultPostTemplates } from './defaultPostTemplates';
+import { getProfile } from '../../backend/services/companyProfileService';
+import {
+  extractCompanyIdentity,
+  buildIdentityLock,
+  buildAntiGenericRules,
+  scoreCompanyContext,
+  getDynamicContextThreshold,
+  buildDiagnosticRetryReasons,
+} from '../content/companyContextBlock';
 
 export interface PostGenerationRequest {
   company_id: string;
@@ -49,7 +58,10 @@ function extractExplicitTimingReference(topic: string): string | null {
   return null;
 }
 
-function buildPostGuardrails(input: PostGenerationRequest): string {
+function buildPostFactualGuardrails(input: PostGenerationRequest): string {
+  // Content-integrity rules (NOT anti-generic rules — those come from the shared
+  // buildAntiGenericRules). These prevent hallucinated proof points and wrong
+  // timing in launch/announce-style posts.
   const timingReference = extractExplicitTimingReference(input.topic);
   const soundsLikeLaunch = /\b(launch|launching|introducing|announce|announcing|coming soon|officially launch)\b/i.test(
     input.topic,
@@ -57,7 +69,6 @@ function buildPostGuardrails(input: PostGenerationRequest): string {
 
   return [
     'Factual guardrails for this post:',
-    '- Use only facts grounded in the user topic, provided instructions, and company context.',
     '- Do NOT invent testimonials, customer quotes, adoption, user outcomes, case studies, or proof points unless they were explicitly provided.',
     '- Do NOT imply the product is already widely used, proven, or endorsed if that proof was not supplied.',
     '- Do NOT introduce random historical references or past-year framing such as 2023 or 2024 unless the user explicitly asked for that exact year.',
@@ -77,10 +88,20 @@ export async function runPostGeneration(
     ? input.platform.trim().toLowerCase()
     : 'linkedin';
 
+  // Resolve company identity for shared prompt-level enforcement (A4 parity
+  // with long-form). Identity lock + anti-generic rules are the SAME builders
+  // used by blog/article/whitepaper — no duplicated inline rules here.
+  const profile = await getProfile(input.company_id, { autoRefine: false, languageRefine: false }).catch(() => null);
+  const identity = extractCompanyIdentity(profile);
+  const companyEnforcement = (identity.companyName || identity.industry || identity.coreProblem)
+    ? `${buildIdentityLock(identity, 'post')}\n\n${buildAntiGenericRules(identity)}`
+    : '';
+
   const templateInstruction = resolveTemplateInstruction(input.template_name);
   const extraInstruction = [
+    companyEnforcement || undefined,
     templateInstruction,
-    buildPostGuardrails(input),
+    buildPostFactualGuardrails(input),
     typeof input.extra_instruction === 'string' && input.extra_instruction.trim()
       ? input.extra_instruction.trim()
       : undefined,
@@ -108,14 +129,74 @@ export async function runPostGeneration(
     ...(extraInstruction ? { extra_instruction: extraInstruction } : {}),
   };
 
-  const master_content = await generateMasterContentFromIntent(item);
-  const [platform_variant] = await buildPlatformVariantsFromMaster({
+  let master_content = await generateMasterContentFromIntent(item);
+  let [platform_variant] = await buildPlatformVariantsFromMaster({
     ...item,
     master_content,
   });
 
   if (!platform_variant) {
     throw new Error(`Failed to generate post variant for platform "${platform}"`);
+  }
+
+  // D3: short-form company-context gate. If the variant scores below threshold,
+  // regenerate once with a diagnostic message appended so the model treats the
+  // company-context failures as mandatory fixes. Lightweight — single regen,
+  // no deep structural parsing.
+  if (companyEnforcement) {
+    const variantText = [
+      platform_variant.generated_content || '',
+      master_content.content || '',
+    ].filter(Boolean).join('\n\n');
+
+    if (variantText.trim().length >= 40) {
+      const wordCount = variantText.split(/\s+/).filter(Boolean).length;
+      const threshold = getDynamicContextThreshold('post', wordCount);
+      const score = scoreCompanyContext(variantText, identity, { contentType: 'post' });
+      let retryCount = 0;
+      let finalScore = score.score;
+
+      if (score.score < threshold) {
+        const diagnostic = buildDiagnosticRetryReasons(score, identity);
+        const regenItem = {
+          ...item,
+          extra_instruction: [
+            item.extra_instruction ?? '',
+            `\n\n## PREVIOUS DRAFT FAILED COMPANY-CONTEXT CHECK (score ${score.score}/100)\n${diagnostic}`,
+          ].filter(Boolean).join(''),
+        };
+        try {
+          retryCount = 1;
+          const regenMaster = await generateMasterContentFromIntent(regenItem);
+          const [regenVariant] = await buildPlatformVariantsFromMaster({
+            ...regenItem,
+            master_content: regenMaster,
+          });
+          if (regenVariant) {
+            const regenText = [
+              regenVariant.generated_content || '',
+              regenMaster.content || '',
+            ].filter(Boolean).join('\n\n');
+            const regenScore = scoreCompanyContext(regenText, identity, { contentType: 'post' });
+            // Keep the regen only if it actually improved the score — never
+            // ship something worse than the first attempt.
+            if (regenScore.score > score.score) {
+              master_content = regenMaster;
+              platform_variant = regenVariant;
+              finalScore = regenScore.score;
+            }
+          }
+        } catch { /* regen is best-effort; keep original on transient failure */ }
+      }
+
+      console.info('[content-enforcement]', {
+        contentType: 'post',
+        target_words: wordCount,
+        threshold,
+        final_score: finalScore,
+        retry_count: retryCount,
+      });
+    }
   }
 
   return {

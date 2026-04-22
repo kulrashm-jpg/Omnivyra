@@ -9,8 +9,11 @@ import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { processContent } from '@/backend/services/unifiedContentProcessor';
 import { supabase } from '@/backend/db/supabaseClient';
 import { hasEnoughCredits } from '@/backend/services/creditDeductionService';
-import { deductCreditsAwaited } from '@/backend/services/creditExecutionService';
+import { deductCreditsAwaited, executeWithCredits, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
+import { assertOrgMembership } from '@/backend/services/requestAccessService';
+import { generateMasterContentStrict } from '@/backend/services/contentGeneration/blueprintGenerator';
 import { updateActivity } from '@/backend/services/executionPlannerPersistence';
+import { checkRateLimit } from '@/lib/auth/rateLimit';
 
 type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant' | 'improve_variant_all';
 type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
@@ -418,21 +421,132 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     if (action === 'generate_master') {
-      if (companyId) {
-        const check = await hasEnoughCredits(companyId, 'content_basic');
-        if (!check.sufficient) {
-          return res.status(402).json({ error: 'Insufficient credits to generate content', required: check.required, balance: check.balance });
-        }
-      }
-      const master = await generateMasterContentFromIntent(item);
-      // Persist immediately so subsequent repurpose calls on other platforms can reuse it
+      // ── STRICT REQUIREMENTS ──────────────────────────────────────────────
+      //   1. orgId is NEVER taken from request body — resolved server-side
+      //      from activity → campaign → company.
+      //   2. Tenant membership is verified BEFORE any credit work.
+      //   3. Rate limits: per-user (30/min, 300/hour) + per-org (100/min,
+      //      1000/hour), sliding-window (Redis zset).
+      //   4. Provider + model pinned explicitly — no env fallback.
+      //   5. Model hard limits (max_context_tokens, max_output_tokens) are
+      //      validated inside estimateLlmHoldCredits BEFORE HOLD is placed.
+      //   6. HOLD size = resolveLlmCost(maxTokens, applyCeiling=false) —
+      //      no ceiling cap on the reservation; the settlement cap still
+      //      applies when CONFIRM computes the actual charge.
+      //   7. Tokens come ONLY from executor return; source flag distinguishes
+      //      provider-metered from cache.
+      //   8. aiGateway owns usage_events telemetry; executeWithCredits owns
+      //      credit_transactions. No suppressUsageLog flag, no double-write.
+      //   9. Response is minimal — no pricing / settlement / tokens leaked.
+      // ─────────────────────────────────────────────────────────────────────
+
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistMasterToDb(activityDbId, master);
-      if (companyId) await deductCreditsAwaited(companyId, 'content_basic', { note: 'Master content generation' });
-      return res.status(200).json({
-        success: true,
-        master_content: master,
+      if (!activityDbId || activityDbId.startsWith('workspace-')) {
+        return res.status(400).json({ error: 'Persisted activity id required (workspace IDs are not billable)' });
+      }
+
+      // Server-side orgId resolution — body.companyId is IGNORED.
+      const { data: plan } = await supabase
+        .from('daily_content_plans')
+        .select('campaign_id')
+        .eq('id', activityDbId)
+        .maybeSingle();
+      const campaignIdResolved = (plan as { campaign_id?: string } | null)?.campaign_id;
+      if (!campaignIdResolved) {
+        return res.status(404).json({ error: 'Activity not found or has no campaign' });
+      }
+      const { data: camp } = await supabase
+        .from('campaigns')
+        .select('company_id')
+        .eq('id', campaignIdResolved)
+        .maybeSingle();
+      const resolvedOrgId = (camp as { company_id?: string } | null)?.company_id ?? null;
+      if (!resolvedOrgId) {
+        return res.status(404).json({ error: 'Campaign has no company' });
+      }
+
+      const isMember = await assertOrgMembership(user.id, resolvedOrgId);
+      if (!isMember) {
+        return res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
+      }
+
+      // ── Rate limits (sliding window, per-user + per-org, min + hour) ──
+      const rlChecks = await Promise.all([
+        checkRateLimit(user.id,        { keyPrefix: 'genmaster:user:min',  limit: 30,   windowSecs: 60   }),
+        checkRateLimit(user.id,        { keyPrefix: 'genmaster:user:hour', limit: 300,  windowSecs: 3600 }),
+        checkRateLimit(resolvedOrgId,  { keyPrefix: 'genmaster:org:min',   limit: 100,  windowSecs: 60   }),
+        checkRateLimit(resolvedOrgId,  { keyPrefix: 'genmaster:org:hour',  limit: 1000, windowSecs: 3600 }),
+      ]);
+      const blocked = rlChecks.find((r) => !r.allowed);
+      if (blocked) {
+        res.setHeader('Retry-After', String(Math.max(1, blocked.resetAt - Math.floor(Date.now() / 1000))));
+        return res.status(429).json({ error: 'Too many requests' });
+      }
+
+      const PROVIDER = 'openai';
+      const MODEL    = 'gpt-4o-mini';
+      // Conservative upper bounds used to size the HOLD. validateModelLimits
+      // (called inside estimateLlmHoldCredits) rejects if these exceed the
+      // model's configured max_context_tokens / max_output_tokens.
+      const MAX_INPUT_TOKENS  = 4000;
+      const MAX_OUTPUT_TOKENS = 1500;
+
+      const result = await executeWithCredits<MasterContentPayload>({
+        userId:         user.id,
+        orgId:          resolvedOrgId,
+        action:         'content_generation',
+        referenceType:  'master_content',
+        referenceId:    activityDbId,
+        idempotencyKey: makeIdempotencyKey(user.id, 'content_generation', activityDbId),
+        note:           'Master content generation',
+        llmPricing: {
+          provider:        PROVIDER,
+          model:           MODEL,
+          actionKey:       'content_generation',
+          maxInputTokens:  MAX_INPUT_TOKENS,
+          maxOutputTokens: MAX_OUTPUT_TOKENS,
+        },
+        executor: async () => {
+          const strict = await generateMasterContentStrict(item, {
+            provider: PROVIDER,
+            model:    MODEL,
+          });
+          return {
+            result:   strict.master,
+            usage: {
+              inputTokens:  strict.usage.inputTokens,
+              outputTokens: strict.usage.outputTokens,
+              source:       'provider' as const,
+            },
+            provider: strict.provider,
+            model:    strict.model,
+          };
+        },
       });
+
+      if (result.status === 'insufficient_credits') {
+        return res.status(402).json({
+          error:    'Insufficient credits to generate content',
+          required: result.required,
+          balance:  result.available,
+        });
+      }
+      if (result.status === 'not_a_member') {
+        return res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
+      }
+      if (result.status === 'org_control_blocked') {
+        return res.status(403).json({ error: result.code, detail: result.reason });
+      }
+      if (result.status === 'no_credit_account') {
+        return res.status(402).json({ error: 'No credit account for org' });
+      }
+      if (result.status !== 'executed') {
+        return res.status(500).json({ error: 'Failed to generate master content' });
+      }
+
+      const master = result.result;
+      await persistMasterToDb(activityDbId, master);
+      return res.status(200).json({ success: true, master_content: master });
     }
 
     if (action === 'refine_variant') {

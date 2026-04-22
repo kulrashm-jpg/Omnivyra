@@ -479,7 +479,7 @@ function PlatformDiagram() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
           </svg>
         </div>
-        <p className="mt-1 text-center text-[9px] font-bold uppercase tracking-widest text-[#0A66C2]">Omnivyra</p>
+        <p className="mt-1 text-center text-[9px] font-bold uppercase tracking-widest text-[#0A66C2]">OmniVyra</p>
       </div>
 
       {/* Satellite nodes */}
@@ -505,13 +505,13 @@ export default function FeaturesPage() {
   return (
     <>
       <Head>
-        <title>Capabilities — Omnivyra</title>
+        <title>Capabilities — OmniVyra</title>
         <meta
           name="description"
-          content="Omnivyra is a connected marketing system — campaign management software, SEO analysis tools, content strategy platform, and marketing insights in one place."
+          content="OmniVyra is a connected marketing system — campaign management software, SEO analysis tools, content strategy platform, and marketing insights in one place."
         />
         <meta name="keywords" content="marketing automation platform, campaign management software, SEO analysis tools, marketing insights, content strategy platform" />
-        <meta property="og:title" content="Capabilities — Omnivyra" />
+        <meta property="og:title" content="Capabilities — OmniVyra" />
         <meta property="og:description" content="Everything you need to understand and run your marketing. From insight to execution — one connected system." />
         <meta property="og:type" content="website" />
         <link rel="canonical" href="https://omnivyra.com/features" />
@@ -539,7 +539,7 @@ export default function FeaturesPage() {
                   Everything you need to understand and run your digital marketing
                 </h1>
                 <p className="mt-6 text-lg leading-relaxed text-white/70">
-                  From insight to execution — Omnivyra connects everything into one system so you know what to do and how to do it.
+                  From insight to execution — OmniVyra connects everything into one system so you know what to do and how to do it.
                 </p>
                 <p className="mt-2 text-sm font-medium text-[#3FA9F5]">
                   No scattered tools. No disconnected decisions.
@@ -592,7 +592,7 @@ export default function FeaturesPage() {
             <div className="mb-14 text-center">
               <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-[#0A66C2]">The System</p>
               <h2 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">
-                How Omnivyra works
+                How OmniVyra works
               </h2>
               <p className="mt-3 text-base text-[#6B7C93]">
                 Four connected stages — moving from visibility to growth.
@@ -808,7 +808,7 @@ export default function FeaturesPage() {
                 </p>
               </div>
 
-              {/* Omnivyra */}
+              {/* OmniVyra */}
               <div className="rounded-3xl border border-[#0A66C2]/15 bg-[#F0F7FF] p-8">
                 <div className="mb-4 flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#0A66C2]/10">
@@ -817,7 +817,7 @@ export default function FeaturesPage() {
                     </svg>
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-[#0B1F33]">Omnivyra</h3>
+                    <h3 className="text-base font-bold text-[#0B1F33]">OmniVyra</h3>
                     <p className="text-xs text-[#6B7C93]">What you actually need</p>
                   </div>
                 </div>
@@ -861,7 +861,7 @@ export default function FeaturesPage() {
                 What this looks like in practice
               </h2>
               <p className="mt-3 text-base text-[#6B7C93]">
-                Three moments where Omnivyra gives you the clarity you need.
+                Three moments where OmniVyra gives you the clarity you need.
               </p>
             </div>
 

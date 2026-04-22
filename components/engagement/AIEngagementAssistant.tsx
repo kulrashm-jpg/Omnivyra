@@ -15,7 +15,7 @@ export interface AIEngagementAssistantProps {
   onSelectThread?: (threadId: string) => void;
   onFilterByAuthor?: (authorName: string, platform: string) => void;
   onUseSuggestedReply?: (replyText: string) => void;
-  onSendSuggestedReply?: (replyText: string) => Promise<void>;
+  onSendSuggestedReply?: (replyText: string) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
   className?: string;
 }
 
@@ -256,8 +256,11 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
     setError(null);
     setSuggestedReplyStatus(null);
     try {
-      await onSendSuggestedReply(displayedReply);
-      setSuggestedReplyStatus('Suggested reply submitted. LinkedIn may take a few seconds to reflect it.');
+      const result = await onSendSuggestedReply(displayedReply);
+      const resultMessage = result && typeof result === 'object' ? result.message : null;
+      setSuggestedReplyStatus(
+        resultMessage || 'Suggested reply submitted. It may take a few seconds to reflect on the platform.'
+      );
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : 'Failed to send suggested reply');
     } finally {

@@ -85,7 +85,7 @@ export default function ContentCreationPanel({
 
   const platforms = [
     { id: 'linkedin', name: 'LinkedIn', icon: '💼' },
-    { id: 'twitter', name: 'Twitter', icon: '🐦' },
+    { id: 'twitter', name: 'X', icon: '𝕏' },
     { id: 'instagram', name: 'Instagram', icon: '📸' },
     { id: 'facebook', name: 'Facebook', icon: '📘' },
     { id: 'youtube', name: 'YouTube', icon: '📺' },

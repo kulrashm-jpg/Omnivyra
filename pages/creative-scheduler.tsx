@@ -49,7 +49,7 @@ export default function CreativeScheduler() {
       name: "Twitter/X", 
       icon: <Smartphone className="h-8 w-8" />, 
       gradient: "from-sky-500 to-blue-600",
-      bgPattern: "🐦",
+      bgPattern: "𝕏",
       description: "Real-time Updates",
       stats: { reach: "1.8K", engagement: "6.7%" }
     },
@@ -596,7 +596,7 @@ export default function CreativeScheduler() {
                           {/* Twitter Trends (Reddit) - only if Twitter is connected */}
                           {trendingData?.twitter?.length > 0 && connectedAccounts.some(acc => acc.platform === 'twitter' && acc.is_active) && (
                             <div>
-                              <h4 className="text-sm text-gray-400 mb-3">🐦 Twitter Viral</h4>
+                              <h4 className="text-sm text-gray-400 mb-3">𝕏 Twitter Viral</h4>
                               {trendingData.twitter.slice(0, 2).map((trend, index) => (
                                 <div
                                   key={index}
@@ -615,7 +615,7 @@ export default function CreativeScheduler() {
                                       <div className="text-xs text-gray-400">r/{trend.subreddit}</div>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                      <span className="text-xs text-sky-400">🐦</span>
+                                      <span className="text-xs text-sky-400">𝕏</span>
                                       <span className="text-sky-400 text-xs">{trend.upvotes}</span>
                                     </div>
                                   </div>

@@ -4,8 +4,8 @@
  */
 export const PLATFORM_EMOJI_ICONS: Record<string, string> = {
   linkedin: '💼',
-  twitter: '🐦',
-  x: '🐦',
+  twitter: '𝕏',
+  x: '𝕏',
   youtube: '▶️',
   reddit: '🤖',
   slack: '💬',

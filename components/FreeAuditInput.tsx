@@ -66,6 +66,9 @@ export default function FreeAuditInput({
         </div>
         <button
           type="submit"
+          data-ga-primary-cta
+          data-ga-label={buttonText}
+          data-ga-location="free_audit_input"
           className="landing-btn-primary shrink-0 rounded-xl px-6 py-3 text-base font-semibold sm:py-3.5"
         >
           {buttonText}

@@ -104,14 +104,12 @@ export type OAuthPlatformEntry = {
 
 export const OAUTH_PLATFORMS: OAuthPlatformEntry[] = [
   { platform_key: 'linkedin',  platform_label: 'LinkedIn',           configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
-  { platform_key: 'twitter',   platform_label: 'X (Twitter)',        configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+  { platform_key: 'x',         platform_label: 'X',                  configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
   { platform_key: 'youtube',   platform_label: 'YouTube',            configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
-  { platform_key: 'instagram', platform_label: 'Instagram',          configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
-  { platform_key: 'facebook',  platform_label: 'Facebook',           configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
+  { platform_key: 'facebook',  platform_label: 'Meta (Facebook · Instagram · WhatsApp)', configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
   { platform_key: 'tiktok',    platform_label: 'TikTok',             configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
   { platform_key: 'pinterest', platform_label: 'Pinterest',          configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
   { platform_key: 'reddit',    platform_label: 'Reddit',             configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
-  { platform_key: 'whatsapp',  platform_label: 'WhatsApp Business',  configured: false, enabled: false, client_id_preview: '', has_client_secret: false, updated_at: null },
 ];
 
 export type KnownApiEntry = {
@@ -167,3 +165,6 @@ export const KNOWN_APIS: Record<string, KnownApiEntry[]> = {
     { key: 'perplexity',   name: 'Perplexity AI',           icon: '🧩',  env_var: 'PERPLEXITY_API_KEY',  auth_type: 'bearer', base_url: 'https://api.perplexity.ai/models',              description: 'AI-powered search and answers' },
   ],
 };
+export default function SuperAdminTypesPage() {
+  return null;
+}

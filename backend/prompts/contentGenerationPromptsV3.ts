@@ -12,8 +12,37 @@
  */
 
 import { ContentType } from '../services/unifiedContentGenerationEngine';
+import {
+  type CompanyIdentity,
+  buildIdentityLock,
+  buildAntiGenericRules,
+} from '../../lib/content/companyContextBlock';
 
 export const CONTENT_GENERATION_PROMPT_VERSION = 'v3_unified';
+
+/**
+ * Wrap any structural system prompt with mandatory company enforcement.
+ *
+ * Prepends:
+ *   - buildIdentityLock (identity + strategy perspective)
+ * Appends:
+ *   - buildAntiGenericRules (strategy + forbidden phrases)
+ *
+ * When identity has no companyName, returns base unchanged so existing
+ * zero-context flows continue to work.
+ */
+function wrapWithCompanyEnforcement(
+  base: string,
+  contentType: string,
+  identity?: CompanyIdentity,
+): string {
+  if (!identity || (!identity.companyName && !identity.industry && !identity.coreProblem)) {
+    return base;
+  }
+  const head = buildIdentityLock(identity, contentType);
+  const tail = buildAntiGenericRules(identity);
+  return `${head}\n\n${base}\n${tail}`;
+}
 
 /**
  * Content-type specific system prompts
@@ -228,7 +257,8 @@ Return ONLY valid JSON:
 };
 
 /**
- * Prompts for angle generation (3-angle system)
+ * Prompts for angle generation (3-angle system).
+ * Use buildAnglesSystemPromptV3(identity) to get the enforced version.
  */
 export const ANGLES_SYSTEM_PROMPT = `You are a B2B content strategist. Generate three distinct editorial angles for a given topic:
 
@@ -397,8 +427,40 @@ export function getContentBlueprintPromptWithFingerprint() {
   };
 }
 
-export function getContentTypeSystemPrompt(contentType: ContentType): string {
-  return CONTENT_TYPE_SYSTEM_PROMPTS[contentType] || CONTENT_TYPE_SYSTEM_PROMPTS.article;
+export function getContentTypeSystemPrompt(
+  contentType: ContentType,
+  identity?: CompanyIdentity,
+): string {
+  const base = CONTENT_TYPE_SYSTEM_PROMPTS[contentType] || CONTENT_TYPE_SYSTEM_PROMPTS.article;
+  return wrapWithCompanyEnforcement(base, contentType, identity);
+}
+
+/**
+ * Builder: identity-locked, strategy-enforced system prompt for a given
+ * content type. Use this instead of reading CONTENT_TYPE_SYSTEM_PROMPTS
+ * directly when calling the model.
+ */
+export function buildContentSystemPrompt(
+  contentType: ContentType,
+  identity?: CompanyIdentity,
+): string {
+  const base = CONTENT_TYPE_SYSTEM_PROMPTS[contentType] || CONTENT_TYPE_SYSTEM_PROMPTS.article;
+  return wrapWithCompanyEnforcement(base, contentType, identity);
+}
+
+/**
+ * Builder: identity-locked, strategy-enforced angles system prompt.
+ * Prepends identity lock + anti-generic rules when identity is provided.
+ */
+export function buildAnglesSystemPromptV3(identity?: CompanyIdentity): string {
+  return wrapWithCompanyEnforcement(ANGLES_SYSTEM_PROMPT, 'angles', identity);
+}
+
+/**
+ * Builder: identity-locked platform variants system prompt.
+ */
+export function buildPlatformVariantsSystemPrompt(identity?: CompanyIdentity): string {
+  return wrapWithCompanyEnforcement(PLATFORM_VARIANTS_SYSTEM, 'platform variant', identity);
 }
 
 export function getValidationRules(contentType: ContentType) {

@@ -12,7 +12,7 @@ import { getUserRole } from '@/backend/services/rbacService';
 const SUPPORTED_PLATFORMS = [
   // Social media platforms
   { key: 'linkedin',       label: 'LinkedIn',       authPath: '/api/auth/linkedin',  category: 'social' },
-  { key: 'twitter',        label: 'X (Twitter)',    authPath: '/api/auth/twitter',   category: 'social' },
+  { key: 'x',              label: 'X',              authPath: '/api/auth/x',         category: 'social' },
   { key: 'youtube',        label: 'YouTube',        authPath: '/api/auth/youtube',   category: 'social' },
   { key: 'instagram',      label: 'Instagram',      authPath: '/api/auth/instagram', category: 'social' },
   { key: 'facebook',       label: 'Facebook',       authPath: '/api/auth/facebook',  category: 'social' },
@@ -73,14 +73,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .not('platform_user_id', 'like', 'planning_%'),
       ]);
       for (const acc of [...(scopedAccounts || []), ...(legacyAccounts || [])]) {
-        if (!accountMap[acc.platform]) accountMap[acc.platform] = acc;
+        const normalizedPlatform = acc.platform === 'twitter' ? 'x' : acc.platform;
+        if (!accountMap[normalizedPlatform]) accountMap[normalizedPlatform] = acc;
       }
     } else {
       const { data: accounts } = await supabase.from('social_accounts').select(baseSelect)
         .eq('user_id', userId).eq('is_active', true)
         .not('platform_user_id', 'like', 'planning_%');
       for (const acc of accounts || []) {
-        if (!accountMap[acc.platform]) accountMap[acc.platform] = acc;
+        const normalizedPlatform = acc.platform === 'twitter' ? 'x' : acc.platform;
+        if (!accountMap[normalizedPlatform]) accountMap[normalizedPlatform] = acc;
       }
     }
   }
@@ -101,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return v && v.trim() && !v.includes('your_');
   };
   if (hasEnv('LINKEDIN_CLIENT_ID')) configuredSet.add('linkedin');
-  if (hasEnv('TWITTER_CLIENT_ID')) configuredSet.add('twitter');
+  if (hasEnv('TWITTER_CLIENT_ID') || hasEnv('X_CLIENT_ID')) configuredSet.add('x');
   if (hasEnv('YOUTUBE_CLIENT_ID') || hasEnv('GOOGLE_CLIENT_ID')) configuredSet.add('youtube');
   // Facebook App covers facebook, instagram, whatsapp
   if (hasEnv('FACEBOOK_CLIENT_ID')) {

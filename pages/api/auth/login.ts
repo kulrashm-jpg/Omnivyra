@@ -11,6 +11,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 
 type SuccessResponse = { proceed: true };
 type ErrorResponse   = { error: string; code?: string };
@@ -20,6 +21,17 @@ export default async function handler(
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Rate limit: 10 pre-check attempts per IP per 15 min. Prevents email
+  // enumeration via the NO_PASSWORD vs INVALID_CREDENTIALS response split,
+  // and slows credential stuffing into signInWithPassword downstream.
+  const ip = String(
+    req.headers['x-forwarded-for'] ?? (req.socket as any)?.remoteAddress ?? 'unknown',
+  ).split(',')[0].trim();
+  const rl = await checkRateLimit(ip, LOGIN_LIMIT);
+  if (!rl.allowed) {
+    return res.status(429).json({ error: 'Too many sign-in attempts. Please try again later.' });
+  }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { email } = body as { email?: string };

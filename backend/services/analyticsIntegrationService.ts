@@ -1,0 +1,683 @@
+import { decodeOAuthState, encodeOAuthState } from '../auth/oauthState';
+import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
+import { supabase } from '../db/supabaseClient';
+import { getAnalyticsProviderConfig } from './analyticsProviderConfigService';
+
+export type AnalyticsProvider = 'GA4';
+export type AnalyticsIntegrationStatus = 'connected' | 'disconnected' | 'error';
+
+export type AnalyticsIntegrationRecord = {
+  id: string;
+  company_id: string;
+  provider: AnalyticsProvider;
+  status: AnalyticsIntegrationStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AnalyticsPropertyRecord = {
+  id: string;
+  integration_id: string;
+  property_id: string;
+  property_name: string;
+  account_id: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AnalyticsTokenRecord = {
+  id: string;
+  integration_id: string;
+  access_token: string;
+  refresh_token: string | null;
+  expiry_date: string | null;
+  scope: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GoogleAnalyticsPropertySummary = {
+  propertyId: string;
+  propertyName: string;
+  accountId: string | null;
+  accountName: string | null;
+};
+
+export type GoogleAnalyticsConnectionStatus = {
+  integration: AnalyticsIntegrationRecord | null;
+  activeProperty: AnalyticsPropertyRecord | null;
+  ready: boolean;
+  tokenValid: boolean;
+  tokenExpiresAt: string | null;
+  propertiesCount: number;
+};
+
+type ConnectGoogleAnalyticsOptions = {
+  userId?: string;
+  returnTo?: string;
+  requestBaseUrl?: string;
+};
+
+type OAuthCallbackInput = {
+  code: string;
+  state?: string;
+  requestBaseUrl?: string;
+};
+
+type TokenExchangeResult = {
+  access_token: string;
+  refresh_token?: string;
+  expiry_date: string | null;
+  scope: string | null;
+};
+
+const GA4_PROVIDER: AnalyticsProvider = 'GA4';
+const GA4_SCOPES = [
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/analytics.readonly',
+].join(' ');
+
+async function getGoogleAnalyticsOauthConfig(): Promise<{
+  client_id: string;
+  client_secret: string;
+  scopes: string[];
+  redirect_uri: string | null;
+}> {
+  const config = await getAnalyticsProviderConfig('google_analytics');
+  if (!config?.enabled) {
+    throw new Error('Google Analytics is not enabled');
+  }
+  if (!config.oauth_client_id || !config.oauth_client_secret) {
+    throw new Error('Google Analytics OAuth credentials are not configured');
+  }
+
+  return {
+    client_id: config.oauth_client_id,
+    client_secret: config.oauth_client_secret,
+    scopes: config.scopes,
+    redirect_uri: config.redirect_uri,
+  };
+}
+
+function maybeDecrypt(value: string | null | undefined): string | null {
+  if (!value || !value.trim()) return null;
+  try {
+    const parts = value.split(':');
+    if (parts.length === 3 && /^[0-9a-f]+$/i.test(parts[0]) && /^[0-9a-f]+$/i.test(parts[1])) {
+      return decryptCredential(value);
+    }
+    return value;
+  } catch {
+    return value;
+  }
+}
+
+function encryptValue(value: string | null | undefined): string | null {
+  if (!value || !value.trim()) return null;
+  return encryptCredential(value);
+}
+
+function isExpiringSoon(expiryDate: string | null | undefined, windowMinutes = 5): boolean {
+  if (!expiryDate) return true;
+  const expiresAt = new Date(expiryDate).getTime();
+  if (!Number.isFinite(expiresAt)) return true;
+  return expiresAt <= Date.now() + windowMinutes * 60 * 1000;
+}
+
+function parseGoogleResourceId(resourceName: string | null | undefined): string | null {
+  if (!resourceName) return null;
+  const parts = String(resourceName).split('/');
+  const value = parts[parts.length - 1]?.trim();
+  return value || null;
+}
+
+async function getAnalyticsIntegration(companyId: string): Promise<AnalyticsIntegrationRecord | null> {
+  const { data, error } = await supabase
+    .from('analytics_integrations')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('provider', GA4_PROVIDER)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to load analytics integration: ${error.message}`);
+  }
+
+  return (data as AnalyticsIntegrationRecord | null) ?? null;
+}
+
+async function ensureAnalyticsIntegration(
+  companyId: string,
+  status: AnalyticsIntegrationStatus,
+): Promise<AnalyticsIntegrationRecord> {
+  const existing = await getAnalyticsIntegration(companyId);
+  const timestamp = new Date().toISOString();
+
+  if (existing) {
+    const { data, error } = await supabase
+      .from('analytics_integrations')
+      .update({
+        status,
+        updated_at: timestamp,
+      })
+      .eq('id', existing.id)
+      .select('*')
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to update analytics integration: ${error.message}`);
+    }
+
+    return data as AnalyticsIntegrationRecord;
+  }
+
+  const { data, error } = await supabase
+    .from('analytics_integrations')
+    .insert({
+      company_id: companyId,
+      provider: GA4_PROVIDER,
+      status,
+      created_at: timestamp,
+      updated_at: timestamp,
+    })
+    .select('*')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to create analytics integration: ${error.message}`);
+  }
+
+  return data as AnalyticsIntegrationRecord;
+}
+
+async function saveAnalyticsTokens(integrationId: string, token: TokenExchangeResult): Promise<void> {
+  const timestamp = new Date().toISOString();
+  const payload = {
+    integration_id: integrationId,
+    access_token: encryptValue(token.access_token),
+    refresh_token: encryptValue(token.refresh_token ?? null),
+    expiry_date: token.expiry_date,
+    scope: token.scope,
+    updated_at: timestamp,
+  };
+
+  const { data: existing, error: lookupError } = await supabase
+    .from('analytics_tokens')
+    .select('id')
+    .eq('integration_id', integrationId)
+    .maybeSingle();
+
+  if (lookupError) {
+    throw new Error(`Failed to lookup analytics token: ${lookupError.message}`);
+  }
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from('analytics_tokens')
+      .update(payload)
+      .eq('id', existing.id);
+
+    if (error) {
+      throw new Error(`Failed to update analytics token: ${error.message}`);
+    }
+    return;
+  }
+
+  const { error } = await supabase.from('analytics_tokens').insert({
+    ...payload,
+    created_at: timestamp,
+  });
+
+  if (error) {
+    throw new Error(`Failed to insert analytics token: ${error.message}`);
+  }
+}
+
+async function getAnalyticsTokenRecord(integrationId: string): Promise<AnalyticsTokenRecord | null> {
+  const { data, error } = await supabase
+    .from('analytics_tokens')
+    .select('*')
+    .eq('integration_id', integrationId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to load analytics token: ${error.message}`);
+  }
+
+  if (!data) return null;
+
+  const row = data as AnalyticsTokenRecord;
+  return {
+    ...row,
+    access_token: maybeDecrypt(row.access_token) ?? '',
+    refresh_token: maybeDecrypt(row.refresh_token) ?? null,
+  };
+}
+
+async function syncAnalyticsProperties(
+  integrationId: string,
+  properties: GoogleAnalyticsPropertySummary[],
+): Promise<AnalyticsPropertyRecord[]> {
+  const timestamp = new Date().toISOString();
+
+  if (properties.length > 0) {
+    const { error } = await supabase.from('analytics_properties').upsert(
+      properties.map((property) => ({
+        integration_id: integrationId,
+        property_id: property.propertyId,
+        property_name: property.propertyName,
+        account_id: property.accountId,
+        updated_at: timestamp,
+      })),
+      { onConflict: 'integration_id,property_id' },
+    );
+
+    if (error) {
+      throw new Error(`Failed to sync analytics properties: ${error.message}`);
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('analytics_properties')
+    .select('*')
+    .eq('integration_id', integrationId)
+    .order('property_name', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to load analytics properties: ${error.message}`);
+  }
+
+  return (data ?? []) as AnalyticsPropertyRecord[];
+}
+
+async function exchangeAuthorizationCode(
+  code: string,
+  requestBaseUrl?: string,
+): Promise<TokenExchangeResult> {
+  const credentials = await getGoogleAnalyticsOauthConfig();
+  const redirectUri =
+    credentials.redirect_uri ||
+    `${(requestBaseUrl || '').replace(/\/$/, '')}/api/analytics/connect/google/callback`;
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      client_id: credentials.client_id,
+      client_secret: credentials.client_secret,
+      code,
+      grant_type: 'authorization_code',
+      redirect_uri: redirectUri,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`GA4 token exchange failed (${response.status}): ${body || 'unknown error'}`);
+  }
+
+  const tokenData = await response.json();
+  return {
+    access_token: String(tokenData.access_token || ''),
+    refresh_token: tokenData.refresh_token ? String(tokenData.refresh_token) : undefined,
+    expiry_date: tokenData.expires_in
+      ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString()
+      : null,
+    scope: typeof tokenData.scope === 'string' ? tokenData.scope : null,
+  };
+}
+
+export async function fetchGAAccountsAndProperties(
+  accessToken: string,
+): Promise<GoogleAnalyticsPropertySummary[]> {
+  const response = await fetch('https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=200', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(`Failed to load GA4 account summaries (${response.status}): ${body || 'unknown error'}`);
+  }
+
+  const payload = await response.json();
+  const summaries = Array.isArray(payload.accountSummaries) ? payload.accountSummaries : [];
+  const properties: GoogleAnalyticsPropertySummary[] = [];
+
+  for (const summary of summaries) {
+    const accountId = parseGoogleResourceId(summary?.account);
+    const accountName = typeof summary?.displayName === 'string' ? summary.displayName : null;
+    const propertySummaries = Array.isArray(summary?.propertySummaries) ? summary.propertySummaries : [];
+
+    for (const property of propertySummaries) {
+      const propertyId = parseGoogleResourceId(property?.property);
+      const propertyName = typeof property?.displayName === 'string' ? property.displayName : '';
+      if (!propertyId || !propertyName) continue;
+
+      properties.push({
+        propertyId,
+        propertyName,
+        accountId,
+        accountName,
+      });
+    }
+  }
+
+  return properties;
+}
+
+export async function connectGoogleAnalytics(
+  companyId: string,
+  options: ConnectGoogleAnalyticsOptions = {},
+): Promise<{ authorizationUrl: string }> {
+  const credentials = await getGoogleAnalyticsOauthConfig();
+
+  const baseUrl = (options.requestBaseUrl || '').replace(/\/$/, '');
+  if (!baseUrl && !credentials.redirect_uri) {
+    throw new Error('Request base URL is required to start GA4 OAuth');
+  }
+
+  await ensureAnalyticsIntegration(companyId, 'disconnected');
+
+  const state = encodeOAuthState({
+    companyId,
+    userId: options.userId,
+    returnTo: options.returnTo,
+    flow: 'ga4',
+  });
+
+  const params = new URLSearchParams({
+    client_id: credentials.client_id,
+    redirect_uri: credentials.redirect_uri || `${baseUrl}/api/analytics/connect/google/callback`,
+    response_type: 'code',
+    access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: 'true',
+    scope: credentials.scopes.length > 0 ? credentials.scopes.join(' ') : GA4_SCOPES,
+    state,
+  });
+
+  return {
+    authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+  };
+}
+
+export async function handleOAuthCallback(
+  input: OAuthCallbackInput,
+): Promise<{
+  companyId: string;
+  integration: AnalyticsIntegrationRecord;
+  properties: AnalyticsPropertyRecord[];
+  returnTo: string | null;
+}> {
+  const state = decodeOAuthState(input.state);
+  if (state.valid !== true) {
+    throw new Error('Invalid OAuth state');
+  }
+  if (!state.companyId) {
+    throw new Error('OAuth state is missing company context');
+  }
+  if (!state.userId) {
+    throw new Error('OAuth state is missing user context');
+  }
+  if (!input.requestBaseUrl) {
+    throw new Error('Request base URL is required for GA4 OAuth callback');
+  }
+
+  const token = await exchangeAuthorizationCode(input.code, input.requestBaseUrl);
+  if (!token.access_token) {
+    throw new Error('OAuth callback did not return an access token');
+  }
+
+  const integration = await ensureAnalyticsIntegration(state.companyId, 'connected');
+  await saveAnalyticsTokens(integration.id, token);
+
+  const properties = await fetchGAAccountsAndProperties(token.access_token);
+  const syncedProperties = await syncAnalyticsProperties(integration.id, properties);
+
+  return {
+    companyId: state.companyId,
+    integration,
+    properties: syncedProperties,
+    returnTo: state.returnTo ?? null,
+  };
+}
+
+export async function saveSelectedProperty(
+  companyId: string,
+  propertyId: string,
+): Promise<AnalyticsPropertyRecord> {
+  const integration = await getAnalyticsIntegration(companyId);
+  if (!integration) {
+    throw new Error('GA4 integration not found for company');
+  }
+
+  const { data: property, error: propertyError } = await supabase
+    .from('analytics_properties')
+    .select('*')
+    .eq('integration_id', integration.id)
+    .eq('property_id', propertyId)
+    .maybeSingle();
+
+  if (propertyError) {
+    throw new Error(`Failed to load analytics property: ${propertyError.message}`);
+  }
+  if (!property) {
+    throw new Error('Selected GA4 property does not belong to this company integration');
+  }
+
+  const timestamp = new Date().toISOString();
+
+  const { error: resetError } = await supabase
+    .from('analytics_properties')
+    .update({ is_active: false, updated_at: timestamp })
+    .eq('integration_id', integration.id)
+    .eq('is_active', true);
+
+  if (resetError) {
+    throw new Error(`Failed to deactivate current GA4 property: ${resetError.message}`);
+  }
+
+  const { data, error } = await supabase
+    .from('analytics_properties')
+    .update({ is_active: true, updated_at: timestamp })
+    .eq('id', (property as AnalyticsPropertyRecord).id)
+    .select('*')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to activate GA4 property: ${error.message}`);
+  }
+
+  return data as AnalyticsPropertyRecord;
+}
+
+export async function getActiveProperty(companyId: string): Promise<AnalyticsPropertyRecord | null> {
+  const integration = await getAnalyticsIntegration(companyId);
+  if (!integration) return null;
+
+  const { data, error } = await supabase
+    .from('analytics_properties')
+    .select('*')
+    .eq('integration_id', integration.id)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to load active GA4 property: ${error.message}`);
+  }
+
+  return (data as AnalyticsPropertyRecord | null) ?? null;
+}
+
+export async function refreshAccessToken(integrationId: string): Promise<AnalyticsTokenRecord> {
+  const token = await getAnalyticsTokenRecord(integrationId);
+  if (!token?.refresh_token) {
+    throw new Error('GA4 refresh token is missing');
+  }
+
+  const credentials = await getGoogleAnalyticsOauthConfig();
+
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({
+      client_id: credentials.client_id,
+      client_secret: credentials.client_secret,
+      grant_type: 'refresh_token',
+      refresh_token: token.refresh_token,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    await supabase
+      .from('analytics_integrations')
+      .update({ status: 'error', updated_at: new Date().toISOString() })
+      .eq('id', integrationId);
+    throw new Error(`GA4 token refresh failed (${response.status}): ${body || 'unknown error'}`);
+  }
+
+  const refreshed = await response.json();
+  const nextToken: TokenExchangeResult = {
+    access_token: String(refreshed.access_token || ''),
+    refresh_token: typeof refreshed.refresh_token === 'string' ? refreshed.refresh_token : token.refresh_token,
+    expiry_date: refreshed.expires_in
+      ? new Date(Date.now() + Number(refreshed.expires_in) * 1000).toISOString()
+      : token.expiry_date,
+    scope: typeof refreshed.scope === 'string' ? refreshed.scope : token.scope,
+  };
+
+  await saveAnalyticsTokens(integrationId, nextToken);
+  await supabase
+    .from('analytics_integrations')
+    .update({ status: 'connected', updated_at: new Date().toISOString() })
+    .eq('id', integrationId);
+
+  const updated = await getAnalyticsTokenRecord(integrationId);
+  if (!updated) {
+    throw new Error('Refreshed GA4 token could not be reloaded');
+  }
+  return updated;
+}
+
+export async function getValidAccessTokenForIntegration(integrationId: string): Promise<string | null> {
+  const token = await getAnalyticsTokenRecord(integrationId);
+  if (!token?.access_token) return null;
+
+  if (isExpiringSoon(token.expiry_date)) {
+    const refreshed = await refreshAccessToken(integrationId);
+    return refreshed.access_token || null;
+  }
+
+  return token.access_token;
+}
+
+export async function getValidAccessTokenForCompany(companyId: string): Promise<string | null> {
+  const integration = await getAnalyticsIntegration(companyId);
+  if (!integration || integration.status !== 'connected') return null;
+  return getValidAccessTokenForIntegration(integration.id);
+}
+
+export async function listGoogleAnalyticsProperties(
+  companyId: string,
+  options: { syncRemote?: boolean } = {},
+): Promise<AnalyticsPropertyRecord[]> {
+  const integration = await getAnalyticsIntegration(companyId);
+  if (!integration) return [];
+
+  if (options.syncRemote !== false) {
+    const accessToken = await getValidAccessTokenForIntegration(integration.id);
+    if (accessToken) {
+      const remoteProperties = await fetchGAAccountsAndProperties(accessToken);
+      await syncAnalyticsProperties(integration.id, remoteProperties);
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('analytics_properties')
+    .select('*')
+    .eq('integration_id', integration.id)
+    .order('property_name', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to list GA4 properties: ${error.message}`);
+  }
+
+  return (data ?? []) as AnalyticsPropertyRecord[];
+}
+
+export async function getGoogleAnalyticsStatus(companyId: string): Promise<GoogleAnalyticsConnectionStatus> {
+  const integration = await getAnalyticsIntegration(companyId);
+  if (!integration) {
+    return {
+      integration: null,
+      activeProperty: null,
+      ready: false,
+      tokenValid: false,
+      tokenExpiresAt: null,
+      propertiesCount: 0,
+    };
+  }
+
+  const [activeProperty, properties, token] = await Promise.all([
+    getActiveProperty(companyId),
+    listGoogleAnalyticsProperties(companyId, { syncRemote: false }),
+    getAnalyticsTokenRecord(integration.id),
+  ]);
+
+  let tokenValid = false;
+  let tokenExpiresAt = token?.expiry_date ?? null;
+
+  if (token?.access_token) {
+    try {
+      const validToken = await getValidAccessTokenForIntegration(integration.id);
+      tokenValid = Boolean(validToken);
+      const latestToken = await getAnalyticsTokenRecord(integration.id);
+      tokenExpiresAt = latestToken?.expiry_date ?? tokenExpiresAt;
+    } catch {
+      tokenValid = false;
+    }
+  }
+
+  return {
+    integration,
+    activeProperty,
+    ready: integration.status === 'connected' && Boolean(activeProperty) && tokenValid,
+    tokenValid,
+    tokenExpiresAt,
+    propertiesCount: properties.length,
+  };
+}
+
+export async function resolveGa4IngestionContext(companyId: string): Promise<{
+  integration: AnalyticsIntegrationRecord;
+  property: AnalyticsPropertyRecord;
+  accessToken: string;
+}> {
+  const status = await getGoogleAnalyticsStatus(companyId);
+  if (!status.integration || status.integration.status !== 'connected') {
+    throw new Error(`No connected GA4 integration for company ${companyId}`);
+  }
+  if (!status.activeProperty) {
+    throw new Error(`No active GA4 property selected for company ${companyId}`);
+  }
+
+  const accessToken = await getValidAccessTokenForIntegration(status.integration.id);
+  if (!accessToken) {
+    throw new Error(`No valid GA4 token available for company ${companyId}`);
+  }
+
+  return {
+    integration: status.integration,
+    property: status.activeProperty,
+    accessToken,
+  };
+}

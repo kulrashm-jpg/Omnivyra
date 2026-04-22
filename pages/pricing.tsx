@@ -170,10 +170,10 @@ export default function PricingPage() {
   return (
     <>
       <Head>
-        <title>Pricing | Omnivyra</title>
+        <title>Pricing | OmniVyra</title>
         <meta
           name="description"
-          content="Omnivyra pricing — all features included, pay only for what you use. Start free with 1,000 credits. No feature gating, no forced upgrades."
+          content="OmniVyra pricing — all features included, pay only for what you use. Start free with 1,000 credits. No feature gating, no forced upgrades."
         />
       </Head>
 
@@ -257,6 +257,9 @@ export default function PricingPage() {
                 <div className="mt-auto">
                   <Link
                     href={tier.ctaHref}
+                    data-ga-primary-cta
+                    data-ga-label={tier.cta}
+                    data-ga-location={`/pricing/${tier.key}`}
                     className={`block w-full rounded-full px-6 py-3 text-center text-sm font-semibold transition ${tierButton(tier.accent, tier.popular, tier.enterprise)}`}
                   >
                     {tier.cta}
@@ -339,7 +342,7 @@ export default function PricingPage() {
               <div>
                 <p className="text-sm font-semibold text-[#0B1F33]">Smart Mode — on by default</p>
                 <p className="mt-1 text-sm leading-relaxed text-[#6B7C93]">
-                  Omnivyra automatically batches operations, skips redundant scans, and only charges background credits when real value is found.
+                  OmniVyra automatically batches operations, skips redundant scans, and only charges background credits when real value is found.
                   You get the same outcomes — at lower credit cost.
                 </p>
               </div>

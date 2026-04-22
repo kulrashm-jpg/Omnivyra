@@ -46,6 +46,7 @@ type ChangeDetectionResult = {
 const IMPROVEMENT_THRESHOLD = 3;
 const DECLINE_THRESHOLD = -3;
 const TRAFFIC_CHANGE_THRESHOLD = 0.2;
+const TARGET_UNIFIED_SCORE = 55;
 
 function toIsoDate(date: Date): string {
   return date.toISOString();
@@ -61,6 +62,22 @@ function addFrequency(dateIso: string, frequency: AutomationFrequency): string {
     date.setDate(date.getDate() + 7);
   }
   return toIsoDate(date);
+}
+
+function addDays(dateIso: string, days: number): string {
+  const date = new Date(dateIso);
+  date.setDate(date.getDate() + days);
+  return toIsoDate(date);
+}
+
+function getAdaptiveReviewWindowDays(unifiedScore: number): number {
+  if (unifiedScore > 0 && unifiedScore < TARGET_UNIFIED_SCORE) return 90;
+  return 120;
+}
+
+function buildAdaptiveNextRunAt(dateIso: string, reportData?: Record<string, unknown> | null): string {
+  const snapshotSignals = extractSnapshotSignalsFromReportData(reportData);
+  return addDays(dateIso, getAdaptiveReviewWindowDays(snapshotSignals.unified_score));
 }
 
 function shouldRunScheduled(config: AutomationConfigRow, nowIso: string): boolean {
@@ -300,7 +317,7 @@ async function triggerSnapshotReport(params: {
     return { reportId: null, skippedReason: 'Snapshot already generating' };
   }
 
-  const { resolveReportInput, persistResolvedReportInputs } = await import('./reportInputResolver');
+  const { resolveSnapshotReportInput, persistSnapshotReportInputs } = await import('./snapshotInputResolver');
   const { createFreeReport, startAsyncReportGeneration } = await import('./reportCardService');
 
   const requestPayload: ReportRequestPayload = {
@@ -312,12 +329,11 @@ async function triggerSnapshotReport(params: {
   };
 
   const reportCategory: ReportCategory = 'snapshot';
-  const resolvedInput = await resolveReportInput({
+  const resolvedInput = await resolveSnapshotReportInput({
     companyId: params.companyId,
-    reportCategory,
     requestPayload,
   });
-  const readiness = evaluateResolvedReportReadiness(resolvedInput);
+  const readiness = await evaluateResolvedReportReadiness(resolvedInput);
 
   if (!readiness.ready) {
     return {
@@ -326,7 +342,7 @@ async function triggerSnapshotReport(params: {
     };
   }
 
-  await persistResolvedReportInputs(resolvedInput);
+  await persistSnapshotReportInputs(resolvedInput);
 
   const report = await createFreeReport(params.userId, params.companyId, params.domain, {
     reportCategory: 'snapshot',
@@ -360,7 +376,7 @@ export async function ensureAutomationConfig(params: {
       frequency,
       change_detection_enabled: params.changeDetectionEnabled ?? true,
       is_active: true,
-      next_run_at: addFrequency(nowIso, frequency),
+      next_run_at: addDays(nowIso, 120),
       updated_at: nowIso,
     }, {
       onConflict: 'user_id,company_id,domain',
@@ -451,7 +467,11 @@ export async function runReportAutomationCycle(): Promise<{
       .update({
         last_checked_at: nowIso,
         last_run_at: triggerResult.reportId ? nowIso : config.last_run_at,
-        next_run_at: triggerResult.reportId ? addFrequency(nowIso, config.frequency) : config.next_run_at,
+        next_run_at: triggerResult.reportId
+          ? config.next_run_at
+          : eventType === 'scheduled'
+            ? addDays(nowIso, 30)
+            : config.next_run_at,
         last_triggered_report_id: triggerResult.reportId ?? config.last_triggered_report_id,
         last_change_snapshot: currentBaseline,
         updated_at: nowIso,
@@ -543,7 +563,7 @@ export async function handleSnapshotReportCompleted(params: {
       .from('report_automation_configs')
       .update({
         last_run_at: nowIso,
-        next_run_at: addFrequency(nowIso, config.frequency),
+        next_run_at: buildAdaptiveNextRunAt(nowIso, params.data),
         last_triggered_report_id: params.reportId,
         updated_at: nowIso,
       })

@@ -89,6 +89,146 @@ import { refineProblemTransformationAnswers } from './companyProfile/problemTran
 import { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
 import { buildSavePayload } from './companyProfile/savePayload';
 
+const COMPANY_PROFILES_TABLE = 'company_profiles' as const;
+const COMPANY_PROFILE_FALLBACK_COLUMNS = [
+  'company_id',
+  'name',
+  'industry',
+  'category',
+  'website_url',
+  'industry_list',
+  'category_list',
+  'geography_list',
+  'competitors_list',
+  'content_themes_list',
+  'products_services_list',
+  'target_audience_list',
+  'goals_list',
+  'brand_voice_list',
+  'social_profiles',
+  'field_confidence',
+  'overall_confidence',
+  'source_urls',
+  'linkedin_url',
+  'facebook_url',
+  'instagram_url',
+  'x_url',
+  'youtube_url',
+  'tiktok_url',
+  'reddit_url',
+  'blog_url',
+  'other_social_links',
+  'products_services',
+  'target_audience',
+  'geography',
+  'brand_voice',
+  'goals',
+  'competitors',
+  'unique_value',
+  'content_themes',
+  'confidence_score',
+  'source',
+  'last_refined_at',
+  'created_at',
+  'updated_at',
+  'target_customer_segment',
+  'ideal_customer_profile',
+  'pricing_model',
+  'sales_motion',
+  'avg_deal_size',
+  'sales_cycle',
+  'key_metrics',
+  'user_locked_fields',
+  'last_edited_by',
+  'marketing_channels',
+  'content_strategy',
+  'campaign_focus',
+  'key_messages',
+  'brand_positioning',
+  'competitive_advantages',
+  'growth_priorities',
+  'strategy_profile',
+  'campaign_purpose_intent',
+  'core_problem_statement',
+  'pain_symptoms',
+  'awareness_gap',
+  'problem_impact',
+  'life_with_problem',
+  'life_after_solution',
+  'desired_transformation',
+  'transformation_mechanism',
+  'authority_domains',
+  'forced_context_fields',
+  'recommendation_context',
+  'strategic_inputs',
+  'platform_content_type_prefs',
+  'report_settings',
+] as const;
+
+let companyProfileColumnsCache: Set<string> | null = null;
+
+async function getCompanyProfileColumns(existingProfile?: CompanyProfile | null): Promise<Set<string>> {
+  if (companyProfileColumnsCache && companyProfileColumnsCache.size > 0) {
+    return new Set(companyProfileColumnsCache);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('information_schema.columns')
+      .select('column_name')
+      .eq('table_schema', 'public')
+      .eq('table_name', COMPANY_PROFILES_TABLE);
+
+    if (!error && Array.isArray(data) && data.length > 0) {
+      companyProfileColumnsCache = new Set(
+        data
+          .map((row) => String((row as { column_name?: string | null }).column_name ?? '').trim())
+          .filter(Boolean),
+      );
+      return new Set(companyProfileColumnsCache);
+    }
+
+    if (error) {
+      console.warn('Failed to introspect company_profiles columns:', error.message);
+    }
+  } catch (error) {
+    console.warn(
+      'Failed to introspect company_profiles columns:',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  if (existingProfile && typeof existingProfile === 'object') {
+    const inferred = Object.keys(existingProfile).filter(Boolean);
+    if (inferred.length > 0) {
+      companyProfileColumnsCache = new Set(inferred);
+      return new Set(companyProfileColumnsCache);
+    }
+  }
+
+  companyProfileColumnsCache = new Set(COMPANY_PROFILE_FALLBACK_COLUMNS);
+  return new Set(companyProfileColumnsCache);
+}
+
+function filterCompanyProfilePayload(
+  payload: Record<string, unknown>,
+  validColumns: Set<string>,
+): { safePayload: Record<string, unknown>; skippedFields: string[] } {
+  const safePayload: Record<string, unknown> = {};
+  const skippedFields: string[] = [];
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (validColumns.has(key)) {
+      safePayload[key] = value;
+      continue;
+    }
+    skippedFields.push(key);
+    console.warn('Skipped unknown profile field:', key);
+  }
+
+  return { safePayload, skippedFields };
+}
+
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
 export const shouldRefineProfile = (lastRefinedAt?: string | null): boolean => {
@@ -185,13 +325,25 @@ export async function saveProfile(
     payload.last_edited_by = 'user';
   }
 
+  const validColumns = await getCompanyProfileColumns(existing);
+  const { safePayload, skippedFields } = filterCompanyProfilePayload(
+    payload as Record<string, unknown>,
+    validColumns,
+  );
+  if (skippedFields.length > 0) {
+    console.warn('Filtered company profile fields before save:', skippedFields.join(', '));
+  }
+
   const { data, error } = await supabase
-    .from('company_profiles')
-    .upsert(payload, { onConflict: 'company_id' })
+    .from(COMPANY_PROFILES_TABLE)
+    .upsert(safePayload, { onConflict: 'company_id' })
     .select('*')
     .single();
-  if (error) throw new Error(`Failed to save company profile: ${error.message}`);
-  return data;
+  if (error) {
+    console.warn('Profile save error:', error.message);
+    return (existing ?? null) as CompanyProfile;
+  }
+  return data ?? ((existing ?? null) as CompanyProfile);
 }
 
 // ─── saveProblemTransformationAnswers ─────────────────────────────────────────

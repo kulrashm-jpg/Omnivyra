@@ -8,7 +8,7 @@ import DayDetailPanel, { type DayActivity } from './collaboration/DayDetailPanel
 import ReportAutomationActivityFeed from './dashboard/ReportAutomationActivityFeed';
 import PostPreviewModal, { type ActivityEvent } from './dashboard/PostPreviewModal';
 import CampaignProgress from './dashboard/CampaignProgress';
-import { DashboardTeamTab, DashboardIntegrationsTab, DashboardAnalyticsTab } from './dashboard/DashboardTeamTab';
+import { DashboardTeamTab, DashboardAnalyticsTab } from './dashboard/DashboardTeamTab';
 import { useDashboardState } from './hooks/useDashboardState';
 import type { CalendarActivity, CalendarExecutionStage } from './DashboardPage.types';
 import DashboardCalendarTab from './dashboard/DashboardCalendarTab';
@@ -42,7 +42,7 @@ export default function DashboardPage() {
     handleRescheduleFromModal, handlePublishNow, handleChatSend, handleViewCampaign,
     handleExpandToWeekPlans, loadDashboardData, handleDeleteCampaign, confirmDeleteCampaign,
     getStageLabel, draggedActivity, setDraggedActivity, dropTargetDate, setDropTargetDate,
-    selectedCalendarCampaign, openIntelligenceTab, buildPlanningWorkspaceUrl,
+    selectedCalendarCampaign, buildPlanningWorkspaceUrl,
     isActivityEvent,
   } = d;
 
@@ -150,8 +150,7 @@ export default function DashboardPage() {
             { id: 'campaigns', label: 'Campaigns', icon: Target },
             { id: 'team', label: 'Team', icon: Users },
             { id: 'analytics', label: 'Analytics', icon: TrendingUp },
-            { id: 'calendar', label: 'Calendar', icon: Calendar },
-            { id: 'integrations', label: 'Integrations', icon: Link2 }
+            { id: 'calendar', label: 'Calendar', icon: Calendar }
           ].map((tab) => {
             const Icon = tab.icon;
             if (tab.id === 'team') {
@@ -304,7 +303,6 @@ export default function DashboardPage() {
 
         {/* Team Tab */}
         {activeTab === 'team' && <DashboardTeamTab />}
-        {activeTab === 'integrations' && <DashboardIntegrationsTab />}
       </div>
       {chatPanel && user?.userId && (
         <FloatingChatPanel

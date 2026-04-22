@@ -46,9 +46,16 @@ export default function PerformanceIntelligencePage() {
     (dataTab === 'upload' && Boolean(uploadedFile)) ||
     (dataTab === 'manual' && hasManualData) ||
     Boolean(readiness?.reports?.performance?.ready);
+  const readinessStatus = readiness?.reports?.performance?.ready
+    ? 'ready'
+    : readiness?.reports?.performance?.missing_requirements?.length
+      ? 'no_data'
+      : 'low_data';
   const readinessLabel = integrationsConnected
     ? 'Ready to generate'
-    : (readiness?.reports?.performance?.missing_requirements?.[0] as string | undefined) || 'Connect integrations below to proceed';
+    : readinessStatus === 'no_data'
+      ? 'No analytics data available'
+      : 'Not enough data yet';
 
   return (
     <>
@@ -94,15 +101,15 @@ export default function PerformanceIntelligencePage() {
           <div className="mt-6 grid gap-4 md:grid-cols-3">
             <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Designed For</p>
-              <p className="mt-1 text-sm text-gray-700">Teams that need performance clarity before they optimize funnels, channels, or budgets.</p>
+              <p className="mt-1 text-sm text-gray-700">Teams that need clearer session, conversion rate, and drop-off evidence before changing pages or traffic sources.</p>
             </div>
             <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Decision Quality</p>
-              <p className="mt-1 text-sm text-gray-700">Shows where visitors engage, where they drop off, and which channels are earning attention.</p>
+              <p className="mt-1 text-sm text-gray-700">Shows where sessions drop off, which pages convert, and which traffic sources are producing conversions.</p>
             </div>
             <div className="rounded-2xl border border-gray-100 bg-gray-50/80 px-4 py-3">
               <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Output Standard</p>
-              <p className="mt-1 text-sm text-gray-700">A deeper performance report built for optimization decisions, not surface-level metrics.</p>
+              <p className="mt-1 text-sm text-gray-700">A deeper analytics report built for sessions, conversions, conversion rate, and drop-off decisions.</p>
             </div>
           </div>
 
@@ -168,13 +175,13 @@ export default function PerformanceIntelligencePage() {
               </h2>
 
               <p className="mb-6 text-gray-600 leading-relaxed">
-                We connect to your analytics and ads platforms to reveal the true performance of your digital presence. This isn't a generic web audit — it's a detailed analysis of your actual user behavior, conversions, and traffic quality.
+                We connect to your analytics sources to show how sessions move through your funnel, where drop-off happens, and which pages and sources lead to conversions.
               </p>
 
               <div className="space-y-3 text-gray-700">
                 <p className="flex gap-3">
                   <span className="text-blue-600 font-bold">→</span>
-                  <span>Analyzes real traffic data across channels</span>
+                  <span>Analyzes sessions by source and page</span>
                 </p>
                 <p className="flex gap-3">
                   <span className="text-blue-600 font-bold">→</span>
@@ -182,7 +189,7 @@ export default function PerformanceIntelligencePage() {
                 </p>
                 <p className="flex gap-3">
                   <span className="text-blue-600 font-bold">→</span>
-                  <span>Compares channel performance and ROI</span>
+                  <span>Highlights which sources and pages lead to conversions</span>
                 </p>
               </div>
             </div>
@@ -200,9 +207,9 @@ export default function PerformanceIntelligencePage() {
                 <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-100">
                   <span className="text-2xl">📊</span>
                 </div>
-                <h3 className="mb-3 font-bold text-gray-900">Traffic Quality Analysis</h3>
+                <h3 className="mb-3 font-bold text-gray-900">Traffic Sources</h3>
                 <p className="text-sm text-gray-600">
-                  Understand where your visitors come from, how engaged they are, and whether you're attracting the right audience.
+                  Review which sources drive the most sessions, conversions, and conversion rate.
                 </p>
               </div>
 
@@ -213,7 +220,7 @@ export default function PerformanceIntelligencePage() {
                 </div>
                 <h3 className="mb-3 font-bold text-gray-900">Funnel Drop-Off Map</h3>
                 <p className="text-sm text-gray-600">
-                  See exactly where users leave your funnel and why. Pinpoint the highest-impact optimization opportunities.
+                  See where sessions fall out of the funnel so you can address the biggest drop-off points first.
                 </p>
               </div>
 
@@ -222,9 +229,9 @@ export default function PerformanceIntelligencePage() {
                 <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-100">
                   <span className="text-2xl">📈</span>
                 </div>
-                <h3 className="mb-3 font-bold text-gray-900">Conversion Gap Analysis</h3>
+                <h3 className="mb-3 font-bold text-gray-900">Conversions Overview</h3>
                 <p className="text-sm text-gray-600">
-                  See how your conversion rates compare to benchmarks. Identify gaps between sections of your audience.
+                  Track total conversions and conversion rate from the same canonical analytics data used in the report.
                 </p>
               </div>
 
@@ -233,9 +240,9 @@ export default function PerformanceIntelligencePage() {
                 <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-100">
                   <span className="text-2xl">📡</span>
                 </div>
-                <h3 className="mb-3 font-bold text-gray-900">Channel Performance Breakdown</h3>
+                <h3 className="mb-3 font-bold text-gray-900">Top Pages</h3>
                 <p className="text-sm text-gray-600">
-                  Detailed metrics per channel (organic, paid, direct) so you know where to invest budget.
+                  Identify the pages that attract the most sessions and the pages that convert best.
                 </p>
               </div>
 
@@ -244,9 +251,9 @@ export default function PerformanceIntelligencePage() {
                 <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-100">
                   <span className="text-2xl">💡</span>
                 </div>
-                <h3 className="mb-3 font-bold text-gray-900">Actionable Recommendations</h3>
+                <h3 className="mb-3 font-bold text-gray-900">Key Decisions</h3>
                 <p className="text-sm text-gray-600">
-                  Clear next steps prioritized by impact. Know exactly what to fix and why it matters.
+                  Get specific next steps tied to funnel leakage, drop-off, source quality, and conversion performance.
                 </p>
               </div>
 
@@ -308,12 +315,21 @@ export default function PerformanceIntelligencePage() {
             {dataTab === 'integrations' && (
               <div className="space-y-4">
                 <p className="text-sm text-gray-500 text-center mb-4">Connect read-only integrations so we can pull your live performance data.</p>
+                <div className="flex justify-center">
+                  <button
+                    onClick={() => router.push('/integrations?focus=data')}
+                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
+                  >
+                    Open analytics setup
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
                 {[
-                  { icon: '📊', name: 'Google Analytics', desc: 'Traffic, sessions, bounce rate, and user behavior', required: true },
-                  { icon: '🔍', name: 'Google Search Console', desc: 'Organic keywords, impressions, and click-through rates', required: true },
-                  { icon: '💼', name: 'LinkedIn Ads', desc: 'Campaign performance and audience engagement', required: false },
-                  { icon: '🟦', name: 'Facebook / Meta Ads', desc: 'Ad spend, reach, and conversion tracking', required: false },
-                  { icon: '🛒', name: 'Shopify / WooCommerce', desc: 'Revenue, conversion funnel, and product performance', required: false },
+                  { icon: '📊', name: 'Google Analytics', desc: 'Sessions, conversions, conversion rate, and page behavior', required: true },
+                  { icon: '🔍', name: 'Google Search Console', desc: 'Search queries and landing-page demand signals', required: true },
+                  { icon: '💼', name: 'LinkedIn Ads', desc: 'Campaign-level demand context for source comparisons', required: false },
+                  { icon: '🟦', name: 'Facebook / Meta Ads', desc: 'Campaign-level demand context for source comparisons', required: false },
+                  { icon: '🛒', name: 'Shopify / WooCommerce', desc: 'Conversion outcomes that support page and source analysis', required: false },
                 ].map((item) => (
                   <div key={item.name} className="flex items-center gap-4 rounded-xl bg-gray-50 p-4 border border-gray-200">
                     <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white border border-gray-200 text-2xl flex-shrink-0">
@@ -327,9 +343,8 @@ export default function PerformanceIntelligencePage() {
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">{item.desc}</p>
                     </div>
-                    <button
-                      onClick={() => router.push('/integrations')}
-                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                    <span
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold ${
                         readiness?.integration_state?.[
                           item.name === 'Google Analytics'
                             ? 'google_analytics'
@@ -341,8 +356,8 @@ export default function PerformanceIntelligencePage() {
                                   ? 'meta_ads'
                                   : 'shopify'
                         ]?.connected
-                          ? 'bg-green-100 text-green-700 cursor-default'
-                          : 'bg-blue-600 hover:bg-blue-700 text-white'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-gray-100 text-gray-600'
                       }`}
                     >
                       {readiness?.integration_state?.[
@@ -355,8 +370,8 @@ export default function PerformanceIntelligencePage() {
                               : item.name === 'Facebook / Meta Ads'
                                 ? 'meta_ads'
                                 : 'shopify'
-                      ]?.connected ? '✓ Connected' : 'Manage'}
-                    </button>
+                      ]?.connected ? 'Connected' : 'Not connected'}
+                    </span>
                   </div>
                 ))}
                 <p className="text-xs text-center text-gray-400 mt-4">

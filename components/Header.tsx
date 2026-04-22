@@ -271,7 +271,7 @@ function UserMenu({
             {isCompanyAdmin && (
               <Item icon={BarChart3} label="Usage"             href="/super-admin/consumption" />
             )}
-            <Item icon={Link2}      label="Integrations"       href="/integrations" />
+            <Item icon={Link2}      label="Integrations"       href="/integrations?focus=website" />
             {isCompanyAdmin && (
               <Item icon={Settings} label="Settings"           href="/settings/company-admin-access" />
             )}
@@ -413,7 +413,7 @@ const Header: React.FC = () => {
           >
             <img
               src="/logo.png"
-              alt="Omnivyra"
+              alt="OmniVyra"
               className="h-10 w-auto object-contain"
             />
           </Link>

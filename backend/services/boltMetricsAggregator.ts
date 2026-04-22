@@ -79,7 +79,8 @@ export async function aggregateBoltAiMetrics(boltRunId: string): Promise<BoltAiM
     const inT = usage ? Number(usage.prompt_tokens) || 0 : 0;
     const outT = usage ? Number(usage.completion_tokens) || 0 : 0;
     const model = String(meta.model ?? 'gpt-4o-mini');
-    const cost = calculateAiCost(inT, outT, model);
+    const processType = String(meta.operation ?? meta.context_type ?? 'generateDailyPlan');
+    const cost = await calculateAiCost(inT, outT, model, processType);
 
     if (usage) {
       metrics.ai_tokens_input += inT;

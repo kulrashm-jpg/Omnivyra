@@ -80,12 +80,39 @@ export default async function handler(
 
   const now = new Date().toISOString();
 
+  // Whether this Supabase auth user has a password set. True for password
+  // signup (`supabase.auth.signUp`) and for anyone who has gone through
+  // `/auth/set-password`. False for magic-link-only users.
+  //
+  // Fail-open to `false`: a missing function or transient RPC error must not
+  // block account creation — an invited / magic-link user should still have
+  // their public.users row synced, just with has_password=false.
+  let hasPassword = false;
+  try {
+    const { data, error: rpcErr } = await supabase.rpc('auth_user_has_password', {
+      p_user_id: supabaseUid,
+    });
+    if (rpcErr) {
+      logger.warn('auth_sync_has_password_rpc_failed', {
+        supabaseUid,
+        message: rpcErr.message,
+      });
+    } else {
+      hasPassword = data === true;
+    }
+  } catch (err) {
+    logger.warn('auth_sync_has_password_rpc_threw', {
+      supabaseUid,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   // ── 4. Upsert by supabase_uid ────────────────────────────────────────────
   // First try: existing row already has supabase_uid (returning user)
   if (existingByUid) {
     await supabase
       .from('users')
-      .update({ is_email_verified: true, last_sign_in_at: now })
+      .update({ is_email_verified: true, last_sign_in_at: now, has_password: hasPassword })
       .eq('supabase_uid', supabaseUid);
     return res.status(200).json({ ok: true });
   }
@@ -94,7 +121,7 @@ export default async function handler(
   // stamp supabase_uid on it so future lookups use the faster UID path.
   const { data: byEmail } = await supabase
     .from('users')
-    .select('id, supabase_uid')
+    .select('id, supabase_uid, active_company_id')
     .eq('email', normalizedEmail)
     .maybeSingle();
 
@@ -104,6 +131,7 @@ export default async function handler(
       supabase_uid:      supabaseUid,
       is_email_verified: true,
       last_sign_in_at:   now,
+      has_password:      hasPassword,
     };
     if (!(byEmail as any).active_company_id) {
       const { data: roleRow } = await supabase
@@ -139,6 +167,7 @@ export default async function handler(
     email:             normalizedEmail,
     is_email_verified: true,
     last_sign_in_at:   now,
+    has_password:      hasPassword,
     ...(invitedCompanyId ? { active_company_id: invitedCompanyId } : {}),
   });
 

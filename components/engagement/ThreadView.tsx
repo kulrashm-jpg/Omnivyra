@@ -22,7 +22,7 @@ export interface ThreadViewProps {
     messageId: string;
     platform: string;
     replyText: string;
-  }) => Promise<void>;
+  }) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
   onLike?: (messageId: string, platform: string) => void;
   onIgnore?: (threadId: string) => void;
   onMarkResolved?: () => void;

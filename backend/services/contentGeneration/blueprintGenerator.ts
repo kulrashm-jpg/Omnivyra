@@ -155,6 +155,220 @@ export function isBlueprintQualitySufficient(bp: ContentBlueprint): boolean {
   return keyPointsOk && hookOk;
 }
 
+/**
+ * Strict token-tracked variant of generateMasterContentFromIntent.
+ *
+ * Differences from the legacy function:
+ *   - Requires explicit `provider` + `model` — NO env fallback.
+ *   - On LLM failure OR empty response: THROWS (no deterministic fallback).
+ *     This lets the credit wrapper RELEASE the full HOLD instead of silently
+ *     charging for a failed call.
+ *   - Returns `{ master, usage, provider, model }` so callers can wire into
+ *     executeWithCredits' llmPricing hook.
+ *
+ * Use this from executeWithCredits. Other callers that want the forgiving
+ * "never throw, always return something" contract keep using the legacy
+ * generateMasterContentFromIntent.
+ */
+export async function generateMasterContentStrict(
+  item: DailyExecutionItemLike,
+  args: { provider: string; model: string },
+): Promise<{
+  master:   MasterContentPayload;
+  usage:    { inputTokens: number; outputTokens: number; totalTokens: number };
+  provider: string;
+  model:    string;
+}> {
+  if (!args?.provider || !args?.model) {
+    throw new Error('[generateMasterContentStrict] provider and model are required — no env fallback allowed');
+  }
+  const { provider, model } = args;
+
+  const itemId  = sanitizeIdPart(item.execution_id || item.title || item.topic || item.platform || 'daily-item');
+  const nowIso  = new Date().toISOString();
+  const intent  = asObject(item.intent);
+  const brief   = asObject(item.writer_content_brief);
+  const topic   = nonEmpty(item.topic) || nonEmpty(item.title) || nonEmpty(intent?.topic) || 'TBD topic';
+  const objective =
+    nonEmpty(intent?.objective) ||
+    nonEmpty(brief?.whatShouldReaderLearn) ||
+    nonEmpty(brief?.topicGoal) ||
+    'TBD objective';
+  const coreMessage =
+    nonEmpty(intent?.outcome_promise) ||
+    nonEmpty(intent?.pain_point) ||
+    nonEmpty(brief?.whatProblemAreWeAddressing) ||
+    'TBD core message';
+
+  const decisionTrace: NonNullable<MasterContentPayload['decision_trace']> = {
+    source_topic: topic,
+    objective,
+    pain_point:
+      nonEmpty(intent?.pain_point) ||
+      nonEmpty(brief?.whatProblemAreWeAddressing) ||
+      'Audience challenge relevant to topic',
+    outcome_promise:
+      nonEmpty(intent?.outcome_promise) ||
+      nonEmpty(brief?.expectedOutcome) ||
+      'Clear measurable improvement for the audience',
+    writing_angle:
+      nonEmpty(brief?.messagingAngle) ||
+      nonEmpty(brief?.topicGoal) ||
+      nonEmpty(intent?.strategic_role) ||
+      'Educational narrative aligned to weekly intent',
+    tone_used:
+      nonEmpty(brief?.narrativeStyle) ||
+      nonEmpty(brief?.toneGuidance) ||
+      'Neutral, clear, practical',
+    narrative_role: nonEmpty((item as any)?.narrative_role) || 'support',
+    progression_step: Number.isFinite(Number((item as any)?.progression_step))
+      ? Number((item as any)?.progression_step)
+      : null,
+  };
+
+  const identity     = await resolveCompanyIdentity((item as any)?.company_id);
+  const shortContext = buildCompanyContextBlockShort(identity);
+  const ctCategory   = getContentTypeCategory(nonEmpty(item?.content_type));
+
+  // Build prompt + context — media-dependent and text flows share extraction.
+  const isMediaFlow = isMediaDependentContentType(item?.content_type);
+
+  let systemPrompt: string;
+  let userContent:  string;
+  let temperature:  number;
+  let contentTypeMode: MasterContentPayload['content_type_mode'];
+  let requiredMedia = false;
+
+  if (isMediaFlow) {
+    const productionSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
+    const antiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
+    systemPrompt = productionSystemPromptBase + antiGeneric;
+    const productionContext: Record<string, unknown> = {
+      topic,
+      objective,
+      core_message: coreMessage,
+      target_audience: identity.idealCustomerProfile || identity.targetAudience || nonEmpty(intent?.target_audience) || nonEmpty((asObject(item?.writer_content_brief) as any)?.whoAreWeWritingFor) || 'Campaign audience',
+      tone: nonEmpty((asObject(item?.writer_content_brief) as any)?.narrativeStyle) || nonEmpty(intent?.tone) || 'Professional and engaging',
+      cta: nonEmpty(intent?.cta_type) || 'Follow for more',
+      creator_instruction: nonEmpty((item as any)?.creatorInstruction) || nonEmpty((item as any)?.creator_instruction) || '',
+    };
+    if (shortContext) productionContext.company_context = shortContext;
+    userContent    = JSON.stringify(productionContext);
+    temperature    = 0.3;
+    contentTypeMode = 'media_blueprint';
+    requiredMedia   = true;
+  } else {
+    const contextPayload: Record<string, unknown> = {
+      content_type: nonEmpty(item?.content_type).toLowerCase() || 'post',
+      topic,
+      objective,
+      target_audience:
+        identity.idealCustomerProfile || identity.targetAudience ||
+        nonEmpty(intent?.target_audience) ||
+        nonEmpty(brief?.whoAreWeWritingFor) ||
+        'General audience aligned to campaign context',
+      writing_angle:
+        nonEmpty(brief?.messagingAngle) ||
+        nonEmpty(brief?.topicGoal) ||
+        nonEmpty(intent?.strategic_role) ||
+        'Educational narrative aligned to weekly intent',
+      pain_point:
+        nonEmpty(intent?.pain_point) ||
+        nonEmpty(brief?.whatProblemAreWeAddressing) ||
+        'Audience challenge relevant to topic',
+      outcome_promise:
+        nonEmpty(intent?.outcome_promise) ||
+        nonEmpty(brief?.expectedOutcome) ||
+        'Clear measurable improvement for the audience',
+      tone:
+        nonEmpty(brief?.narrativeStyle) ||
+        nonEmpty(brief?.toneGuidance) ||
+        'Neutral, clear, practical',
+      core_message: coreMessage,
+      key_points: Array.isArray(brief?.key_points)
+        ? (brief.key_points as unknown[]).map((v) => nonEmpty(v)).filter(Boolean)
+        : [],
+      cta_type: nonEmpty(intent?.cta_type) || 'Soft CTA',
+      progression_step: Number.isFinite(Number(item?.progression_step)) ? Number(item.progression_step) : null,
+      global_progression_index: Number.isFinite(Number(item?.global_progression_index))
+        ? Number(item.global_progression_index)
+        : null,
+      ...(typeof (item as any)?.extra_instruction === 'string' && (item as any).extra_instruction.trim()
+        ? { additional_guidance: (item as any).extra_instruction.trim() }
+        : {}),
+    };
+    if (shortContext) contextPayload.company_context = shortContext;
+
+    const contentTypeSystemPromptBase = getContentTypeSystemPrompt(ctCategory);
+    const textAntiGeneric = identity.companyName ? buildAntiGenericRules(identity) : '';
+    systemPrompt = identity.companyName
+      ? `${buildIdentityLock(identity, contextPayload.content_type as string)}\n\n${contentTypeSystemPromptBase}${textAntiGeneric}`
+      : contentTypeSystemPromptBase + textAntiGeneric;
+    const contentTypeMaxWords = getContentTypeMaxWords(ctCategory, nonEmpty(item?.content_type));
+    userContent    = JSON.stringify({ ...contextPayload, max_words: contentTypeMaxWords });
+    temperature    = 0.7;
+    contentTypeMode = 'text';
+  }
+
+  // Single LLM call — explicit provider + model, no env fallback.
+  // aiGateway owns usage_events telemetry for this call; executeWithCredits
+  // owns credit_transactions. Both writers are unaware of the other.
+  const aiResult = await runCompletionWithOperation({
+    companyId:   (item as any)?.company_id ?? null,
+    model,
+    operation:   'generateMasterContent',
+    temperature,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userContent   },
+    ],
+  });
+
+  const aiContent = nonEmpty(aiResult?.output);
+  if (!aiContent) {
+    throw new Error('[generateMasterContentStrict] LLM returned empty content — hold will be released');
+  }
+
+  // Extract token usage from gateway metadata — required, no synthetic estimate,
+  // no zero tolerance (a zero means the provider didn't meter us, which breaks
+  // billing integrity even if the response text looked fine).
+  const tokenUsage   = aiResult?.metadata?.token_usage;
+  const inputTokens  = Number(tokenUsage?.prompt_tokens     ?? NaN);
+  const outputTokens = Number(tokenUsage?.completion_tokens ?? NaN);
+  if (!Number.isFinite(inputTokens)  || inputTokens  <= 0) {
+    throw new Error(`[generateMasterContentStrict] invalid inputTokens=${tokenUsage?.prompt_tokens} — provider must return a positive prompt_tokens count`);
+  }
+  if (!Number.isFinite(outputTokens) || outputTokens <= 0) {
+    throw new Error(`[generateMasterContentStrict] invalid outputTokens=${tokenUsage?.completion_tokens} — provider must return a positive completion_tokens count`);
+  }
+  const totalTokens = Number(tokenUsage?.total_tokens ?? (inputTokens + outputTokens));
+
+  // Post-process: language refinement (text flow only).
+  let finalContent = aiContent;
+  if (!isMediaFlow) {
+    const refinedMaster = await refineLanguageOutput({ content: aiContent, card_type: 'master_content' });
+    finalContent = (refinedMaster.refined as string) || aiContent;
+  }
+
+  const master: MasterContentPayload = {
+    id: `master-${itemId}`,
+    generated_at:      nowIso,
+    content:           finalContent,
+    generation_status: 'generated',
+    generation_source: 'ai',
+    content_type_mode: contentTypeMode,
+    ...(requiredMedia ? { required_media: true as const, media_status: 'missing' as const } : {}),
+    decision_trace:    decisionTrace,
+  };
+
+  return {
+    master,
+    usage: { inputTokens, outputTokens, totalTokens },
+    provider,
+    model,
+  };
+}
+
 export async function generateMasterContentFromIntent(item: DailyExecutionItemLike): Promise<MasterContentPayload> {
   const itemId = sanitizeIdPart(item.execution_id || item.title || item.topic || item.platform || 'daily-item');
   const nowIso = new Date().toISOString();

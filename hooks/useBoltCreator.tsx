@@ -504,7 +504,7 @@ export function useBoltCreator() {
       tentative_start: campaignStartDate || new Date().toISOString().split('T')[0],
       campaign_goal: combinedGoal,
       campaign_goals: goals,
-      campaign_mode: 'creator_dependent',
+      campaign_mode: 'creator',
       communication_style: ['visual'],
       content_formats: contentFormats,
       cross_platform_sharing: sharingMode === 'shared'

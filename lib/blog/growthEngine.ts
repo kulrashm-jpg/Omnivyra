@@ -58,7 +58,7 @@ export function getAmplificationActions(
       type: 'promote_twitter', priority: 'medium',
       label: 'Convert to Twitter/X thread',
       reason: 'Strong engagement — key insights translate naturally to a thread format',
-      icon: '🐦',
+      icon: '𝕏',
     });
   }
 

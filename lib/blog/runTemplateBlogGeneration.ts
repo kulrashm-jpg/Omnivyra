@@ -40,7 +40,21 @@ import { injectInternalLinks } from './runBlogGenerationDataAccess';
 import { deepenTemplateParagraphsIndividually } from './runTemplateDeepening';
 import type { OrchestratorResult } from '../content/contentGenerationOrchestrator';
 import type { BlogGenerationResult } from './blogRunnerTypes';
-import { buildRepairContextAnchor, extractCompanyIdentity, scoreCompanyContext, type CompanyIdentity } from '../content/companyContextBlock';
+import {
+  buildRepairContextAnchor,
+  extractCompanyIdentity,
+  scoreCompanyContext,
+  buildDiagnosticRetryReasons,
+  buildIdentityLock,
+  buildAntiGenericRules,
+  assertCompanyContextAcceptable,
+  CompanyContextEnforcementError,
+  validateSectionCompanyContext,
+  validateStrategyPresence,
+  getDynamicContextThreshold,
+  splitIntoSections,
+  type CompanyIdentity,
+} from '../content/companyContextBlock';
 import { validateContentVariation } from '../content/contentVariationValidator';
 import { getProfile } from '../../backend/services/companyProfileService';
 
@@ -59,6 +73,13 @@ export interface TemplateBlogGenerationParams {
   ctx: OrchestratorResult | null;
   confidence: 'high' | 'medium';
   selected_angle?: BlogAngle;
+  /**
+   * Company identity for mandatory prompt-level enforcement. When present,
+   * buildTemplateAwareSystemPromptV2 is wrapped with buildIdentityLock +
+   * buildAntiGenericRules. If omitted, the runner falls back to deriving
+   * identity from the profile fetch already performed for repair anchoring.
+   */
+  companyIdentity?: CompanyIdentity;
 }
 
 export async function runTemplateBlogGenerationPath(
@@ -79,6 +100,7 @@ export async function runTemplateBlogGenerationPath(
     ctx,
     confidence,
     selected_angle,
+    companyIdentity: callerCompanyIdentity,
   } = params;
 
   const { buildTemplateAwareSystemPromptV2, buildTemplateAwareUserPrompt, parseTemplateOutput } =
@@ -114,6 +136,14 @@ export async function runTemplateBlogGenerationPath(
     uniqueValue: a.uniqueness_directive || profileIdentity.uniqueValue || undefined,
   };
   const repairAnchor = buildRepairContextAnchor(_identity);
+
+  // B2: Company enforcement prefix for repair system prompts. Each structured
+  // repair call below prepends this so identity lock + anti-generic rules are
+  // never stripped during repair iterations.
+  const repairHasIdentity = !!(_identity.companyName || _identity.industry || _identity.coreProblem);
+  const repairEnforcementPrefix = repairHasIdentity
+    ? `${buildIdentityLock(_identity, 'blog repair')}\n\n${buildAntiGenericRules(_identity)}\n\n`
+    : '';
 
   const normalizedTemplateName = normalizeTemplateName(effectiveTemplateName);
   const templateDepthGuidance = deriveTemplateDepthGuidance(
@@ -379,11 +409,15 @@ export async function runTemplateBlogGenerationPath(
     }
   }
 
+  // Prefer identity passed from runBlogGeneration (derived from companyContext);
+  // fall back to identity reconstructed from profile + answers for standalone callers.
+  const effectiveIdentity = callerCompanyIdentity ?? _identity;
   const templateSystemPrompt = buildTemplateAwareSystemPromptV2(
     targetWc ?? 1200,
     contentType,
     effectiveTemplateBlocks,
     effectiveTemplateName,
+    effectiveIdentity,
   );
   const templateUserPrompt = buildTemplateAwareUserPrompt(generationInput, effectiveTemplateBlocks);
 
@@ -1057,6 +1091,7 @@ export async function runTemplateBlogGenerationPath(
             {
               role: 'system',
               content:
+                repairEnforcementPrefix +
                 `You are repairing a Classic blog article that must satisfy a fixed editorial structure.\n` +
                 `Return JSON only with these fields:\n` +
                 `{\n` +
@@ -1207,6 +1242,7 @@ export async function runTemplateBlogGenerationPath(
             {
               role: 'system',
               content:
+                repairEnforcementPrefix +
                 `You are repairing a Tutorial blog article that must satisfy a fixed step-by-step structure.\n` +
                 `Return JSON only with these fields:\n` +
                 `{\n` +
@@ -1349,6 +1385,53 @@ export async function runTemplateBlogGenerationPath(
       blogTable as 'blogs' | 'public_blogs',
       [tplParsed.title],
     );
+
+    // C1 + C3 + C5 + C6: final enforcement for the template path. Applies the
+    // same company-context gate used by runStandardBlogGeneration so template
+    // outputs cannot ship weak content either.
+    if (callerCompanyIdentity || _identity.companyName) {
+      const enforcementIdentity = callerCompanyIdentity ?? _identity;
+      // Feed the paragraph text stream to the shared section splitter so the
+      // template path shares one segmentation algorithm with the HTML path.
+      const paragraphTexts = flattenBlocks(content_blocks as any)
+        .filter((b: any) => b.type === 'paragraph')
+        .map((b: any) => String(b.html || ''));
+      const paragraphText = paragraphTexts
+        .map((s: string) => s.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+        .filter((s: string) => s.length > 0)
+        .join('\n\n');
+
+      if (paragraphText.length > 200) {
+        const contextScore = scoreCompanyContext(paragraphText, enforcementIdentity, { contentType });
+        const contextThreshold = getDynamicContextThreshold(contentType, targetWc);
+        assertCompanyContextAcceptable(contextScore, contextThreshold);
+
+        // Section-level check (C5/C6) — uses splitIntoSections for consistency.
+        // The template path feeds paragraph blocks as an array so the helper
+        // takes the array-input code path (no HTML re-parse).
+        const sectionChunks = splitIntoSections(paragraphTexts, contentType);
+        if (sectionChunks.length > 0) {
+          const secCtx = validateSectionCompanyContext(sectionChunks, enforcementIdentity);
+          const secStrategy = validateStrategyPresence(sectionChunks);
+          if (secCtx.shouldRetry || secStrategy.shouldRetry) {
+            const issues: string[] = [];
+            if (secCtx.shouldRetry) issues.push(`${secCtx.failingSections}/${secCtx.totalSections} sections lack company-specific context`);
+            if (secStrategy.shouldRetry) issues.push(`${secStrategy.failingSections}/${secStrategy.totalSections} sections missing strategy markers`);
+            throw new CompanyContextEnforcementError(contextScore.score, contextThreshold, issues);
+          }
+        }
+
+        // Observability log — single entry per template generation.
+        console.info('[content-enforcement]', {
+          contentType,
+          path: 'template',
+          target_words: targetWc,
+          threshold: contextThreshold,
+          final_score: contextScore.score,
+          retry_count: 0, // template path does not use the context-retry loop
+        });
+      }
+    }
 
     const result: BlogGenerationOutput & { content_blocks: unknown[] } = {
       title:                tplParsed.title,

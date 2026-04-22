@@ -518,3 +518,6 @@ export interface ReportData {
 export function isSnapshotReport(data: ReportData): boolean {
   return data.reportType === 'snapshot';
 }
+export default function ReportViewTypesPage() {
+  return null;
+}

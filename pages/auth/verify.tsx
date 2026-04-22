@@ -49,7 +49,7 @@ export default function VerifyPage() {
   return (
     <>
       <Head>
-        <title>Redirecting… | Omnivyra</title>
+        <title>Redirecting… | OmniVyra</title>
         <meta name="robots" content="noindex" />
       </Head>
       <div className="min-h-screen bg-[#F5F9FF] flex items-center justify-center">

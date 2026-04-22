@@ -8,10 +8,11 @@ import {
   ReportRequestError,
   startAsyncReportGeneration,
 } from '../../../backend/services/reportCardService';
+import { resolveAnalyticsReportInput, persistAnalyticsReportInputs } from '../../../backend/services/analyticsInputResolver';
 import { hasEnoughCredits } from '../../../backend/services/creditDeductionService';
-import { persistResolvedReportInputs, resolveReportInput } from '../../../backend/services/reportInputResolver';
 import { evaluateResolvedReportReadiness } from '../../../backend/services/reportReadinessService';
 import { ensureAutomationConfig } from '../../../backend/services/reportAutomationService';
+import { resolveSnapshotReportInput, persistSnapshotReportInputs } from '../../../backend/services/snapshotInputResolver';
 
 type GenerateReportRequest = {
   companyId?: string;
@@ -98,12 +99,18 @@ export default async function handler(
       },
       generationContext: body.generationContext || null,
     };
-    const resolvedInput = await resolveReportInput({
-      companyId,
-      reportCategory,
-      requestPayload,
-    });
-    const readiness = evaluateResolvedReportReadiness(resolvedInput);
+    const resolvedInput =
+      reportCategory === 'snapshot'
+        ? await resolveSnapshotReportInput({
+          companyId,
+          requestPayload,
+        })
+        : await resolveAnalyticsReportInput({
+          companyId,
+          reportCategory,
+          requestPayload,
+        });
+    const readiness = await evaluateResolvedReportReadiness(resolvedInput);
 
     if (!readiness.ready) {
       return res.status(400).json({
@@ -112,7 +119,11 @@ export default async function handler(
       });
     }
 
-    await persistResolvedReportInputs(resolvedInput);
+    if (reportCategory === 'snapshot') {
+      await persistSnapshotReportInputs(resolvedInput);
+    } else {
+      await persistAnalyticsReportInputs(resolvedInput);
+    }
 
     if (type === 'premium') {
       const creditCheck = await hasEnoughCredits(companyId, getCreditAction(reportCategory));
@@ -149,11 +160,16 @@ export default async function handler(
       });
     }
 
+    const generationMessage =
+      reportCategory === 'performance'
+        ? 'Lead & Growth Intelligence report generation started'
+        : 'Report generation started';
+
     return res.status(202).json({
       success: true,
       reportId: report.id,
       status: 'generating',
-      message: 'Report generation started',
+      message: generationMessage,
     });
   } catch (error) {
     if (error instanceof ReportRequestError) {

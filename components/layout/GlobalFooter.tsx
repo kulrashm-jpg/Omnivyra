@@ -8,7 +8,7 @@ const GlobalFooter: React.FC = () => {
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-400">
           {/* Left: copyright */}
-          <span>&copy; {new Date().getFullYear()} Omnivyra. All rights reserved.</span>
+          <span>&copy; {new Date().getFullYear()} OmniVyra. All rights reserved.</span>
 
           {/* Right: links */}
           <div className="flex items-center gap-4">
@@ -34,6 +34,12 @@ const GlobalFooter: React.FC = () => {
             </a>
             <Link href="/privacy" className="hover:text-gray-600 transition-colors">
               Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-gray-600 transition-colors">
+              Terms of Service
+            </Link>
+            <Link href="/data-deletion" className="hover:text-gray-600 transition-colors">
+              Data Deletion
             </Link>
           </div>
         </div>

@@ -23,7 +23,7 @@ export default function WebsiteGrowthCheck() {
   return (
     <>
       <Head>
-        <title>Website Growth Check | Free AI Audit | Omnivyra</title>
+        <title>Website Growth Check | Free AI Audit | OmniVyra</title>
         <meta name="description" content="Run a 60-second AI website audit to discover what is silently losing you customers — traffic, leads, and conversions." />
       </Head>
 

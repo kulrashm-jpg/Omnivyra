@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
+import { trackWebsiteEvent } from '../../lib/websiteAnalytics';
 
 const GOALS = ['Generate leads', 'Drive sales', 'Build awareness', 'Book demos', 'Other'];
 const TRAFFIC_SOURCES = ['Organic search', 'Paid ads', 'Social media', 'Email', 'Referral', 'Direct'];
@@ -40,6 +41,10 @@ export default function FreeAuditStart() {
   const handleStep3Submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim()) return;
+    trackWebsiteEvent('lead_created', {
+      lead_source: 'free_audit',
+      lead_surface: '/free-audit/start',
+    });
     setIsAnalyzing(true);
     // Simulate analysis delay
     await new Promise((r) => setTimeout(r, 2500));
@@ -52,7 +57,7 @@ export default function FreeAuditStart() {
   return (
     <>
       <Head>
-        <title>Free Website Audit | Omnivyra</title>
+        <title>Free Website Audit | OmniVyra</title>
         <meta name="description" content="Run a free AI-powered website audit." />
       </Head>
       <div className="min-h-screen bg-[#F5F9FF]">
@@ -245,11 +250,14 @@ export default function FreeAuditStart() {
                     >
                       Back
                     </button>
-                    <button
-                      type="submit"
-                      className="landing-btn-primary flex-1 rounded-xl py-3.5 font-semibold"
-                    >
-                      Get My Report
+                  <button
+                    type="submit"
+                    data-ga-primary-cta
+                    data-ga-label="Get My Report"
+                    data-ga-location="/free-audit/start"
+                    className="landing-btn-primary flex-1 rounded-xl py-3.5 font-semibold"
+                  >
+                    Get My Report
                     </button>
                   </div>
                 </form>
@@ -259,7 +267,7 @@ export default function FreeAuditStart() {
 
           <p className="mt-8 text-center text-sm text-gray-500">
             <Link href="/" className="text-[#0B5ED7] hover:underline">
-              Back to Omnivyra
+              Back to OmniVyra
             </Link>
           </p>
         </div>

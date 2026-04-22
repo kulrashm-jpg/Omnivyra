@@ -14,6 +14,30 @@
  */
 
 import { getStructureRules, getArticleStructureRules, getWhitepaperStructureRules, getNewsletterStructureRules, getStoryStructureRules, getGuideStructureRules, isValidArticleFormat, isValidWhitepaperFormat, isValidNewsletterFormat, isValidStoryFormat, isValidGuideFormat, type BlogFormatType, type ArticleFormatType, type WhitepaperFormatType, type NewsletterFormatType, type StoryFormatType, type GuideFormatType } from './blogStructureTemplates';
+import {
+  type CompanyIdentity,
+  buildIdentityLock,
+  buildAntiGenericRules,
+} from '../content/companyContextBlock';
+
+/**
+ * Wrap a base system prompt with mandatory company enforcement.
+ * Prepends identity lock (includes strategy perspective) and appends
+ * anti-generic rules. Returns base unchanged when identity is empty
+ * so zero-context flows are unaffected.
+ */
+function wrapWithCompanyEnforcement(
+  base: string,
+  contentType: string,
+  identity?: CompanyIdentity,
+): string {
+  if (!identity || (!identity.companyName && !identity.industry && !identity.coreProblem)) {
+    return base;
+  }
+  const head = buildIdentityLock(identity, contentType);
+  const tail = buildAntiGenericRules(identity);
+  return `${head}\n\n${base}\n${tail}`;
+}
 
 // ── Angle types ───────────────────────────────────────────────────────────────
 
@@ -92,7 +116,10 @@ export interface BlogGenerationOutput {
 
 // ── ANGLE PROMPTS ─────────────────────────────────────────────────────────────
 
-export function buildAnglesSystemPrompt(contentType: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide' = 'blog'): string {
+export function buildAnglesSystemPrompt(
+  contentType: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide' = 'blog',
+  companyIdentity?: CompanyIdentity,
+): string {
   const currentYear = new Date().getFullYear();
   const nextYear    = currentYear + 1;
   const isArticle   = contentType === 'article';
@@ -179,7 +206,7 @@ export function buildAnglesSystemPrompt(contentType: 'blog' | 'article' | 'white
 - Titles should read like headlines from a respected industry publication.
 ` : '';
 
-  return `${identity}
+  const base = `${identity}
 
 ${angle1}
 ${angle2}
@@ -223,6 +250,8 @@ Return ONLY valid JSON — no markdown, no prose:
     }
   ]
 }`;
+
+  return wrapWithCompanyEnforcement(base, `${contentType} angles`, companyIdentity);
 }
 
 export function buildAnglesUserPrompt(input: BlogGenerationInput): string {
@@ -324,6 +353,7 @@ export function buildGenerationSystemPrompt(
   targetWordCount?: number,
   contentType: 'blog' | 'article' | 'whitepaper' | 'newsletter' | 'story' | 'guide' = 'blog',
   formatType?: BlogFormatType | ArticleFormatType | WhitepaperFormatType | NewsletterFormatType | StoryFormatType | GuideFormatType,
+  companyIdentity?: CompanyIdentity,
 ): string {
   const currentYear = new Date().getFullYear();
   const nextYear    = currentYear + 1;
@@ -491,7 +521,7 @@ ${refRule}`;
 - Do NOT fragment one idea across multiple H2 sections. Combine related points into fewer, deeper sections.
 - If you feel the need for more than ${maxSections} sections, MERGE related ideas instead.`;
 
-  return `${identity}
+  const base = `${identity}
 
 ## MANDATORY WORD COUNT: ${tw} words (±10%)
 
@@ -547,6 +577,8 @@ The content_html field must be valid HTML using only these elements:
 - End with a <h2>References</h2> and <ol> of cited sources (minimum ${isWhitepaper ? 5 : (isArticle || isGuide) ? 5 : 3})
 
 Do NOT use: <div> (except key-insights), <span>, <table>, inline styles, class attributes (except the key-insights div), or any JavaScript.`;
+
+  return wrapWithCompanyEnforcement(base, contentType, companyIdentity);
 }
 
 export function buildGenerationUserPrompt(input: BlogGenerationInput): string {
@@ -1179,6 +1211,7 @@ export function buildTemplateAwareSystemPromptV2(
   contentType: string,
   template: ContentBlock[],
   templateName?: string,
+  companyIdentity?: CompanyIdentity,
 ): string {
   const tw = targetWordCount;
   const structure = serializeTemplateStructure(template);
@@ -1195,7 +1228,7 @@ export function buildTemplateAwareSystemPromptV2(
     tw >= 1200 ? '2-3 <p> elements' :
     '1-3 <p> elements';
 
-  return `You are a senior ${contentType} content strategist. You fill pre-designed content templates with high-quality, publication-ready content.
+  const base = `You are a senior ${contentType} content strategist. You fill pre-designed content templates with high-quality, publication-ready content.
 
 ## YOUR TASK
 You are given a template structure (a sequence of typed content blocks). Fill EVERY block with substantive content about the provided topic. Each block type has specific content requirements.
@@ -1242,6 +1275,8 @@ ${normalizedTemplateName === 'split-screen insight' ? '- For the Split-Screen In
 ${buildTemplateOutputSchema(template)}
 
 The "blocks" array MUST have exactly ${template.length} entries, one per template block, in order.`;
+
+  return wrapWithCompanyEnforcement(base, `${contentType} template`, companyIdentity);
 }
 
 /**

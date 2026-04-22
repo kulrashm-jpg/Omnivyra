@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useRouter } from 'next/router';
-import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 
 type LoginMode = 'super_admin' | 'content_architect';
 
@@ -11,96 +10,36 @@ export default function SuperAdminLoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isCheckingSession, setIsCheckingSession] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const checkExistingSession = async () => {
-      try {
-        const { data } = await getSupabaseBrowser().auth.getSession();
-        const accessToken = data.session?.access_token;
-        if (!accessToken) return;
-
-        const response = await fetch('/api/super-admin/session', {
-          method: 'GET',
-          credentials: 'include',
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!cancelled && response.ok && payload?.isSuperAdmin) {
-          router.replace('/super-admin/dashboard');
-          return;
-        }
-      } finally {
-        if (!cancelled) setIsCheckingSession(false);
-      }
-    };
-
-    void checkExistingSession();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
 
   const handleLogin = async () => {
     setError(null);
     setIsSubmitting(true);
     try {
       const isContentArchitect = mode === 'content_architect';
-      if (isContentArchitect) {
-        const response = await fetch('/api/super-admin/content-architect-login', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password }),
-        });
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data?.error || 'Login failed');
-        }
-        router.replace('/content-architect');
-        return;
-      }
-
-      const supabase = getSupabaseBrowser();
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: username.trim().toLowerCase(),
-        password,
-      });
-
-      if (signInError || !data.session?.access_token) {
-        throw new Error(
-          signInError?.message?.toLowerCase().includes('invalid login')
-            ? 'Incorrect email or password.'
-            : signInError?.message || 'Login failed'
-        );
-      }
-
-      const sessionResponse = await fetch('/api/super-admin/session', {
-        method: 'GET',
+      const url = isContentArchitect
+        ? '/api/super-admin/content-architect-login'
+        : '/api/super-admin/login';
+      const response = await fetch(url, {
+        method: 'POST',
         credentials: 'include',
-        headers: { Authorization: `Bearer ${data.session.access_token}` },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
       });
-      const sessionData = await sessionResponse.json().catch(() => ({}));
-
-      if (!sessionResponse.ok || !sessionData?.isSuperAdmin) {
-        await supabase.auth.signOut();
-        throw new Error('This account is not assigned the SUPER_ADMIN role.');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || 'Login failed');
       }
-
-      router.replace('/super-admin/dashboard');
+      if (isContentArchitect) {
+        router.replace('/content-architect');
+      } else {
+        router.replace('/super-admin/dashboard');
+      }
     } catch (err: any) {
       setError(err?.message || 'Login failed');
     } finally {
       setIsSubmitting(false);
     }
   };
-
-  if (isCheckingSession) {
-    return null;
-  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
@@ -132,12 +71,12 @@ export default function SuperAdminLoginPage() {
         </div>
         <p className="text-sm text-gray-600">
           {mode === 'super_admin'
-            ? 'Use your Omnivyra account email and password. Super Admin access now comes from your assigned SUPER_ADMIN role.'
+            ? 'Use the dedicated Super Admin credentials configured for this environment.'
             : 'Content Architect still uses the dedicated credential-based access path.'}
         </p>
         <input
           className="border rounded-md px-3 py-2 w-full"
-          placeholder={mode === 'super_admin' ? 'Work email' : 'Username'}
+          placeholder="Username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           disabled={isSubmitting}

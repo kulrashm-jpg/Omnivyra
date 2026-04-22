@@ -608,7 +608,7 @@ export default function ManagedSuggestionsPage({
   return (
     <>
       <Head>
-        <title>{title} | Omnivyra</title>
+        <title>{title} | OmniVyra</title>
       </Head>
       <GenerationProgressTracker
         open={generating}

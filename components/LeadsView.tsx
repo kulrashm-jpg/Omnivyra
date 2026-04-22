@@ -673,7 +673,7 @@ export default function LeadsView({ d }: { d: S }) {
                     <Webhook className="h-10 w-10 mx-auto mb-3 text-gray-300" />
                     <p className="font-medium text-gray-600">No webhook connections configured</p>
                     <p className="text-sm text-gray-400 mt-1 mb-4">Create a Lead Webhook integration to get your connection credentials.</p>
-                    <button onClick={() => router.push('/integrations')} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors inline-flex items-center gap-1.5">
+                    <button onClick={() => router.push('/integrations?focus=website')} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors inline-flex items-center gap-1.5">
                       <ExternalLink className="h-4 w-4" /> Go to Integrations
                     </button>
                   </div>
@@ -721,7 +721,7 @@ export default function LeadsView({ d }: { d: S }) {
                               {test?.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <TestTube2 className="h-4 w-4" />}
                               Send Test Lead
                             </button>
-                            <button onClick={() => router.push('/integrations')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 font-medium transition-colors">
+                            <button onClick={() => router.push('/integrations?focus=website')} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 font-medium transition-colors">
                               <ExternalLink className="h-3.5 w-3.5" /> Manage in Integrations
                             </button>
                             {test && !test.loading && (

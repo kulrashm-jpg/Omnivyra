@@ -127,12 +127,13 @@ export async function orchestrateResponse(
   }
 
   // uuid removed — use crypto.randomUUID()
+  const normalizedPlatform = (input.platform || '').toLowerCase() === 'x' ? 'twitter' : input.platform;
   const result = await executeAction(
     {
       id: crypto.randomUUID(),
       tenant_id: input.organization_id,
       organization_id: input.organization_id,
-      platform: input.platform,
+      platform: normalizedPlatform,
       action_type: 'reply',
       target_id: message.platform_message_id ?? input.message_id,
       suggested_text: formatted,
@@ -140,7 +141,7 @@ export async function orchestrateResponse(
       execution_mode: 'manual',
     },
     true,
-    { source: 'manual' }
+    { source: 'manual', persist: true, auto_insert: true, final_text: formatted }
   );
 
   return {

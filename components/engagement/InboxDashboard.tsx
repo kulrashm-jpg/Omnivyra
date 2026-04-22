@@ -7,6 +7,7 @@ import { useRouter } from 'next/router';
 import { PlatformTabs } from '@/components/engagement/PlatformTabs';
 import { ExtensionStatusPanel } from '@/components/engagement/ExtensionStatusPanel';
 import { LinkedInOperationsPanel } from '@/components/engagement/LinkedInOperationsPanel';
+import { BrowserOperationsPanel } from '@/components/engagement/BrowserOperationsPanel';
 import { ThreadList } from '@/components/engagement/ThreadList';
 import { ThreadView } from '@/components/engagement/ThreadView';
 import { AIEngagementAssistant } from '@/components/engagement/AIEngagementAssistant';
@@ -24,6 +25,8 @@ import { getAuthToken } from '@/utils/getAuthToken';
 import { apiFetch } from '@/lib/apiFetch';
 import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
 import { normalizePlatform } from '@/utils/platformIcons';
+import { isBrowserAssistRuntimeEnabled } from '@/lib/featureFlags';
+import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
 import type { ThreadQueueGroup } from './threadQueueModel';
 import {
   filterThreadsForQueue,
@@ -45,6 +48,7 @@ export function InboxDashboard({
   className = '',
 }: InboxDashboardProps) {
   const router = useRouter();
+  const browserAssistEnabled = isBrowserAssistRuntimeEnabled();
   const [selectedPlatform, setSelectedPlatform] = useState<string>('all');
   const [selectedThread, setSelectedThread] = useState<InboxThread | null>(null);
   const [mobileTab, setMobileTab] = useState<'threads' | 'conversation' | 'assistant'>('threads');
@@ -57,6 +61,12 @@ export function InboxDashboard({
   const [authorFilter, setAuthorFilter] = useState<{ authorName: string; platform: string } | null>(
     null
   );
+  const [browserAssistError, setBrowserAssistError] = useState<string | null>(null);
+  const [browserAssistBusyPlatform, setBrowserAssistBusyPlatform] = useState<string | null>(null);
+  const [browserAssistStatusByPlatform, setBrowserAssistStatusByPlatform] = useState<Record<string, string | null>>({});
+  const [browserAssistErrorByPlatform, setBrowserAssistErrorByPlatform] = useState<Record<string, string | null>>({});
+  const [linkedInSurfaceActionBusy, setLinkedInSurfaceActionBusy] = useState<'sales_navigator' | 'recruiter' | null>(null);
+  const [linkedInSurfaceActionStatus, setLinkedInSurfaceActionStatus] = useState<string | null>(null);
   const attemptedExtensionAuthRef = useRef<string | null>(null);
 
   const filters = useMemo(
@@ -99,8 +109,13 @@ export function InboxDashboard({
     updatingPlatform: updatingWorkspacePlatform,
     setPlatformEnabled: setWorkspacePlatformEnabled,
   } = useEngagementPlatformPreferences(organizationId);
-  const { items, loading, error, refresh } = useEngagementInbox(organizationId, filters);
-  const { messages, loading: messagesLoading, refresh: refreshMessages } = useEngagementMessages(
+  const { items, loading, error, refresh, patchThread } = useEngagementInbox(organizationId, filters);
+  const {
+    messages,
+    loading: messagesLoading,
+    refresh: refreshMessages,
+    addOptimisticMessage,
+  } = useEngagementMessages(
     organizationId,
     selectedThread?.thread_id ?? null
   );
@@ -119,6 +134,34 @@ export function InboxDashboard({
   } = useLinkedInEngagementWorkspace(organizationId, hasLinkedInConnection);
 
   const threadIdFromUrl = typeof router.query.thread === 'string' ? router.query.thread : null;
+
+  const replaceEngagementRoute = useCallback(
+    (query?: Record<string, string>) => {
+      const params = new URLSearchParams();
+      if (query) {
+        for (const [key, value] of Object.entries(query)) {
+          if (value) {
+            params.set(key, value);
+          }
+        }
+      }
+
+      const nextAsPath = params.toString() ? `/engagement?${params.toString()}` : '/engagement';
+      if (router.asPath === nextAsPath) {
+        return;
+      }
+
+      void router.replace(
+        {
+          pathname: '/engagement',
+          query,
+        },
+        undefined,
+        { shallow: true }
+      );
+    },
+    [router]
+  );
 
   const filteredItems = useMemo((): InboxThread[] => {
     if (!authorFilter) return items;
@@ -149,11 +192,7 @@ export function InboxDashboard({
   const handleSelectThread = useCallback(
     (thread: InboxThread) => {
       setSelectedThread(thread);
-      router.replace(
-        { pathname: '/engagement', query: { thread: thread.thread_id } },
-        undefined,
-        { shallow: true }
-      );
+      replaceEngagementRoute({ thread: thread.thread_id });
       void recordEngagementEvent('thread_opened', {
         organization_id: organizationId,
         thread_id: thread.thread_id,
@@ -175,7 +214,7 @@ export function InboxDashboard({
         });
       }
     },
-    [router, organizationId]
+    [organizationId, replaceEngagementRoute]
   );
 
   const handleSelectThreadById = useCallback(
@@ -193,12 +232,13 @@ export function InboxDashboard({
     (platform: string) => {
       setSelectedThread(null);
       setSelectedPlatform(platform);
-      router.replace({ pathname: '/engagement' }, undefined, { shallow: true });
+      replaceEngagementRoute();
     },
-    [router]
+    [replaceEngagementRoute]
   );
 
   const handleRefresh = useCallback(() => {
+    setBrowserAssistError(null);
     refresh();
     refreshCounts();
     refreshWorkQueue();
@@ -233,12 +273,55 @@ export function InboxDashboard({
         browserEnabled: extensionPlatform?.browserEnabled ?? true,
         hasOpenTab: extensionPlatform?.hasOpenTab ?? false,
         openTabCount: extensionPlatform?.openTabCount ?? 0,
+        hasMessagingTab: extensionPlatform?.hasMessagingTab ?? false,
+        hasFeedTab: extensionPlatform?.hasFeedTab ?? false,
+        hasSalesNavigatorTab: extensionPlatform?.hasSalesNavigatorTab ?? false,
+        hasRecruiterTab: extensionPlatform?.hasRecruiterTab ?? false,
         workspaceEnabled: workspacePreferenceMap[platform] ?? true,
       };
     });
   }, [integrations, mergedPlatforms, workspacePreferenceMap]);
   const updatingExtensionPlatform = updatingWorkspacePlatform || updatingBrowserPlatform;
   const linkedInBrowserState = extensionPanelPlatforms.find((platform) => platform.platform === 'linkedin');
+  const genericBrowserPlatforms = useMemo(
+    () =>
+      extensionPanelPlatforms.filter((platform) =>
+        ['facebook', 'instagram', 'x', 'twitter'].includes(platform.platform)
+      ),
+    [extensionPanelPlatforms]
+  );
+  const getBrowserActionPlatform = useCallback((platform: string) => {
+    const normalized = normalizePlatform(platform);
+    return normalized === 'twitter' ? 'x' : normalized;
+  }, []);
+  const getBrowserPlatformState = useCallback(
+    (platform: string) => {
+      const browserPlatform = getBrowserActionPlatform(platform);
+      return extensionPanelPlatforms.find((entry) => entry.platform === browserPlatform) ?? null;
+    },
+    [extensionPanelPlatforms, getBrowserActionPlatform]
+  );
+
+  const requiresVerifiedBrowserReply = useCallback((platform: string) => {
+    return ['linkedin', 'facebook', 'instagram', 'x'].includes(getBrowserActionPlatform(platform));
+  }, [getBrowserActionPlatform]);
+
+  const getVerifiedReplyRequirementMessage = useCallback((platform: string) => {
+    const normalized = getBrowserActionPlatform(platform);
+    if (normalized === 'linkedin') {
+      return 'LinkedIn DM and comment replies require a verified browser-assisted send. Open LinkedIn Messaging for DMs, or the relevant LinkedIn conversation surface, before sending.';
+    }
+    if (normalized === 'facebook') {
+      return 'Facebook replies and message actions require a verified browser-assisted send. Open Messenger or the relevant Facebook conversation surface before sending.';
+    }
+    if (normalized === 'instagram') {
+      return 'Instagram replies and direct-message actions require a verified browser-assisted send. Open Instagram Direct or the relevant thread before sending.';
+    }
+    if (normalized === 'x') {
+      return 'X replies and direct-message actions require a verified browser-assisted send. Open X Messages or the relevant reply surface before sending.';
+    }
+    return `${normalized} engagement actions require a verified browser-assisted send before OmniVyra can trust them.`;
+  }, [getBrowserActionPlatform]);
   const extensionUserLabel =
     extensionAuth?.user?.email ||
     extensionAuth?.user?.name ||
@@ -528,35 +611,14 @@ export function InboxDashboard({
       platform: string;
       replyText: string;
     }) => {
-      if (
-        normalizePlatform(platform) === 'linkedin' &&
-        extensionAuth?.isAuthenticated &&
-        linkedInBrowserState?.browserEnabled &&
-        linkedInBrowserState?.hasOpenTab
-      ) {
-        const targetMessage = messages.find((entry) => entry.id === messageId);
-        await bootstrapExtensionAuth();
-        const execution = await executePlatformAction('linkedin', 'continue_thread', {
-          text: replyText,
-          autoSubmit: true,
-          threadId,
-          messageText: targetMessage?.content ?? null,
-          platformMessageId: targetMessage?.platform_message_id ?? null,
-        });
-        const executionResult = (execution?.result ?? null) as { mode?: string; autoSubmit?: boolean } | null;
-        const mode = executionResult?.mode ?? null;
-        const submitted = executionResult?.autoSubmit === true || mode === 'submitted';
-        if (!submitted) {
-          throw new Error('LinkedIn did not confirm that the reply was sent');
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 1200));
-        await triggerPlatformSync('linkedin');
-        refreshMessages();
-        refresh();
-        refreshCounts();
-        refreshWorkQueue();
-        refreshLinkedInOverview();
-        return;
+      // All user-initiated reply sends go through the same API path. The
+      // route rejects unsupported (platform, action) pairs at the boundary;
+      // we trust its contract (status === 'executed' + platform response)
+      // and do not push optimistic messages — success is only confirmed when
+      // the platform acknowledges.
+      const capability = resolveEngagementCapability(platform, 'reply');
+      if (capability.status !== 'api_verified') {
+        throw new Error(capability.reason ?? `Replies are not supported on ${platform}.`);
       }
 
       const res = await fetch('/api/engagement/reply', {
@@ -572,26 +634,38 @@ export function InboxDashboard({
         }),
       });
 
-      const json = await res.json().catch(() => ({}));
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        status?: string;
+        confirmed?: boolean;
+        platform_id?: string | null;
+        success?: boolean;
+      };
       if (!res.ok) {
         throw new Error(json.error || res.statusText || 'Failed to send reply');
       }
+      if (json.status !== 'executed' || json.success !== true) {
+        throw new Error(json.error || 'Platform did not confirm the reply was sent');
+      }
+
+      await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
+
+      const niceLabel = platform === 'twitter' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
+      // Three visible states aligned to the server contract:
+      //   confirmed + platform_id → "Confirmed by <platform> (id: …)"
+      //   executed without id     → "Sent to <platform>. Awaiting confirmation."
+      //   anything else thrown above as an error.
+      const message =
+        json.confirmed && json.platform_id
+          ? `Reply confirmed by ${niceLabel} (id: ${json.platform_id}).`
+          : `Reply sent to ${niceLabel}. Awaiting platform confirmation.`;
+      return {
+        mode: json.confirmed ? 'api_confirmed' : 'api_sent',
+        platform,
+        message,
+      };
     },
-    [
-      bootstrapExtensionAuth,
-      executePlatformAction,
-      extensionAuth?.isAuthenticated,
-      linkedInBrowserState?.browserEnabled,
-      linkedInBrowserState?.hasOpenTab,
-      messages,
-      organizationId,
-      refresh,
-      refreshCounts,
-      refreshLinkedInOverview,
-      refreshMessages,
-      refreshWorkQueue,
-      triggerPlatformSync,
-    ]
+    [organizationId, refresh, refreshCounts, refreshMessages, refreshWorkQueue]
   );
 
   const handleSyncLinkedIn = useCallback(async () => {
@@ -615,19 +689,12 @@ export function InboxDashboard({
       );
 
       setMobileTab('conversation');
-      router.replace(
-        {
-          pathname: '/engagement',
-          query: {
-            thread: selectedThread.thread_id,
-            prefill_reply: token,
-          },
-        },
-        undefined,
-        { shallow: true }
-      );
+      replaceEngagementRoute({
+        thread: selectedThread.thread_id,
+        prefill_reply: token,
+      });
     },
-    [router, selectedThread]
+    [replaceEngagementRoute, selectedThread]
   );
 
   const handleSendSuggestedReply = useCallback(
@@ -642,7 +709,7 @@ export function InboxDashboard({
       }
 
       setMobileTab('conversation');
-      await handleExecuteReply({
+      return await handleExecuteReply({
         threadId: selectedThread.thread_id,
         messageId: targetMessage.id,
         platform: targetMessage.platform ?? selectedThread.platform,
@@ -653,20 +720,119 @@ export function InboxDashboard({
   );
 
   const handleRunLinkedInBrowserAssist = useCallback(async () => {
-    await bootstrapExtensionAuth();
-    await triggerPlatformSync('linkedin');
-    const settleDelays = [1200, 2500, 4500];
+    setBrowserAssistError(null);
+    setLinkedInSurfaceActionStatus(null);
+    try {
+      await bootstrapExtensionAuth();
+      await triggerPlatformSync('linkedin');
+      const settleDelays = [1200, 2500, 4500];
 
-    for (const delay of settleDelays) {
-      await new Promise((resolve) => window.setTimeout(resolve, delay));
-      await refreshLinkedInOverview();
-      refresh();
-      refreshCounts();
-      refreshWorkQueue();
+      for (const delay of settleDelays) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        await refreshLinkedInOverview();
+        refresh();
+        refreshCounts();
+        refreshWorkQueue();
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'LinkedIn browser assist is not available right now';
+      setBrowserAssistError(message);
     }
   }, [bootstrapExtensionAuth, triggerPlatformSync, refreshLinkedInOverview, refresh, refreshCounts, refreshWorkQueue]);
 
+  const handleRunPlatformBrowserAssist = useCallback(
+    async (platform: string) => {
+      const browserActionPlatform = getBrowserActionPlatform(platform);
+      setBrowserAssistBusyPlatform(browserActionPlatform);
+      setBrowserAssistStatusByPlatform((current) => ({ ...current, [browserActionPlatform]: null }));
+      setBrowserAssistErrorByPlatform((current) => ({ ...current, [browserActionPlatform]: null }));
+      try {
+        await bootstrapExtensionAuth();
+        await triggerPlatformSync(browserActionPlatform);
+        await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        await Promise.allSettled([
+          refresh(),
+          refreshCounts(),
+          refreshWorkQueue(),
+          refreshMessages(),
+        ]);
+        setBrowserAssistStatusByPlatform((current) => ({
+          ...current,
+          [browserActionPlatform]: `${browserActionPlatform === 'x' ? 'X' : browserActionPlatform.charAt(0).toUpperCase() + browserActionPlatform.slice(1)} browser assist ran successfully.`,
+        }));
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : `${browserActionPlatform} browser assist is not available right now`;
+        setBrowserAssistErrorByPlatform((current) => ({
+          ...current,
+          [browserActionPlatform]: message,
+        }));
+      } finally {
+        setBrowserAssistBusyPlatform(null);
+      }
+    },
+    [bootstrapExtensionAuth, getBrowserActionPlatform, refresh, refreshCounts, refreshMessages, refreshWorkQueue, triggerPlatformSync]
+  );
+
+  const handleCaptureLinkedInSurface = useCallback(
+    async (surface: 'sales_navigator' | 'recruiter') => {
+      setBrowserAssistError(null);
+      setLinkedInSurfaceActionStatus(null);
+      setLinkedInSurfaceActionBusy(surface);
+      try {
+        const browserState = getBrowserPlatformState('linkedin');
+        const surfaceReady =
+          surface === 'sales_navigator'
+            ? browserState?.hasSalesNavigatorTab
+            : browserState?.hasRecruiterTab;
+
+        if (!surfaceReady) {
+          throw new Error(
+            surface === 'sales_navigator'
+              ? 'Open Sales Navigator to capture lead workflows'
+              : 'Open Recruiter to capture candidate workflows'
+          );
+        }
+
+        await bootstrapExtensionAuth();
+        // Direct platform action dispatch is disabled in the hardened
+        // bridge. Sales Navigator / Recruiter capture is deferred until
+        // the server-issued command path for those surfaces ships.
+        void executePlatformAction;
+        setLinkedInSurfaceActionStatus(
+          surface === 'sales_navigator'
+            ? 'Sales Navigator capture is deferred until server-issued command dispatch ships for this surface.'
+            : 'Recruiter capture is deferred until server-issued command dispatch ships for this surface.',
+        );
+
+        await Promise.allSettled([
+          refresh(),
+          refreshCounts(),
+          refreshWorkQueue(),
+          refreshLinkedInOverview(),
+        ]);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'LinkedIn advanced surface capture is not available right now';
+        setBrowserAssistError(message);
+      } finally {
+        setLinkedInSurfaceActionBusy(null);
+      }
+    },
+    [
+      bootstrapExtensionAuth,
+      executePlatformAction,
+      getBrowserPlatformState,
+      refresh,
+      refreshCounts,
+      refreshLinkedInOverview,
+      refreshWorkQueue,
+    ]
+  );
+
   useEffect(() => {
+    if (!browserAssistEnabled) return;
     if (!organizationId || !extensionStatus?.runtimeId || extensionError) return;
     if (extensionAuth?.isAuthenticated) {
       attemptedExtensionAuthRef.current = null;
@@ -679,6 +845,7 @@ export function InboxDashboard({
     }
     void bootstrapExtensionAuth();
   }, [
+    browserAssistEnabled,
     bootstrapExtensionAuth,
     extensionAuth?.isAuthenticated,
     extensionError,
@@ -690,28 +857,9 @@ export function InboxDashboard({
     async (messageId: string, platform: string) => {
       if (!organizationId) return;
       try {
-        if (
-          normalizePlatform(platform) === 'linkedin' &&
-          extensionAuth?.isAuthenticated &&
-          linkedInBrowserState?.browserEnabled &&
-          linkedInBrowserState?.hasOpenTab
-        ) {
-          const targetMessage = messages.find((entry) => entry.id === messageId);
-          await bootstrapExtensionAuth();
-          await executePlatformAction('linkedin', 'like_message', {
-            messageId,
-            platform,
-            messageText: targetMessage?.content ?? null,
-            platformMessageId: targetMessage?.platform_message_id ?? null,
-          });
-          await new Promise((resolve) => window.setTimeout(resolve, 800));
-          await triggerPlatformSync('linkedin');
-          refreshMessages();
-          refresh();
-          refreshCounts();
-          refreshWorkQueue();
-          refreshLinkedInOverview();
-          return;
+        const capability = resolveEngagementCapability(platform, 'like');
+        if (capability.status !== 'api_verified') {
+          throw new Error(capability.reason ?? `Like is not supported on ${platform}.`);
         }
 
         const res = await fetch('/api/engagement/like', {
@@ -724,28 +872,33 @@ export function InboxDashboard({
             platform,
           }),
         });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || res.statusText);
+        const json = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          status?: string;
+          confirmed?: boolean;
+          platform_id?: string | null;
+          success?: boolean;
+        };
+        if (!res.ok) {
+          throw new Error(json.error || res.statusText || 'Failed to like message');
+        }
+        if (json.status !== 'executed' || json.success !== true) {
+          throw new Error(json.error || 'Platform did not confirm the like was applied');
+        }
+        // We don't show a toast for likes, but the log distinction matters
+        // for observability: confirmed like vs sent-but-unconfirmed like.
+        if (!json.confirmed) {
+          console.info('[engagement] like accepted by platform but no id returned', {
+            messageId,
+            platform,
+          });
+        }
         refreshMessages();
       } catch (err) {
         console.error('[engagement] like failed:', err);
       }
     },
-    [
-      bootstrapExtensionAuth,
-      executePlatformAction,
-      extensionAuth?.isAuthenticated,
-      linkedInBrowserState?.browserEnabled,
-      linkedInBrowserState?.hasOpenTab,
-      messages,
-      organizationId,
-      refresh,
-      refreshCounts,
-      refreshLinkedInOverview,
-      refreshMessages,
-      refreshWorkQueue,
-      triggerPlatformSync,
-    ]
+    [organizationId, refreshMessages]
   );
 
   useEffect(() => {
@@ -817,7 +970,7 @@ export function InboxDashboard({
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || res.statusText);
         setSelectedThread(null);
-        router.replace({ pathname: '/engagement' }, undefined, { shallow: true });
+        replaceEngagementRoute();
         refresh();
         refreshCounts();
         refreshWorkQueue();
@@ -826,7 +979,7 @@ export function InboxDashboard({
         console.error('[engagement] ignore failed:', err);
       }
     },
-    [organizationId, refresh, refreshCounts, refreshWorkQueue, router]
+    [organizationId, refresh, refreshCounts, refreshWorkQueue, replaceEngagementRoute]
   );
 
   if (!organizationId) {
@@ -913,35 +1066,66 @@ export function InboxDashboard({
             </button>
           </div>
 
-          <ExtensionStatusPanel
-            loading={extensionLoading || workspacePreferencesLoading || extensionAuthenticating}
-            error={extensionError}
-            authenticated={Boolean(extensionAuth?.isAuthenticated)}
-            orgId={extensionAuth?.orgId ?? null}
-            userLabel={extensionUserLabel}
-            runtimeId={extensionStatus?.runtimeId ?? null}
-            version={extensionStatus?.version ?? null}
-            platforms={extensionPanelPlatforms}
-            updatingPlatform={updatingExtensionPlatform}
-            onRefresh={handleRefreshExtensionPanel}
-            onTogglePlatform={handleToggleExtensionPlatform}
-          />
+          {/* Browser-assist runtime surfaces are gated by a hard-off feature
+              flag. They describe capabilities (DM / messaging / Sales Navigator /
+              Recruiter capture) that require a Chrome extension that does not
+              ship today. Kept in the tree behind the flag so the architecture
+              is preserved without misleading production users. */}
+          {browserAssistEnabled && (
+            <>
+              <ExtensionStatusPanel
+                loading={extensionLoading || workspacePreferencesLoading || extensionAuthenticating}
+                error={extensionError}
+                authenticated={Boolean(extensionAuth?.isAuthenticated)}
+                orgId={extensionAuth?.orgId ?? null}
+                userLabel={extensionUserLabel}
+                runtimeId={extensionStatus?.runtimeId ?? null}
+                version={extensionStatus?.version ?? null}
+                platforms={extensionPanelPlatforms}
+                updatingPlatform={updatingExtensionPlatform}
+                onRefresh={handleRefreshExtensionPanel}
+                onTogglePlatform={handleToggleExtensionPlatform}
+              />
 
-          {hasLinkedInConnection ? (
-            <LinkedInOperationsPanel
-              loading={linkedinOverviewLoading}
-              syncing={linkedinSyncing}
-              error={linkedinOverviewError}
-              overview={linkedinOverview}
-              lastSyncResult={linkedinLastSyncResult}
-              extensionAuthenticated={Boolean(extensionAuth?.isAuthenticated)}
-              browserAssistAvailable={Boolean(linkedInBrowserState?.browserEnabled)}
-              browserTabOpen={Boolean(linkedInBrowserState?.hasOpenTab)}
-              onRefresh={refreshLinkedInOverview}
-              onSyncNow={handleSyncLinkedIn}
-              onRunBrowserAssist={linkedInBrowserState?.browserEnabled ? handleRunLinkedInBrowserAssist : null}
-            />
-          ) : null}
+              {hasLinkedInConnection ? (
+                <LinkedInOperationsPanel
+                  loading={linkedinOverviewLoading}
+                  syncing={linkedinSyncing}
+                  surfaceActionBusy={linkedInSurfaceActionBusy}
+                  error={browserAssistError || linkedinOverviewError}
+                  surfaceActionStatus={linkedInSurfaceActionStatus}
+                  overview={linkedinOverview}
+                  lastSyncResult={linkedinLastSyncResult}
+                  extensionAuthenticated={Boolean(extensionAuth?.isAuthenticated)}
+                  browserAssistAvailable={Boolean(linkedInBrowserState?.browserEnabled)}
+                  browserTabOpen={Boolean(linkedInBrowserState?.hasOpenTab)}
+                  browserMessagingTabOpen={Boolean(linkedInBrowserState?.hasMessagingTab)}
+                  browserFeedTabOpen={Boolean(linkedInBrowserState?.hasFeedTab)}
+                  browserSalesNavigatorTabOpen={Boolean(linkedInBrowserState?.hasSalesNavigatorTab)}
+                  browserRecruiterTabOpen={Boolean(linkedInBrowserState?.hasRecruiterTab)}
+                  onRefresh={refreshLinkedInOverview}
+                  onSyncNow={handleSyncLinkedIn}
+                  onRunBrowserAssist={linkedInBrowserState?.browserEnabled ? handleRunLinkedInBrowserAssist : null}
+                  onCaptureSalesNavigator={
+                    linkedInBrowserState?.browserEnabled ? () => handleCaptureLinkedInSurface('sales_navigator') : null
+                  }
+                  onCaptureRecruiter={
+                    linkedInBrowserState?.browserEnabled ? () => handleCaptureLinkedInSurface('recruiter') : null
+                  }
+                />
+              ) : null}
+
+              <BrowserOperationsPanel
+                loading={extensionLoading || extensionAuthenticating}
+                authenticated={Boolean(extensionAuth?.isAuthenticated)}
+                platforms={genericBrowserPlatforms}
+                busyPlatform={browserAssistBusyPlatform}
+                statusByPlatform={browserAssistStatusByPlatform}
+                errorByPlatform={browserAssistErrorByPlatform}
+                onRunBrowserAssist={handleRunPlatformBrowserAssist}
+              />
+            </>
+          )}
         </div>
 
         <PlatformTabs
