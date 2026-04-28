@@ -223,6 +223,13 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     if (text.ok !== true) return { ok: false, code: 'INVALID_PAYLOAD', message: (text as { message: string }).message };
     return { ok: true, payload: { ...p, autoSubmit: p.autoSubmit !== false } };
   },
+  'linkedin.sync_dm_inbox': (p) => {
+    // Opt-in navigate flag so the extension may force /messaging/ when
+    // fired from a non-messaging tab. No other fields expected.
+    const unknown = allowOnly(p, ['navigate']);
+    if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
+    return { ok: true, payload: { navigate: p.navigate === true } };
+  },
 };
 
 export function validateCommandPayload(

@@ -17,8 +17,8 @@ import {
 import {
   getTrendRanking,
   getTrendRelevance,
-  getOmniVyraHealthReport,
-  isOmniVyraEnabled,
+  getOmnivyraHealthReport,
+  isOmnivyraEnabled,
   TrendSignalInput,
 } from '../omnivyraClientV1';
 import { getLastFallbackReason, getLastMeta, setLastFallbackReason } from '../omnivyraHealthService';
@@ -515,9 +515,9 @@ export const generateRecommendations = async (
           ? input.selectedApiIds
           : enabledApis.map((api) => api.id);
       const signalQuality = await getExternalApiRuntimeSnapshot(runtimeApiIds);
-      const healthReport = getOmniVyraHealthReport();
+      const healthReport = getOmnivyraHealthReport();
       const lastMeta = getLastMeta();
-      if (!isOmniVyraEnabled()) {
+      if (!isOmnivyraEnabled()) {
         setLastFallbackReason('omnivyra_disabled');
       }
       const baseConfidence = computeConfidence([], undefined);
@@ -555,7 +555,7 @@ export const generateRecommendations = async (
           confidence: undefined,
           contract_version: lastMeta?.contract_version,
           latency_ms: lastMeta?.latency_ms,
-          fallback_reason: getLastFallbackReason() ?? (isOmniVyraEnabled() ? null : 'omnivyra_disabled'),
+          fallback_reason: getLastFallbackReason() ?? (isOmnivyraEnabled() ? null : 'omnivyra_disabled'),
           last_error: healthReport.last_error,
           endpoint: lastMeta?.endpoint ?? null,
         },
@@ -563,7 +563,7 @@ export const generateRecommendations = async (
         signals_source: 'PROFILE_ONLY' as const,
       } as RecommendationEngineResult;
 
-      if (isOmniVyraEnabled()) {
+      if (isOmnivyraEnabled()) {
         const learning = await sendLearningSnapshot({
           companyId: input.companyId,
           campaignId: input.campaignId ?? undefined,
@@ -665,8 +665,8 @@ export const generateRecommendations = async (
   let omnivyraMeta: RecommendationEngineResult['omnivyra_metadata'] = undefined;
   let fallbackReason: string | null = null;
 
-  if (isOmniVyraEnabled() && insightSource !== 'api') {
-    const companyProfileForOmniVyra = profile
+  if (isOmnivyraEnabled() && insightSource !== 'api') {
+    const companyProfileForOmnivyra = profile
       ? {
           ...profile,
           strategic_context:
@@ -688,7 +688,7 @@ export const generateRecommendations = async (
       signals: trendsToScore.map(normalizeTrendInput),
       geo: pickProfileGeo(profile),
       category: pickEffectiveCategory(profile, input.strategicPayload),
-      companyProfile: companyProfileForOmniVyra,
+      companyProfile: companyProfileForOmnivyra,
     });
     if (relevance.status === 'ok') {
       const relevant = relevance.data?.relevant_trends ?? relevance.data?.trends ?? [];
@@ -711,7 +711,7 @@ export const generateRecommendations = async (
       signals: trendsUsed.map(normalizeTrendInput),
       geo: pickProfileGeo(profile),
       category: pickEffectiveCategory(profile, input.strategicPayload),
-      companyProfile: companyProfileForOmniVyra,
+      companyProfile: companyProfileForOmnivyra,
     });
     if (ranking.status === 'ok') {
       const ranked = ranking.data?.ranked_trends ?? ranking.data?.trends ?? [];
@@ -919,9 +919,9 @@ export const generateRecommendations = async (
       objective,
       durationWeeks,
     });
-    const healthReport = getOmniVyraHealthReport();
+    const healthReport = getOmnivyraHealthReport();
     const lastMeta = getLastMeta();
-    if (!isOmniVyraEnabled()) {
+    if (!isOmnivyraEnabled()) {
       setLastFallbackReason('omnivyra_disabled');
     }
     const fallbackBaseConfidence = computeConfidence([], undefined);
@@ -962,7 +962,7 @@ export const generateRecommendations = async (
         confidence: undefined,
         contract_version: lastMeta?.contract_version,
         latency_ms: lastMeta?.latency_ms,
-        fallback_reason: getLastFallbackReason() ?? (isOmniVyraEnabled() ? null : 'omnivyra_disabled'),
+        fallback_reason: getLastFallbackReason() ?? (isOmnivyraEnabled() ? null : 'omnivyra_disabled'),
         last_error: healthReport.last_error,
         endpoint: lastMeta?.endpoint ?? null,
       },
@@ -970,7 +970,7 @@ export const generateRecommendations = async (
       signals_source: 'PROFILE_ONLY' as const,
     } as RecommendationEngineResult;
 
-    if (isOmniVyraEnabled()) {
+    if (isOmnivyraEnabled()) {
       const learning = await sendLearningSnapshot({
         companyId: input.companyId,
         campaignId: input.campaignId ?? undefined,
@@ -992,7 +992,7 @@ export const generateRecommendations = async (
     return result;
   }
 
-  const healthReport = getOmniVyraHealthReport();
+  const healthReport = getOmnivyraHealthReport();
   const lastMeta = getLastMeta();
   const scenarioOutcomes = input.simulate
     ? computeScenarioOutcomes(confidence, trendsUsed.length)
@@ -1097,7 +1097,7 @@ export const generateRecommendations = async (
     result.execution_source = EXECUTION_SOURCE_VALIDATED;
   }
 
-  if (isOmniVyraEnabled()) {
+  if (isOmnivyraEnabled()) {
     const learning = await sendLearningSnapshot({
       companyId: input.companyId,
       campaignId: input.campaignId ?? undefined,

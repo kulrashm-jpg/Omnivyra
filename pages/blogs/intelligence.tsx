@@ -101,7 +101,7 @@ export default function BlogIntelligencePage() {
   return (
     <>
       <Head>
-        <title>Blog Intelligence | OmniVyra</title>
+        <title>Blog Intelligence | Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.07),_transparent_35%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_50%,#f8fafc_100%)] p-6">

@@ -1,6 +1,6 @@
 import type { NextApiRequest } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { evaluateCommunityAiForecastInsights, isOmniVyraEnabled } from './omnivyraClientV1';
+import { evaluateCommunityAiForecastInsights, isOmnivyraEnabled } from './omnivyraClientV1';
 import forecastHandler from '../../pages/api/community-ai/forecast';
 import trendsHandler from '../../pages/api/community-ai/trends';
 import contentKpisHandler from '../../pages/api/community-ai/content-kpis';
@@ -106,9 +106,9 @@ export const evaluateForecastInsights = async (
   input: ForecastInsightsInput
 ): Promise<ForecastInsightsOutput> => {
   const brandVoice = normalizeBrandVoice(input.brand_voice);
-  if (!isOmniVyraEnabled()) {
+  if (!isOmnivyraEnabled()) {
     return {
-      explanation_summary: 'OmniVyra disabled',
+      explanation_summary: 'Omnivyra disabled',
       key_drivers: [],
       risks: [],
       recommended_actions: [],
@@ -153,7 +153,7 @@ export const evaluateForecastInsights = async (
       reason: response.error?.message,
     });
     return {
-      explanation_summary: 'OmniVyra unavailable',
+      explanation_summary: 'Omnivyra unavailable',
       key_drivers: [],
       risks: [],
       recommended_actions: [],

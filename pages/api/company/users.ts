@@ -377,6 +377,22 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     try {
+      if (desiredRole === Role.COMPANY_ADMIN && access.role !== Role.SUPER_ADMIN) {
+        const { count: activeAdminCount } = await supabase
+          .from('user_company_roles')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .eq('role', Role.COMPANY_ADMIN)
+          .eq('status', 'active');
+
+        if ((activeAdminCount ?? 0) > 0) {
+          return res.status(409).json({
+            error: 'ADMIN_TRANSFER_REQUIRED',
+            details: 'This company already has an active company admin. Transfer admin access instead of creating a second admin.',
+          });
+        }
+      }
+
       // 1. Domain enforcement: COMPANY_ADMIN must use the company's work email domain.
       //    SUPER_ADMIN callers are exempt.
       if (desiredRole === Role.COMPANY_ADMIN && access.role !== Role.SUPER_ADMIN) {
@@ -497,6 +513,25 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       role: desiredRole,
       updated_at: new Date().toISOString(),
     };
+
+    if (desiredRole === Role.COMPANY_ADMIN && access.role !== Role.SUPER_ADMIN) {
+      const { data: anotherAdmin } = await supabase
+        .from('user_company_roles')
+        .select('user_id')
+        .eq('company_id', companyId)
+        .eq('role', Role.COMPANY_ADMIN)
+        .eq('status', 'active')
+        .neq('user_id', userId)
+        .limit(1)
+        .maybeSingle();
+
+      if (anotherAdmin) {
+        return res.status(409).json({
+          error: 'ADMIN_TRANSFER_REQUIRED',
+          details: 'This company already has an active company admin. Reassign the current admin before promoting another user.',
+        });
+      }
+    }
     if (status) {
       updates.status = status;
       if (status === 'inactive' || status === 'deactivated') {

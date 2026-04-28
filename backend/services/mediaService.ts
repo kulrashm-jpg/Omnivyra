@@ -69,6 +69,18 @@ export interface MediaValidation {
   };
 }
 
+function stripMissingColumnFromInsertPayload(payload: Record<string, any>, errorMessage: string) {
+  const match = String(errorMessage || '').match(/Could not find the '([^']+)' column/i);
+  const missingColumn = match?.[1];
+  if (!missingColumn || !(missingColumn in payload)) {
+    return null;
+  }
+
+  const nextPayload = { ...payload };
+  delete nextPayload[missingColumn];
+  return nextPayload;
+}
+
 /**
  * Media type validation rules
  */
@@ -268,26 +280,56 @@ export async function uploadMedia(options: UploadMediaOptions): Promise<MediaFil
   const fileUrl = urlData.publicUrl;
 
   // Save metadata to database
-  const { data: dbData, error: dbError } = await supabase
-    .from('media_files')
-    .insert({
-      user_id: userId,
-      campaign_id: campaignId || null,
-      file_name: fileName,
-      file_path: filePath,
-      file_url: fileUrl,
-      file_size: fileBuffer.length,
-      mime_type: mimeType,
-      media_type: mediaType,
-      width: metadata.width || null,
-      height: metadata.height || null,
-      duration: metadata.duration || null,
-      storage_provider: 'supabase',
-      storage_bucket: bucketName,
-      metadata: metadata,
-    })
-    .select()
-    .single();
+  const insertPayload: Record<string, any> = {
+    user_id: userId,
+    campaign_id: campaignId || null,
+    file_name: fileName,
+    original_name: fileName,
+    file_type: mimeType,
+    file_size_bytes: fileBuffer.length,
+    storage_url: fileUrl,
+    dimensions:
+      metadata.width && metadata.height
+        ? `${metadata.width}x${metadata.height}`
+        : null,
+    duration_seconds: metadata.duration || null,
+    file_path: filePath,
+    file_url: fileUrl,
+    file_size: fileBuffer.length,
+    mime_type: mimeType,
+    media_type: mediaType,
+    width: metadata.width || null,
+    height: metadata.height || null,
+    duration: metadata.duration || null,
+    storage_provider: 'supabase',
+    storage_bucket: bucketName,
+    metadata: metadata,
+  };
+
+  let dbData: any = null;
+  let dbError: any = null;
+  let currentPayload: Record<string, any> | null = insertPayload;
+
+  while (currentPayload) {
+    const result = await supabase
+      .from('media_files')
+      .insert(currentPayload)
+      .select()
+      .single();
+
+    dbData = result.data;
+    dbError = result.error;
+
+    if (!dbError) {
+      break;
+    }
+
+    const strippedPayload = stripMissingColumnFromInsertPayload(currentPayload, dbError.message);
+    if (!strippedPayload) {
+      break;
+    }
+    currentPayload = strippedPayload;
+  }
 
   if (dbError) {
     // Rollback: delete uploaded file if DB insert fails

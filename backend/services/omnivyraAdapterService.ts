@@ -1,6 +1,6 @@
-import { getExplainability, isOmniVyraEnabled } from './omnivyraClientV1';
+import { getExplainability, isOmnivyraEnabled } from './omnivyraClientV1';
 
-export type OmniVyraAdvisory = {
+export type OmnivyraAdvisory = {
   hashtags: string[];
   timing: string | null;
   format: string | null;
@@ -16,17 +16,17 @@ export type OmniVyraAdvisory = {
   };
 };
 
-export async function getOmniVyraAdvisory(input: {
+export async function getOmnivyraAdvisory(input: {
   recommendation?: string | null;
   context?: any;
-}): Promise<OmniVyraAdvisory> {
+}): Promise<OmnivyraAdvisory> {
   const recommendation = input.recommendation || '';
-  if (!isOmniVyraEnabled()) {
+  if (!isOmnivyraEnabled()) {
     return {
       hashtags: [],
       timing: null,
       format: null,
-      notes: recommendation ? recommendation : 'No OmniVyra advisory provided',
+      notes: recommendation ? recommendation : 'No Omnivyra advisory provided',
       source: recommendation ? 'omnivyra' : 'placeholder',
     };
   }
@@ -41,7 +41,7 @@ export async function getOmniVyraAdvisory(input: {
       hashtags: [],
       timing: null,
       format: null,
-      notes: recommendation ? recommendation : 'No OmniVyra advisory provided',
+      notes: recommendation ? recommendation : 'No Omnivyra advisory provided',
       source: recommendation ? 'omnivyra' : 'placeholder',
     };
   }

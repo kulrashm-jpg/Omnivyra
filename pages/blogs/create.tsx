@@ -97,7 +97,7 @@ export default function BlogCreatePage() {
   return (
     <>
       <Head>
-        <title>Create Blog | OmniVyra</title>
+        <title>Create Blog | Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">

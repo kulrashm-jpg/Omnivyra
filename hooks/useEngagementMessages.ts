@@ -20,13 +20,39 @@ export type EngagementMessage = {
   created_at?: string | null;
   platform_created_at?: string | null;
   optimistic?: boolean;
+  /** Display name of the comment author, sourced from raw_payload.author_name
+   *  on the server. Falls back to author_id (UUID) if not captured. Used by
+   *  ConversationView to show "who wrote this comment" in People Reaction. */
+  author_display_name?: string | null;
+  author_handle?: string | null;
+  author_self?: boolean;
+  author_avatar_url?: string | null;
+  /** True when this row was hand-seeded for demo. Like/Reply against these
+   *  always fail because their platform_message_id is synthetic; UI gates
+   *  the action buttons accordingly. */
+  is_placeholder?: boolean;
+  /** Virtual row representing a queued outbound DM action that hasn't yet
+   *  been delivered by the Chrome extension. Rendered with a "Queued · not
+   *  yet delivered" marker and a Cancel button. Removed automatically once
+   *  the extension delivers and the real outbound message gets ingested. */
+  is_pending_outbound?: boolean;
+  /** community_ai_actions.id for the queued action, used by the cancel
+   *  button to call /api/engagement/cancel-queued. */
+  pending_action_id?: string | null;
 };
 
-const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+// Conversation pane refresh cadence. Mirrors the inbox: 30 s so the
+// reactions/replies on the open thread reflect new scraped data quickly.
+const REFRESH_INTERVAL_MS = 30 * 1000; // 30 seconds
 
 export function useEngagementMessages(
   organizationId: string,
-  threadId: string | null
+  threadId: string | null,
+  /** Optional sibling thread ids — when the inbox API has collapsed
+   *  multiple legacy DM threads for the same counterparty into one
+   *  canonical row, the conversation pane passes the other thread ids
+   *  here so messages from the merged conversation render together. */
+  siblingThreadIds: string[] = []
 ): {
   messages: EngagementMessage[];
   loading: boolean;
@@ -40,7 +66,7 @@ export function useEngagementMessages(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchMessages = useCallback(async () => {
+  const fetchMessages = useCallback(async (background = false) => {
     if (!organizationId?.trim() || !threadId?.trim()) {
       setMessages([]);
       setOptimisticMessages([]);
@@ -49,7 +75,9 @@ export function useEngagementMessages(
       return;
     }
 
-    setLoading(true);
+    // Background refreshes silently swap message data; only the very first
+    // load (or thread switch) flips the loading skeleton.
+    if (!background) setLoading(true);
     setError(null);
 
     const params = new URLSearchParams({
@@ -57,6 +85,9 @@ export function useEngagementMessages(
       thread_id: threadId,
       limit: '50',
     });
+    if (siblingThreadIds && siblingThreadIds.length > 0) {
+      params.set('sibling_thread_ids', siblingThreadIds.join(','));
+    }
 
     try {
       const res = await apiFetch(`/api/engagement/messages?${params.toString()}`);
@@ -91,19 +122,21 @@ export function useEngagementMessages(
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch messages');
-      setMessages([]);
+      // Don't blow away the prior message list on a background-poll
+      // failure — keep the last good data and surface the error.
+      if (!background) setMessages([]);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
-  }, [organizationId, threadId]);
+  }, [organizationId, threadId, siblingThreadIds.join(',')]);
 
   useEffect(() => {
-    fetchMessages();
+    fetchMessages(false);
   }, [fetchMessages]);
 
   useEffect(() => {
     if (!organizationId?.trim() || !threadId?.trim()) return;
-    const interval = setInterval(fetchMessages, REFRESH_INTERVAL_MS);
+    const interval = setInterval(() => fetchMessages(true), REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [organizationId, threadId, fetchMessages]);
 
@@ -124,11 +157,15 @@ export function useEngagementMessages(
     return tb - ta;
   });
 
+  // Public refresh is a *background* refresh — see useEngagementInbox for
+  // the same rationale. Keeps the message list visible across click-driven
+  // refreshes instead of flashing a skeleton.
+  const refresh = useCallback(() => fetchMessages(true), [fetchMessages]);
   return {
     messages: mergedMessages,
     loading,
     error,
-    refresh: fetchMessages,
+    refresh,
     addOptimisticMessage,
     clearOptimisticMessages,
   };

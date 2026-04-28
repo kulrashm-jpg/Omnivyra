@@ -52,6 +52,68 @@ export interface AnalyticsSummary {
   platforms: PlatformAnalyticsRow[];
 }
 
+export interface GoogleAnalyticsStatusSummary {
+  connected: boolean;
+  status: string;
+  message: string;
+  last_sync: string | null;
+  events_last_30_days: number;
+  reconnect_required: boolean;
+  property: {
+    id: string;
+    name: string;
+    account_id: string | null;
+  } | null;
+  properties?: Array<{
+    id: string;
+    name: string;
+    account_id: string | null;
+    active: boolean;
+  }>;
+}
+
+export interface GoogleAnalyticsOverview {
+  total_sessions: number;
+  engaged_sessions: number;
+  engagement_rate: number;
+  total_page_views: number;
+  avg_events_per_session: number;
+  total_conversions: number;
+  conversion_rate: number;
+  avg_engagement_time_seconds: number;
+}
+
+export interface GoogleAnalyticsTrafficSourceRow {
+  traffic_source: string;
+  source_medium: string;
+  sessions: number;
+  events: number;
+  conversions: number;
+}
+
+export interface GoogleAnalyticsTopPageRow {
+  page_url: string;
+  visits: number;
+  events: number;
+  conversions: number;
+}
+
+export interface GoogleAnalyticsConversionRow {
+  conversion_name: string;
+  count: number;
+}
+
+export interface GoogleAnalyticsCompanySummary {
+  company_id: string;
+  company_name: string;
+  website: string;
+  ga_status: GoogleAnalyticsStatusSummary;
+  overview: GoogleAnalyticsOverview;
+  traffic_sources: GoogleAnalyticsTrafficSourceRow[];
+  top_pages: GoogleAnalyticsTopPageRow[];
+  conversions: GoogleAnalyticsConversionRow[];
+}
+
 export interface CampaignHealthCompanyRow {
   company_id: string;
   total_campaigns: number;

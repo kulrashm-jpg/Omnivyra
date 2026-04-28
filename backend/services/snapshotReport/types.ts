@@ -350,6 +350,8 @@ export interface SnapshotReport {
     primary_offering: string | null;
     positioning: string | null;
     market_context: string | null;
+    logo_url: string | null;
+    favicon_url: string | null;
     positioning_strength: PositioningStrength;
     positioning_narrative: string;
     positioning_gap: string | null;
@@ -441,6 +443,8 @@ export type CompanyNarrativeContext = {
   marketFocus: string | null;
   productServices: string[];
   geography: string | null;
+  logoUrl: string | null;
+  faviconUrl: string | null;
 };
 
 export type PositioningStrength = 'strong' | 'moderate' | 'weak';

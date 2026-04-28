@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCompanyContext } from '@/backend/services/companyContextGuardService';
+import { sendInvite } from '@/backend/services/emailService';
 import { verifySupabaseAuthHeader } from '../../../../lib/auth/serverValidation';
 import { randomBytes, createHash } from 'crypto';
 
@@ -146,8 +147,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rawToken = await createInvitationToken(userId, normalizedEmail, companyId, actorId);
     const inviteUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invite?token=${rawToken}`;
 
-    // TODO: send invite email via Resend/SendGrid/SES
-    console.info('[reinvite] invitation link for', normalizedEmail, ':', inviteUrl);
+    // Send the invite via SES through the email_jobs queue. Idempotency
+    // key bound to (user, company) so back-to-back reinvite requests
+    // collapse to a single email instead of spamming the recipient.
+    await sendInvite(
+      normalizedEmail,
+      inviteUrl,
+      `reinvite:${companyId}:${userId}`,
+    );
 
     return res.status(200).json({ success: true });
   } catch (error: any) {

@@ -280,7 +280,7 @@ export default function DigitalAuthoritySnapshotPage() {
   return (
     <>
       <Head>
-        <title>Digital Authority Snapshot — Free Report | OmniVyra</title>
+        <title>Digital Authority Snapshot — Free Report | Omnivyra</title>
         <meta
           name="description"
           content="Generate your free Digital Authority Snapshot. See exactly what's holding your digital growth back — no payment, no credit card."

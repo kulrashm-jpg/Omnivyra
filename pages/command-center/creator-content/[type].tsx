@@ -331,12 +331,84 @@ type CreatorResult = {
   };
 };
 
+type SuggestionOption = {
+  id: string;
+  label: string;
+  summary: string;
+  rationale: string;
+};
+
+type SavedBlockReference = {
+  id: string;
+  reference: string;
+  name: string;
+};
+
 function summarizeMediaUrls(result: CreatorResult | null): string[] {
   if (!result) return [];
   const mediaBundle = result.output.asset_payload.media_bundle || {};
   const files = Array.isArray(mediaBundle.files) ? mediaBundle.files.filter(Boolean) : [];
   const url = typeof mediaBundle.url === 'string' && mediaBundle.url.trim() ? [mediaBundle.url.trim()] : [];
   return [...url, ...files];
+}
+
+function humanizeValue(value: string | undefined): string {
+  return String(value || '')
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim();
+}
+
+function buildBlockReference(templateId: string): string {
+  const compact = String(templateId || '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .slice(0, 8)
+    .toUpperCase();
+  return compact ? `BLK-${compact}` : 'BLK-PENDING';
+}
+
+function getOptionLabel(config: WorkflowConfig, fieldId: string, value: string | undefined): string {
+  const field = config.fields.find(
+    (entry): entry is Extract<WorkflowField, { kind: 'single-select' }> =>
+      entry.id === fieldId && entry.kind === 'single-select',
+  );
+  if (!field || !value) return humanizeValue(value);
+  return field.options.find((option) => option.value === value)?.label || humanizeValue(value);
+}
+
+function buildSuggestionOptions(config: WorkflowConfig, answers: Record<string, string>): SuggestionOption[] {
+  const subtypeLabel = config.subtypeOptions.find((option) => option.value === answers.subtype)?.label || config.title;
+  const objective = getOptionLabel(config, 'objective', answers.objective) || 'engagement';
+  const style = getOptionLabel(config, 'styleDirection', answers.styleDirection) || 'brand-led';
+  const continuity =
+    getOptionLabel(config, 'continuity', answers.continuity) ||
+    getOptionLabel(config, 'visualSystem', answers.visualSystem) ||
+    getOptionLabel(config, 'structureMode', answers.structureMode) ||
+    getOptionLabel(config, 'hierarchy', answers.hierarchy) ||
+    'clear visual continuity';
+  const audience = String(answers.audience || 'your target audience').trim();
+  const message = String(answers.keyMessage || answers.headline || answers.topic || config.title).trim();
+
+  return [
+    {
+      id: 'safe-fit',
+      label: 'Brand-Safe Direction',
+      summary: `${subtypeLabel} ${config.title.toLowerCase()} optimized for ${objective.toLowerCase()} with a ${style.toLowerCase()} look and ${continuity.toLowerCase()}.`,
+      rationale: `Best when you want something clean, clear, and easy for ${audience} to understand quickly.`,
+    },
+    {
+      id: 'standout',
+      label: 'Standout Direction',
+      summary: `${subtypeLabel} ${config.title.toLowerCase()} that pushes the hook harder around "${message}" and creates stronger visual separation across the asset.`,
+      rationale: `Best when the priority is stopping attention and making the concept feel sharper or less generic.`,
+    },
+    {
+      id: 'educator',
+      label: 'Structured Direction',
+      summary: `${subtypeLabel} ${config.title.toLowerCase()} with a more structured teaching flow so the audience can scan, understand, and retain the core message faster.`,
+      rationale: `Best when clarity, retention, and downstream reuse matter more than novelty alone.`,
+    },
+  ];
 }
 
 export default function CreatorTypeWorkflowPage() {
@@ -350,6 +422,10 @@ export default function CreatorTypeWorkflowPage() {
   const [isSavingBlock, setIsSavingBlock] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+  const [savedBlock, setSavedBlock] = React.useState<SavedBlockReference | null>(null);
+  const [selectedSuggestionId, setSelectedSuggestionId] = React.useState('safe-fit');
+  const [refinePrompt, setRefinePrompt] = React.useState('');
+  const [refinedSuggestion, setRefinedSuggestion] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<CreatorResult | null>(null);
 
   React.useEffect(() => {
@@ -363,6 +439,10 @@ export default function CreatorTypeWorkflowPage() {
     setResult(null);
     setError(null);
     setNotice(null);
+    setSavedBlock(null);
+    setSelectedSuggestionId('safe-fit');
+    setRefinePrompt('');
+    setRefinedSuggestion(null);
   }, [config, type]);
 
   if (!authChecked || isLoading) {
@@ -389,6 +469,23 @@ export default function CreatorTypeWorkflowPage() {
     setAnswers((current) => ({ ...current, [id]: value }));
   };
 
+  const suggestionOptions = React.useMemo(() => buildSuggestionOptions(config, answers), [config, answers]);
+  const selectedSuggestion =
+    suggestionOptions.find((option) => option.id === selectedSuggestionId) || suggestionOptions[0];
+
+  const handleRefineSuggestion = () => {
+    const note = String(refinePrompt || '').trim();
+    if (!note) {
+      setError('Add a short refinement note so AI knows what to push further.');
+      return;
+    }
+
+    setError(null);
+    const refined = `${selectedSuggestion.summary} Refine it further by making it ${note}.`;
+    setRefinedSuggestion(refined);
+    setNotice('AI direction refined. Generate when this feels right.');
+  };
+
   const handleGenerate = async () => {
     if (!selectedCompanyId) {
       setError('Select a company context before generating creator content.');
@@ -402,6 +499,7 @@ export default function CreatorTypeWorkflowPage() {
     setIsGenerating(true);
     setError(null);
     setNotice(null);
+    setSavedBlock(null);
     setResult(null);
 
     const constraintLines = [
@@ -418,6 +516,9 @@ export default function CreatorTypeWorkflowPage() {
       answers.density ? `Density: ${answers.density}` : '',
       answers.styleDirection ? `Style direction: ${answers.styleDirection}` : '',
       answers.refinement ? `Additional notes: ${answers.refinement}` : '',
+      selectedSuggestion ? `Selected AI direction: ${selectedSuggestion.summary}` : '',
+      refinedSuggestion ? `Refined AI direction: ${refinedSuggestion}` : '',
+      refinePrompt ? `Refinement prompt: ${refinePrompt}` : '',
     ].filter(Boolean);
 
     try {
@@ -526,7 +627,22 @@ export default function CreatorTypeWorkflowPage() {
         throw new Error(data?.error || 'Failed to save this creator output as a reusable block.');
       }
 
-      setNotice('Saved as a reusable block template. You can now pull it into long-form content.');
+      const templateId = String(data?.template?.id || '').trim();
+      const templateName = String(data?.template?.name || `${String(answers.topic || config.title).trim()} Block`).trim();
+      const nextSavedBlock = templateId
+        ? {
+            id: templateId,
+            reference: buildBlockReference(templateId),
+            name: templateName,
+          }
+        : null;
+
+      setSavedBlock(nextSavedBlock);
+      setNotice(
+        nextSavedBlock
+          ? `Saved as reusable block ${nextSavedBlock.reference}. Writer Content can pull this asset later using the saved block reference.`
+          : 'Saved as a reusable block template. You can now pull it into long-form content.',
+      );
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Failed to save this creator output as a reusable block.');
     } finally {
@@ -538,11 +654,7 @@ export default function CreatorTypeWorkflowPage() {
   const slides = Array.isArray(result?.output.asset_payload.slides) ? result.output.asset_payload.slides : [];
   const selectedSubtype = config.subtypeOptions.find((option) => option.value === answers.subtype) || config.subtypeOptions[0];
   const proposalLine = [
-    selectedSubtype?.label ? `${selectedSubtype.label} ${config.title.toLowerCase()}` : config.title,
-    answers.objective ? `optimized for ${answers.objective.replace(/-/g, ' ')}` : '',
-    answers.styleDirection ? `with a ${answers.styleDirection.replace(/-/g, ' ')} visual tone` : '',
-    answers.continuity ? `using ${answers.continuity.replace(/-/g, ' ')} flow` : '',
-    answers.visualSystem ? `and ${answers.visualSystem.replace(/-/g, ' ')} continuity` : '',
+    refinedSuggestion || selectedSuggestion?.summary || '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -683,22 +795,85 @@ export default function CreatorTypeWorkflowPage() {
               >
                 {isGenerating ? 'Generating...' : `Generate ${config.title}`}
               </button>
-              <button
-                type="button"
-                onClick={() => router.push('/command-center/writer-content')}
-                className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-sm font-semibold text-gray-700 transition hover:border-gray-300 hover:text-gray-900"
-              >
-                Open Writer Content
-              </button>
             </div>
           </div>
 
           <div className="space-y-6">
             <div className="rounded-[28px] border border-white/80 bg-white/92 p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] backdrop-blur-sm md:p-8">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Generated Output</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                {result ? 'Generated Output' : 'Pick A Direction'}
+              </p>
               {!result ? (
-                <div className="mt-4 rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-5 py-10 text-sm text-gray-500">
-                  Once you generate, this panel will show the AI-built creator output for {config.title.toLowerCase()}, including media URLs and downstream actions.
+                <div className="mt-4 space-y-5">
+                  <div className="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-4">
+                    <p className="text-sm font-medium text-gray-700">
+                      AI has prepared a few starting directions based on your selections. Pick the one that feels closest, then refine it if needed.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {suggestionOptions.map((option) => {
+                      const selected = selectedSuggestionId === option.id;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedSuggestionId(option.id);
+                            setRefinedSuggestion(null);
+                            setNotice(null);
+                          }}
+                          className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+                            selected
+                              ? 'border-slate-900 bg-slate-900 text-white'
+                              : 'border-gray-200 bg-white text-gray-800 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold">{option.label}</p>
+                            {selected ? (
+                              <span className="rounded-full bg-white/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white">
+                                Selected
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className={`mt-2 text-sm leading-6 ${selected ? 'text-slate-100' : 'text-gray-700'}`}>
+                            {option.summary}
+                          </p>
+                          <p className={`mt-2 text-xs leading-5 ${selected ? 'text-slate-300' : 'text-gray-500'}`}>
+                            {option.rationale}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Refine With AI</p>
+                    <p className="mt-2 text-sm leading-6 text-blue-900">
+                      Tell AI what to change if the selected direction is close but not quite right.
+                    </p>
+                    <textarea
+                      value={refinePrompt}
+                      onChange={(event) => setRefinePrompt(event.target.value)}
+                      rows={3}
+                      placeholder="Example: make it less corporate, more premium, and more visual-first."
+                      className="mt-3 w-full rounded-2xl border border-blue-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRefineSuggestion}
+                      className="mt-3 rounded-2xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
+                    >
+                      Refine Direction
+                    </button>
+                    {refinedSuggestion ? (
+                      <div className="mt-4 rounded-2xl border border-blue-200 bg-white px-4 py-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">Refined Direction</p>
+                        <p className="mt-2 text-sm leading-6 text-gray-700">{refinedSuggestion}</p>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ) : (
                 <div className="mt-4 space-y-5">
@@ -730,6 +905,17 @@ export default function CreatorTypeWorkflowPage() {
                             {url}
                           </a>
                         ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {savedBlock && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">Saved Block Reference</p>
+                      <div className="mt-2 space-y-1 text-sm text-amber-900">
+                        <p className="font-semibold">{savedBlock.reference}</p>
+                        <p>{savedBlock.name}</p>
+                        <p className="break-all text-xs text-amber-800">Block ID: {savedBlock.id}</p>
                       </div>
                     </div>
                   )}

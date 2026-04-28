@@ -4,7 +4,7 @@ import { getProfile } from '../../services/companyProfileService';
 import { fetchExternalApis } from '../../services/externalApiService';
 import { validateUniqueness } from '../../services/campaignMemoryService';
 import { generateCampaignStrategy } from '../../services/campaignRecommendationService';
-import { isOmniVyraEnabled } from '../../services/omnivyraClientV1';
+import { isOmnivyraEnabled } from '../../services/omnivyraClientV1';
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
@@ -39,8 +39,8 @@ jest.mock('../../services/campaignRecommendationService', () => ({
 jest.mock('../../services/omnivyraClientV1', () => ({
   getTrendRelevance: jest.fn(),
   getTrendRanking: jest.fn(),
-  isOmniVyraEnabled: jest.fn(),
-  getOmniVyraHealthReport: jest.fn().mockReturnValue({
+  isOmnivyraEnabled: jest.fn(),
+  getOmnivyraHealthReport: jest.fn().mockReturnValue({
     status: 'healthy',
     endpoints: {},
     avg_latency_ms: 0,
@@ -118,9 +118,9 @@ describe('generateRecommendations fallback signals', () => {
       rate_limited_sources: [],
       signal_confidence_summary: null,
     });
-    (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+    (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
     const omnivyra = jest.requireMock('../../services/omnivyraClientV1');
-    omnivyra.getOmniVyraHealthReport.mockReturnValue({
+    omnivyra.getOmnivyraHealthReport.mockReturnValue({
       status: 'healthy',
       endpoints: {},
       avg_latency_ms: 0,

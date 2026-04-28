@@ -98,7 +98,7 @@ export default function AdminBlogListPage() {
             <Link href="/dashboard" className="flex shrink-0 items-center" aria-label="Home">
               <img
                 src="/logo.png"
-                alt="OmniVyra"
+                alt="Omnivyra"
                 width={100}
                 height={40}
                 className="h-10 w-auto object-contain sm:h-11"

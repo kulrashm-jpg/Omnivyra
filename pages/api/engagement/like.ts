@@ -85,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data: message, error: msgError } = await supabase
       .from('engagement_messages')
-      .select('id, thread_id, platform_message_id, post_comment_id, platform')
+      .select('id, thread_id, platform_message_id, post_comment_id, platform, raw_payload')
       .eq('id', messageId)
       .maybeSingle();
 
@@ -101,6 +101,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!thread || thread.organization_id !== organizationId) {
       return res.status(403).json({ error: 'Message thread not found or access denied' });
+    }
+
+    // Reject Like on placeholder seed rows — their platform_message_id is
+    // synthetic ("urn:li:activity:...#demo-comment-N") and LinkedIn rejects
+    // it with "TargetUrn ... is not valid". Mirrors the same guard in
+    // reply.ts so the operator sees a clean error instead of a 502 chain.
+    const messageRawPayload = (message as { raw_payload?: Record<string, unknown> } | null)?.raw_payload;
+    if (messageRawPayload?.placeholder === true) {
+      return res.status(409).json({
+        error:
+          'This is a demo seed row — likes require a real LinkedIn comment URN. ' +
+          'Visit the LinkedIn post to let the extension scrape real comment IDs, then like those.',
+        code: 'PLACEHOLDER_TARGET',
+        platform,
+      });
     }
 
     // comment_likes is upserted only after the platform confirms — same

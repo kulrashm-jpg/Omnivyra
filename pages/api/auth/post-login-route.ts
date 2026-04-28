@@ -7,7 +7,7 @@
  *
  *   /onboarding/profile  — new user, no name yet
  *   /onboarding/company  — has profile but no active company membership
- *   /dashboard           — existing user, all checks pass
+ *   /command-center      — default workspace landing for eligible users
  *
  * Auth: Supabase access token in Authorization: Bearer <token>
  */
@@ -42,7 +42,7 @@ export default async function handler(
   // ── 2. Look up user row ───────────────────────────────────────────────────
   const { data: userRow } = await supabase
     .from('users')
-    .select('id, name, company_id, last_sign_in_at, is_deleted')
+    .select('id, name, company_id, role, last_sign_in_at, is_deleted, onboarding_state, has_password')
     .or(`supabase_uid.eq.${supabaseUid},email.eq.${email.toLowerCase()}`)
     .maybeSingle();
 
@@ -66,32 +66,62 @@ export default async function handler(
   }
 
   const userId: string = (userRow as any).id;
+  const onboardingState = String((userRow as any).onboarding_state ?? '');
+  const hasPassword = (userRow as any).has_password === true;
+  const userCompanyId = String((userRow as any).company_id ?? '').trim();
+  const userRole = String((userRow as any).role ?? '').trim();
+
+  if (!hasPassword) {
+    return res.status(200).json({ route: '/auth/set-password' });
+  }
 
   // ── 3. New user: no name set yet → complete profile ───────────────────────
-  if (!(userRow as any).name) {
+  if (
+    !(userRow as any).name ||
+    onboardingState === 'verified' ||
+    onboardingState === 'pending_verification'
+  ) {
     return res.status(200).json({ route: '/onboarding/profile' });
   }
 
   // ── 4. No active company membership → company setup ──────────────────────
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('role, company_id')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  let roleRow: { role?: string | null; company_id?: string | null } | null = null;
+
+  if (userCompanyId && userRole) {
+    roleRow = { role: userRole, company_id: userCompanyId };
+  } else {
+    const { data: activeRoleRow } = await supabase
+      .from('user_company_roles')
+      .select('role, company_id')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    roleRow = (activeRoleRow as { role?: string | null; company_id?: string | null } | null) ?? null;
+
+    if (roleRow?.company_id || roleRow?.role) {
+      await supabase
+        .from('users')
+        .update({
+          ...(roleRow.company_id ? { company_id: roleRow.company_id } : {}),
+          ...(roleRow.role ? { role: roleRow.role } : {}),
+        })
+        .eq('id', userId);
+    }
+  }
 
   if (!roleRow) {
     return res.status(200).json({ route: '/onboarding/company' });
   }
 
   // ── 5. Validate role exists (safety fallback) ──────────────────────────────
-  // If role is missing/invalid, default to dashboard for safety
-  const userRole = (roleRow as any)?.role;
-  if (!userRole) {
+  // If role is missing/invalid, default to command center for safety
+  const resolvedRole = (roleRow as any)?.role;
+  if (!resolvedRole) {
     console.warn('[post-login-route] Invalid or missing role', { userId });
-    return res.status(200).json({ route: '/dashboard' });
+    return res.status(200).json({ route: '/command-center' });
   }
 
   // ── 6. Check user preferences for post-login landing page ────────────────

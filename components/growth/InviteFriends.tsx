@@ -37,7 +37,7 @@ export default function InviteFriends({ trigger, className = '' }: InviteFriends
   };
 
   const handleCopyLink = async () => {
-    const inviteUrl = `${window.location.origin}/signup?ref=invite`;
+    const inviteUrl = `${window.location.origin}/create-account?ref=invite`;
     try {
       await navigator.clipboard.writeText(inviteUrl);
       setCopied(true);
@@ -61,7 +61,7 @@ export default function InviteFriends({ trigger, className = '' }: InviteFriends
       body: 'Know a marketing team that could use a content engine?',
     },
     manual: {
-      title: 'Enjoying OmniVyra?',
+      title: 'Enjoying Omnivyra?',
       body: 'Invite your team or share with a colleague who creates content.',
     },
   };

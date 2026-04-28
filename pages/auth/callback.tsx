@@ -1,14 +1,22 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 
 export default function AuthCallback() {
   const router = useRouter();
   const [statusMsg, setStatusMsg] = useState('Signing you in…');
+  // Guard against React strict-mode (and HMR-triggered) double-fire of
+  // the useEffect below. Without this, exchangeCodeForSession runs twice
+  // — the second call fails with "code already used" and the catch
+  // block redirects to /login?error=auth_failed. Tracking the call in
+  // a ref (instead of state) ensures the second invocation sees the
+  // flag synchronously even before the first invocation finishes.
+  const startedRef = useRef(false);
 
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     async function handleCallback() {
       const supabase  = getSupabaseBrowser();
       const params    = new URLSearchParams(window.location.search);
@@ -112,6 +120,15 @@ export default function AuthCallback() {
 
         if (!verifyRes.ok) {
           throw new Error('verify_failed');
+        }
+
+        const verifyJson = await verifyRes.json().catch(() => ({})) as { route?: string };
+        const verifyRoute = verifyJson.route;
+
+        if (verifyRoute && verifyRoute !== '/dashboard') {
+          setStatusMsg('Redirecting…');
+          router.replace(verifyRoute);
+          return;
         }
 
         setStatusMsg('Loading your workspace…');

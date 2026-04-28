@@ -1,6 +1,6 @@
 import {
   evaluateCommunityAiEngagement,
-  isOmniVyraEnabled,
+  isOmnivyraEnabled,
 } from './omnivyraClientV1';
 import { supabase } from '../db/supabaseClient';
 import { evaluateAutoRules } from './communityAiAutoRuleService';
@@ -101,9 +101,9 @@ export const evaluateEngagement = async (
   input: CommunityAiOmnivyraInput
 ): Promise<CommunityAiOmnivyraOutput> => {
   const brandVoice = normalizeBrandVoice(input.brand_voice);
-  if (!isOmniVyraEnabled()) {
+  if (!isOmnivyraEnabled()) {
     return {
-      analysis: 'OmniVyra disabled',
+      analysis: 'Omnivyra disabled',
       suggested_actions: [],
       content_improvement: null,
       safety_classification: null,
@@ -119,7 +119,7 @@ export const evaluateEngagement = async (
   if (response.status !== 'ok') {
     console.warn('OMNIVYRA_COMMUNITY_AI_FALLBACK', { reason: response.error?.message });
     return {
-      analysis: 'OmniVyra unavailable',
+      analysis: 'Omnivyra unavailable',
       suggested_actions: [],
       content_improvement: null,
       safety_classification: null,

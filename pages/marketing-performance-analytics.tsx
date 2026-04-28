@@ -6,7 +6,7 @@ export default function MarketingPerformanceAnalyticsPage() {
   return (
     <>
       <Head>
-        <title>Marketing Performance Analytics | OmniVyra</title>
+        <title>Marketing Performance Analytics | Omnivyra</title>
         <meta
           name="description"
           content="Learn how marketing performance analytics helps teams understand conversions, engagement, drop-offs, and the next best actions to improve growth."
@@ -42,8 +42,8 @@ export default function MarketingPerformanceAnalyticsPage() {
                 body: 'Many teams can see dashboards, but they still cannot identify the next best action because performance data is separated from execution decisions.',
               },
               {
-                title: 'How OmniVyra approaches analytics',
-                body: 'OmniVyra analyzes marketing performance, funnel behavior, conversion trends, and drop-offs, then translates those signals into prioritized actions teams can execute.',
+                title: 'How Omnivyra approaches analytics',
+                body: 'Omnivyra analyzes marketing performance, funnel behavior, conversion trends, and drop-offs, then translates those signals into prioritized actions teams can execute.',
               },
             ].map((section) => (
               <article key={section.title} className="rounded-2xl border border-gray-200/70 bg-white p-8 shadow-[0_2px_12px_rgba(10,31,68,0.05)]">
@@ -58,7 +58,7 @@ export default function MarketingPerformanceAnalyticsPage() {
               </Link>{' '}
               or return to the{' '}
               <Link href="/landing" className="font-semibold text-[#0A66C2]">
-                OmniVyra landing page
+                Omnivyra landing page
               </Link>
               .
             </p>

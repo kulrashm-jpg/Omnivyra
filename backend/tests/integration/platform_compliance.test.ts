@@ -23,7 +23,7 @@ describe('Platform compliance', () => {
     expect(report.status).toBe('blocked');
   });
 
-  it('blocks scheduling when OmniVyra returns block', async () => {
+  it('blocks scheduling when Omnivyra returns block', async () => {
     process.env.USE_OMNIVYRA = 'true';
     (global as any).fetch = jest.fn().mockResolvedValue({
       ok: true,

@@ -42,6 +42,7 @@ const EXTENSION_ACTION_BY_PAIR: Record<string, string> = {
   continue_thread: 'continue_thread',
   search_user: 'search_user',
   start_new_dm: 'start_new_dm',
+  sync_dm_inbox: 'sync_dm_inbox',
 };
 
 function mapCapabilityActionToExtensionAction(capabilityAction: string): string | null {
@@ -92,6 +93,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       client_version: clientCapabilityVersion,
     });
   }
+
+  // Heartbeat: a successful auth + capability check past this point means
+  // the extension is alive and polling. Stamp extension_sessions.last_seen
+  // so the platform-health badge can flip from 'unverified' to 'ok' as
+  // soon as the extension is loaded — not only after a successful action.
+  // Best-effort: failures here must not block command dispatch.
+  //
+  // The table has no unique index on (user_id, org_id), so we can't use
+  // upsert-on-conflict. Pattern: UPDATE → if zero rows matched, INSERT.
+  void (async () => {
+    try {
+      const nowTs = new Date().toISOString();
+      const { data: updated } = await supabase
+        .from('extension_sessions')
+        .update({ last_seen: nowTs, updated_at: nowTs })
+        .eq('user_id', session.userId)
+        .eq('org_id', session.orgId)
+        .select('id')
+        .limit(1);
+
+      if (!updated || updated.length === 0) {
+        // No prior session row for this (user, org) — likely the first
+        // poll under DEV_EXTENSION_AUTH_BYPASS, where no real redeem ever
+        // ran. Insert a minimal heartbeat row so subsequent polls can
+        // UPDATE it cleanly.
+        const tokenForRow = `heartbeat:${session.userId}:${session.orgId}`;
+        await supabase.from('extension_sessions').insert({
+          user_id: session.userId,
+          org_id: session.orgId,
+          session_token: tokenForRow,
+          last_seen: nowTs,
+          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          created_at: nowTs,
+          updated_at: nowTs,
+        });
+      }
+    } catch (hbErr) {
+      // Heartbeat is opportunistic. If a constraint or race means we
+      // can't write, swallow — the command flow still works.
+      console.warn('[extension/commands] heartbeat write skipped:', (hbErr as Error)?.message);
+    }
+  })();
 
   try {
     const nowIso = new Date().toISOString();

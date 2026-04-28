@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": true
+  },
+  "include": [
+    "scripts/**/*.ts",
+    "scripts/**/*.tsx",
+    "backend/**/*.ts",
+    "backend/**/*.tsx",
+    "lib/**/*.ts",
+    "lib/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "out",
+    "docs",
+    "tmp",
+    "tmp_*",
+    "artifacts",
+    "backend/tests",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
+}

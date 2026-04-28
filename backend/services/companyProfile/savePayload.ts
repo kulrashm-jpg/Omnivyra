@@ -1,5 +1,15 @@
 import type { CompanyProfile } from './types';
 import { mergeStringArrays, splitToList } from './normalization';
+import { withRecommendationContextDefaults } from '../../../utils/safeJson';
+
+function serializeRecommendationContext(
+  value: CompanyProfile['recommendation_context'] | undefined,
+  fallback: CompanyProfile['recommendation_context'] | undefined,
+): string | null {
+  const context = value !== undefined ? value : fallback;
+  if (!context || typeof context !== 'object') return null;
+  return JSON.stringify(withRecommendationContextDefaults(context));
+}
 
 export function buildSavePayload(
   input: Partial<CompanyProfile>,
@@ -10,12 +20,21 @@ export function buildSavePayload(
   nowIso: string,
   confidenceScore: number
 ) {
+  const logoUrl =
+    input.logo_url !== undefined ? String(input.logo_url || '').trim() || null : existing?.logo_url ?? null;
+  const faviconUrl =
+    input.favicon_url !== undefined
+      ? String(input.favicon_url || '').trim() || null
+      : existing?.favicon_url ?? null;
+
   return {
     company_id: companyId,
     name: input.name ?? existing?.name ?? null,
     industry: input.industry ?? existing?.industry ?? null,
     category: input.category ?? existing?.category ?? null,
     website_url: input.website_url ?? existing?.website_url ?? null,
+    logo_url: logoUrl,
+    favicon_url: faviconUrl,
     industry_list: mergeStringArrays(existing?.industry_list ?? splitToList(existing?.industry), input.industry_list ?? splitToList(input.industry)),
     category_list: mergeStringArrays(existing?.category_list ?? splitToList(existing?.category), input.category_list ?? splitToList(input.category)),
     geography_list: mergeStringArrays(existing?.geography_list ?? splitToList(existing?.geography), input.geography_list ?? splitToList(input.geography)),
@@ -67,7 +86,6 @@ export function buildSavePayload(
     brand_positioning: input.brand_positioning ?? existing?.brand_positioning ?? null,
     competitive_advantages: input.competitive_advantages ?? existing?.competitive_advantages ?? null,
     growth_priorities: input.growth_priorities ?? existing?.growth_priorities ?? null,
-    strategy_profile: input.strategy_profile ?? input.strategyProfile ?? existing?.strategy_profile ?? existing?.strategyProfile ?? null,
     campaign_purpose_intent: input.campaign_purpose_intent ?? existing?.campaign_purpose_intent ?? null,
     core_problem_statement: input.core_problem_statement ?? existing?.core_problem_statement ?? null,
     pain_symptoms: input.pain_symptoms ?? existing?.pain_symptoms ?? null,
@@ -79,7 +97,10 @@ export function buildSavePayload(
     transformation_mechanism: input.transformation_mechanism ?? existing?.transformation_mechanism ?? null,
     authority_domains: input.authority_domains ?? existing?.authority_domains ?? null,
     forced_context_fields: input.forced_context_fields ?? existing?.forced_context_fields ?? null,
-    recommendation_context: input.recommendation_context !== undefined ? input.recommendation_context : existing?.recommendation_context ?? null,
+    recommendation_context: serializeRecommendationContext(
+      input.recommendation_context,
+      existing?.recommendation_context,
+    ),
     strategic_inputs: input.strategic_inputs !== undefined ? input.strategic_inputs : existing?.strategic_inputs ?? null,
     report_settings: input.report_settings !== undefined ? input.report_settings : existing?.report_settings ?? null,
   };

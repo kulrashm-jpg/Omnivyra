@@ -116,7 +116,7 @@ export default function FormatSelectionPage({
   return (
     <>
       <Head>
-        <title>{pageTitle || title} | OmniVyra</title>
+        <title>{pageTitle || title} | Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">

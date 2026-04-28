@@ -10,7 +10,7 @@ import { listAssetsWithLatestContent } from '../db/contentAssetStore';
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../db/performanceStore';
 import { getCampaignMemory } from './campaignMemoryService';
 import { getEnabledApis, getExternalApiRuntimeSnapshot } from './externalApiService';
-import { getOmniVyraHealthReport } from './omnivyraClientV1';
+import { getOmnivyraHealthReport } from './omnivyraClientV1';
 import { getLastFallbackReason, getLastMeta } from './omnivyraHealthService';
 import { getLearningStatus } from './omnivyraFeedbackService';
 import { detectContentOverlap } from './contentOverlapService';
@@ -292,7 +292,7 @@ export async function generateCampaignAuditReport(
   console.log('EXTERNAL_API_COMPANY_SCOPE', resolvedCompanyId);
   console.log('EXTERNAL_API_SOURCES_USED', enabledApis.map((api) => api.id));
   const learningStatus = getLearningStatus(campaignId ?? null);
-  const omnivyraHealth = getOmniVyraHealthReport();
+  const omnivyraHealth = getOmnivyraHealthReport();
   const omnivyraMeta = getLastMeta();
   const status = computeStatus({
     missingFields: gate.missing_fields,

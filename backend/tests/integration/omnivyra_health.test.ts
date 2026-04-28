@@ -2,12 +2,12 @@ import {
   getHealthReport,
   recordFailure,
   recordSuccess,
-  resetOmniVyraHealth,
+  resetOmnivyraHealth,
 } from '../../services/omnivyraHealthService';
 
-describe('OmniVyra health monitor', () => {
+describe('Omnivyra health monitor', () => {
   beforeEach(() => {
-    resetOmniVyraHealth();
+    resetOmnivyraHealth();
   });
 
   it('tracks success and failure counts', () => {

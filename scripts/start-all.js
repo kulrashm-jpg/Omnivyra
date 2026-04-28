@@ -8,9 +8,9 @@
  * 4. Start Next.js dev server (foreground)
  *
  * Usage:
- *   npm run dev          - Full stack (workers + cron + Next.js). Fallback to app-only if Redis unavailable.
- *   npm run dev:full     - Same as dev
- *   npm run dev:app      - Next.js only (no workers, no Redis needed)
+ *   npm run dev          - Next.js only (no workers, no Redis needed)
+ *   npm run dev:full     - Full stack (workers + cron + Next.js). Fallback to app-only if Redis unavailable.
+ *   npm run dev:app      - Same as dev
  *
  * Env vars:
  *   DEV_AUTO_START_REDIS=1  - Try starting Redis via Docker if not running
@@ -21,6 +21,7 @@
 const { spawn, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const net = require('net');
 
 const args = process.argv.slice(2);
 const APP_ONLY = args.includes('--app-only') || process.env.DEV_APP_ONLY === '1';
@@ -52,9 +53,25 @@ const REDIS_RETRY_INTERVAL_MS = 500;
 const AUTO_START_REDIS = process.env.DEV_AUTO_START_REDIS === '1';
 const FALLBACK_APP_ONLY = process.env.DEV_FALLBACK_APP_ONLY !== '0'; // default true
 const FORCE_UNLOCK_NEXT = process.env.DEV_FORCE_UNLOCK_NEXT === '1';
+const DEV_PORT = parseInt(process.env.PORT || '3000', 10);
 
-function hasExistingDevArtifacts() {
-  return fs.existsSync(path.join(process.cwd(), '.next', 'dev'));
+function isPortInUse(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.once('error', (err) => {
+      resolve(err && err.code === 'EADDRINUSE');
+    });
+    tester.once('listening', () => {
+      tester.close(() => resolve(false));
+    });
+    tester.listen(port, '127.0.0.1');
+  });
+}
+
+async function isDevServerRunning() {
+  // Authoritative signal: is someone already bound to the dev port?
+  // Filesystem state (.next/dev) lies — it persists after crashes.
+  return isPortInUse(DEV_PORT);
 }
 
 function parseRedisUrl(url) {
@@ -136,10 +153,10 @@ function spawnProcess(name, command, args, opts = {}) {
   return child;
 }
 
-function cleanNextCache() {
-  if (hasExistingDevArtifacts()) {
-    console.log('   ⚠️  Skipping .next cleanup because .next/dev already exists.');
-    console.log('      A Next.js dev server may already be running in this workspace.\n');
+async function cleanNextCache() {
+  if (await isDevServerRunning()) {
+    console.log(`   ⚠️  Skipping .next cleanup because port ${DEV_PORT} is already in use.`);
+    console.log('      A Next.js dev server is already running in this workspace.\n');
     return;
   }
   const cleanScript = path.join(process.cwd(), 'scripts', 'clean.js');
@@ -151,9 +168,9 @@ function cleanNextCache() {
   }
 }
 
-function cleanupStaleNextLockArtifacts() {
-  if (hasExistingDevArtifacts()) {
-    console.log('   ⚠️  Skipping stale .next/dev cleanup because dev artifacts already exist.\n');
+async function cleanupStaleNextLockArtifacts() {
+  if (await isDevServerRunning()) {
+    console.log(`   ⚠️  Skipping stale .next/dev cleanup because port ${DEV_PORT} is already in use.\n`);
     return;
   }
   const lockPaths = [
@@ -222,8 +239,8 @@ function tryStartRedisViaDocker() {
 
 async function runAppOnly(children) {
   console.log('\n⚠️  Running Next.js only (no workers). BOLT and background jobs will not work.\n');
-  cleanNextCache();
-  cleanupStaleNextLockArtifacts();
+  await cleanNextCache();
+  await cleanupStaleNextLockArtifacts();
   console.log('   App: http://localhost:3000');
   console.log('   To enable workers: start Redis and run npm run dev:full\n');
   const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack'], {
@@ -335,8 +352,8 @@ async function main() {
   await new Promise((r) => setTimeout(r, 2000));
 
   // 4. Start Next.js (foreground - user sees this)
-  cleanNextCache();
-  cleanupStaleNextLockArtifacts();
+  await cleanNextCache();
+  await cleanupStaleNextLockArtifacts();
   console.log('4️⃣  Starting Next.js dev server...\n');
   console.log('   App: http://localhost:3000');
   console.log('   Press Ctrl+C to stop all services\n');

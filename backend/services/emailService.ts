@@ -2,8 +2,10 @@ import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { getRequestContext } from './requestContext';
+import { createSesTransport } from './sesTransport';
+import { validateEmailEnv } from '../config/validateEnv';
 
-type EmailJobName = 'magic_link' | 'invite' | 'reset' | 'company_referral';
+type EmailJobName = 'magic_link' | 'invite' | 'reset' | 'company_referral' | 'inbound_signup_notice';
 type EmailJobStatus = 'pending' | 'processing' | 'failed' | 'sent' | 'dead';
 
 type EmailEnvelope = {
@@ -33,13 +35,6 @@ function getAppUrl(): string {
   return (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
 }
 
-function getEmailConfig(): { apiKey: string; from: string } | null {
-  const apiKey = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.EMAIL_FROM?.trim() || process.env.RESEND_FROM_EMAIL?.trim();
-  if (!apiKey || !from) return null;
-  return { apiKey, from };
-}
-
 function payloadHash(name: EmailJobName, envelope: EmailEnvelope): string {
   return createHash('sha256')
     .update(JSON.stringify({
@@ -51,49 +46,34 @@ function payloadHash(name: EmailJobName, envelope: EmailEnvelope): string {
     .digest('hex');
 }
 
-async function sendViaResend(envelope: EmailEnvelope): Promise<void> {
-  const config = getEmailConfig();
+/**
+ * Sends a single envelope via Amazon SES (SMTP) using the lazy
+ * nodemailer transport from sesTransport.ts. Fails loudly when EMAIL_FROM
+ * or any SES_SMTP_* env var is missing — no dev fallback. Run-time env
+ * validation is enforced once at server startup via validateEmailEnv().
+ */
+export async function sendEmailSMTP(envelope: EmailEnvelope): Promise<void> {
+  // Hard-fail on first send if any required env var is missing. Idempotent
+  // after the first successful check, so the per-call cost is one boolean.
+  validateEmailEnv();
 
-  if (!config) {
-    // Dev fallback: when no email transport is configured, log the envelope
-    // (including any action link embedded in the HTML) to stdout so the
-    // developer can use it without an external mail provider. Treat the send
-    // as successful so the signup / invite / reset flows complete locally.
-    const linkMatch = envelope.html.match(/href="([^"]+)"/);
-    logger.warn('email_dev_fallback_no_transport', {
-      to: envelope.to,
-      subject: envelope.subject,
-      actionLink: linkMatch?.[1] ?? null,
-    });
-
-    console.warn(
-      `\n[email dev fallback] RESEND_API_KEY/EMAIL_FROM not set. Email NOT sent.\n` +
-      `  to:      ${envelope.to}\n` +
-      `  subject: ${envelope.subject}\n` +
-      (linkMatch ? `  link:    ${linkMatch[1]}\n` : `  (no http link found in HTML body)\n`),
-    );
-    return;
+  const from = process.env.EMAIL_FROM?.trim();
+  if (!from) {
+    throw new Error('EMAIL_SEND_FAILED:EMAIL_FROM_NOT_SET');
   }
 
-  const { apiKey, from } = config;
+  const transporter = createSesTransport();
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  try {
+    await transporter.sendMail({
       from,
-      to: [envelope.to],
+      to: envelope.to,
       subject: envelope.subject,
       html: envelope.html,
-    }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`EMAIL_SEND_FAILED:${response.status}:${body}`);
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`EMAIL_SEND_FAILED:SES:${message}`);
   }
 }
 
@@ -271,13 +251,18 @@ async function claimInlineJob(jobId: string, workerId: string): Promise<EmailJob
 
 async function attemptJob(job: EmailJobRow, workerId?: string): Promise<void> {
   try {
-    await sendViaResend({
+    await sendEmailSMTP({
       to: job.recipient_email,
       subject: job.subject,
       html: job.html,
     });
     await completeJob(job);
   } catch (error) {
+    // failJob computes terminal vs retryable based on retry_count + 1
+    // against MAX_RETRIES (3) — terminal failures are stored as 'dead',
+    // retryable as 'failed' with next_attempt_at scheduled for the next
+    // worker pass. Surfaces the error to the caller so processPending /
+    // enqueueAndSend can tell the request what happened.
     const resolved = error instanceof Error ? error : new Error(String(error));
     await failJob(job, resolved, workerId);
     logger.warn('email_job_attempt_failed', {
@@ -397,9 +382,9 @@ export async function sendMagicLink(
     'magic_link',
     {
       to: email,
-      subject: 'Your OmniVyra sign-in link',
+      subject: 'Your Omnivyra sign-in link',
       html: renderActionEmail(
-        'Sign in to OmniVyra',
+        'Sign in to Omnivyra',
         'Use the secure sign-in link below to continue to your account.',
         'Sign in',
         actionLink,
@@ -454,12 +439,51 @@ export async function sendCompanyAdminReferral(
   );
 }
 
+/**
+ * Sent to an active COMPANY_ADMIN when a brand-new user from the same email
+ * domain finishes verifying their email but cannot self-create the company
+ * because the admin already owns it. Lets the admin reach out and decide
+ * whether to invite the person.
+ */
+export async function sendInboundSignupNoticeToAdmin(
+  adminEmail: string,
+  opts: {
+    prospectEmail: string;
+    companyName: string | null;
+    supportEmail: string;
+  },
+  idempotencyKey?: string,
+): Promise<void> {
+  const companyClause = opts.companyName ? ` for <strong>${opts.companyName}</strong>` : '';
+  const body =
+    `<strong>${opts.prospectEmail}</strong> just verified their email and tried to create an Omnivyra account${companyClause}. ` +
+    `Because your account already owns this domain, we did not auto-add them to your company.<br/><br/>` +
+    `If they should have access, please invite them from your team settings. ` +
+    `If not, no action is needed — their account stays unattached.<br/><br/>` +
+    `Need help? Reach out at <a href="mailto:${opts.supportEmail}">${opts.supportEmail}</a>.`;
+
+  await enqueueAndSend(
+    'inbound_signup_notice',
+    {
+      to: adminEmail,
+      subject: 'Someone tried to join your Omnivyra company',
+      html: renderActionEmail(
+        'A new sign-up matched your domain',
+        body,
+        'Open team settings',
+        `${getAppUrl()}/settings/team`,
+      ),
+    },
+    idempotencyKey,
+  );
+}
+
 export async function sendInvite(email: string, inviteLink: string, idempotencyKey?: string): Promise<void> {
   await enqueueAndSend(
     'invite',
     {
       to: email,
-      subject: 'You have been invited to OmniVyra',
+      subject: 'You have been invited to Omnivyra',
       html: renderActionEmail(
         'You have been invited',
         'Use the invitation link below to accept access to your organization account.',

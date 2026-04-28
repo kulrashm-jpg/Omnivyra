@@ -80,7 +80,7 @@ jest.mock('../../db/supabaseClient', () => {
   return { supabase: { from, rpc: jest.fn().mockResolvedValue({ data: null, error: null }) } };
 });
 jest.mock('../../services/omnivyraClientV1', () => ({
-  isOmniVyraEnabled: jest.fn().mockReturnValue(true),
+  isOmnivyraEnabled: jest.fn().mockReturnValue(true),
   getTrendRelevance: jest.fn().mockResolvedValue({
     status: 'error',
     error: { message: 'Invalid schema' },
@@ -96,7 +96,7 @@ jest.mock('../../services/omnivyraClientV1', () => ({
     error: { message: 'Invalid schema' },
     _omnivyra_meta: { error_type: 'schema_invalid', endpoint: '/platform/rules/canonical', latency_ms: 100 },
   }),
-  getOmniVyraHealthReport: jest.fn().mockReturnValue({
+  getOmnivyraHealthReport: jest.fn().mockReturnValue({
     status: 'degraded',
     endpoints: {},
     avg_latency_ms: 100,
@@ -105,7 +105,7 @@ jest.mock('../../services/omnivyraClientV1', () => ({
   }),
 }));
 
-describe('OmniVyra fallback reasons', () => {
+describe('Omnivyra fallback reasons', () => {
   it('sets fallback reason in recommendation engine status', async () => {
     const result = await generateRecommendations({
       companyId: 'comp-1',

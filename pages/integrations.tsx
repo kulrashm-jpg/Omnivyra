@@ -464,7 +464,7 @@ function GoogleAnalyticsSetupCard({
             </div>
             <div>
               <h2 className="text-base font-semibold text-gray-900">Google Analytics</h2>
-              <p className="text-sm text-gray-500">Click connect, choose a property, and OmniVyra handles the rest.</p>
+              <p className="text-sm text-gray-500">Click connect, choose a property, and Omnivyra handles the rest.</p>
             </div>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -547,7 +547,7 @@ function GoogleAnalyticsSetupCard({
           <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
             <div className="mb-3">
               <h3 className="text-sm font-semibold text-gray-900">Choose the Google Analytics property to sync</h3>
-              <p className="text-sm text-gray-600">No manual configuration is needed beyond selecting the property you want OmniVyra to use.</p>
+              <p className="text-sm text-gray-600">No manual configuration is needed beyond selecting the property you want Omnivyra to use.</p>
             </div>
             {properties.length === 0 ? (
               <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">

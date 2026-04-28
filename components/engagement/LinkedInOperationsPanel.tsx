@@ -119,14 +119,14 @@ export function LinkedInOperationsPanel({
                 LinkedIn Operations
               </p>
               <h3 className="text-xl font-semibold text-slate-900">
-                Run engagement from OmniVyra
+                Run engagement from Omnivyra
               </h3>
             </div>
           </div>
 
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
             This workspace now treats the company LinkedIn connection as the primary path.
-            OmniVyra can pull comment activity from published LinkedIn posts into the unified inbox,
+            Omnivyra can pull comment activity from published LinkedIn posts into the unified inbox,
             while the browser extension stays available as a fallback for browser-assisted coverage,
             including LinkedIn messaging capture, Sales Navigator lead workflows, and Recruiter candidate workflows.
           </p>
@@ -225,12 +225,12 @@ export function LinkedInOperationsPanel({
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Published posts</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{overview?.publishedPosts ?? 0}</p>
-          <p className="mt-1 text-xs text-slate-500">LinkedIn posts published from OmniVyra in the last 30 days.</p>
+          <p className="mt-1 text-xs text-slate-500">LinkedIn posts published from Omnivyra in the last 30 days.</p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Raw comments</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{overview?.rawComments ?? 0}</p>
-          <p className="mt-1 text-xs text-slate-500">LinkedIn comments already pulled into OmniVyra storage.</p>
+          <p className="mt-1 text-xs text-slate-500">LinkedIn comments already pulled into Omnivyra storage.</p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Inbox threads</p>
@@ -240,7 +240,7 @@ export function LinkedInOperationsPanel({
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">DM threads</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{overview?.dmThreads ?? 0}</p>
-          <p className="mt-1 text-xs text-slate-500">LinkedIn direct-message threads captured into OmniVyra.</p>
+          <p className="mt-1 text-xs text-slate-500">LinkedIn direct-message threads captured into Omnivyra.</p>
         </div>
       </div>
 
@@ -248,7 +248,7 @@ export function LinkedInOperationsPanel({
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
           <p className="text-sm font-semibold text-slate-900">What works in this view</p>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            OmniVyra can already use the company LinkedIn connection to ingest comments on published
+            Omnivyra can already use the company LinkedIn connection to ingest comments on published
             LinkedIn posts and turn them into inbox threads. Centralized reply coverage is still partial,
             so the extension remains available as a browser-assisted fallback where LinkedIn requires it.
           </p>
@@ -299,7 +299,7 @@ export function LinkedInOperationsPanel({
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
               <p className="font-medium text-slate-900">Inbox messages</p>
-              <p className="mt-1">{overview?.inboxMessages ?? 0} LinkedIn message records are in OmniVyra.</p>
+              <p className="mt-1">{overview?.inboxMessages ?? 0} LinkedIn message records are in Omnivyra.</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
               <p className="font-medium text-slate-900">DM messages</p>

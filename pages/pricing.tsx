@@ -170,10 +170,10 @@ export default function PricingPage() {
   return (
     <>
       <Head>
-        <title>Pricing | OmniVyra</title>
+        <title>Pricing | Omnivyra</title>
         <meta
           name="description"
-          content="OmniVyra pricing — all features included, pay only for what you use. Start free with 1,000 credits. No feature gating, no forced upgrades."
+          content="Omnivyra pricing — all features included, pay only for what you use. Start free with 1,000 credits. No feature gating, no forced upgrades."
         />
       </Head>
 
@@ -342,7 +342,7 @@ export default function PricingPage() {
               <div>
                 <p className="text-sm font-semibold text-[#0B1F33]">Smart Mode — on by default</p>
                 <p className="mt-1 text-sm leading-relaxed text-[#6B7C93]">
-                  OmniVyra automatically batches operations, skips redundant scans, and only charges background credits when real value is found.
+                  Omnivyra automatically batches operations, skips redundant scans, and only charges background credits when real value is found.
                   You get the same outcomes — at lower credit cost.
                 </p>
               </div>

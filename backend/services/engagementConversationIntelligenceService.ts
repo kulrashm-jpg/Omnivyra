@@ -7,7 +7,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { evaluateCommunityAiEngagement, isOmniVyraEnabled } from './omnivyraClientV1';
+import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClientV1';
 import { getProfile } from './companyProfileService';
 
 const INFLUENCER_FOLLOWER_THRESHOLD = 10000;
@@ -132,7 +132,7 @@ export async function analyzeMessage(message_id: string): Promise<void> {
     organizationId
   );
 
-  if (isOmniVyraEnabled() && organizationId) {
+  if (isOmnivyraEnabled() && organizationId) {
     try {
       const voice = await getProfile(organizationId, { autoRefine: false, languageRefine: true })
         .then((p) => {
@@ -170,7 +170,7 @@ export async function analyzeMessage(message_id: string): Promise<void> {
         }
       }
     } catch (err) {
-      console.warn('[engagementConversationIntelligence] OmniVyra error, using rule-based:', (err as Error)?.message);
+      console.warn('[engagementConversationIntelligence] Omnivyra error, using rule-based:', (err as Error)?.message);
     }
   }
 

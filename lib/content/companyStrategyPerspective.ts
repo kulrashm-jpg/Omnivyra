@@ -64,7 +64,12 @@ export function normalizeStrategyProfile(strategyProfile: unknown): StrategyProf
 
 export function extractStrategyProfile(profile: CompanyProfile | null | undefined): StrategyProfile | undefined {
   if (!profile) return undefined;
-  return normalizeStrategyProfile(profile.strategy_profile ?? profile.strategyProfile);
+  return normalizeStrategyProfile({
+    worldview: cleanText(profile.brand_positioning),
+    primaryFocus: cleanList((profile.growth_priorities || '').split(/[\n;,]+/)),
+    differentiation: cleanList((profile.competitive_advantages || '').split(/[\n;,]+/)),
+    typicalAngles: cleanList((profile.key_messages || '').split(/[\n;,]+/)),
+  });
 }
 
 export function buildStrategyInstructions(strategyProfile: StrategyProfile | null | undefined): string {

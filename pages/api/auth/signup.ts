@@ -27,31 +27,15 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { validateWorkEmail } from '../../../lib/auth/serverValidation';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
-import { sendCompanyAdminReferral } from '../../../backend/services/emailService';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
 type SuccessResponse = { proceed: true };
-type ClaimedResponse = {
-  claimed: true;
-  code: 'COMPANY_CLAIMED';
-  alreadyReferred: boolean;
-  adminEmailMasked: string | null;
-};
 type ErrorResponse = { error: string; code?: string };
-
-const SUPPORT_EMAIL = 'support@omnivyra.com';
-
-function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
-  if (!local || !domain) return email;
-  const head = local.slice(0, Math.min(2, local.length));
-  return `${head}${'*'.repeat(Math.max(1, local.length - 2))}@${domain}`;
-}
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<SuccessResponse | ClaimedResponse | ErrorResponse>,
+  res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
@@ -60,9 +44,17 @@ export default async function handler(
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  const { email } = body as { email?: string };
+  const { email, companyName } = body as { email?: string; companyName?: string };
 
   if (!email?.trim()) return res.status(400).json({ error: 'email is required' });
+
+  // Company name is required for self-serve signups (the user becomes the
+  // COMPANY_ADMIN of this company on first email verify). Stored on the
+  // signup_intents row so /auth/callback can bootstrap the company without
+  // asking the user again.
+  const trimmedCompany = String(companyName ?? '').trim();
+  if (!trimmedCompany) return res.status(400).json({ error: 'companyName is required' });
+  if (trimmedCompany.length > 80) return res.status(400).json({ error: 'companyName is too long' });
 
   const normalizedEmail = email.trim().toLowerCase();
   const domain = normalizedEmail.split('@')[1] ?? '';
@@ -96,7 +88,7 @@ export default async function handler(
   // active role = abandoned onboarding; fall through (re-signup allowed).
   const { data: existingUser } = await supabase
     .from('users')
-    .select('id, is_deleted')
+    .select('id, is_deleted, company_id, role, onboarding_state')
     .eq('email', normalizedEmail)
     .maybeSingle();
 
@@ -113,13 +105,29 @@ export default async function handler(
       .limit(1)
       .maybeSingle();
 
-    if (companyRole) {
+    const hasCompletedUserRecord =
+      Boolean((existingUser as any).company_id) &&
+      Boolean((existingUser as any).role) &&
+      !!companyRole;
+
+    if (hasCompletedUserRecord) {
       return res.status(409).json({
         error: 'An account with this email already exists. Please log in.',
         code:  'ACCOUNT_EXISTS',
       });
     }
+
+    return res.status(409).json({
+      error: 'We found an unfinished account for this email. Please sign in to continue setup.',
+      code:  'RESUME_SIGNUP',
+    });
   }
+
+  // (moved to post-email-auth) The pre-auth COMPANY_CLAIMED check that
+  // used to live here returned a 409 the moment a domain match was found.
+  // Detection + the two emails (referral to prospect, notice to admin)
+  // now run inside /api/auth/sync-supabase-user once the user has
+  // verified their email — we only contact the admin about real humans.
 
   // ── 3. auth.users already has this email confirmed? ───────────────────────
   // Catches the orphan case where auth.users was created by a prior flow
@@ -134,120 +142,21 @@ export default async function handler(
       logger.warn('auth_signup_auth_confirmed_rpc_failed', { email: normalizedEmail, message: rpcErr.message });
     } else if (authConfirmed === true) {
       return res.status(409).json({
-        error: 'An account with this email already exists. Please log in.',
-        code:  'ACCOUNT_EXISTS',
+        error: 'We found an unfinished account for this email. Please sign in to continue setup.',
+        code:  'RESUME_SIGNUP',
       });
     }
   } catch (err: any) {
     logger.warn('auth_signup_auth_confirmed_rpc_threw', { email: normalizedEmail, message: err?.message });
   }
 
-  // ── 4. Domain already claimed by another company admin? ──────────────────
-  // Find an active COMPANY_ADMIN whose email ends in @<domain>. If one
-  // exists, this domain belongs to an existing org and the would-be signer
-  // must be invited by its admin. We send them (once) an email with the
-  // admin's contact details; repeat attempts skip the email and tell them
-  // the details were already shared.
-  const { data: domainMembers } = await supabase
-    .from('users')
-    .select('id')
-    .ilike('email', `%@${domain}`)
-    .eq('is_deleted', false);
-
-  if (domainMembers && domainMembers.length > 0) {
-    const memberIds = (domainMembers as Array<{ id: string }>).map((m) => m.id);
-
-    const { data: adminRoleRow } = await supabase
-      .from('user_company_roles')
-      .select('user_id, company_id, created_at')
-      .in('user_id', memberIds)
-      .eq('status', 'active')
-      .eq('role', 'COMPANY_ADMIN')
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (adminRoleRow) {
-      const adminUserId = (adminRoleRow as any).user_id as string;
-      const companyId = (adminRoleRow as any).company_id as string;
-
-      const { data: adminUser } = await supabase
-        .from('users')
-        .select('name, email')
-        .eq('id', adminUserId)
-        .maybeSingle();
-      const { data: companyRow } = companyId
-        ? await supabase.from('companies').select('name').eq('id', companyId).maybeSingle()
-        : { data: null };
-
-      // Dedupe email — write/update the signup_referrals row first, then
-      // send only on first hit.
-      const { data: existingReferral } = await supabase
-        .from('signup_referrals')
-        .select('id, admin_email_sent_at, attempt_count')
-        .eq('email', normalizedEmail)
-        .maybeSingle();
-
-      const now = new Date().toISOString();
-      let shouldSend = false;
-
-      if (!existingReferral) {
-        const { error: insertErr } = await supabase.from('signup_referrals').insert({
-          email:               normalizedEmail,
-          domain,
-          company_id:          companyId,
-          admin_user_id:       adminUserId,
-          first_attempt_at:    now,
-          last_attempt_at:     now,
-          attempt_count:       1,
-        });
-        if (insertErr) {
-          logger.error('auth_signup_referral_insert_failed', { email: normalizedEmail, message: insertErr.message });
-        } else {
-          shouldSend = true;
-        }
-      } else {
-        await supabase
-          .from('signup_referrals')
-          .update({
-            last_attempt_at: now,
-            attempt_count:   ((existingReferral as any).attempt_count ?? 1) + 1,
-          })
-          .eq('id', (existingReferral as any).id);
-        shouldSend = !(existingReferral as any).admin_email_sent_at;
-      }
-
-      if (shouldSend) {
-        try {
-          const adminEmail = (adminUser as any)?.email as string | undefined;
-          await sendCompanyAdminReferral(
-            normalizedEmail,
-            {
-              admin:        adminEmail ? { name: (adminUser as any)?.name ?? null, email: adminEmail } : null,
-              companyName:  (companyRow as any)?.name ?? null,
-              supportEmail: SUPPORT_EMAIL,
-            },
-            `company-referral:${normalizedEmail}`,
-          );
-          await supabase
-            .from('signup_referrals')
-            .update({ admin_email_sent_at: now })
-            .eq('email', normalizedEmail);
-        } catch (err: any) {
-          // Don't fail the request if email dispatch fails — the UI message
-          // still tells them their domain is claimed, and they can retry.
-          logger.error('auth_signup_referral_send_failed', { email: normalizedEmail, message: err?.message });
-        }
-      }
-
-      return res.status(409).json({
-        claimed:          true,
-        code:             'COMPANY_CLAIMED',
-        alreadyReferred:  !!existingReferral,
-        adminEmailMasked: (adminUser as any)?.email ? maskEmail((adminUser as any).email) : null,
-      });
-    }
-  }
+  // ── 4. (moved to post-email-auth) Domain-claimed handling ────────────────
+  // Detection of a claimed domain + the two emails it triggers (referral
+  // email to the prospect, notification email to the existing admin) now
+  // run inside /api/auth/sync-supabase-user → bootstrapCompanyFromSignupIntent
+  // AFTER the user has verified their email. This ensures emails only fly
+  // for verified humans and gives the admin a real-person notification.
+  // Signup is allowed to proceed here so the verification email is sent.
 
   // ── 5. Fresh signup path — upsert signup_intents and let the client proceed.
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -262,16 +171,24 @@ export default async function handler(
 
   if (!existingIntent) {
     const { error: insertErr } = await supabase.from('signup_intents').insert({
-      email:      normalizedEmail,
-      source:     'signup_form',
-      status:     'pending',
-      expires_at: expiresAt,
+      email:       normalizedEmail,
+      source:      'signup_form',
+      status:      'pending',
+      expires_at:  expiresAt,
+      intent_data: { company_name: trimmedCompany },
     });
 
     if (insertErr) {
       logger.error('auth_signup_intent_insert_failed', { email: normalizedEmail, message: insertErr.message });
       return res.status(500).json({ error: 'Failed to initiate signup' });
     }
+  } else {
+    // Refresh the existing pending intent with the latest company name in
+    // case the user changed it before re-submitting the signup form.
+    await supabase
+      .from('signup_intents')
+      .update({ intent_data: { company_name: trimmedCompany } })
+      .eq('id', (existingIntent as { id: string }).id);
   }
 
   return res.status(200).json({ proceed: true });

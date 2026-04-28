@@ -1,4 +1,4 @@
-import { evaluateCommunityAiInsights, isOmniVyraEnabled } from './omnivyraClientV1';
+import { evaluateCommunityAiInsights, isOmnivyraEnabled } from './omnivyraClientV1';
 
 export type CommunityAiInsightsInput = {
   tenant_id: string;
@@ -30,9 +30,9 @@ export const evaluateInsights = async (
   input: CommunityAiInsightsInput
 ): Promise<CommunityAiInsightsOutput> => {
   const brandVoice = normalizeBrandVoice(input.brand_voice);
-  if (!isOmniVyraEnabled()) {
+  if (!isOmnivyraEnabled()) {
     return {
-      summary_insight: 'OmniVyra disabled',
+      summary_insight: 'Omnivyra disabled',
       key_findings: [],
       recommended_actions: [],
       risks: null,
@@ -47,7 +47,7 @@ export const evaluateInsights = async (
       reason: response.error?.message,
     });
     return {
-      summary_insight: 'OmniVyra unavailable',
+      summary_insight: 'Omnivyra unavailable',
       key_findings: [],
       recommended_actions: [],
       risks: null,

@@ -6,6 +6,16 @@ export type StrategyProfile = {
   typicalAngles?: string[] | null;
 };
 
+export type RecommendationContext = {
+  version: number;
+  key_threat: string;
+  biggest_advantage: string;
+  strategic_focus: string;
+  contrarian_beliefs: string[];
+  typical_angles: string[];
+  insights: Array<Record<string, unknown>>;
+};
+
 export type CompanyProfile = {
   id?: string;
   company_id: string;
@@ -13,6 +23,8 @@ export type CompanyProfile = {
   industry?: string;
   category?: string;
   website_url?: string;
+  logo_url?: string | null;
+  favicon_url?: string | null;
   industry_list?: string[];
   category_list?: string[];
   geography_list?: string[];
@@ -67,8 +79,6 @@ export type CompanyProfile = {
   brand_positioning?: string | null;
   competitive_advantages?: string | null;
   growth_priorities?: string | null;
-  strategy_profile?: StrategyProfile | null;
-  strategyProfile?: StrategyProfile | null;
   // Campaign Purpose & Strategic Intent (from Define Target Customer / Define Strategic Purpose)
   campaign_purpose_intent?: {
     primary_objective?: string | null;
@@ -105,7 +115,7 @@ export type CompanyProfile = {
   /** User-selected signals that MUST be injected into AI context. */
   forced_context_fields?: Record<string, boolean> | null;
   /** Company-only context for recommendations; used when generating Trend/Lead recommendations for this company. */
-  recommendation_context?: string | null;
+  recommendation_context?: RecommendationContext | null;
   /** Content Architect–editable strategic inputs for Trend Campaigns (aspects, offerings by aspect, objectives). */
   strategic_inputs?: {
     strategic_aspects?: string[];

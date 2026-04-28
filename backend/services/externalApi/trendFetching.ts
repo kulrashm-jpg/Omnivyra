@@ -15,7 +15,7 @@ import {
 } from '../redisExternalApiCache';
 import { updateApiHealth } from '../externalApiHealthService';
 import { insertFromTrendApiResults } from '../intelligenceSignalStore';
-import { getTrendRanking, getTrendRelevance, isOmniVyraEnabled } from '../omnivyraClientV1';
+import { getTrendRanking, getTrendRelevance, isOmnivyraEnabled } from '../omnivyraClientV1';
 import { resolveAllAccountsForRequest } from '../providerAccountService';
 import type {
   ExternalApiSource,
@@ -31,7 +31,7 @@ import { executeWithAccountLoop, buildExternalApiRequest } from './execution';
 import {
   normalizeTrendSignals,
   toTrendInput,
-  mapOmniVyraTrends,
+  mapOmnivyraTrends,
   applyRankingOrder,
   lastSignalConfidenceSummary,
 } from './responseMapping';
@@ -140,7 +140,7 @@ export async function fetchTrendsFromApis(
   }
 
   const normalized = normalizeTrendSignals(results);
-  if (!isOmniVyraEnabled()) {
+  if (!isOmnivyraEnabled()) {
     return normalized;
   }
 
@@ -152,7 +152,7 @@ export async function fetchTrendsFromApis(
 
   const withRelevance =
     relevance.status === 'ok'
-      ? mapOmniVyraTrends(
+      ? mapOmnivyraTrends(
           relevance.data?.relevant_trends ?? relevance.data?.trends,
           normalized
         )

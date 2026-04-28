@@ -1184,7 +1184,19 @@ export function useCompanyProfileState() {
       }
       const data = await response.json();
       const structuredFields = data.structuredFields || {};
-      updateActiveProfile({ ...activeProfile, ...structuredFields });
+      const competitorList = Array.isArray(data.competitors)
+        ? data.competitors.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
+        : [];
+      updateActiveProfile({
+        ...activeProfile,
+        ...structuredFields,
+        ...(competitorList.length > 0
+          ? {
+              competitors: competitorList.join(', '),
+              competitors_list: competitorList,
+            }
+          : {}),
+      });
       setSuccessMessage('Marketing intelligence generated. Review, edit if needed, then click Save Profile to persist and lock.');
     } catch (e) {
       setErrorMessage((e as Error).message || 'Failed to generate marketing intelligence');

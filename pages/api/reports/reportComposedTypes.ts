@@ -78,6 +78,8 @@ export type ComposedReportData = {
     primary_offering?: string | null;
     positioning?: string | null;
     market_context?: string | null;
+    logo_url?: string | null;
+    favicon_url?: string | null;
     positioning_strength?: 'strong' | 'moderate' | 'weak';
     positioning_narrative?: string;
     positioning_gap?: string | null;

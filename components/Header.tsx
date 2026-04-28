@@ -413,7 +413,7 @@ const Header: React.FC = () => {
           >
             <img
               src="/logo.png"
-              alt="OmniVyra"
+              alt="Omnivyra"
               className="h-10 w-auto object-contain"
             />
           </Link>

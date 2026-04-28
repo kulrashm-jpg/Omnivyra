@@ -45,7 +45,7 @@ interface Props {
   companyContext: string;
   existingTopics?: string[];
   writingStyleGuide?: string;
-  onCardCreated?: (card: BlogCardPreview) => void;
+  onCardCreated?: (card: BlogCardPreview) => void | Promise<void>;
   contentLabel?: string;
   contentType?: string;
   contentModeLabel?: string;
@@ -227,7 +227,7 @@ export default function AIBlogCardModal({
     try {
       // Call parent callback to add the card
       if (onCardCreated) {
-        onCardCreated(cardPreview);
+        await onCardCreated(cardPreview);
       }
 
       // Show success and prepare to close
@@ -250,6 +250,15 @@ export default function AIBlogCardModal({
       }, 1500);
     } catch (err) {
       console.error('Error saving card:', err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          type: 'ai',
+          message: err instanceof Error ? `Unable to continue: ${err.message}` : 'Unable to continue with this card right now.',
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ]);
     } finally {
       setIsSaving(false);
     }

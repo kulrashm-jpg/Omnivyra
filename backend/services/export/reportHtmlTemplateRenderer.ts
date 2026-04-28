@@ -59,6 +59,8 @@ export function renderOmnivyraSnapshotMasterHtml(payload: PdfReportPayload): { h
     companyName: vars.company_name,
     completedMarkup,
     incompleteMarkup,
+    reportDate: vars.report_date,
+    faviconUrl: vars.company_favicon_url,
   });
   return { html, templateName: 'omnivyra_snapshot_master_report.html' };
 }
@@ -95,6 +97,8 @@ export function renderOmnivyraSnapshotPdfHtml(payload: PdfReportPayload): { html
     companyName: vars.company_name,
     completedMarkup,
     incompleteMarkup: '',
+    reportDate: vars.report_date,
+    faviconUrl: vars.company_favicon_url,
   });
   return { html, templateName: 'omnivyra_snapshot_master_report.html' };
 }

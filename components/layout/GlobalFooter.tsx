@@ -8,7 +8,7 @@ const GlobalFooter: React.FC = () => {
       <div className="max-w-screen-xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-400">
           {/* Left: copyright */}
-          <span>&copy; {new Date().getFullYear()} OmniVyra. All rights reserved.</span>
+          <span>&copy; {new Date().getFullYear()} Omnivyra. All rights reserved.</span>
 
           {/* Right: links */}
           <div className="flex items-center gap-4">

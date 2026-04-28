@@ -551,7 +551,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
       <header className="sticky top-0 z-[70] border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-screen-xl items-center gap-3 px-3 sm:px-4 lg:px-6">
           <Link href="/command-center" className="shrink-0" title="Command Center">
-            <img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" />
+            <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
           </Link>
 
           <div className="hidden h-5 w-px shrink-0 bg-slate-200 md:block" />

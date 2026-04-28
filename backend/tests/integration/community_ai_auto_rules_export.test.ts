@@ -38,7 +38,7 @@ jest.mock('../../services/companyProfileService', () => ({
 }));
 
 jest.mock('../../services/omnivyraClientV1', () => ({
-  isOmniVyraEnabled: jest.fn().mockReturnValue(true),
+  isOmnivyraEnabled: jest.fn().mockReturnValue(true),
   evaluateCommunityAiEngagement: jest.fn().mockResolvedValue({
     status: 'ok',
     data: {

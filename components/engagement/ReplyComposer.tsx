@@ -5,12 +5,15 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { recordEngagementEvent } from '@/lib/engagementTelemetry';
 import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
+import { isDmMessageType } from '@/lib/engagement/messageRoles';
 
 export interface ReplyComposerProps {
   threadId: string;
   messageId: string;
   platform: string;
   organizationId: string;
+  /** The target message's type — drives capability lookup ('dm' vs 'reply'). */
+  messageType?: string | null;
   value?: string;
   onChange?: (value: string) => void;
   onReplySent?: () => void;
@@ -19,6 +22,7 @@ export interface ReplyComposerProps {
     messageId: string;
     platform: string;
     replyText: string;
+    messageType?: string | null;
   }) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
   onRequestSuggestions?: () => void;
   disabled?: boolean;
@@ -30,6 +34,7 @@ export const ReplyComposer = React.memo(function ReplyComposer({
   messageId,
   platform,
   organizationId,
+  messageType,
   value: controlledValue,
   onChange,
   onReplySent,
@@ -60,12 +65,18 @@ export const ReplyComposer = React.memo(function ReplyComposer({
   const text = isControlled ? controlledValue : internalValue;
   const setText = isControlled ? (onChange ?? (() => {})) : setInternalValue;
 
+  // For DMs the capability key is 'dm', not 'reply' — they have separate
+  // matrix entries and different dispatch modes (browser vs api).
+  const isDmMessage = isDmMessageType(messageType);
+  const capabilityAction = isDmMessage ? 'dm' : 'reply';
   const capability = useMemo(
-    () => resolveEngagementCapability(platform, 'reply'),
-    [platform],
+    () => resolveEngagementCapability(platform, capabilityAction),
+    [platform, capabilityAction],
   );
   const unsupportedReason =
-    capability.status === 'api_verified' ? null : capability.reason ?? 'Reply is not supported on this platform.';
+    capability.status === 'api_verified'
+      ? null
+      : capability.reason ?? `${capabilityAction === 'dm' ? 'DM' : 'Reply'} is not supported on this platform.`;
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
@@ -88,6 +99,7 @@ export const ReplyComposer = React.memo(function ReplyComposer({
           messageId,
           platform,
           replyText: trimmed,
+          messageType,
         });
         if (executionResult && typeof executionResult === 'object' && executionResult.message) {
           executionMessage = executionResult.message;
@@ -144,7 +156,7 @@ export const ReplyComposer = React.memo(function ReplyComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, disabled, unsupportedReason, onExecuteReply, threadId, messageId, platform, organizationId, isControlled, setText, onReplySent]);
+  }, [text, sending, disabled, unsupportedReason, onExecuteReply, threadId, messageId, platform, organizationId, messageType, isControlled, setText, onReplySent]);
 
   const composerDisabled = disabled || Boolean(unsupportedReason);
 

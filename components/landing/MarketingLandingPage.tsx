@@ -16,9 +16,9 @@ export const LANDING_FAQS = [
       'By analyzing performance trends, identifying bottlenecks such as drop-offs, and prioritizing actions that have the highest impact on conversions and growth.',
   },
   {
-    question: 'How does OmniVyra help?',
+    question: 'How does Omnivyra help?',
     answer:
-      'OmniVyra connects analytics with recommendations and execution, helping teams move from insights to prioritized actions without switching tools.',
+      'Omnivyra connects analytics with recommendations and execution, helping teams move from insights to prioritized actions without switching tools.',
   },
 ];
 
@@ -99,17 +99,17 @@ export default function MarketingLandingPage() {
               See what is working, know what to do next, and move faster.
             </h2>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-white/80 lg:mx-0">
-              OmniVyra turns performance signals, campaign data, and market context into clear priorities your team can act on.
+              Omnivyra turns performance signals, campaign data, and market context into clear priorities your team can act on.
             </p>
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3 lg:justify-start">
               <Link
                 href="/features"
                 data-ga-primary-cta
-                data-ga-label="See OmniVyra in Action"
+                data-ga-label="See Omnivyra in Action"
                 data-ga-location="hero"
                 className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-7 py-3.5 text-[15px] font-semibold text-white shadow-[0_4px_20px_rgba(10,102,194,0.45)] transition hover:shadow-[0_6px_28px_rgba(10,102,194,0.6)] hover:opacity-95"
               >
-                See OmniVyra in Action
+                See Omnivyra in Action
               </Link>
               <Link
                 href="/free-audit/start"
@@ -211,10 +211,10 @@ export default function MarketingLandingPage() {
             className="text-center text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl"
             style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}
           >
-            OmniVyra connects marketing performance with next best actions.
+            Omnivyra connects marketing performance with next best actions.
           </h2>
           <p className="mx-auto mt-5 max-w-3xl text-center text-base leading-relaxed text-[#6B7C93]">
-            OmniVyra analyzes marketing performance, funnel behavior, conversion trends, and drop-offs to identify what is changing and what needs attention. Then it turns those signals into prioritized recommendations and execution-ready next steps.
+            Omnivyra analyzes marketing performance, funnel behavior, conversion trends, and drop-offs to identify what is changing and what needs attention. Then it turns those signals into prioritized recommendations and execution-ready next steps.
           </p>
           <div className="mt-12 grid gap-5 sm:grid-cols-3">
             {[
@@ -274,7 +274,7 @@ export default function MarketingLandingPage() {
             className="text-center text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl"
             style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}
           >
-            How OmniVyra works
+            How Omnivyra works
           </h2>
           <div className="mt-14 grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
             {HOW_IT_WORKS.map((item, index) => (
@@ -307,7 +307,7 @@ export default function MarketingLandingPage() {
             className="text-center text-3xl font-bold tracking-tight text-white sm:text-4xl"
             style={{ fontFamily: "'Poppins', 'Inter', sans-serif" }}
           >
-            What OmniVyra helps you improve
+            What Omnivyra helps you improve
           </h2>
           <div className="mt-12 grid gap-6 sm:grid-cols-3">
             {OUTCOMES.map((item) => (
@@ -335,7 +335,7 @@ export default function MarketingLandingPage() {
             A system built for analytics-driven execution
           </h2>
           <p className="mx-auto mt-5 max-w-3xl text-center text-base leading-relaxed text-[#6B7C93]">
-            OmniVyra is not just a reporting layer. It is an analytics and action system that helps teams understand performance, generate next steps, and follow through.
+            Omnivyra is not just a reporting layer. It is an analytics and action system that helps teams understand performance, generate next steps, and follow through.
           </p>
           <div className="mt-12 grid gap-4 sm:grid-cols-2">
             {SYSTEM_POINTS.map((point) => (
@@ -362,7 +362,7 @@ export default function MarketingLandingPage() {
             If your team had clearer priorities, what would move faster?
           </h2>
           <p className="mx-auto mt-5 max-w-2xl text-lg text-white/70">
-            Use OmniVyra to turn analytics into action and action into measurable progress.
+            Use Omnivyra to turn analytics into action and action into measurable progress.
           </p>
           <div className="mx-auto mt-8 max-w-xl">
             <FreeAuditInput placeholder="https://yourwebsite.com" buttonText="Analyze My Performance" />

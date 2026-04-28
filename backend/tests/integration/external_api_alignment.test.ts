@@ -186,8 +186,8 @@ describe('External API alignment', () => {
           generateCampaignStrategy: jest.fn().mockResolvedValue({ weekly_plan: [], daily_plan: [] }),
         }));
         jest.doMock('../../services/omnivyraClientV1', () => ({
-          isOmniVyraEnabled: jest.fn().mockReturnValue(false),
-          getOmniVyraHealthReport: jest.fn().mockReturnValue({ status: 'disabled' }),
+          isOmnivyraEnabled: jest.fn().mockReturnValue(false),
+          getOmnivyraHealthReport: jest.fn().mockReturnValue({ status: 'disabled' }),
         }));
         jest.doMock('../../services/omnivyraHealthService', () => ({
           getLastFallbackReason: jest.fn().mockReturnValue(null),

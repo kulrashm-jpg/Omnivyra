@@ -57,7 +57,7 @@ export default function FreeAuditStart() {
   return (
     <>
       <Head>
-        <title>Free Website Audit | OmniVyra</title>
+        <title>Free Website Audit | Omnivyra</title>
         <meta name="description" content="Run a free AI-powered website audit." />
       </Head>
       <div className="min-h-screen bg-[#F5F9FF]">
@@ -267,7 +267,7 @@ export default function FreeAuditStart() {
 
           <p className="mt-8 text-center text-sm text-gray-500">
             <Link href="/" className="text-[#0B5ED7] hover:underline">
-              Back to OmniVyra
+              Back to Omnivyra
             </Link>
           </p>
         </div>

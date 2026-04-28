@@ -28,6 +28,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_company_profiles_company_id
 
 ALTER TABLE company_profiles
     ADD COLUMN IF NOT EXISTS website_url TEXT,
+    ADD COLUMN IF NOT EXISTS logo_url TEXT,
+    ADD COLUMN IF NOT EXISTS favicon_url TEXT,
     ADD COLUMN IF NOT EXISTS linkedin_url TEXT,
     ADD COLUMN IF NOT EXISTS facebook_url TEXT,
     ADD COLUMN IF NOT EXISTS instagram_url TEXT,

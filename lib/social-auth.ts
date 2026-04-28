@@ -23,8 +23,8 @@ export const SOCIAL_AUTH_CONFIGS = {
   linkedin: {
     authUrl: 'https://www.linkedin.com/oauth/v2/authorization',
     tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
-    scope: ['r_liteprofile', 'r_emailaddress', 'w_member_social'],
-    requiredPermissions: ['r_liteprofile', 'w_member_social']
+    scope: ['openid', 'profile', 'email', 'w_member_social'],
+    requiredPermissions: ['openid', 'w_member_social']
   },
   twitter: {
     authUrl: 'https://twitter.com/i/oauth2/authorize',

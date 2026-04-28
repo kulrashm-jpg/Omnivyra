@@ -16,7 +16,13 @@
  */
 import type { CompanyProfile } from '../../pages/company-profile.types';
 
-export type StrategyProfile = NonNullable<CompanyProfile['strategy_profile']>;
+export type StrategyProfile = {
+  worldview?: string | null;
+  contrarianBeliefs?: string[] | null;
+  primaryFocus?: string[] | null;
+  differentiation?: string[] | null;
+  typicalAngles?: string[] | null;
+};
 
 const GENERIC_TERMS = [
   'growth',
@@ -82,11 +88,11 @@ function tokenizeText(value: string): string[] {
 
 export function normalizeStrategyProfile(profile: CompanyProfile): StrategyProfile {
   return {
-    worldview: profile.strategy_profile?.worldview ?? profile.strategyProfile?.worldview ?? '',
-    contrarianBeliefs: profile.strategy_profile?.contrarianBeliefs ?? profile.strategyProfile?.contrarianBeliefs ?? [],
-    primaryFocus: profile.strategy_profile?.primaryFocus ?? profile.strategyProfile?.primaryFocus ?? [],
-    differentiation: profile.strategy_profile?.differentiation ?? profile.strategyProfile?.differentiation ?? [],
-    typicalAngles: profile.strategy_profile?.typicalAngles ?? profile.strategyProfile?.typicalAngles ?? [],
+    worldview: profile.brand_positioning ?? '',
+    contrarianBeliefs: [],
+    primaryFocus: toCleanList(String(profile.growth_priorities || '').split(/[\n;,]+/).filter(Boolean)),
+    differentiation: toCleanList(String(profile.competitive_advantages || '').split(/[\n;,]+/).filter(Boolean)),
+    typicalAngles: toCleanList(String(profile.key_messages || '').split(/[\n;,]+/).filter(Boolean)),
   };
 }
 

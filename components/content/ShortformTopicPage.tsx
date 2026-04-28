@@ -52,7 +52,7 @@ export default function ShortformTopicPage({
   formatOptions,
 }: Props) {
   const router = useRouter();
-  const { user, isLoading } = useCompanyContext();
+  const { user, isLoading, selectedCompanyId } = useCompanyContext();
   const selectedFormat = typeof router.query.format === 'string' ? router.query.format : defaultFormat;
   const selectedFormatOption = formatOptions.find((option) => option.value === selectedFormat);
   const targetWords = useMemo(
@@ -62,6 +62,109 @@ export default function ShortformTopicPage({
 
   const [topic, setTopic] = useState('');
   const [strategicNote, setStrategicNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  const normalizePostGenerationResult = (result: any) => {
+    const generatedContent = typeof result?.platform_variant?.generated_content === 'string'
+      ? result.platform_variant.generated_content
+      : '';
+    const masterContent = typeof result?.master_content?.content === 'string'
+      ? result.master_content.content
+      : '';
+    const variantFailed =
+      typeof result?.platform_variant?.generation_status === 'string' &&
+      result.platform_variant.generation_status.toLowerCase() === 'failed';
+    const placeholderDetected =
+      generatedContent.includes('[PLATFORM ADAPTATION FAILED]') ||
+      generatedContent.trim() === 'Based on master content.';
+
+    if ((!variantFailed && !placeholderDetected) || !masterContent.trim()) {
+      return result;
+    }
+
+    return {
+      ...result,
+      platform_variant: {
+        ...result.platform_variant,
+        generated_content: masterContent,
+        generation_status: 'generated',
+        adaptation_trace: {
+          ...result.platform_variant?.adaptation_trace,
+          adaptation_reason: 'Used master content fallback because platform adaptation failed.',
+          actual_length_used: masterContent.length,
+        },
+      },
+    };
+  };
+
+  const handleContinue = async () => {
+    if (!topic.trim()) return;
+
+    if (contentType === 'post') {
+      if (!selectedCompanyId) {
+        setError('Select a company before generating a post.');
+        return;
+      }
+
+      setSubmitting(true);
+      setError('');
+      try {
+        const response = await fetch('/api/posts/generate', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            company_id: selectedCompanyId,
+            topic: topic.trim(),
+            platform: 'linkedin',
+            template_name: selectedFormatOption?.label || selectedFormat,
+            extra_instruction: strategicNote.trim() || undefined,
+          }),
+        });
+
+        const rawResult = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(
+            (rawResult as { error?: string }).error || 'Failed to generate post',
+          );
+        }
+
+        const prefillToken = `post_prefill_${Date.now()}`;
+        sessionStorage.setItem(
+          prefillToken,
+          JSON.stringify({
+            output: normalizePostGenerationResult(rawResult),
+            source: 'post_direct_topic',
+            topic: topic.trim(),
+            platform: 'linkedin',
+            template_name: selectedFormatOption?.label || selectedFormat,
+          }),
+        );
+
+        await router.push({
+          pathname: '/posts/result',
+          query: { prefill: prefillToken },
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unable to generate post right now.');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    void router.push({
+      pathname: templatePath,
+      query: {
+        format: selectedFormat,
+        target_words: String(targetWords),
+        prefill_source: `${contentType}_direct_topic`,
+        prefill_topic: topic.trim(),
+        prefill_reason: strategicNote.trim() || `Directly entered ${contentType} topic.`,
+      },
+    });
+  };
 
   if (isLoading) {
     return (
@@ -82,7 +185,7 @@ export default function ShortformTopicPage({
   return (
     <>
       <Head>
-        <title>{pageTitle} | OmniVyra</title>
+        <title>{pageTitle} | Omnivyra</title>
       </Head>
 
       <div className={`min-h-screen bg-gradient-to-br ${accentSurfaceClassName} p-6`}>
@@ -117,7 +220,11 @@ export default function ShortformTopicPage({
               </div>
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Next Step</p>
-                <p className="mt-2 text-sm text-slate-600">You will choose a template before refining the final brief and generating the output.</p>
+                <p className="mt-2 text-sm text-slate-600">
+                  {contentType === 'post'
+                    ? 'Your topic will go straight into post generation so you can review the finished draft immediately.'
+                    : 'You will choose a template before refining the final brief and generating the output.'}
+                </p>
               </div>
             </div>
 
@@ -150,25 +257,27 @@ export default function ShortformTopicPage({
                 Keep the topic concrete. Specific inputs produce sharper hooks, cleaner structure, and stronger platform fit.
               </p>
 
+              {error ? (
+                <p className="w-full text-sm text-red-600">{error}</p>
+              ) : null}
+
               <button
                 type="button"
-                disabled={!topic.trim()}
-                onClick={() =>
-                  void router.push({
-                    pathname: templatePath,
-                    query: {
-                      format: selectedFormat,
-                      target_words: String(targetWords),
-                      prefill_source: `${contentType}_direct_topic`,
-                      prefill_topic: topic.trim(),
-                      prefill_reason: strategicNote.trim() || `Directly entered ${contentType} topic.`,
-                    },
-                  })
-                }
+                disabled={!topic.trim() || submitting}
+                onClick={() => void handleContinue()}
                 className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${accentButtonClassName}`}
               >
-                Continue to templates
-                <ArrowRight className="h-4 w-4" />
+                {submitting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Generating post
+                  </>
+                ) : (
+                  <>
+                    {contentType === 'post' ? 'Generate post' : 'Continue to templates'}
+                    <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
               </button>
             </div>
           </div>

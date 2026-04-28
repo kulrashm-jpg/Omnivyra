@@ -368,7 +368,6 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       p.startsWith('/onboarding/') ||
       p.startsWith('/super-admin/') ||
       p === '/login' ||
-      p === '/signup' ||
       p === '/create-account';
     if (isAuthFlowPage) {
       setIsLoading(false);

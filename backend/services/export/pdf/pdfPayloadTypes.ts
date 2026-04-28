@@ -46,6 +46,7 @@ export type PdfNextStep = {
 
 export type PdfReportPayload = {
   domain: string;
+  overallScore?: number;
   companyContext?: {
     companyName: string | null;
     domain: string | null;
@@ -54,6 +55,8 @@ export type PdfReportPayload = {
     primaryOffering: string | null;
     positioning: string | null;
     marketContext: string | null;
+    logoUrl?: string | null;
+    faviconUrl?: string | null;
     positioningStrength?: 'strong' | 'moderate' | 'weak';
     positioningNarrative?: string;
     positioningGap?: string | null;
@@ -73,7 +76,29 @@ export type PdfReportPayload = {
   summary: string;
   confidenceSource?: string;
   scoreExplanation?: {
+    dimensions?: Array<{
+      key: string;
+      label: string;
+      value: number;
+      explanation: string;
+    }>;
+    weakestDimensions?: Array<{
+      key: string;
+      label: string;
+      value: number;
+    }>;
     limitingFactors?: string[];
+    growthPath?: {
+      currentLevel: string;
+      nextLevel: string | null;
+      focus: string[];
+      projectedScoreImprovements: Array<{
+        dimension: string;
+        currentValue: number;
+        projectedValue: number;
+        projectedTotalScore: number;
+      }>;
+    };
   };
   seoExecutiveSummary?: {
     overallHealthScore: number;
@@ -302,6 +327,26 @@ export type PdfReportPayload = {
     competitivePosition: 'leader' | 'competitive' | 'lagging';
     confidence: 'high' | 'medium' | 'low';
   } | null;
+  competitorContext?: {
+    summary: string;
+    competitors: Array<{
+      name: string;
+      domain: string | null;
+      classification: string;
+      source: string;
+      relevanceScore: number;
+      rationale: string;
+      standing: 'Behind' | 'At Par' | 'Ahead';
+    }>;
+    strongestGaps: Array<{
+      gapType: string;
+      title: string;
+      whyItMatters: string;
+      confidenceScore: number;
+      impactScore: number;
+      leadingCompetitors: string[];
+    }>;
+  };
   competitorMovementComparison?: {
     previous_report_id: string;
     current_report_id: string;
@@ -338,6 +383,50 @@ export type PdfReportPayload = {
     summary: {
       overall_trend: 'improving' | 'declining' | 'stable';
       key_movement: string;
+    };
+  } | null;
+  progressComparison?: {
+    previous_report_id: string;
+    current_report_id: string;
+    unified_score_change: number | null;
+    seo_changes: {
+      health_score_delta: number | null;
+      impressions_delta: number | null;
+      clicks_delta: number | null;
+      ctr_delta: number | null;
+    };
+    geo_aeo_changes: {
+      ai_visibility_delta: number | null;
+      answer_coverage_delta: number | null;
+      citation_readiness_delta: number | null;
+    };
+    competitor_changes: {
+      position_change: number | null;
+      gap_reduction_score: number | null;
+    };
+    data_status: 'complete' | 'partial' | 'insufficient';
+    summary: {
+      overall_trend: 'improving' | 'declining' | 'stable';
+      biggest_gain: string;
+      biggest_drop: string;
+    };
+  } | null;
+  timelineComparison?: {
+    snapshots: Array<{
+      report_id: string;
+      created_at: string;
+      unified_score: number | null;
+      competitor: {
+        domain: string;
+        score: number;
+      } | null;
+      delta_from_previous: number | null;
+    }>;
+    meta: {
+      trend: 'improving' | 'declining' | 'stable';
+      total_change: number | null;
+      data_points: number;
+      data_status: 'complete' | 'partial' | 'insufficient';
     };
   } | null;
   decisionSnapshot?: {

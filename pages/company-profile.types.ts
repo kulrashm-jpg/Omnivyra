@@ -5,25 +5,13 @@
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type CompanyProfile = {
-  strategy_profile?: {
-    worldview?: string | null;
-    contrarianBeliefs?: string[] | null;
-    primaryFocus?: string[] | null;
-    differentiation?: string[] | null;
-    typicalAngles?: string[] | null;
-  } | null;
-  strategyProfile?: {
-    worldview?: string | null;
-    contrarianBeliefs?: string[] | null;
-    primaryFocus?: string[] | null;
-    differentiation?: string[] | null;
-    typicalAngles?: string[] | null;
-  } | null;
   company_id?: string;
   name?: string;
   industry?: string;
   category?: string;
   website_url?: string;
+  logo_url?: string;
+  favicon_url?: string;
   industry_list?: string[];
   category_list?: string[];
   geography_list?: string[];
@@ -89,6 +77,7 @@ export type CompanyProfile = {
   desired_transformation?: string | null;
   transformation_mechanism?: string | null;
   authority_domains?: string[] | null;
+  recommendation_context?: Record<string, any> | null;
   report_settings?: {
     company_facts?: {
       team_size?: string | null;
@@ -146,12 +135,12 @@ export type CompanyProfileRefinement = {
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const emptyProfile: CompanyProfile = {
-  strategy_profile: null,
-  strategyProfile: null,
   name: '',
   industry: '',
   category: '',
   website_url: '',
+  logo_url: '',
+  favicon_url: '',
   linkedin_url: '',
   facebook_url: '',
   instagram_url: '',

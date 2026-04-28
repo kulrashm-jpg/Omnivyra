@@ -1,8 +1,8 @@
-import { validateOmniVyraEnvelope } from '../../services/omnivyraContractService';
+import { validateOmnivyraEnvelope } from '../../services/omnivyraContractService';
 
-describe('OmniVyra contract validation', () => {
+describe('Omnivyra contract validation', () => {
   it('accepts valid envelope', () => {
-    const result = validateOmniVyraEnvelope({
+    const result = validateOmnivyraEnvelope({
       decision_id: 'abc',
       confidence: 0.9,
       placeholders: [],
@@ -15,13 +15,13 @@ describe('OmniVyra contract validation', () => {
   });
 
   it('rejects missing fields', () => {
-    const result = validateOmniVyraEnvelope({ decision_id: 'abc' });
+    const result = validateOmnivyraEnvelope({ decision_id: 'abc' });
     expect(result.valid).toBe(false);
     expect(result.errors.length).toBeGreaterThan(0);
   });
 
   it('rejects invalid confidence range', () => {
-    const result = validateOmniVyraEnvelope({
+    const result = validateOmnivyraEnvelope({
       decision_id: 'abc',
       confidence: 2,
       placeholders: [],
@@ -34,7 +34,7 @@ describe('OmniVyra contract validation', () => {
   });
 
   it('rejects version mismatch', () => {
-    const result = validateOmniVyraEnvelope({
+    const result = validateOmnivyraEnvelope({
       decision_id: 'abc',
       confidence: 0.8,
       placeholders: [],

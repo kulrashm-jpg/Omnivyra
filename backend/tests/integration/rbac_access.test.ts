@@ -85,7 +85,7 @@ describe('RBAC access enforcement', () => {
     expect(result?.role).toBe(Role.SUPER_ADMIN);
   });
 
-  it('COMPANY_ADMIN blocked from OmniVyra health', async () => {
+  it('COMPANY_ADMIN blocked from Omnivyra health', async () => {
     mockRoleLookup({ 'company-a': Role.COMPANY_ADMIN }, [Role.COMPANY_ADMIN]);
     const res = createMockRes();
     const result = await enforceRole({

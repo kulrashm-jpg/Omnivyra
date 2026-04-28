@@ -117,7 +117,7 @@ export const toTrendInput = (signal: TrendSignal): TrendSignalInput => ({
   volume: signal.volume,
 });
 
-export const mapOmniVyraTrends = (
+export const mapOmnivyraTrends = (
   omnivyraTrends: Array<TrendSignalInput | { topic: string } | string> | undefined,
   fallbackSignals: TrendSignal[]
 ): TrendSignal[] => {

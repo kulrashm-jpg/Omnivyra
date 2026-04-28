@@ -33,7 +33,7 @@ jest.mock('../../services/companyProfileService', () => ({
 }));
 
 jest.mock('../../services/omnivyraClientV1', () => ({
-  isOmniVyraEnabled: jest.fn().mockReturnValue(true),
+  isOmnivyraEnabled: jest.fn().mockReturnValue(true),
   evaluateCommunityAiInsights: jest.fn().mockResolvedValue({
     status: 'ok',
     data: {
@@ -67,7 +67,7 @@ describe('Community-AI Insights', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('calls OmniVyra with KPIs + trends + anomalies', async () => {
+  it('calls Omnivyra with KPIs + trends + anomalies', async () => {
     setRole('VIEW_ONLY');
     scheduledPostStore.push({
       id: 'insight-1',

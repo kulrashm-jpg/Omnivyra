@@ -31,7 +31,7 @@ export default function ThreadCreateView() {
   return (
     <>
       <Head>
-        <title>Create Thread | OmniVyra</title>
+        <title>Create Thread | Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-4 py-8">

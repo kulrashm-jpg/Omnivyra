@@ -20,7 +20,7 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: 'welcome',
     target: null,
-    title: 'Welcome to OmniVyra!',
+    title: 'Welcome to Omnivyra!',
     description:
       "Let's get you set up in a few quick steps. We'll guide you through everything — you can restart this guide any time by clicking Start Help in the header.",
     position: 'center',
@@ -64,7 +64,7 @@ export const TOUR_STEPS: TourStep[] = [
     target: 'create-campaign-btn',
     title: 'Step 4 — Create your First Campaign',
     description:
-      "Ready to build! Click Create Campaign to start. Choose text-based (Bolt) for a quick manual draft, or Run Campaign to let OmniVyra generate the full content pipeline automatically.",
+      "Ready to build! Click Create Campaign to start. Choose text-based (Bolt) for a quick manual draft, or Run Campaign to let Omnivyra generate the full content pipeline automatically.",
     position: 'bottom',
     primaryLabel: 'Create Campaign',
     primaryUrl: '/campaign-planner?mode=direct',
@@ -75,7 +75,7 @@ export const TOUR_STEPS: TourStep[] = [
     target: null,
     title: "You're all set!",
     description:
-      "You now know the full OmniVyra flow. Whenever you need guidance again, click Start Help in the header and this tour will restart from the beginning. Happy campaigning!",
+      "You now know the full Omnivyra flow. Whenever you need guidance again, click Start Help in the header and this tour will restart from the beginning. Happy campaigning!",
     position: 'center',
     primaryLabel: 'Go to dashboard',
   },

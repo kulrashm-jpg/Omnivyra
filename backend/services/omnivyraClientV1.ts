@@ -1,4 +1,4 @@
-import { validateOmniVyraEnvelope } from './omnivyraContractService';
+import { validateOmnivyraEnvelope } from './omnivyraContractService';
 import {
   getHealthReport,
   recordFailure,
@@ -6,13 +6,13 @@ import {
   setLastMeta,
 } from './omnivyraHealthService';
 
-type OmniVyraError = {
+type OmnivyraError = {
   message: string;
   status?: number;
   error_type?: string;
 };
 
-export type OmniVyraEnvelope<T> = {
+export type OmnivyraEnvelope<T> = {
   decision_id: string;
   confidence: number;
   placeholders: string[];
@@ -21,7 +21,7 @@ export type OmniVyraEnvelope<T> = {
   data: T;
 };
 
-export type OmniVyraResponse<T> = {
+export type OmnivyraResponse<T> = {
   status: 'ok' | 'error';
   data?: T;
   decision_id?: string;
@@ -31,7 +31,7 @@ export type OmniVyraResponse<T> = {
   contract_version?: string;
   partial?: boolean;
   raw?: any;
-  error?: OmniVyraError;
+  error?: OmnivyraError;
   _omnivyra_meta?: {
     latency_ms: number;
     contract_valid: boolean;
@@ -134,7 +134,7 @@ const getBaseUrl = (): string | null => {
   return baseUrl.replace(/\/$/, '');
 };
 
-const logOmniVyraMeta = (payload: {
+const logOmnivyraMeta = (payload: {
   path: string;
   decision_id?: string;
   confidence?: number;
@@ -169,7 +169,7 @@ const logOmniVyraMeta = (payload: {
   }
 };
 
-const normalizeEnvelope = <T>(rawJson: any): OmniVyraEnvelope<T> | null => {
+const normalizeEnvelope = <T>(rawJson: any): OmnivyraEnvelope<T> | null => {
   const decisionId = rawJson?.decision_id;
   const confidence = parseNumber(rawJson?.confidence);
   const placeholders = parsePlaceholders(rawJson?.placeholders);
@@ -198,11 +198,11 @@ const normalizeEnvelope = <T>(rawJson: any): OmniVyraEnvelope<T> | null => {
   };
 };
 
-const requestOmniVyra = async <T>(
+const requestOmnivyra = async <T>(
   path: string,
   payload: any,
   options?: { timeoutMs?: number; retries?: number }
-): Promise<OmniVyraResponse<T>> => {
+): Promise<OmnivyraResponse<T>> => {
   const baseUrl = getBaseUrl();
   if (!baseUrl) {
     recordFailure(path, 'unknown', 'Missing OMNIVYRA_BASE_URL');
@@ -226,7 +226,7 @@ const requestOmniVyra = async <T>(
 
   const retries = options?.retries ?? DEFAULT_RETRIES;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  let lastError: OmniVyraError | undefined;
+  let lastError: OmnivyraError | undefined;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const controller = new AbortController();
@@ -252,7 +252,7 @@ const requestOmniVyra = async <T>(
 
       if (!response.ok) {
         lastError = {
-          message: rawJson?.error || response.statusText || 'OmniVyra error',
+          message: rawJson?.error || response.statusText || 'Omnivyra error',
           status: response.status,
           error_type: 'http_error',
         };
@@ -266,7 +266,7 @@ const requestOmniVyra = async <T>(
         continue;
       }
 
-      const contract = validateOmniVyraEnvelope(rawJson);
+      const contract = validateOmnivyraEnvelope(rawJson);
       const envelope = normalizeEnvelope<T>(rawJson);
       if (!contract.valid || !envelope) {
         const errorType = contract.errors.some((error) => error.includes('contract_version'))
@@ -281,7 +281,7 @@ const requestOmniVyra = async <T>(
         });
         return {
           status: 'error',
-          error: { message: 'Invalid OmniVyra response envelope', error_type: errorType },
+          error: { message: 'Invalid Omnivyra response envelope', error_type: errorType },
           raw: rawJson,
           _omnivyra_meta: {
             latency_ms: latencyMs,
@@ -293,7 +293,7 @@ const requestOmniVyra = async <T>(
       }
 
       const partial = envelope.placeholders.length > 0;
-      logOmniVyraMeta({
+      logOmnivyraMeta({
         path,
         decision_id: envelope.decision_id,
         confidence: envelope.confidence,
@@ -328,7 +328,7 @@ const requestOmniVyra = async <T>(
     } catch (error: any) {
       const errType = (error?.name === 'AbortError' ? 'timeout' : 'unknown') as 'timeout' | 'unknown';
       lastError = {
-        message: error?.name === 'AbortError' ? 'OmniVyra request timed out' : error?.message,
+        message: error?.name === 'AbortError' ? 'Omnivyra request timed out' : error?.message,
         error_type: errType,
       };
       recordFailure(path, errType, lastError.message);
@@ -349,7 +349,7 @@ const requestOmniVyra = async <T>(
 
   return {
     status: 'error',
-    error: lastError || { message: 'OmniVyra request failed' },
+    error: lastError || { message: 'Omnivyra request failed' },
     _omnivyra_meta: {
       latency_ms: timeoutMs,
       contract_valid: false,
@@ -359,29 +359,29 @@ const requestOmniVyra = async <T>(
   };
 };
 
-export const isOmniVyraEnabled = (): boolean => {
+export const isOmnivyraEnabled = (): boolean => {
   const flag = process.env.USE_OMNIVYRA;
   return flag === 'true' || flag === '1' || flag === 'yes';
 };
 
-export const getOmniVyraHealthReport = () => getHealthReport(isOmniVyraEnabled());
+export const getOmnivyraHealthReport = () => getHealthReport(isOmnivyraEnabled());
 
 export const getTrendRelevance = (input: {
   signals: TrendSignalInput[];
   geo?: string;
   category?: string;
   companyProfile?: any;
-}) => requestOmniVyra<TrendRelevanceResult>('/trends/relevance', input);
+}) => requestOmnivyra<TrendRelevanceResult>('/trends/relevance', input);
 
 export const getTrendRanking = (input: {
   signals: TrendSignalInput[];
   geo?: string;
   category?: string;
   companyProfile?: any;
-}) => requestOmniVyra<TrendRankingResult>('/trends/rank', input);
+}) => requestOmnivyra<TrendRankingResult>('/trends/rank', input);
 
 export const getPlatformRules = (input: { platform: string; contentType: string }) =>
-  requestOmniVyra<PlatformRuleResult>('/platform/rules/canonical', input);
+  requestOmnivyra<PlatformRuleResult>('/platform/rules/canonical', input);
 
 export const getContentBlueprint = (input: {
   companyProfile: any;
@@ -389,14 +389,14 @@ export const getContentBlueprint = (input: {
   durationWeeks: number;
   contentCapabilities: any;
   platformRules?: any;
-}) => requestOmniVyra<ContentBlueprintResult>('/content/blueprint', input);
+}) => requestOmnivyra<ContentBlueprintResult>('/content/blueprint', input);
 
 export const getPromotionMetadata = (input: {
   companyId: string;
   contentAssetId: string;
   platform: string;
   content: any;
-}) => requestOmniVyra<PromotionMetadataResult>('/promotion/intelligence', input);
+}) => requestOmnivyra<PromotionMetadataResult>('/promotion/intelligence', input);
 
 export const checkPlatformCompliance = (input: {
   contentAssetId: string;
@@ -405,10 +405,10 @@ export const checkPlatformCompliance = (input: {
   formattedContent: string;
   rule: any;
   promotionMetadata: any;
-}) => requestOmniVyra<ComplianceResult>('/platform/compliance/intelligence', input);
+}) => requestOmnivyra<ComplianceResult>('/platform/compliance/intelligence', input);
 
 export const getExplainability = (input: { recommendation?: string | null; context?: any }) =>
-  requestOmniVyra<ExplainabilityResult>('/explain', input);
+  requestOmnivyra<ExplainabilityResult>('/explain', input);
 
 export type CommunityAiEvaluationResult = {
   analysis?: string;
@@ -427,7 +427,7 @@ export const evaluateCommunityAiEngagement = (input: {
   goals?: any;
   brand_voice: string;
   context?: any;
-}) => requestOmniVyra<CommunityAiEvaluationResult>('/community/engagement/evaluate', input);
+}) => requestOmnivyra<CommunityAiEvaluationResult>('/community/engagement/evaluate', input);
 
 export type CommunityAiInsightsResult = {
   summary_insight?: string;
@@ -447,7 +447,7 @@ export const evaluateCommunityAiInsights = (input: {
   anomalies: any;
   brand_voice: string;
   recent_content_summary?: any;
-}) => requestOmniVyra<CommunityAiInsightsResult>('/community/insights/evaluate', input);
+}) => requestOmnivyra<CommunityAiInsightsResult>('/community/insights/evaluate', input);
 
 export type CommunityAiForecastInsightsResult = {
   explanation_summary?: string;
@@ -468,7 +468,7 @@ export const evaluateCommunityAiForecastInsights = (input: {
   kpis: any;
   brand_voice: string;
   recent_content_summary?: any;
-}) => requestOmniVyra<CommunityAiForecastInsightsResult>('/community/forecast/insights', input);
+}) => requestOmnivyra<CommunityAiForecastInsightsResult>('/community/forecast/insights', input);
 
 export type CommunityAiExecutiveNarrativeResult = {
   overview?: string;
@@ -487,4 +487,4 @@ export const evaluateCommunityAiExecutiveNarrative = (input: {
   network_intelligence_snapshot: any;
   automation_levels: any;
   date_range?: { start_date: string | null; end_date: string | null };
-}) => requestOmniVyra<CommunityAiExecutiveNarrativeResult>('/community/executive/narrative', input);
+}) => requestOmnivyra<CommunityAiExecutiveNarrativeResult>('/community/executive/narrative', input);

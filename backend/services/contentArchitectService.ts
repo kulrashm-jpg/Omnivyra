@@ -11,8 +11,7 @@ import { getUserRole, getCompanyRoleIncludingInvited, isSuperAdmin, Role } from 
  * True when the request has a valid Content Architect session (can access companies/campaigns).
  */
 export function isContentArchitectSession(req: NextApiRequest): boolean {
-  void req;
-  return false;
+  return req.cookies?.content_architect_session === '1';
 }
 
 /**
@@ -20,8 +19,10 @@ export function isContentArchitectSession(req: NextApiRequest): boolean {
  * with a company cookie set; otherwise null (session can still be architect with access to all companies).
  */
 export function getContentArchitectCompanyId(req: NextApiRequest): string | null {
-  void req;
-  return null;
+  const companyId = req.cookies?.content_architect_company_id;
+  if (!companyId || typeof companyId !== 'string') return null;
+  const trimmed = companyId.trim();
+  return trimmed || null;
 }
 
 /**

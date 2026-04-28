@@ -8,8 +8,8 @@ import { generateCampaignStrategy } from '../../services/campaignRecommendationS
 import {
   getTrendRanking,
   getTrendRelevance,
-  getOmniVyraHealthReport,
-  isOmniVyraEnabled,
+  getOmnivyraHealthReport,
+  isOmnivyraEnabled,
 } from '../../services/omnivyraClientV1';
 
 jest.mock('../../db/supabaseClient', () => ({
@@ -49,8 +49,8 @@ jest.mock('../../services/campaignRecommendationService', () => ({
 jest.mock('../../services/omnivyraClientV1', () => ({
   getTrendRelevance: jest.fn(),
   getTrendRanking: jest.fn(),
-  isOmniVyraEnabled: jest.fn(),
-  getOmniVyraHealthReport: jest.fn().mockReturnValue({
+  isOmnivyraEnabled: jest.fn(),
+  getOmnivyraHealthReport: jest.fn().mockReturnValue({
     status: 'healthy',
     endpoints: {},
     avg_latency_ms: 0,
@@ -126,7 +126,7 @@ describe('Recommendation engine service', () => {
       weekly_plan: [{ week_number: 1, theme: 'AI Marketing', trend_influence: [] }],
       daily_plan: [{ date: 'Week 1 Day 1', platform: 'linkedin', content_type: 'text', topic: 'AI' }],
     });
-    (getOmniVyraHealthReport as jest.Mock).mockReturnValue({
+    (getOmnivyraHealthReport as jest.Mock).mockReturnValue({
       status: 'healthy',
       endpoints: {},
       avg_latency_ms: 0,
@@ -139,8 +139,8 @@ describe('Recommendation engine service', () => {
     jest.resetAllMocks();
   });
 
-  it('handles OmniVyra enabled path', async () => {
-    (isOmniVyraEnabled as jest.Mock).mockReturnValue(true);
+  it('handles Omnivyra enabled path', async () => {
+    (isOmnivyraEnabled as jest.Mock).mockReturnValue(true);
     (getTrendRelevance as jest.Mock).mockResolvedValue({
       status: 'ok',
       data: { relevant_trends: [{ topic: 'AI marketing' }], ignored_trends: [] },
@@ -149,7 +149,7 @@ describe('Recommendation engine service', () => {
       status: 'ok',
       data: { ranked_trends: [{ topic: 'AI marketing' }] },
       confidence: 0.82,
-      explanation: 'Ranked by OmniVyra',
+      explanation: 'Ranked by Omnivyra',
     });
 
     const result = await generateRecommendations({
@@ -162,8 +162,8 @@ describe('Recommendation engine service', () => {
     expect(result.confidence_score).toBeGreaterThan(0);
   });
 
-  it('uses fallback when OmniVyra disabled', async () => {
-    (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+  it('uses fallback when Omnivyra disabled', async () => {
+    (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
     const result = await generateRecommendations({
       companyId: 'c-1',
       campaignId: 'camp-1',
@@ -173,7 +173,7 @@ describe('Recommendation engine service', () => {
   });
 
   it('retries on memory overlap', async () => {
-    (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+    (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
     (validateUniqueness as jest.Mock).mockResolvedValueOnce({
       overlapDetected: true,
       overlappingItems: ['AI marketing'],
@@ -190,7 +190,7 @@ describe('Recommendation engine service', () => {
   });
 
   it('merges duplicate trends', async () => {
-    (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+    (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
     const result = await generateRecommendations({
       companyId: 'c-1',
       campaignId: 'camp-1',
@@ -200,7 +200,7 @@ describe('Recommendation engine service', () => {
   });
 
   it('populates confidence', async () => {
-    (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+    (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
     const result = await generateRecommendations({
       companyId: 'c-1',
       campaignId: 'camp-1',
@@ -209,7 +209,7 @@ describe('Recommendation engine service', () => {
   });
 
   it('exposes card blueprint readiness contract fields', async () => {
-    (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+    (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
     (getProfile as jest.Mock).mockResolvedValue({
       company_id: 'c-1',
       category: 'marketing',
@@ -247,7 +247,7 @@ describe('Recommendation engine service', () => {
 
   describe('Content Intelligence alignment', () => {
     it('excludes trends with zero core_problem overlap (core problem filter)', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -270,7 +270,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('excludes trends containing disqualified keywords', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -291,7 +291,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('highly aligned trend outranks generic popular trend (scoring)', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -312,7 +312,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('low-alignment trend ranks lower even with higher popularity', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         campaign_focus: 'B2B marketing',
@@ -332,7 +332,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('core problem overlap increases ranking', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         campaign_focus: 'SaaS productivity',
@@ -352,7 +352,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('campaign_focus match outranks industry match (weighted scoring)', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -374,7 +374,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('content_themes match outranks goals match (weighted scoring)', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -396,7 +396,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('falls back to popularity when profile has only blacklisted tokens (token hygiene)', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -416,7 +416,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('falls back to generated themes when profile has no alignment tokens', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -436,7 +436,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('uses profile.geography_list when input.regions is empty (multi-region)', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -471,7 +471,7 @@ describe('Recommendation engine service', () => {
 
   describe('alignment_regression_guard', () => {
     it('1. alignment > popularity: highly aligned low-volume outranks weakly aligned high-volume', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -493,7 +493,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('2. disqualified always excluded: high alignment + popularity still filtered out', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -516,7 +516,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('3. core problem filter always active: unrelated trends never enter scoring', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -540,7 +540,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('4. weighted alignment preserved: campaign_focus dominates lower-weight fields', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -562,7 +562,7 @@ describe('Recommendation engine service', () => {
     });
 
     it('5. fallback compatibility: no alignment tokens → generated fallback themes still return recommendations', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',
@@ -584,7 +584,7 @@ describe('Recommendation engine service', () => {
 
   describe('alignment_contract_guard', () => {
     it('validates full alignment contract in one scenario', async () => {
-      (isOmniVyraEnabled as jest.Mock).mockReturnValue(false);
+      (isOmnivyraEnabled as jest.Mock).mockReturnValue(false);
       (getProfile as jest.Mock).mockResolvedValue({
         company_id: 'c-1',
         category: 'marketing',

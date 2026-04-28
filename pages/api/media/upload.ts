@@ -16,6 +16,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import { uploadMedia, validateMedia } from '../../../backend/services/mediaService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import fs from 'fs';
 
 // Disable body parser to allow file uploads
@@ -31,6 +32,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    const { user, error: authError } = await getSupabaseUserFromRequest(req);
+    if (authError || !user?.id) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
     // Parse form data using formidable
     const form = formidable({
       maxFileSize: 500 * 1024 * 1024, // 500MB max
@@ -40,9 +46,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const [fields, files] = await form.parse(req);
 
     // Get required fields
-    const userId = Array.isArray(fields.user_id) ? fields.user_id[0] : fields.user_id;
+    const providedUserId = Array.isArray(fields.user_id) ? fields.user_id[0] : fields.user_id;
     const campaignId = Array.isArray(fields.campaign_id) ? fields.campaign_id[0] : fields.campaign_id;
     const platform = Array.isArray(fields.platform) ? fields.platform[0] : fields.platform;
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const userId = typeof providedUserId === 'string' && uuidPattern.test(providedUserId)
+      ? providedUserId
+      : user.id;
 
     if (!userId) {
       return res.status(400).json({ error: 'user_id is required' });
@@ -87,8 +97,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!validation.valid) {
       // Clean up uploaded file
       fs.unlinkSync(uploadedFile.filepath);
+      const reason = validation.errors.join(', ') || 'Media validation failed';
       return res.status(400).json({
-        error: 'Media validation failed',
+        error: reason,
+        message: reason,
         details: validation.errors,
         warnings: validation.warnings,
       });
@@ -114,9 +126,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (error: any) {
     console.error('Media upload error:', error);
+    const reason =
+      typeof error?.message === 'string' && error.message.trim()
+        ? error.message.trim()
+        : 'Failed to upload media';
     res.status(500).json({
-      error: 'Failed to upload media',
-      message: error.message,
+      error: reason,
+      message: reason,
     });
   }
 }

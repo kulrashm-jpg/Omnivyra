@@ -11,7 +11,7 @@ import { getProfile } from '../../services/companyProfileService';
 import { fetchExternalApis } from '../../services/externalApiService';
 import { validateUniqueness } from '../../services/campaignMemoryService';
 import { generateCampaignStrategy } from '../../services/campaignRecommendationService';
-import { isOmniVyraEnabled } from '../../services/omnivyraClientV1';
+import { isOmnivyraEnabled } from '../../services/omnivyraClientV1';
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
@@ -49,8 +49,8 @@ jest.mock('../../services/campaignRecommendationService', () => ({
 jest.mock('../../services/omnivyraClientV1', () => ({
   getTrendRelevance: jest.fn(),
   getTrendRanking: jest.fn(),
-  isOmniVyraEnabled: jest.fn().mockReturnValue(false),
-  getOmniVyraHealthReport: jest.fn().mockReturnValue({
+  isOmnivyraEnabled: jest.fn().mockReturnValue(false),
+  getOmnivyraHealthReport: jest.fn().mockReturnValue({
     status: 'healthy',
     endpoints: {},
     avg_latency_ms: 0,

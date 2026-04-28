@@ -22,7 +22,7 @@ import {
   validatePublicWebsite,
 } from '../../../backend/services/companyMatchService';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
-import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
+import { grantInitialFreeCredit } from '../../../backend/services/initialFreeCreditService';
 import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
 
 type Result =
@@ -160,6 +160,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           .update({ status: 'active', accepted_at: now, updated_at: now })
           .eq('id', invite.id);
 
+        await supabase
+          .from('users')
+          .update({ company_id: invite.company_id, updated_at: now })
+          .eq('id', user.id);
+
         return res.status(200).json({ companyId: invite.company_id });
       }
 
@@ -186,6 +191,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           updated_at:  now,
         });
       }
+
+      await supabase
+        .from('users')
+        .update({ company_id: orgId, role: 'COMPANY_ADMIN', onboarding_state: 'company_complete', updated_at: now })
+        .eq('id', user.id);
 
       return res.status(200).json({ companyId: orgId });
     }
@@ -308,6 +318,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
               .update({ status: 'active', accepted_at: now, updated_at: now })
               .eq('id', role.id);
           }
+          await supabase
+            .from('users')
+            .update({ company_id: domainCompany.id, updated_at: new Date().toISOString() })
+            .eq('id', user.id);
           return res.status(200).json({ companyId: domainCompany.id });
         }
 
@@ -378,12 +392,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       company_id:  companyId,
       role:        'COMPANY_ADMIN',
       status:      'active',
-      join_source: 'invited',
+      join_source: 'self_registered',
       created_at:  now,
       updated_at:  now,
-      invited_at:  now,
     });
     if (roleErr) throw roleErr;
+
+    await supabase
+      .from('users')
+      .update({ company_id: companyId, role: 'COMPANY_ADMIN', onboarding_state: 'company_complete', updated_at: now })
+      .eq('id', user.id);
 
     // ── 5. Create company_profiles row ────────────────────────────────────────
     await supabase.from('company_profiles').insert({
@@ -414,107 +432,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       .update({ organization_id: companyId, updated_at: now })
       .eq('user_id', user.id);
 
-    // ── 7. Retroactively grant pending free credits ───────────────────────────
-    // onboarding/complete runs BEFORE setup-company, so orgId is null when
-    // credits are first attempted. Grant them now that the org exists.
-    const { data: pendingProfile } = await supabase
-      .from('free_credit_profiles')
-      .select('id, initial_credits, credit_expiry_at')
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    if (pendingProfile?.initial_credits) {
-      // ── STEP 2: One free credit grant per domain ──────────────────────────
-      // Block the grant if any other org on the same admin_email_domain has
-      // already received an initial credit grant.
-      let domainAlreadyClaimed = false;
-      if (adminEmailDomain) {
-        const { data: domainSiblings } = await supabase
-          .from('companies')
-          .select('id')
-          .eq('admin_email_domain', adminEmailDomain)
-          .neq('id', companyId);
-
-        const siblingIds = (domainSiblings ?? []).map((r: any) => r.id);
-        if (siblingIds.length > 0) {
-          const { data: siblingClaim } = await supabase
-            .from('free_credit_claims')
-            .select('id')
-            .eq('category', 'initial')
-            .in('organization_id', siblingIds)
-            .limit(1)
-            .maybeSingle();
-          domainAlreadyClaimed = !!siblingClaim;
-        }
-      }
-
-      const { data: existingClaim } = await supabase
-        .from('free_credit_claims')
-        .select('id, organization_id')
-        .eq('user_id', user.id)
-        .eq('category', 'initial')
-        .maybeSingle();
-
-      if (!existingClaim && !domainAlreadyClaimed) {
-        // ── STEP 4: Read initial credit amount from config with fallback ──
-        const { data: config } = await supabase
-          .from('free_credit_config')
-          .select('credits, expiry_days')
-          .eq('category', 'initial')
-          .eq('is_active', true)
-          .maybeSingle();
-        const creditAmount  = (config as any)?.credits   ?? pendingProfile.initial_credits;
-        const expiryDays    = (config as any)?.expiry_days ?? 14;
-        const expiryAt      = new Date(Date.now() + expiryDays * 86400 * 1000).toISOString();
-        const expiryNote    = ` (expires ${expiryAt.slice(0, 10)})`;
-
-        try {
-          await createCredit({
-            orgId:          companyId,
-            amount:         creditAmount,
-            category:       'free',
-            referenceType:  'free_credits',
-            referenceId:    companyId,                       // STEP 3: org-scoped referenceId
-            note:           `Free credits — onboarding${expiryNote}`,
-            performedBy:    user.id,
-            // STEP 3: org-scoped idempotency key — same key regardless of which
-            // user triggers the grant for this org.
-            idempotencyKey: makeIdempotencyKey(companyId, 'initial_free_credit', companyId),
-          });
-          await supabase.from('free_credit_claims').insert({
-            user_id:         user.id,
-            organization_id: companyId,
-            category:        'initial',
-            credits_granted: creditAmount,
-            domain:          adminEmailDomain,   // domain-level UNIQUE enforcement
-          });
-        } catch (creditErr: any) {
-          console.error('[setup-company] credit grant failed:', creditErr.message);
-          // Non-fatal — company is still created
-        }
-      } else if (existingClaim && !existingClaim.organization_id) {
-        // Claim was logged without an org — backfill the org reference and domain
-        await supabase
-          .from('free_credit_claims')
-          .update({ organization_id: companyId, domain: adminEmailDomain })
-          .eq('user_id', user.id)
-          .eq('category', 'initial');
-        // Grant credits (skipped earlier because orgId was null); idempotent if already granted
-        try {
-          await createCredit({
-            orgId:          companyId,
-            amount:         pendingProfile.initial_credits,
-            category:       'free',
-            referenceType:  'free_credits',
-            referenceId:    companyId,
-            note:           `Free credits — onboarding retroactive`,
-            performedBy:    user.id,
-            idempotencyKey: makeIdempotencyKey(companyId, 'initial_free_credit', companyId),
-          });
-        } catch (creditErr: any) {
-          console.error('[setup-company] retroactive credit grant failed:', creditErr.message);
-        }
-      }
+    // ── 7. Grant initial free credits via the single shared service ─────────
+    // The service is idempotent at the DB layer (UNIQUE on
+    // free_credit_claims.organization_id WHERE category='initial_free_credit')
+    // so calling it from multiple onboarding paths is safe. Reads the amount
+    // and expiry from free_credit_config; defaults to 50 / 14 days.
+    const grantResult = await grantInitialFreeCredit({
+      orgId: companyId,
+      userId: user.id,
+      emailDomain: adminEmailDomain,
+    });
+    if (grantResult.granted === false && grantResult.reason === 'grant_failed') {
+      console.error('[setup-company] credit grant failed:', grantResult.message);
+      // Non-fatal — company is still created
     }
 
     // ── 8. Mark profile_complete in setup progress ────────────────────────────

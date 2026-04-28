@@ -1,8 +1,8 @@
 /**
- * OmniVyra Engagement Input Adapter
+ * Omnivyra Engagement Input Adapter
  *
- * Builds OmniVyra evaluation input from engagement_messages (unified model).
- * OmniVyra continues to read post_comments by default; this adapter allows
+ * Builds Omnivyra evaluation input from engagement_messages (unified model).
+ * Omnivyra continues to read post_comments by default; this adapter allows
  * optional use of engagement_messages for evaluation.
  *
  * DO NOT change engagementEvaluationService behavior — it still uses post_comments.
@@ -36,7 +36,7 @@ export type OmnivyraEngagementInput = {
 };
 
 /**
- * Build OmniVyra engagement evaluation input from engagement_messages.
+ * Build Omnivyra engagement evaluation input from engagement_messages.
  * Fetches messages for the thread, joins authors, normalizes to post_comments-like shape.
  */
 export async function buildOmnivyraEngagementInput(

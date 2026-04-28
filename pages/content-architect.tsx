@@ -87,7 +87,21 @@ import { useContentArchitect } from '../hooks/useContentArchitect';
 import ContentArchitectView from '../components/ContentArchitectView';
 export default function ContentArchitectPage() {
   const d = useContentArchitect();
-  if (d._ef1) return null;
-  if (d._ef2) return null;
+  if (d._ef1) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-600">Loading content architect access...</div>
+      </div>
+    );
+  }
+  if (d._ef2) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
+        <div className="max-w-md w-full rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          Content Architect access was not detected. Please sign in again at <a className="font-medium underline" href="/super-admin/login">/super-admin/login</a>.
+        </div>
+      </div>
+    );
+  }
   return <ContentArchitectView d={d} />;
 }

@@ -20,7 +20,7 @@ export default function PoweredByBadge({ variant = 'light', className = '' }: Po
       <span className={`text-xs text-gray-400 ${className}`}>
         Generated with{' '}
         <a href={baseUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-gray-500 hover:text-blue-600">
-          OmniVyra
+          Omnivyra
         </a>
       </span>
     );
@@ -38,7 +38,7 @@ export default function PoweredByBadge({ variant = 'light', className = '' }: Po
       } ${className}`}
     >
       <span className="w-3 h-3 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600" />
-      Generated with OmniVyra
+      Generated with Omnivyra
     </a>
   );
 }

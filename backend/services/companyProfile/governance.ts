@@ -131,6 +131,8 @@ const COMPANY_ADMIN_VISIBLE_PROFILE_KEYS: (keyof CompanyProfile)[] = [
   'industry',
   'website_url',
   'category',
+  'logo_url',
+  'favicon_url',
   'created_at',
   'updated_at',
   // Social & links
@@ -188,9 +190,6 @@ const COMPANY_ADMIN_VISIBLE_PROFILE_KEYS: (keyof CompanyProfile)[] = [
   'brand_positioning',
   'competitive_advantages',
   'growth_priorities',
-  // Strategy profile
-  'strategy_profile',
-  'strategyProfile',
   // Lock/edit metadata (read-only)
   'user_locked_fields',
   'last_edited_by',

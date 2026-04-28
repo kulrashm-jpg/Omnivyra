@@ -182,6 +182,8 @@ export function mapComposedReport(
         primaryOffering: report.company_context?.primary_offering || null,
         positioning: report.company_context?.positioning || null,
         marketContext: report.company_context?.market_context || null,
+        logoUrl: report.company_context?.logo_url || null,
+        faviconUrl: report.company_context?.favicon_url || null,
         positioningStrength: report.company_context?.positioning_strength || undefined,
         positioningNarrative: report.company_context?.positioning_narrative || undefined,
         positioningGap: report.company_context?.positioning_gap || null,

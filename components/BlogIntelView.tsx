@@ -216,7 +216,7 @@ export default function BlogIntelView({ d }: { d: S }) {
     return (
     <>
       <Head>
-        <title>Blog Intelligence | OmniVyra</title>
+        <title>Blog Intelligence | Omnivyra</title>
       </Head>
       <div className="min-h-screen bg-gray-50">
 

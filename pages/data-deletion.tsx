@@ -6,8 +6,8 @@ export default function DataDeletion() {
   return (
     <>
       <Head>
-        <title>Data Deletion Instructions | OmniVyra</title>
-        <meta name="description" content="How to request deletion of your personal data from OmniVyra." />
+        <title>Data Deletion Instructions | Omnivyra</title>
+        <meta name="description" content="How to request deletion of your personal data from Omnivyra." />
       </Head>
       <div className="min-h-screen bg-[#F5F9FF]">
         <main className="mx-auto max-w-3xl px-6 py-16 lg:px-8 lg:py-24">
@@ -22,7 +22,7 @@ export default function DataDeletion() {
             <section>
               <h2 className="text-xl font-semibold">Your right to data deletion</h2>
               <p className="mt-3 text-base leading-relaxed text-[#6B7C93]">
-                You have the right to request the deletion of your personal data that OmniVyra holds at any time. This includes account information, usage data, connected platform authorisations, support records, and content or assets associated with your account.
+                You have the right to request the deletion of your personal data that Omnivyra holds at any time. This includes account information, usage data, connected platform authorisations, support records, and content or assets associated with your account.
               </p>
             </section>
 
@@ -43,7 +43,7 @@ export default function DataDeletion() {
                   <strong className="text-[#0B1F33]">In-app deletion:</strong> Log in to your account, go to <strong>Settings -&gt; Account -&gt; Delete Account</strong>. This schedules your account and associated data for permanent deletion.
                 </li>
                 <li>
-                  <strong className="text-[#0B1F33]">Facebook / Meta data:</strong> If you connected your account through Facebook / Meta login, you can also remove OmniVyra from <strong>Settings &amp; Privacy -&gt; Settings -&gt; Apps and Websites</strong>. We will process the related deletion request after we receive the platform notice.
+                  <strong className="text-[#0B1F33]">Facebook / Meta data:</strong> If you connected your account through Facebook / Meta login, you can also remove Omnivyra from <strong>Settings &amp; Privacy -&gt; Settings -&gt; Apps and Websites</strong>. We will process the related deletion request after we receive the platform notice.
                 </li>
               </ol>
             </section>
@@ -51,7 +51,7 @@ export default function DataDeletion() {
             <section>
               <h2 className="text-xl font-semibold">What to include in your request</h2>
               <ul className="mt-4 list-disc space-y-2 pl-5 text-base text-[#6B7C93]">
-                <li>The email address associated with your OmniVyra account</li>
+                <li>The email address associated with your Omnivyra account</li>
                 <li>Your company name if your account belongs to a shared workspace</li>
                 <li>A short confirmation that you want your personal data deleted</li>
                 <li>Any connected platform you also want revoked or removed</li>

@@ -14,7 +14,7 @@ export function resolveSchedulerDraft({
 }): DraftPayload {
   if (prefill && typeof window !== 'undefined') {
     try {
-      const raw = sessionStorage.getItem(prefill);
+      const raw = sessionStorage.getItem(prefill) || window.localStorage.getItem(prefill);
       if (raw) {
         const parsed = JSON.parse(raw) as SocialPostingPrefillPayload & {
           output?: {
@@ -32,7 +32,10 @@ export function resolveSchedulerDraft({
           return {
             title: parsed.draft.title || topic || 'Content Draft',
             topic: parsed.draft.topic || parsed.draft.title || topic || 'Content Draft',
-            content: parsed.draft.content,
+            content:
+              (typeof parsed.draft.masterContent?.content === 'string' && parsed.draft.masterContent.content.trim())
+                ? parsed.draft.masterContent.content.trim()
+                : parsed.draft.content,
             hashtags: Array.isArray(parsed.draft.hashtags) ? parsed.draft.hashtags : [],
             excerpt: parsed.draft.excerpt || null,
             sourceContentType: parsed.draft.sourceContentType || sourceContentType,
@@ -42,12 +45,15 @@ export function resolveSchedulerDraft({
           };
         }
 
+        const master = typeof parsed?.output?.master_content?.content === 'string'
+          ? parsed.output.master_content.content.trim()
+          : '';
         const generated = parsed?.output?.platform_variant?.generated_content?.trim();
-        if (generated) {
+        if (master || generated) {
           return {
             title: parsed.topic || topic || 'Generated Post',
             topic: parsed.topic || topic || 'Generated Post',
-            content: generated,
+            content: master || generated,
             hashtags: parsed?.output?.platform_variant?.discoverability_meta?.hashtags || [],
             excerpt: null,
             sourceContentType,

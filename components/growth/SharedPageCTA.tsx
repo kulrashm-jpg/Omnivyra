@@ -43,15 +43,15 @@ export default function SharedPageCTA({ contentType = 'content', className = '' 
   return (
     <div className={`bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 rounded-2xl p-6 sm:p-8 text-white text-center ${className}`}>
       <div className="flex items-center justify-center gap-2 mb-3">
-        <img src="/logo-white.png" alt="OmniVyra" className="h-6 w-auto" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-        <span className="text-sm font-semibold text-white/80">OmniVyra</span>
+        <img src="/logo-white.png" alt="Omnivyra" className="h-6 w-auto" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+        <span className="text-sm font-semibold text-white/80">Omnivyra</span>
       </div>
 
       <h3 className="text-xl sm:text-2xl font-bold mb-2">{copy.title}</h3>
       <p className="text-sm text-blue-100 max-w-md mx-auto mb-5">{copy.subtitle}</p>
 
       <Link
-        href="/signup"
+        href="/create-account"
         className="inline-flex items-center gap-2 px-6 py-3 bg-white text-blue-700 font-semibold text-sm rounded-xl hover:bg-blue-50 transition-colors shadow-lg"
       >
         <Sparkles className="w-4 h-4" />

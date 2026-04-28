@@ -1,7 +1,7 @@
 import { savePromotionMetadata } from '../db/platformPromotionStore';
 import { getCampaignMemory } from './campaignMemoryService';
 import { detectContentOverlap } from './contentOverlapService';
-import { getPromotionMetadata, isOmniVyraEnabled } from './omnivyraClientV1';
+import { getPromotionMetadata, isOmnivyraEnabled } from './omnivyraClientV1';
 import { setLastFallbackReason } from './omnivyraHealthService';
 
 const toKeywords = (text: string): string[] =>
@@ -32,7 +32,7 @@ export async function generatePromotionMetadata(input: {
   content: { headline?: string; caption?: string; hook?: string; callToAction?: string };
 }): Promise<any> {
   let fallbackReason: string | null = null;
-  if (isOmniVyraEnabled()) {
+  if (isOmnivyraEnabled()) {
     const response = await getPromotionMetadata({
       companyId: input.companyId,
       contentAssetId: input.contentAssetId,

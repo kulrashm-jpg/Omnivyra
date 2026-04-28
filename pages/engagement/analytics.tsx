@@ -224,7 +224,7 @@ export default function EngagementAnalyticsPage() {
     return (
       <>
         <Head>
-          <title>Engagement Analytics | OmniVyra</title>
+          <title>Engagement Analytics | Omnivyra</title>
         </Head>
         <div className="flex h-[calc(100vh-4rem)] flex-col items-center justify-center p-8 text-slate-500">
           Select a company to view engagement analytics.
@@ -236,7 +236,7 @@ export default function EngagementAnalyticsPage() {
   return (
     <>
       <Head>
-        <title>Engagement Analytics | OmniVyra</title>
+        <title>Engagement Analytics | Omnivyra</title>
       </Head>
 
       <div className="min-h-[calc(100vh-4rem)] bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">

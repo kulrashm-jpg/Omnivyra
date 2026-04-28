@@ -239,22 +239,78 @@ export function renderInlineSummary(items: string[]): string {
 }
 
 export function renderRadarSvg(values: Array<{ label: string; value: number }>): string {
-  const radius = 90;
-  const center = 110;
+  // Bigger drawing area + axis lines + value-aware labels so users can
+  // tie each spoke back to its name and read the score directly off
+  // the chart instead of squinting at a tiny polygon in the middle.
+  const radius = 95;            // outer ring radius
+  const center = 140;           // viewBox center
+  const viewBox = 280;
+  const labelOffset = 14;       // distance from outer ring to label baseline
   const angleStep = (Math.PI * 2) / values.length;
-  const point = (value: number, index: number, scale = 1) => {
-    const angle = -Math.PI / 2 + (index * angleStep);
-    const r = radius * scale * (clampPercent(value) / 100);
-    return [center + Math.cos(angle) * r, center + Math.sin(angle) * r];
+
+  const pointAt = (distance: number, index: number): [number, number] => {
+    const angle = -Math.PI / 2 + index * angleStep;
+    return [center + Math.cos(angle) * distance, center + Math.sin(angle) * distance];
   };
-  const polygon = values.map((item, index) => point(item.value, index).join(',')).join(' ');
-  const labelNodes = values.map((item, index) => {
-    const [x, y] = point(100, index, 1.18);
-    return `<text x="${x}" y="${y}" text-anchor="middle">${escapeHtml(item.label)}</text>`;
-  }).join('');
+
+  // Axis spokes from center to each vertex of the outer ring — these
+  // visually connect each label to its own scale.
+  const axisLines = values
+    .map((_, index) => {
+      const [x, y] = pointAt(radius, index);
+      return `<line x1="${center}" y1="${center}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#E8EFF6" stroke-width="1" />`;
+    })
+    .join('');
+
+  // Data polygon — points at distance proportional to value/100.
+  const polygonPoints = values
+    .map((item, index) => {
+      const [x, y] = pointAt(radius * (clampPercent(item.value) / 100), index);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+
+  // Filled dots at each data vertex make small polygons readable.
+  const dataDots = values
+    .map((item, index) => {
+      const [x, y] = pointAt(radius * (clampPercent(item.value) / 100), index);
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="#4f7cff" />`;
+    })
+    .join('');
+
+  // Labels sit just outside the outer ring with text-anchor chosen by
+  // angle so they read cleanly (left/right anchored on the sides,
+  // center anchored at top/bottom).
+  const labelNodes = values
+    .map((item, index) => {
+      const angle = -Math.PI / 2 + index * angleStep;
+      const cosA = Math.cos(angle);
+      const [x, y] = pointAt(radius + labelOffset, index);
+      let anchor: 'start' | 'middle' | 'end' = 'middle';
+      if (cosA > 0.25) anchor = 'start';
+      else if (cosA < -0.25) anchor = 'end';
+      return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" font-size="11" font-weight="700" fill="#1A3A50">${escapeHtml(item.label)}</text>` +
+        `<text x="${x.toFixed(1)}" y="${(y + 12).toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" font-size="10" font-weight="600" fill="#4f7cff">${Math.round(clampPercent(item.value))}</text>`;
+    })
+    .join('');
+
+  // Scale ticks on the top axis so users know what 33/66/100 mean.
+  const scaleTicks = [33, 66, 100]
+    .map((tick) => {
+      const y = center - radius * (tick / 100);
+      return `<text x="${center + 4}" y="${y}" text-anchor="start" dominant-baseline="middle" font-size="9" fill="#8C9DAB">${tick}</text>`;
+    })
+    .join('');
+
   return `
-    <svg viewBox="0 0 220 220" class="svg-chart" role="img" aria-label="radar chart">
-      <polygon points="${polygon}" fill="rgba(79,124,255,0.15)" stroke="#4f7cff" stroke-width="2"></polygon>
+    <svg viewBox="0 0 ${viewBox} ${viewBox}" class="svg-chart svg-chart-radar" role="img" aria-label="radar chart">
+      <circle cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="#E8EFF6" stroke-width="1"></circle>
+      <circle cx="${center}" cy="${center}" r="${Math.round(radius * 0.66)}" fill="none" stroke="#E8EFF6" stroke-width="1"></circle>
+      <circle cx="${center}" cy="${center}" r="${Math.round(radius * 0.33)}" fill="none" stroke="#E8EFF6" stroke-width="1"></circle>
+      ${axisLines}
+      <polygon points="${polygonPoints}" fill="rgba(79,124,255,0.20)" stroke="#4f7cff" stroke-width="2.5" stroke-linejoin="round"></polygon>
+      ${dataDots}
+      ${scaleTicks}
       ${labelNodes}
     </svg>
   `;

@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import {
   deriveAndStoreStrategyProfile,
-  getProfile,
   getCompanyProfileReviewStatus,
   saveStrategyProfileOverride,
 } from '../../../backend/services/companyProfileService';
@@ -28,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!access) return;
 
     if (action === 'save_override') {
-      const strategyProfile = (body.strategyProfile || body.strategy_profile || null) as Parameters<typeof saveStrategyProfileOverride>[1];
+      const strategyProfile = (body.strategyProfile || null) as Parameters<typeof saveStrategyProfileOverride>[1];
       const profile = await saveStrategyProfileOverride(companyId, strategyProfile, { source: 'user' });
       return res.status(200).json({
         profile,
@@ -37,18 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (action === 'regenerate') {
-      const existing = await getProfile(companyId, { autoRefine: false, languageRefine: false });
-      const locked = Array.isArray(existing?.user_locked_fields) && existing.user_locked_fields.includes('strategy_profile');
-      const forceOverride = Boolean(body.forceOverride);
-
-      if (locked && !forceOverride) {
-        return res.status(409).json({
-          error: 'LOCKED_STRATEGY_PROFILE',
-          message: 'Strategy profile is user-defined and locked. Confirm override to regenerate.',
-        });
-      }
-
-      const profile = await deriveAndStoreStrategyProfile(companyId, { forceOverride });
+      const profile = await deriveAndStoreStrategyProfile(companyId, { forceOverride: Boolean(body.forceOverride) });
       if (!profile) {
         return res.status(404).json({ error: 'Company profile not found' });
       }

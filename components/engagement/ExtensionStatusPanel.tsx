@@ -125,7 +125,7 @@ export function ExtensionStatusPanel({
         <div>
           <div className="flex items-center gap-2">
             <span className={`h-2.5 w-2.5 rounded-full ${error ? 'bg-red-500' : authenticated ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-            <p className="text-sm font-semibold text-slate-900">OmniVyra Extension</p>
+            <p className="text-sm font-semibold text-slate-900">Omnivyra Extension</p>
             <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${error ? 'bg-red-50 text-red-700' : authenticated ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
               {error ? 'Disconnected' : authenticated ? 'Connected' : 'Needs sign-in'}
             </span>
@@ -135,7 +135,7 @@ export function ExtensionStatusPanel({
               ? 'The Engagement Center cannot currently reach the browser extension on this page.'
               : authenticated
                 ? 'The browser extension is connected and ready to manage supported social platforms.'
-                : 'The extension is reachable, but it still needs to be authenticated to OmniVyra.'}
+                : 'The extension is reachable, but it still needs to be authenticated to Omnivyra.'}
           </p>
           <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
             <span>Org: <strong className="text-slate-700">{orgId || 'Unknown'}</strong></span>

@@ -16,6 +16,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     'SameSite=Lax',
     'Max-Age=0',
   ].join('; ');
-  res.setHeader('Set-Cookie', [clearSuperAdmin, clearContentArchitect]);
+  const clearContentArchitectCompany = [
+    'content_architect_company_id=',
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ].join('; ');
+  res.setHeader('Set-Cookie', [clearSuperAdmin, clearContentArchitect, clearContentArchitectCompany]);
   return res.status(200).json({ success: true });
 }

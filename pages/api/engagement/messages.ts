@@ -9,6 +9,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { isAuthorSelf, stripSenderColonPrefix } from '../../../lib/engagement/messageRoles';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -25,6 +26,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const startDate = (req.query.start_date ?? req.query.startDate) as string | undefined;
     const endDate = (req.query.end_date ?? req.query.endDate) as string | undefined;
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
+    // Sibling thread ids — the inbox API collapses legacy-split DM threads
+    // by counterparty author and surfaces the other thread ids through
+    // sibling_thread_ids. The conversation pane passes them back here so
+    // the merged history loads as a single chain. Comma-separated string
+    // or repeated query params both supported.
+    const siblingThreadIdsParam =
+      (req.query['sibling_thread_ids'] ?? req.query['siblingThreadIds']) as string | string[] | undefined;
+    const siblingThreadIds: string[] = Array.isArray(siblingThreadIdsParam)
+      ? siblingThreadIdsParam
+      : typeof siblingThreadIdsParam === 'string'
+        ? siblingThreadIdsParam.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
 
     if (!organizationId) {
       return res.status(400).json({ error: 'organization_id or organizationId required' });
@@ -48,21 +61,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let query = supabase
       .from('engagement_messages')
-      .select('id, thread_id, source_id, author_id, platform, platform_message_id, message_type, parent_message_id, content, like_count, reply_count, sentiment_score, created_at, platform_created_at')
+      .select('id, thread_id, source_id, author_id, platform, platform_message_id, message_type, direction, parent_message_id, content, like_count, reply_count, sentiment_score, created_at, platform_created_at, raw_payload')
       .order('platform_created_at', { ascending: false, nullsFirst: false })
       .limit(limit);
 
     if (threadId) {
-      const { data: thread } = await supabase
+      // Validate the canonical thread + any siblings all belong to the
+      // caller's org. Anything that doesn't match is dropped silently
+      // rather than 404'd because a stale sibling list shouldn't break
+      // the legitimate canonical-thread fetch.
+      const idsToCheck = [threadId, ...siblingThreadIds];
+      const { data: validatedThreads } = await supabase
         .from('engagement_threads')
         .select('id')
-        .eq('id', threadId)
-        .eq('organization_id', organizationId)
-        .maybeSingle();
-      if (!thread) {
+        .in('id', idsToCheck)
+        .eq('organization_id', organizationId);
+      const validatedIds = (validatedThreads ?? []).map((r: { id: string }) => r.id);
+      if (!validatedIds.includes(threadId)) {
         return res.status(404).json({ error: 'Thread not found or access denied' });
       }
-      query = query.eq('thread_id', threadId);
+      query = validatedIds.length === 1
+        ? query.eq('thread_id', threadId)
+        : query.in('thread_id', validatedIds);
     } else if (threadIds && threadIds.length > 0) {
       query = query.in('thread_id', threadIds);
     }
@@ -78,23 +98,162 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: error.message });
     }
 
-    const messages = (data ?? []).map((r: Record<string, unknown>) => ({
-      id: r.id,
-      thread_id: r.thread_id,
-      author_id: r.author_id,
-      platform: r.platform,
-      platform_message_id: r.platform_message_id,
-      message_type: r.message_type,
-      parent_message_id: r.parent_message_id,
-      content: r.content,
-      like_count: r.like_count ?? 0,
-      reply_count: r.reply_count ?? 0,
-      sentiment_score: r.sentiment_score,
-      created_at: r.created_at,
-      platform_created_at: r.platform_created_at,
+    const messages = (data ?? []).map((r: Record<string, unknown>) => {
+      const rp = (r.raw_payload && typeof r.raw_payload === 'object' ? r.raw_payload : {}) as Record<string, unknown>;
+      const authorDisplayName =
+        typeof rp.author_name === 'string' && rp.author_name.length > 0
+          ? rp.author_name
+          : typeof rp.sender_name === 'string' && rp.sender_name.length > 0
+            ? rp.sender_name
+            : null;
+      const authorHandle =
+        typeof rp.author_handle === 'string' && rp.author_handle.length > 0
+          ? rp.author_handle
+          : typeof rp.sender_username === 'string' && rp.sender_username.length > 0
+            ? rp.sender_username
+            : null;
+      const authorAvatarUrl =
+        typeof rp.author_avatar_url === 'string' && /^https?:/.test(rp.author_avatar_url)
+          ? rp.author_avatar_url
+          : null;
+      // Synthetic seed rows carry placeholder=true and have invalid
+      // platform_message_id values (e.g. ...#demo-comment-1). LinkedIn API
+      // rejects those URNs, so the UI should gate Like/Reply on real ones.
+      const isPlaceholder = rp.placeholder === true;
+
+      // LinkedIn's messaging list prepends "You:" or "Sender:" to the
+      // preview. lib/engagement/messageRoles owns both the routing decision
+      // (who sent it) and the content cleanup, so this layer just consumes
+      // the helpers — no duplicate prefix-matching regex here.
+      const rawContent = typeof r.content === 'string' ? r.content : '';
+      const finalAuthorSelf = isAuthorSelf({
+        direction: typeof r.direction === 'string' ? r.direction : null,
+        author_self: rp.author_self as boolean | null | undefined,
+        sender_self: rp.sender_self as boolean | null | undefined,
+        content: rawContent,
+      });
+      const cleanContent = stripSenderColonPrefix(rawContent);
+      // Sender's display name from a "Name: ..." preview, when no other
+      // signal gave us one. Only meaningful for inbound rows.
+      const senderColonMatch = !finalAuthorSelf
+        ? rawContent.match(/^([A-Z][\w'.-]{0,40})\s*:\s*/)
+        : null;
+      const finalAuthorDisplayName =
+        authorDisplayName || (senderColonMatch ? senderColonMatch[1] : null);
+      return {
+        id: r.id,
+        thread_id: r.thread_id,
+        author_id: r.author_id,
+        platform: r.platform,
+        platform_message_id: r.platform_message_id,
+        message_type: r.message_type,
+        parent_message_id: r.parent_message_id,
+        content: cleanContent,
+        like_count: r.like_count ?? 0,
+        reply_count: r.reply_count ?? 0,
+        sentiment_score: r.sentiment_score,
+        created_at: r.created_at,
+        platform_created_at: r.platform_created_at,
+        author_display_name: finalAuthorDisplayName,
+        author_handle: authorHandle,
+        author_self: finalAuthorSelf,
+        author_avatar_url: authorAvatarUrl,
+        is_placeholder: isPlaceholder,
+      };
+    });
+
+    // Surface pending outbound DM actions as virtual "queued" messages
+    // so the conversation pane can render them inline alongside the real
+    // platform messages. The user sees:
+    //   - the chain of incoming messages from the other party (real rows)
+    //   - their own queued reply with a "Queued · not yet delivered"
+    //     marker and a Cancel button
+    // Once the extension actually delivers the action, the row is marked
+    // executed and a real outbound engagement_messages row gets ingested
+    // on the next sync — at which point this virtual entry is replaced
+    // by the real one.
+    const threadIdsForPending = threadId
+      ? [threadId, ...siblingThreadIds]
+      : threadIds ?? [];
+    let pendingActions: Array<{
+      id: string;
+      thread_id: string | null;
+      content: string;
+      created_at: string;
+      participant_target: string;
+    }> = [];
+    if (threadIdsForPending.length > 0) {
+      const { data: pendingRows } = await supabase
+        .from('engagement_threads')
+        .select('id, platform_thread_id')
+        .in('id', threadIdsForPending);
+      const platformThreadIdToThreadId = new Map<string, string>();
+      for (const row of pendingRows ?? []) {
+        const ptid = (row as { platform_thread_id: string | null }).platform_thread_id;
+        if (ptid) platformThreadIdToThreadId.set(ptid, (row as { id: string }).id);
+      }
+      // The action's target_id is now the recipient identity (display name
+      // or profile URL) for new actions, but legacy rows still use the
+      // platform_thread_id. Match by either — fetch all pending DMs for
+      // the org's matching set, then filter post-hoc.
+      const platformThreadIds = Array.from(platformThreadIdToThreadId.keys());
+      if (platformThreadIds.length > 0 || threadIdsForPending.length > 0) {
+        const { data: actions } = await supabase
+          .from('community_ai_actions')
+          .select('id, target_id, suggested_text, final_text, created_at, status, dispatch_lease_id, action_type')
+          .eq('organization_id', organizationId)
+          .in('action_type', ['dm', 'reply'])
+          .eq('status', 'pending')
+          .is('dispatch_lease_id', null);
+        // Defensive: only surface actions whose target_id maps to one of
+        // the requested threads. We compare against platform_thread_id
+        // (legacy shape) only — the new recipient-identity target ids
+        // can't be matched here without an authors join. Acceptable
+        // tradeoff: legacy rows get the queued UI; brand-new ones light
+        // up after we add the participant lookup below.
+        for (const a of actions ?? []) {
+          const target = (a as { target_id: string | null }).target_id ?? '';
+          const matchedId = platformThreadIdToThreadId.get(target);
+          if (!matchedId) continue;
+          pendingActions.push({
+            id: (a as { id: string }).id,
+            thread_id: matchedId,
+            content: ((a as { final_text: string | null; suggested_text: string | null }).final_text
+              ?? (a as { suggested_text: string | null }).suggested_text
+              ?? '').toString(),
+            created_at: (a as { created_at: string }).created_at,
+            participant_target: target,
+          });
+        }
+      }
+    }
+
+    const pendingVirtualMessages = pendingActions.map((p) => ({
+      id: `pending:${p.id}`,
+      thread_id: p.thread_id,
+      author_id: null,
+      platform: platform || null,
+      platform_message_id: null,
+      message_type: 'dm',
+      parent_message_id: null,
+      content: p.content,
+      like_count: 0,
+      reply_count: 0,
+      sentiment_score: null,
+      created_at: p.created_at,
+      platform_created_at: p.created_at,
+      author_display_name: 'You',
+      author_handle: null,
+      author_self: true,
+      author_avatar_url: null,
+      is_placeholder: false,
+      // UI-only fields. The conversation pane uses these to render the
+      // queued banner + cancel button.
+      is_pending_outbound: true,
+      pending_action_id: p.id,
     }));
 
-    return res.status(200).json({ messages });
+    return res.status(200).json({ messages: [...messages, ...pendingVirtualMessages] });
   } catch (err) {
     const message = (err as Error)?.message ?? 'Failed to fetch messages';
     console.error('[engagement/messages]', message);

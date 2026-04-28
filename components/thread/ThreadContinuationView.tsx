@@ -272,7 +272,7 @@ export default function ThreadContinuationView() {
   return (
     <>
       <Head>
-        <title>Thread Continuation | OmniVyra</title>
+        <title>Thread Continuation | Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-purple-50 px-4 py-8">

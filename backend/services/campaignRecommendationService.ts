@@ -5,7 +5,7 @@ import {
   buildTrendAssessments,
   getTrendAlerts,
 } from './trends/trendAlignmentService';
-import { getContentBlueprint, isOmniVyraEnabled } from './omnivyraClientV1';
+import { getContentBlueprint, isOmnivyraEnabled } from './omnivyraClientV1';
 
 export type ProfileGateResult = {
   status: 'ready' | 'blocked';
@@ -315,7 +315,7 @@ export const generateCampaignStrategy = async (input: {
     platformRules: input.platformRules,
     contentCapabilities: capabilities,
   });
-  if (isOmniVyraEnabled()) {
+  if (isOmnivyraEnabled()) {
     const response = await getContentBlueprint({
       companyProfile: profile,
       objective,

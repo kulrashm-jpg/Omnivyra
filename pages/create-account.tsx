@@ -21,13 +21,14 @@ export default function CreateAccountPage() {
   const router = useRouter();
   const { email: emailParam = '' } = router.query as Record<string, string>;
 
-  const [email, setEmail]       = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm]   = useState('');
-  const [showPw, setShowPw]     = useState(false);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState<string | null>(null);
-  const [sent, setSent]         = useState(false);
+  const [email, setEmail]             = useState('');
+  const [companyName, setCompanyName] = useState('');
+  const [password, setPassword]       = useState('');
+  const [confirm, setConfirm]         = useState('');
+  const [showPw, setShowPw]           = useState(false);
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+  const [sent, setSent]               = useState(false);
   const [claimed, setClaimed]   = useState<{
     alreadyReferred: boolean;
     adminEmailMasked: string | null;
@@ -75,22 +76,37 @@ export default function CreateAccountPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = email.trim().toLowerCase();
+    const trimmedCompany = companyName.trim();
     if (!validateEmail(trimmed)) return;
+    if (!trimmedCompany) {
+      setError('Please enter your company name.');
+      return;
+    }
+    if (trimmedCompany.length > 80) {
+      setError('Company name is too long.');
+      return;
+    }
     if (!validatePassword(password, confirm)) return;
 
     setLoading(true);
     setError(null);
 
     // Backend pre-check: work-email + MX + existing-account + signup_intent.
-    // Throws on duplicate; otherwise returns { proceed: true }.
+    // Throws on duplicate; otherwise returns { proceed: true }. The company
+    // name is persisted in signup_intents.intent_data so /auth/callback can
+    // bootstrap the company + COMPANY_ADMIN role on first verify.
     try {
       const res  = await fetch('/api/auth/signup', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ email: trimmed }),
+        body:    JSON.stringify({ email: trimmed, companyName: trimmedCompany }),
       });
       const json = await res.json();
       if (!res.ok) {
+        if (json.code === 'RESUME_SIGNUP') {
+          router.replace(`/login?email=${encodeURIComponent(trimmed)}&reason=resume_signup`);
+          return;
+        }
         if (json.code === 'ACCOUNT_EXISTS') {
           router.replace(`/login?email=${encodeURIComponent(trimmed)}&reason=account_exists`);
           return;
@@ -125,7 +141,7 @@ export default function CreateAccountPage() {
     if (signUpError) {
       const msg = signUpError.message.toLowerCase();
       if (msg.includes('already registered') || msg.includes('already been registered')) {
-        router.replace(`/login?email=${encodeURIComponent(trimmed)}&reason=account_exists`);
+        router.replace(`/login?email=${encodeURIComponent(trimmed)}&reason=resume_signup`);
         return;
       }
       if (msg.includes('rate') || (signUpError as any).status === 429) {
@@ -149,11 +165,11 @@ export default function CreateAccountPage() {
   if (claimed) {
     return (
       <>
-        <Head><title>Company already on Omnivyra | OmniVyra</title></Head>
+        <Head><title>Company already on Omnivyra | Omnivyra</title></Head>
         <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
           <header className="border-b border-gray-100 bg-white/95">
             <div className="mx-auto flex h-14 max-w-lg items-center px-6">
-              <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
+              <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             </div>
           </header>
           <main className="flex flex-1 items-center justify-center px-6 py-12">
@@ -202,11 +218,11 @@ export default function CreateAccountPage() {
   if (sent) {
     return (
       <>
-        <Head><title>Check your inbox | OmniVyra</title></Head>
+        <Head><title>Check your inbox | Omnivyra</title></Head>
         <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
           <header className="border-b border-gray-100 bg-white/95">
             <div className="mx-auto flex h-14 max-w-lg items-center px-6">
-              <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
+              <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             </div>
           </header>
           <main className="flex flex-1 items-center justify-center px-6 py-12">
@@ -236,14 +252,14 @@ export default function CreateAccountPage() {
   return (
     <>
       <Head>
-        <title>Create Account | OmniVyra</title>
-        <meta name="description" content="Create your free OmniVyra account." />
+        <title>Create Account | Omnivyra</title>
+        <meta name="description" content="Create your free Omnivyra account." />
       </Head>
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         <header className="border-b border-gray-100 bg-white/95">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
-            <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             <Link href="/login" className="text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors">Log in</Link>
           </div>
         </header>
@@ -266,6 +282,17 @@ export default function CreateAccountPage() {
                   placeholder="you@company.com"
                   className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
                 />
+              </div>
+
+              <div>
+                <label htmlFor="companyName" className="block text-sm font-medium text-[#0B1F33] mb-1.5">Company name</label>
+                <input
+                  id="companyName" type="text" autoComplete="organization" required maxLength={80}
+                  value={companyName} onChange={e => { setCompanyName(e.target.value); setError(null); }}
+                  placeholder="Your company"
+                  className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
+                />
+                <p className="mt-1 text-xs text-[#6B7C93]">You&apos;ll be set up as the company admin. You can refine details after signing in.</p>
               </div>
 
               <div>

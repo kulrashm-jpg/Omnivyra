@@ -15,6 +15,25 @@
  */
 
 export async function register() {
+  // Validate email transport env at boot. Throws if any SES_SMTP_* /
+  // EMAIL_FROM var is missing so production deploys fail fast instead of
+  // silently no-op'ing send paths until the first user-triggered email.
+  // Idempotent — emailService.sendEmailSMTP also calls it per-send as a
+  // belt-and-suspenders guard.
+  try {
+    const { validateEmailEnv } = await import('./backend/config/validateEnv');
+    validateEmailEnv();
+  } catch (err) {
+    // Fail loud in production, warn in dev so local work doesn't require
+    // SES credentials just to render pages that don't send mail.
+    const message = (err as Error)?.message ?? String(err);
+    if (process.env.NODE_ENV === 'production') {
+      console.error('[startup] email env validation FAILED:', message);
+      throw err;
+    }
+    console.warn('[startup] email env validation (non-prod):', message);
+  }
+
   const monitoringFlag = process.env.ENABLE_REDIS_USAGE_MONITORING;
   const isProduction =
     process.env.OMNIVYRA_ENV === 'production' ||

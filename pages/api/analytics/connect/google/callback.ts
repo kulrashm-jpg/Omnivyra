@@ -28,13 +28,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const state = typeof req.query.state === 'string' ? req.query.state : undefined;
   const providerError = typeof req.query.error === 'string' ? req.query.error : '';
   const decodedState = decodeOAuthState(state);
+  const hasSuperAdminSession = req.cookies?.super_admin_session === '1';
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
 
-  if (authError || !user) {
+  if (!hasSuperAdminSession && (authError || !user)) {
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: 'unauthorized' }));
   }
 
-  if (decodedState.valid !== true || !decodedState.userId || decodedState.userId !== user.id) {
+  const invalidState =
+    decodedState.valid !== true ||
+    (
+      !hasSuperAdminSession &&
+      (!decodedState.userId || decodedState.userId !== user?.id)
+    );
+
+  if (invalidState) {
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: 'invalid_oauth_state' }));
   }
 

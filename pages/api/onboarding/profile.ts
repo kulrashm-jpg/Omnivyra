@@ -13,6 +13,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse   = { error: string; code?: string };
@@ -67,7 +68,7 @@ export default async function handler(
     .limit(1)
     .maybeSingle();
 
-  const route = roleRow ? '/dashboard' : '/onboarding/company';
+  const route = roleRow ? await getUserPreferenceRoute(user.id) : '/onboarding/company';
 
   return res.status(200).json({ success: true, route });
 }

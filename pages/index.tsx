@@ -72,10 +72,10 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Marketing Performance Analytics and Action System | OmniVyra</title>
+        <title>Marketing Performance Analytics and Action System | Omnivyra</title>
         <meta
           name="description"
-          content="OmniVyra helps teams analyze marketing performance, identify trends and drop-offs, prioritize next best actions, and execute from one system."
+          content="Omnivyra helps teams analyze marketing performance, identify trends and drop-offs, prioritize next best actions, and execute from one system."
         />
         <script
           type="application/ld+json"

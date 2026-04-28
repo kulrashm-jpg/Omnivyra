@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
 import {
-  renderOmnivyraSnapshotPdfHtml,
+  renderOmnivyraSnapshotMasterHtml,
   renderReportHtmlTemplate,
 } from '../reportHtmlTemplateRenderer';
 import { renderPdfFromHtml } from '../htmlToPdfRenderer';
@@ -44,7 +44,7 @@ function extractPdfSegment(html: string): string {
 export async function renderReportPdf(payload: PdfReportPayload): Promise<Buffer> {
   try {
     const html = payload.reportType === 'snapshot'
-      ? renderOmnivyraSnapshotPdfHtml(payload).html
+      ? renderOmnivyraSnapshotMasterHtml(payload).html
       : renderReportHtmlTemplate(payload).html;
     const htmlPdf = await renderPdfFromHtml(extractPdfSegment(html));
     if (htmlPdf.length > 0) {

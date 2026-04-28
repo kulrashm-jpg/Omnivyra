@@ -585,7 +585,7 @@ export const performanceRendererMap: Record<PerformanceSectionKey, (data: Perfor
 };
 
 function renderHeader(meta?: PerformanceRenderMeta): string {
-  const companyName = meta?.companyName?.trim() || 'OmniVyra Company';
+  const companyName = meta?.companyName?.trim() || 'Omnivyra Company';
   const dateRangeLabel = meta?.dateRangeLabel?.trim() || 'Most recent analytics window';
 
   return `

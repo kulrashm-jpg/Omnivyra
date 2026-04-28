@@ -22,6 +22,55 @@ export default function MultiPlatformSchedulerPage() {
   const [platformState, setPlatformState] = useState<Record<string, PlatformState>>({});
   const [adaptingPlatform, setAdaptingPlatform] = useState<string | null>(null);
   const adaptedPlatformKeysRef = useRef<Record<string, string>>({});
+  const requestedPlatform = typeof router.query.platform === 'string'
+    ? normalizePlatform(router.query.platform)
+    : '';
+  const normalizedSourcePlatform = normalizePlatform(draft?.sourcePlatform || '');
+
+  const getSourceContentForPlatform = (targetPlatform: string, currentDraft: DraftPayload | null) => {
+    if (!currentDraft) return '';
+
+    const masterContent = typeof currentDraft.masterContent?.content === 'string'
+      ? String(currentDraft.masterContent.content).trim()
+      : '';
+
+    if (masterContent) {
+      return masterContent;
+    }
+
+    return String(currentDraft.content || '').trim();
+  };
+
+  const requestQuickPlatformAdaptation = async ({
+    platform,
+    content,
+    contentType,
+  }: {
+    platform: string;
+    content: string;
+    contentType: string;
+  }) => {
+    const response = await fetch('/api/content/quick-platform-adapt', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform,
+        content,
+        contentType,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to apply quick platform adaptation.');
+    }
+    return data;
+  };
+
+  const shouldUseQuickPlatformAdaptation = (platform: string) => {
+    const normalized = normalizePlatform(platform);
+    return ['x', 'twitter', 'instagram', 'facebook', 'tiktok', 'pinterest', 'reddit'].includes(normalized);
+  };
   useEffect(() => {
     if (typeof window === 'undefined' || !router.isReady) return;
     const topic = typeof router.query.topic === 'string' ? router.query.topic.trim() : '';
@@ -66,13 +115,12 @@ export default function MultiPlatformSchedulerPage() {
       .map((account) => {
         const key = normalizePlatform(account.platform_key);
         const config = configMap.get(key);
-        if (!config) return null;
         return {
           key,
           label: account.platform_label,
           socialAccountId: account.social_account_id,
           accountName: account.account_name || account.username || null,
-          contentTypes: config.content_types?.length ? config.content_types : ['post'],
+          contentTypes: config?.content_types?.length ? config.content_types : ['post'],
         };
       })
       .filter(Boolean) as PlatformOption[];
@@ -82,18 +130,25 @@ export default function MultiPlatformSchedulerPage() {
       setSelectedPlatform('');
       return;
     }
-    setSelectedPlatform((current) => (current && platformOptions.some((item) => item.key === current) ? current : platformOptions[0].key));
-  }, [platformOptions]);
+    setSelectedPlatform((current) => {
+      if (requestedPlatform && platformOptions.some((item) => item.key === requestedPlatform)) {
+        return requestedPlatform;
+      }
+      return current && platformOptions.some((item) => item.key === current) ? current : platformOptions[0].key;
+    });
+  }, [platformOptions, requestedPlatform]);
   useEffect(() => {
     if (!draft) return;
     adaptedPlatformKeysRef.current = {};
     setPlatformState((current) => {
       const next = { ...current };
       for (const option of platformOptions) {
+        const sourceContent = getSourceContentForPlatform(option.key, draft);
+        const isSourcePlatform = normalizedSourcePlatform && option.key === normalizedSourcePlatform;
         if (next[option.key]) continue;
         next[option.key] = {
           contentType: option.contentTypes[0] || 'post',
-          content: draft.content,
+          content: isSourcePlatform ? String(draft.content || sourceContent || '').trim() : '',
           hashtags: draft.hashtags.join(' '),
           scheduledFor: defaultScheduleValue(),
           busy: false,
@@ -103,7 +158,7 @@ export default function MultiPlatformSchedulerPage() {
       }
       return next;
     });
-  }, [draft, platformOptions]);
+  }, [draft, normalizedSourcePlatform, platformOptions]);
 
   const selectedOption = platformOptions.find((item) => item.key === selectedPlatform) || null;
   const selectedState = selectedPlatform ? platformState[selectedPlatform] : null;
@@ -152,15 +207,12 @@ export default function MultiPlatformSchedulerPage() {
     const state = platformState[selectedOption.key];
     if (!state) return;
     if (adaptingPlatform === selectedOption.key || state.busy) return;
-    const sourcePlatform = normalizePlatform(draft.sourcePlatform || '');
-    if (sourcePlatform && sourcePlatform === selectedOption.key) {
-      return;
-    }
+    const sourceContent = getSourceContentForPlatform(selectedOption.key, draft);
     const currentContent = String(state.content || '').trim();
-    const draftContent = String(draft.content || '').trim();
+    const draftContent = String(sourceContent || '').trim();
     if (currentContent && draftContent && currentContent !== draftContent) return;
 
-    const adaptationKey = `${selectedOption.key}::${draft.title}::${draft.topic}::${draft.content}`;
+    const adaptationKey = `${selectedOption.key}::${draft.title}::${draft.topic}::${draftContent}`;
     if (adaptedPlatformKeysRef.current[selectedOption.key] === adaptationKey) {
       return;
     }
@@ -171,10 +223,33 @@ export default function MultiPlatformSchedulerPage() {
       updatePlatformState(selectedOption.key, { busy: true, message: null });
 
       try {
+        if (shouldUseQuickPlatformAdaptation(selectedOption.key)) {
+          const fallback = await requestQuickPlatformAdaptation({
+            platform: selectedOption.key,
+            content: sourceContent,
+            contentType: publishContentType,
+          });
+          const variant = fallback?.variant;
+          if (!variant?.generated_content) {
+            throw new Error('The quick platform adaptation did not return content.');
+          }
+
+          updatePlatformState(selectedOption.key, {
+            content: String(variant.generated_content || '').trim(),
+            hashtags: Array.isArray(variant?.discoverability_meta?.hashtags)
+              ? variant.discoverability_meta.hashtags.join(' ')
+              : state.hashtags,
+            busy: false,
+            message: `Applied ${selectedOption.label} platform rules.`,
+            status: 'idle',
+          });
+          return;
+        }
+
         const masterContent = draft.masterContent || {
           id: `scheduler-master-${Date.now()}`,
           generated_at: new Date().toISOString(),
-          content: draft.content,
+          content: sourceContent,
           generation_status: 'generated',
           generation_source: 'ai',
           content_type_mode: 'text',
@@ -204,9 +279,9 @@ export default function MultiPlatformSchedulerPage() {
                 execution_id: `workspace-post-${selectedOption.key}`,
                 platform: selectedOption.key,
                 content_type: publishContentType,
-                topic: draft.topic,
-                title: draft.title,
-                master_content: masterContent,
+              topic: draft.topic,
+              title: draft.title,
+              master_content: masterContent,
                 active_platform_targets: [
                   {
                     platform: selectedOption.key,
@@ -239,16 +314,41 @@ export default function MultiPlatformSchedulerPage() {
         });
       } catch (error) {
         const isAbort = error instanceof Error && error.name === 'AbortError';
-        if (!isAbort) delete adaptedPlatformKeysRef.current[selectedOption.key];
-        updatePlatformState(selectedOption.key, {
-          busy: false,
-          status: isAbort ? 'idle' : 'error',
-          message: isAbort
-            ? `LinkedIn adaptation took too long. You can keep editing and continue with the current post.`
-            : error instanceof Error
-              ? error.message
-              : 'Failed to adapt the post for this platform.',
-        });
+
+        try {
+          const fallback = await requestQuickPlatformAdaptation({
+            platform: selectedOption.key,
+            content: sourceContent,
+            contentType: publishContentType,
+          });
+          const variant = fallback?.variant;
+          if (!variant?.generated_content) {
+            throw new Error('The quick platform adaptation did not return content.');
+          }
+
+          updatePlatformState(selectedOption.key, {
+            content: String(variant.generated_content || '').trim(),
+            hashtags: Array.isArray(variant?.discoverability_meta?.hashtags)
+              ? variant.discoverability_meta.hashtags.join(' ')
+              : state.hashtags,
+            busy: false,
+            message: isAbort
+              ? `Applied ${selectedOption.label} platform rules after the full repurpose timed out.`
+              : `Applied ${selectedOption.label} platform rules.`,
+            status: 'idle',
+          });
+        } catch (fallbackError) {
+          if (!isAbort) delete adaptedPlatformKeysRef.current[selectedOption.key];
+          updatePlatformState(selectedOption.key, {
+            busy: false,
+            status: isAbort ? 'idle' : 'error',
+            message: isAbort
+              ? `${selectedOption.label} adaptation took too long, and the fallback rules could not finish.`
+              : fallbackError instanceof Error
+                ? fallbackError.message
+                : 'Failed to adapt the post for this platform.',
+          });
+        }
       } finally {
         setAdaptingPlatform((current) => (current === selectedOption.key ? null : current));
       }
@@ -371,7 +471,7 @@ export default function MultiPlatformSchedulerPage() {
   return (
     <>
       <Head>
-        <title>Share to Social | OmniVyra</title>
+        <title>Share to Social | Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-slate-50 p-6">

@@ -1,9 +1,9 @@
-export type OmniVyraContractValidation = {
+export type OmnivyraContractValidation = {
   valid: boolean;
   errors: string[];
 };
 
-export const validateOmniVyraEnvelope = (response: any): OmniVyraContractValidation => {
+export const validateOmnivyraEnvelope = (response: any): OmnivyraContractValidation => {
   const errors: string[] = [];
   if (!response || typeof response !== 'object') {
     return { valid: false, errors: ['response must be an object'] };

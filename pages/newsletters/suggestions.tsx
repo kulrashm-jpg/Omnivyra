@@ -241,7 +241,7 @@ export default function NewsletterSuggestionsPage() {
   return (
     <>
       <Head>
-        <title>Newsletter Suggestions | OmniVyra</title>
+        <title>Newsletter Suggestions | Omnivyra</title>
       </Head>
       <GenerationProgressTracker
         open={generating}

@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getOmniVyraHealthReport } from '../../../backend/services/omnivyraClientV1';
+import { getOmnivyraHealthReport } from '../../../backend/services/omnivyraClientV1';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 
@@ -8,7 +8,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const report = getOmniVyraHealthReport();
+  const report = getOmnivyraHealthReport();
   return res.status(200).json(report);
 }
 

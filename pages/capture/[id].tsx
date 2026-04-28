@@ -202,7 +202,7 @@ export default function CapturePage({ form }: Props) {
           </>
         )}
         <div className="powered">
-          Powered by <a href="/" target="_blank" rel="noopener noreferrer">OmniVyra</a>
+          Powered by <a href="/" target="_blank" rel="noopener noreferrer">Omnivyra</a>
         </div>
       </div>
     </>

@@ -8,6 +8,289 @@ import { joinList, splitToList } from './company-profile.types';
 
 type ProfileState = ReturnType<typeof useCompanyProfileState>;
 
+type BrandAssetField = 'logo_url' | 'favicon_url';
+
+const BRAND_ASSET_SPECS: Record<
+  BrandAssetField,
+  {
+    label: string;
+    helper: string;
+    recommendedSize: string;
+    maxBytes: number;
+    square: boolean;
+  }
+> = {
+  logo_url: {
+    label: 'Company Logo',
+    helper: 'Transparent output is required. If you upload a logo on a simple flat background, we will try to remove that background automatically and store a transparent PNG.',
+    recommendedSize: 'Transparent PNG output, recommended up to 1200 x 1200 px and 2 MB max',
+    maxBytes: 2 * 1024 * 1024,
+    square: false,
+  },
+  favicon_url: {
+    label: 'Favicon',
+    helper: 'Transparent output is required. Keep it as a simple square mark that still reads at small sizes.',
+    recommendedSize: 'Transparent square PNG output, recommended 256 x 256 or 512 x 512 px and 512 KB max',
+    maxBytes: 512 * 1024,
+    square: true,
+  },
+};
+
+const BRAND_ASSET_ACCEPT = 'image/png,image/jpeg,image/jpg,image/webp';
+
+const formatFileSize = (bytes: number) => {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(bytes % (1024 * 1024) === 0 ? 0 : 1)} MB`;
+  }
+  return `${Math.round(bytes / 1024)} KB`;
+};
+
+const loadImageDimensions = (file: File): Promise<{ width: number; height: number }> =>
+  new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      resolve({ width: image.naturalWidth, height: image.naturalHeight });
+      URL.revokeObjectURL(objectUrl);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to read image dimensions.'));
+    };
+    image.src = objectUrl;
+  });
+
+const loadImageElement = (file: File): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      resolve(image);
+      URL.revokeObjectURL(objectUrl);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to load image.'));
+    };
+    image.src = objectUrl;
+  });
+
+const hasTransparentPixels = (data: Uint8ClampedArray) => {
+  for (let index = 3; index < data.length; index += 4) {
+    if (data[index] < 255) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const colorDistance = (
+  a: { r: number; g: number; b: number },
+  b: { r: number; g: number; b: number },
+) => Math.sqrt(((a.r - b.r) ** 2) + ((a.g - b.g) ** 2) + ((a.b - b.b) ** 2));
+
+const sampleCornerAverage = (
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  startX: number,
+  startY: number,
+  sampleSize: number,
+) => {
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let count = 0;
+
+  for (let y = startY; y < Math.min(startY + sampleSize, height); y += 1) {
+    for (let x = startX; x < Math.min(startX + sampleSize, width); x += 1) {
+      const pixelIndex = ((y * width) + x) * 4;
+      red += data[pixelIndex];
+      green += data[pixelIndex + 1];
+      blue += data[pixelIndex + 2];
+      count += 1;
+    }
+  }
+
+  return {
+    r: Math.round(red / Math.max(count, 1)),
+    g: Math.round(green / Math.max(count, 1)),
+    b: Math.round(blue / Math.max(count, 1)),
+  };
+};
+
+const detectFlatBackground = (data: Uint8ClampedArray, width: number, height: number) => {
+  const sampleSize = Math.max(1, Math.min(12, Math.floor(Math.min(width, height) / 8)));
+  const corners = [
+    sampleCornerAverage(data, width, height, 0, 0, sampleSize),
+    sampleCornerAverage(data, width, height, Math.max(width - sampleSize, 0), 0, sampleSize),
+    sampleCornerAverage(data, width, height, 0, Math.max(height - sampleSize, 0), sampleSize),
+    sampleCornerAverage(
+      data,
+      width,
+      height,
+      Math.max(width - sampleSize, 0),
+      Math.max(height - sampleSize, 0),
+      sampleSize,
+    ),
+  ];
+
+  let maxDistance = 0;
+  for (let index = 0; index < corners.length; index += 1) {
+    for (let compareIndex = index + 1; compareIndex < corners.length; compareIndex += 1) {
+      maxDistance = Math.max(maxDistance, colorDistance(corners[index], corners[compareIndex]));
+    }
+  }
+
+  if (maxDistance > 24) {
+    return null;
+  }
+
+  return corners.reduce(
+    (acc, current) => ({
+      r: Math.round(acc.r + current.r / corners.length),
+      g: Math.round(acc.g + current.g / corners.length),
+      b: Math.round(acc.b + current.b / corners.length),
+    }),
+    { r: 0, g: 0, b: 0 },
+  );
+};
+
+const canvasToPngFile = async (canvas: HTMLCanvasElement, originalName: string) => {
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((nextBlob) => resolve(nextBlob), 'image/png');
+  });
+
+  if (!blob) {
+    throw new Error('Unable to prepare transparent PNG.');
+  }
+
+  const baseName = originalName.replace(/\.[^.]+$/, '') || 'brand-asset';
+  return new File([blob], `${baseName}-transparent.png`, { type: 'image/png' });
+};
+
+const prepareTransparentBrandAsset = async (
+  file: File,
+  field: BrandAssetField,
+): Promise<{ file: File; width: number; height: number; autoRemovedBackground: boolean }> => {
+  const image = await loadImageElement(file);
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
+
+  if (field === 'favicon_url' && width !== height) {
+    throw new Error(`Favicon must be square. Uploaded image is ${width} x ${height}px.`);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    throw new Error('Canvas is unavailable for brand asset preparation.');
+  }
+
+  context.clearRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+
+  if (hasTransparentPixels(imageData.data)) {
+    return {
+      file: file.type === 'image/png' ? file : await canvasToPngFile(canvas, file.name),
+      width,
+      height,
+      autoRemovedBackground: false,
+    };
+  }
+
+  const backgroundColor = detectFlatBackground(imageData.data, width, height);
+  if (!backgroundColor) {
+    throw new Error(
+      'This image has an opaque background. Upload a transparent asset, or use a logo on a flat background so we can remove it automatically.',
+    );
+  }
+
+  const updated = new Uint8ClampedArray(imageData.data);
+  let removedPixels = 0;
+  const threshold = 34;
+
+  for (let index = 0; index < updated.length; index += 4) {
+    const distance = colorDistance(
+      { r: updated[index], g: updated[index + 1], b: updated[index + 2] },
+      backgroundColor,
+    );
+    if (distance <= threshold) {
+      updated[index + 3] = 0;
+      removedPixels += 1;
+    }
+  }
+
+  if (removedPixels === 0) {
+    throw new Error('This image stayed fully opaque after background cleanup. Upload a transparent asset instead.');
+  }
+
+  context.putImageData(new ImageData(updated, width, height), 0, 0);
+
+  if (!hasTransparentPixels(updated)) {
+    throw new Error('Transparent output could not be produced from this image.');
+  }
+
+  return {
+    file: await canvasToPngFile(canvas, file.name),
+    width,
+    height,
+    autoRemovedBackground: true,
+  };
+};
+
+function StatCard({
+  label,
+  value,
+  tone = 'slate',
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: 'slate' | 'indigo';
+}) {
+  const toneClasses =
+    tone === 'indigo'
+      ? 'border-indigo-200 bg-indigo-50 text-indigo-900'
+      : 'border-slate-200 bg-slate-50 text-slate-900';
+
+  return (
+    <div className={`rounded-xl border px-4 py-3 ${toneClasses}`}>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-1 text-base font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function SectionCard({
+  title,
+  description,
+  children,
+  accent = 'slate',
+}: {
+  title: string;
+  description?: React.ReactNode;
+  children: React.ReactNode;
+  accent?: 'slate' | 'indigo';
+}) {
+  const accentClasses =
+    accent === 'indigo'
+      ? 'border-indigo-200 bg-indigo-50/40'
+      : 'border-slate-200 bg-white';
+
+  return (
+    <section className={`rounded-2xl border p-5 md:p-6 ${accentClasses}`}>
+      <div className="mb-5 flex flex-col gap-2">
+        <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+        {description ? <p className="text-sm leading-6 text-slate-600">{description}</p> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   const {
     REFINE_STEPS,
@@ -171,40 +454,180 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
 
   const marketPulseSettings = activeProfile.report_settings?.market_pulse ?? {};
   const intelligenceSettings = activeProfile.report_settings?.intelligence ?? {};
+  const displayFieldValue = React.useCallback(
+    (primary?: string | null, extracted?: string[] | null) => joinList(extracted, primary) || '',
+    [],
+  );
+  const [brandAssetUploading, setBrandAssetUploading] = React.useState<Record<BrandAssetField, boolean>>({
+    logo_url: false,
+    favicon_url: false,
+  });
+  const [brandAssetErrors, setBrandAssetErrors] = React.useState<Record<BrandAssetField, string | null>>({
+    logo_url: null,
+    favicon_url: null,
+  });
+
+  const setBrandAssetError = (field: BrandAssetField, message: string | null) => {
+    setBrandAssetErrors((prev) => ({ ...prev, [field]: message }));
+  };
+
+  const clearBrandAsset = (field: BrandAssetField) => {
+    if (!isEditing) {
+      setIsEditing(true);
+    }
+    updateActiveProfile({ ...activeProfile, [field]: '' });
+    setBrandAssetError(field, null);
+    setSuccessMessage(`${BRAND_ASSET_SPECS[field].label} removed. Click Save Profile to persist the change.`);
+  };
+
+  const uploadBrandAsset = async (field: BrandAssetField, file: File | null) => {
+    if (!file) return;
+    if (!isEditing) {
+      setIsEditing(true);
+    }
+    if (!user?.userId) {
+      setBrandAssetError(field, 'Your session is missing a user id, so upload is unavailable right now.');
+      return;
+    }
+
+    const spec = BRAND_ASSET_SPECS[field];
+    const normalizedType = file.type.toLowerCase();
+    const isAllowedType = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'].includes(normalizedType);
+    if (!isAllowedType) {
+      setBrandAssetError(field, 'Only PNG, JPG, or WebP images are supported here.');
+      return;
+    }
+    if (file.size > spec.maxBytes) {
+      setBrandAssetError(field, `${spec.label} must be ${formatFileSize(spec.maxBytes)} or smaller.`);
+      return;
+    }
+
+    setBrandAssetError(field, null);
+    setBrandAssetUploading((prev) => ({ ...prev, [field]: true }));
+
+    try {
+      const preparedAsset = await prepareTransparentBrandAsset(file, field);
+      const { width, height } = preparedAsset;
+
+      const formData = new FormData();
+      formData.append('file', preparedAsset.file);
+      formData.append('width', String(width));
+      formData.append('height', String(height));
+
+      const response = await fetchWithAuth('/api/media/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        const detail = Array.isArray(data?.details) && data.details.length > 0
+          ? data.details.join(', ')
+          : (typeof data?.message === 'string' && data.message.trim())
+            ? data.message.trim()
+            : (typeof data?.error === 'string' && data.error.trim())
+              ? data.error.trim()
+              : null;
+        throw new Error(detail || `Failed to upload ${spec.label.toLowerCase()}.`);
+      }
+
+      const fileUrl =
+        data?.data?.file_url ||
+        data?.data?.storage_url ||
+        data?.file_url ||
+        data?.storage_url;
+      if (!fileUrl) {
+        throw new Error('Upload completed but no file URL was returned.');
+      }
+
+      const nextProfile = { ...activeProfile, [field]: fileUrl };
+      updateActiveProfile(nextProfile);
+
+      if (!companyId) {
+        throw new Error('Select a company before uploading brand assets.');
+      }
+
+      const saveResponse = await fetchWithAuth('/api/company-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId,
+          company_id: companyId,
+          [field]: fileUrl,
+        }),
+      });
+      const saveData = await saveResponse.json().catch(() => null);
+      if (!saveResponse.ok) {
+        const detail =
+          (typeof saveData?.error === 'string' && saveData.error.trim())
+            ? saveData.error.trim()
+            : (typeof saveData?.details === 'string' && saveData.details.trim())
+              ? saveData.details.trim()
+              : `Failed to save ${spec.label.toLowerCase()} to the company profile.`;
+        throw new Error(detail);
+      }
+
+      const persistedProfile = saveData?.profile || nextProfile;
+      updateActiveProfile(persistedProfile);
+      setDraftProfile(persistedProfile);
+      setProfile(persistedProfile);
+      setNotFound(false);
+      notifyCompanyProfileUpdated(persistedProfile?.company_id || companyId);
+      setSuccessMessage(
+        preparedAsset.autoRemovedBackground
+          ? `${spec.label} uploaded, converted to a transparent PNG, and saved to this company profile.`
+          : `${spec.label} uploaded and saved to this company profile.`,
+      );
+    } catch (error) {
+      setBrandAssetError(
+        field,
+        error instanceof Error ? error.message : `Failed to upload ${spec.label.toLowerCase()}.`,
+      );
+    } finally {
+      setBrandAssetUploading((prev) => ({ ...prev, [field]: false }));
+    }
+  };
 
   return (
     <>
-      <div className="max-w-4xl mx-auto bg-white shadow rounded-lg p-6 mt-6">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Company Profile</h1>
-            <p className="text-sm text-gray-600">
-              Keep your company profile current for trend relevance and recommendations.
-            </p>
+      <div className="mx-auto mt-6 max-w-5xl rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
+        <div className="mb-6 space-y-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="max-w-2xl">
+              <h1 className="text-3xl font-bold tracking-tight text-slate-950">Company Profile</h1>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Keep your company profile current for trend relevance, recommendations, and Content Architect planning.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Last refined</div>
+              <div className="mt-1 font-medium text-slate-900">{lastRefined}</div>
+            </div>
           </div>
-          <div className="text-right text-sm text-gray-600">
-            <div>Last refined: {lastRefined}</div>
-            <div>
-              Confidence: {completionPercent(uiConfidence)}%
-            </div>
-            <div className="mt-2 pt-2 border-t border-gray-200">
-              <div>
-                Profile completion:{' '}
-                {completionPercent(
-                  overallProfileCompletion ?? uiOverallProfileCompletion
-                )}
-                %
-              </div>
-              {canViewStrategicSections && (
-                <div>
-                  Problem & Transformation:{' '}
-                  {completionPercent(
-                    problemTransformationCompletion ?? uiProblemTransformationCompletion
-                  )}
-                  %
-                </div>
-              )}
-            </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Profile confidence"
+              value={`${completionPercent(uiConfidence)}%`}
+              tone="indigo"
+            />
+            <StatCard
+              label="Profile completion"
+              value={`${completionPercent(
+                overallProfileCompletion ?? uiOverallProfileCompletion
+              )}%`}
+            />
+            {canViewStrategicSections && (
+              <StatCard
+                label="Problem & transformation"
+                value={`${completionPercent(
+                  problemTransformationCompletion ?? uiProblemTransformationCompletion
+                )}%`}
+              />
+            )}
+            <StatCard
+              label="Editing mode"
+              value={isEditing ? 'Editing' : 'Viewing saved profile'}
+            />
           </div>
         </div>
 
@@ -225,8 +648,13 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
         )}
 
         {latestRefinement && (
-          <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900 space-y-3">
-            <div className="font-semibold">Latest Refinement Insights</div>
+          <div className="mb-6 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-5 text-sm text-indigo-900 space-y-4">
+            <div className="space-y-1">
+              <div className="text-lg font-semibold text-slate-900">Latest Refinement Insights</div>
+              <div className="text-sm text-slate-600">
+                Review the latest AI changes first, then open sources or unanswered questions only if you need deeper context.
+              </div>
+            </div>
             {latestRefinement.changed_fields && latestRefinement.changed_fields.length > 0 ? (
               <div>
                 <div className="text-xs uppercase text-indigo-700 mb-2">Fields Updated</div>
@@ -287,8 +715,12 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
         {isLoading ? (
           <div className="text-sm text-gray-500">Loading profile...</div>
         ) : (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-6">
+            <SectionCard
+              title="Profile Basics"
+              description="Start with company identity, official links, brand assets, and core firmographic context so Content Architect has a reliable working base."
+            >
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
                 <label className="text-sm font-medium text-gray-700">Company</label>
                 {canSelectMultipleCompanies && (
@@ -391,24 +823,18 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               <div>
                 <label className="text-sm font-medium text-gray-700">Industry</label>
                 <input
-                  value={activeProfile.industry || ''}
+                  value={displayFieldValue(activeProfile.industry, activeProfile.industry_list)}
                   onChange={(e) => handleChange('industry', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
-                <div className="text-xs text-gray-500 mt-1">
-                  Extracted: {joinList(activeProfile.industry_list, activeProfile.industry)}
-                </div>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Category</label>
                 <input
-                  value={activeProfile.category || ''}
+                  value={displayFieldValue(activeProfile.category, activeProfile.category_list)}
                   onChange={(e) => handleChange('category', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
-                <div className="text-xs text-gray-500 mt-1">
-                  Extracted: {joinList(activeProfile.category_list, activeProfile.category)}
-                </div>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Website URL</label>
@@ -422,6 +848,97 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 <p className="text-xs text-gray-500 mt-1">
                   AI refinement crawls this website, your social profiles, blog, and any additional profiles to enrich all fields below.
                 </p>
+              </div>
+              <div className="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-sm font-semibold text-slate-900">Brand Assets</h3>
+                  <p className="text-xs text-slate-600">
+                    Upload a company logo and favicon so content generation can reuse official brand marks without pulling oversized files into the system. Brand assets stay proportional when rendered, and we do not intentionally recolor or distort them.
+                  </p>
+                </div>
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {(['logo_url', 'favicon_url'] as BrandAssetField[]).map((field) => {
+                    const spec = BRAND_ASSET_SPECS[field];
+                    const assetUrl = activeProfile[field] || '';
+                    const isUploading = brandAssetUploading[field];
+                    const uploadError = brandAssetErrors[field];
+                    const inputId = `brand-asset-${field}`;
+
+                    return (
+                      <div key={field} className="rounded-lg border border-slate-200 bg-white p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-slate-900">{spec.label}</div>
+                            <div className="mt-1 text-xs text-slate-500">{spec.helper}</div>
+                            <div className="mt-1 text-xs font-medium text-slate-700">{spec.recommendedSize}</div>
+                          </div>
+                          <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                            {assetUrl ? (
+                              <img
+                                src={assetUrl}
+                                alt={spec.label}
+                                className="h-full w-full object-contain"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                                {field === 'logo_url' ? 'Logo' : 'Icon'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <input
+                          id={inputId}
+                          type="file"
+                          accept={BRAND_ASSET_ACCEPT}
+                          className="hidden"
+                          onChange={(event) => {
+                            void uploadBrandAsset(field, event.target.files?.[0] ?? null);
+                            event.currentTarget.value = '';
+                          }}
+                        />
+
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                          <label
+                            htmlFor={inputId}
+                            className={`inline-flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm font-medium ${
+                              !isUploading
+                                ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                : 'bg-slate-200 text-slate-500'
+                            }`}
+                          >
+                            {isUploading ? 'Uploading...' : assetUrl ? `Replace ${spec.label}` : `Upload ${spec.label}`}
+                          </label>
+                          {assetUrl && isEditing && (
+                            <button
+                              type="button"
+                              onClick={() => clearBrandAsset(field)}
+                              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                              Remove
+                            </button>
+                          )}
+                          {assetUrl && (
+                            <a
+                              href={assetUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs font-medium text-indigo-600 hover:underline"
+                            >
+                              Open asset
+                            </a>
+                          )}
+                        </div>
+
+                        {uploadError && (
+                          <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                            {uploadError}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">LinkedIn</label>
@@ -498,17 +1015,19 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               <div>
                 <label className="text-sm font-medium text-gray-700">Geography</label>
                 <input
-                  value={activeProfile.geography || ''}
+                  value={displayFieldValue(activeProfile.geography, activeProfile.geography_list)}
                   onChange={(e) => handleChange('geography', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
-                <div className="text-xs text-gray-500 mt-1">
-                  Extracted: {joinList(activeProfile.geography_list, activeProfile.geography)}
-                </div>
-              </div>
             </div>
+            </div>
+            </SectionCard>
 
-            <div className="border rounded-lg p-4 bg-slate-50">
+            <SectionCard
+              title="Company Facts"
+              description="These confirmed business facts support competitor analysis, market positioning, and downstream recommendation quality."
+            >
+            <div className="border rounded-xl p-4 bg-slate-50">
               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between mb-3">
                 <div>
                   <h3 className="text-sm font-semibold text-gray-800">Company Facts</h3>
@@ -557,8 +1076,13 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 Next due: {profileReview.next_confirmation_due_at ? new Date(profileReview.next_confirmation_due_at).toLocaleDateString() : 'After first admin confirmation'}
               </div>
             </div>
+            </SectionCard>
 
-            <div className="border rounded-lg p-4">
+            <SectionCard
+              title="Digital Footprint"
+              description="Keep secondary communities, directories, newsletters, and public surfaces together so refinement has a clearer crawl map."
+            >
+            <div className="border rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold text-gray-800">Additional Digital Assets</h3>
                 {isEditing && (
@@ -603,67 +1127,58 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 ))}
               </div>
             </div>
+            </SectionCard>
 
+            <SectionCard
+              title="Messaging & Audience"
+              description="These are the main inputs Content Architect will keep revisiting when building messaging, themes, and competitor-aware campaign directions."
+            >
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <label className="text-sm font-medium text-gray-700">Products & Services</label>
               <textarea
-                value={activeProfile.products_services || ''}
+                value={displayFieldValue(activeProfile.products_services, activeProfile.products_services_list)}
                 onChange={(e) => handleChange('products_services', e.target.value)}
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Extracted: {joinList(activeProfile.products_services_list, activeProfile.products_services)}
-              </div>
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Target Audience</label>
               <textarea
-                value={activeProfile.target_audience || ''}
+                value={displayFieldValue(activeProfile.target_audience, activeProfile.target_audience_list)}
                 onChange={(e) => handleChange('target_audience', e.target.value)}
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Extracted: {joinList(activeProfile.target_audience_list, activeProfile.target_audience)}
-              </div>
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Brand Voice</label>
               <textarea
-                value={activeProfile.brand_voice || ''}
+                value={displayFieldValue(activeProfile.brand_voice, activeProfile.brand_voice_list)}
                 onChange={(e) => handleChange('brand_voice', e.target.value)}
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Extracted: {joinList(activeProfile.brand_voice_list, activeProfile.brand_voice)}
-              </div>
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Goals</label>
               <textarea
-                value={activeProfile.goals || ''}
+                value={displayFieldValue(activeProfile.goals, activeProfile.goals_list)}
                 onChange={(e) => handleChange('goals', e.target.value)}
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Extracted: {joinList(activeProfile.goals_list, activeProfile.goals)}
-              </div>
             </div>
-            {canViewStrategicSections && (
+            {(canViewStrategicSections || isCompanyAdmin) && (
               <div>
                 <label className="text-sm font-medium text-gray-700">Competitors</label>
                 <textarea
-                  value={activeProfile.competitors || ''}
+                  value={displayFieldValue(activeProfile.competitors, activeProfile.competitors_list)}
                   onChange={(e) => handleChange('competitors', e.target.value)}
                   rows={2}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
-                <div className="text-xs text-gray-500 mt-1">
-                  Extracted: {joinList(activeProfile.competitors_list, activeProfile.competitors)}
-                </div>
               </div>
             )}
             <div>
@@ -678,15 +1193,14 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             <div>
               <label className="text-sm font-medium text-gray-700">Content Themes</label>
               <textarea
-                value={activeProfile.content_themes || ''}
+                value={displayFieldValue(activeProfile.content_themes, activeProfile.content_themes_list)}
                 onChange={(e) => handleChange('content_themes', e.target.value)}
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Extracted: {joinList(activeProfile.content_themes_list, activeProfile.content_themes)}
-              </div>
             </div>
+            </div>
+            </SectionCard>
 
             <CompanyStrategyProfileCard
               companyId={companyId || activeProfile.company_id}
@@ -699,7 +1213,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               onError={setErrorMessage}
             />
 
-            <div className="border-t pt-6 mt-6">
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5">
               {isRefining ? (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
@@ -732,7 +1246,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               )}
             </div>
 
-            <div className="border-t pt-6 mt-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Commercial Strategy</h3>
               <p className="text-sm text-gray-600 mb-4">
                 Define your target customer and commercial model. These fields are locked from AI overwrite once you save.
@@ -857,7 +1371,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             </div>
 
             {canViewStrategicSections && (
-            <div className="border-t pt-6 mt-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Market Pulse Defaults</h3>
               <p className="text-sm text-gray-600 mb-4">
                 Business context used to make Market Pulse more relevant and less noisy. Market focus comes from
@@ -969,7 +1483,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             )}
 
             {canViewStrategicSections && (
-            <div className="border-t pt-6 mt-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Marketing Intelligence</h3>
               <p className="text-sm text-gray-600 mb-4">
                 AI-generated marketing insights from your profile and commercial strategy. Use <strong>Refine with AI</strong> to answer guided questions in a chat, or <strong>Generate Marketing Intelligence</strong> to fill from profile in one shot. Save to persist and lock from refinement overwrite.
@@ -1075,7 +1589,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             )}
 
             {canViewStrategicSections && (
-            <div className="border-t pt-6 mt-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Intelligence Operating Target</h3>
               <p className="text-sm text-gray-600 mb-4">
                 This is the target the <strong>Intelligence</strong> page should optimize against. Set the main objective, the target metric, and the time horizon so the page can tell whether the company is behind, on track, or capable of surpassing the goal.
@@ -1151,7 +1665,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             )}
 
             {canViewStrategicSections && (
-            <div className="border-t pt-6 mt-6">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Problem & Transformation</h3>
               <p className="text-sm text-gray-600 mb-4">
                 Core problem, pain symptoms, and desired transformation used for recommendation alignment.

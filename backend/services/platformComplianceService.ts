@@ -1,5 +1,5 @@
 import { saveComplianceReport } from '../db/platformPromotionStore';
-import { checkPlatformCompliance, isOmniVyraEnabled } from './omnivyraClientV1';
+import { checkPlatformCompliance, isOmnivyraEnabled } from './omnivyraClientV1';
 import { setLastFallbackReason } from './omnivyraHealthService';
 
 export async function validatePlatformCompliance(input: {
@@ -11,7 +11,7 @@ export async function validatePlatformCompliance(input: {
   promotionMetadata: any;
 }): Promise<any> {
   let fallbackReason: string | null = null;
-  if (isOmniVyraEnabled()) {
+  if (isOmnivyraEnabled()) {
     const response = await checkPlatformCompliance({
       contentAssetId: input.contentAssetId,
       platform: input.platform,

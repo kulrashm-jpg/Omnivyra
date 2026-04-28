@@ -19,6 +19,7 @@ import {
   loadThreadSession,
   saveThreadResult,
   saveThreadSession,
+  createThreadSessionToken,
 } from '../../lib/thread/threadStorage';
 import { getThreadContinuationLink, getThreadSchedulerLink } from '../../lib/thread/threadLinks';
 
@@ -27,10 +28,61 @@ type ApiResponse = {
   error?: string;
 } & NonNullable<ThreadGenerationPayload['output']>;
 
+type PrefillThreadPayload = {
+  output?: ThreadGenerationPayload['output'];
+  topic?: string;
+  platform?: string;
+  template_name?: string;
+};
+
+function buildSessionFromPrefill(prefill: PrefillThreadPayload): ThreadSessionPayload | null {
+  const output = prefill.output;
+  const topic = typeof prefill.topic === 'string' ? prefill.topic.trim() : '';
+  if (!output || !topic) return null;
+
+  const platformRaw =
+    typeof output.platform_variant?.platform === 'string'
+      ? output.platform_variant.platform.trim().toLowerCase()
+      : typeof prefill.platform === 'string'
+        ? prefill.platform.trim().toLowerCase()
+        : 'x';
+
+  const platform = platformRaw === 'linkedin' ? 'linkedin' : 'x';
+  const templateLabel =
+    typeof output.template_used === 'string' && output.template_used.trim()
+      ? output.template_used.trim()
+      : typeof prefill.template_name === 'string' && prefill.template_name.trim()
+        ? prefill.template_name.trim()
+        : 'Generated Thread';
+
+  return {
+    createdAt: new Date().toISOString(),
+    executionMode: 'manual',
+    topic,
+    format: 'explainer-thread',
+    formatLabel: templateLabel,
+    intent: 'educate',
+    intentLabel: output.master_content?.decision_trace?.writing_angle || 'Teach something clearly',
+    platform,
+    platformLabel: platform === 'linkedin' ? 'LinkedIn' : 'X',
+    objective:
+      output.master_content?.decision_trace?.objective ||
+      'Create a high-retention educational thread.',
+    audience: 'Audience aligned to the topic and company context',
+    tone:
+      output.master_content?.decision_trace?.tone_used ||
+      'Punchy, clear, and momentum-building',
+    cta: 'Invite readers to react, reply, or follow for the next step',
+    extraInstruction: '',
+    companyName: 'Your company',
+  };
+}
+
 export default function ThreadResultView() {
   const router = useRouter();
   const { user, isLoading, selectedCompanyId } = useCompanyContext();
   const sessionToken = typeof router.query.session === 'string' ? router.query.session : '';
+  const prefillToken = typeof router.query.prefill === 'string' ? router.query.prefill : '';
 
   const [session, setSession] = useState<ThreadSessionPayload | null>(null);
   const [payload, setPayload] = useState<ThreadGenerationPayload | null>(null);
@@ -38,33 +90,75 @@ export default function ThreadResultView() {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [activeSessionToken, setActiveSessionToken] = useState('');
 
   useEffect(() => {
-    if (!sessionToken || typeof window === 'undefined') return;
-    const parsedSession = loadThreadSession(sessionToken);
-    if (parsedSession) {
-      setSession(parsedSession);
-    } else {
-      setSession(null);
+    if (typeof window === 'undefined') return;
+
+    if (sessionToken) {
+      setActiveSessionToken(sessionToken);
+      const parsedSession = loadThreadSession(sessionToken);
+      if (parsedSession) {
+        setSession(parsedSession);
+      } else {
+        setSession(null);
+      }
+
+      const parsedResult = loadThreadResult(sessionToken);
+      if (!parsedResult) return;
+      try {
+        setPayload(parsedResult);
+        if (!parsedSession && parsedResult?.session) {
+          setSession(parsedResult.session);
+          saveThreadSession(sessionToken, parsedResult.session);
+        }
+        const generated = parsedResult?.output?.platform_variant?.generated_content || '';
+        if (generated.trim()) {
+          setSegments(splitThreadIntoSegments(generated));
+        }
+      } catch {
+        setPayload(null);
+      }
+      return;
     }
 
-    const parsedResult = loadThreadResult(sessionToken);
-    if (!parsedResult) return;
+    if (!prefillToken) return;
     try {
-      setPayload(parsedResult);
-      if (!parsedSession && parsedResult?.session) {
-        setSession(parsedResult.session);
-        saveThreadSession(sessionToken, parsedResult.session);
-      }
-      const generated = parsedResult?.output?.platform_variant?.generated_content || '';
+      const raw = sessionStorage.getItem(prefillToken);
+      if (!raw) return;
+      const parsedPrefill = JSON.parse(raw) as PrefillThreadPayload;
+      const derivedSession = buildSessionFromPrefill(parsedPrefill);
+      if (!derivedSession || !parsedPrefill.output) return;
+
+      const token = createThreadSessionToken();
+      const nextPayload: ThreadGenerationPayload = {
+        output: parsedPrefill.output,
+        session: derivedSession,
+      };
+
+      saveThreadSession(token, derivedSession);
+      saveThreadResult(token, nextPayload);
+      setActiveSessionToken(token);
+      setSession(derivedSession);
+      setPayload(nextPayload);
+
+      const generated = parsedPrefill.output.platform_variant?.generated_content || '';
       if (generated.trim()) {
         setSegments(splitThreadIntoSegments(generated));
       }
-    } catch {}
-  }, [sessionToken]);
+
+      void router.replace({
+        pathname: router.pathname,
+        query: { session: token },
+      }, undefined, { shallow: true });
+    } catch {
+      setSession(null);
+      setPayload(null);
+    }
+  }, [prefillToken, router, sessionToken]);
 
   useEffect(() => {
-    if (!session || !selectedCompanyId || generating || payload?.output?.success) return;
+    if (!activeSessionToken || !session || !selectedCompanyId || generating || payload?.output?.success) return;
 
     const run = async () => {
       setGenerating(true);
@@ -102,7 +196,7 @@ export default function ThreadResultView() {
         const generated = data.platform_variant?.generated_content || '';
         setSegments(splitThreadIntoSegments(generated));
 
-        saveThreadResult(sessionToken, nextPayload);
+        saveThreadResult(activeSessionToken, nextPayload);
       } catch (generationError) {
         setError(generationError instanceof Error ? generationError.message : 'Failed to generate thread');
       } finally {
@@ -111,7 +205,7 @@ export default function ThreadResultView() {
     };
 
     void run();
-  }, [generating, payload?.output?.success, selectedCompanyId, session, sessionToken]);
+  }, [activeSessionToken, generating, payload?.output?.success, selectedCompanyId, session]);
 
   const fullThread = useMemo(() => joinThreadSegments(segments), [segments]);
   const hashtags = payload?.output?.platform_variant?.discoverability_meta?.hashtags || [];
@@ -119,11 +213,11 @@ export default function ThreadResultView() {
   const adaptationTrace = payload?.output?.platform_variant?.adaptation_trace;
   const socialLink = useMemo(() => {
     return getThreadSchedulerLink({
-      sessionToken,
+      sessionToken: activeSessionToken,
       executionMode: session?.executionMode || 'manual',
       topic: session?.topic,
     });
-  }, [session?.executionMode, session?.topic, sessionToken]);
+  }, [activeSessionToken, session?.executionMode, session?.topic]);
 
   const copyThread = async () => {
     if (!fullThread.trim()) return;
@@ -133,8 +227,8 @@ export default function ThreadResultView() {
   };
 
   useEffect(() => {
-    if (!sessionToken || !payload || typeof window === 'undefined') return;
-    saveThreadResult(sessionToken, {
+    if (!activeSessionToken || !payload || typeof window === 'undefined') return;
+    saveThreadResult(activeSessionToken, {
       ...payload,
       output: {
         ...payload.output,
@@ -144,7 +238,7 @@ export default function ThreadResultView() {
         },
       },
     });
-  }, [fullThread, payload, sessionToken]);
+  }, [activeSessionToken, fullThread, payload]);
 
   if (isLoading) {
     return (
@@ -179,7 +273,7 @@ export default function ThreadResultView() {
   return (
     <>
       <Head>
-        <title>Generated Thread | OmniVyra</title>
+        <title>Generated Thread | Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-gradient-to-br from-violet-50 via-white to-purple-50 px-4 py-8">
@@ -271,7 +365,7 @@ export default function ThreadResultView() {
                   <Link href={socialLink} className="inline-flex items-center justify-center rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700">
                     Review, schedule, and post
                   </Link>
-                  <Link href={getThreadContinuationLink(sessionToken)} className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                  <Link href={getThreadContinuationLink(activeSessionToken)} className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
                     Plan continuation
                   </Link>
                   <Link href={`/campaign-planner?mode=direct&source=thread-result&contentType=thread&topic=${encodeURIComponent(session.topic)}`} className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">

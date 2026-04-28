@@ -62,8 +62,8 @@ export default function LandingNavbar() {
       <div className="mx-auto flex h-16 max-w-[1280px] items-center justify-between px-6 lg:px-8">
 
         {/* Logo */}
-        <Link href="/" className="flex shrink-0 items-center" aria-label="OmniVyra home">
-          <img src="/logo.png" alt="OmniVyra" className="h-12 w-auto object-contain sm:h-14" />
+        <Link href="/" className="flex shrink-0 items-center" aria-label="Omnivyra home">
+          <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain sm:h-14" />
         </Link>
 
         {/* Center nav — desktop only */}

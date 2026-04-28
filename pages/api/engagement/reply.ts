@@ -26,6 +26,7 @@ import { resolveOpportunityByReply } from '../../../backend/services/engagementO
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 import { recordSuggestionAccepted } from '../../../backend/services/aiSuggestionTrackingService';
+import { isDmMessageType } from '../../../lib/engagement/messageRoles';
 
 type ReplyBody = {
   organization_id?: string;
@@ -77,9 +78,16 @@ async function resolveSignal(
   | { ok: true; platform: string; targetId: string; threadId: string | null; signalId: string; campaignId: string | null }
   | { ok: false; code: string; message: string }
 > {
+  // campaign_activity_engagement_signals.source_id is a UUID pointing at
+  // engagement_messages.id; the platform-native URN lives on
+  // engagement_threads.platform_thread_id (set by the ingestion
+  // normalizer from scheduled_posts.platform_post_id, which LinkedIn
+  // returned as `urn:li:share:...` in the x-restli-id header at publish
+  // time). `platform_message_id` used to be referenced here but was
+  // never a column on this table — removed.
   const { data: signal, error } = await supabase
     .from('campaign_activity_engagement_signals')
-    .select('id, campaign_id, activity_id, platform, conversation_url, platform_message_id')
+    .select('id, campaign_id, activity_id, platform, conversation_url, source_id')
     .eq('id', signalId)
     .maybeSingle();
 
@@ -104,17 +112,54 @@ async function resolveSignal(
     }
   }
 
-  const targetId =
-    (signal as any).platform_message_id ||
-    signal.conversation_url ||
-    signal.activity_id ||
-    signal.id;
+  // Walk: signal.source_id → engagement_messages.thread_id →
+  // engagement_threads.platform_thread_id (the post URN). The LinkedIn
+  // connector then calls /socialActions/{postUrn}/comments which posts a
+  // top-level comment on the post. Threaded replies (reply-to-comment)
+  // would additionally need engagement_messages.platform_message_id +
+  // a nested endpoint; not shipped here.
+  let targetUrn: string | null = null;
+  let threadId: string | null = null;
+  const sourceId = (signal as { source_id?: string | null }).source_id ?? null;
+  if (sourceId) {
+    const { data: message } = await supabase
+      .from('engagement_messages')
+      .select('thread_id')
+      .eq('id', sourceId)
+      .maybeSingle();
+    if (message?.thread_id) {
+      threadId = String(message.thread_id);
+      const { data: thread } = await supabase
+        .from('engagement_threads')
+        .select('platform_thread_id, organization_id')
+        .eq('id', message.thread_id)
+        .maybeSingle();
+      if (thread) {
+        // Defence-in-depth tenant scope at the thread level too.
+        if (thread.organization_id && thread.organization_id !== organizationId) {
+          return { ok: false, code: 'SIGNAL_TENANT_SCOPE', message: 'signal thread does not belong to caller organization' };
+        }
+        if (thread.platform_thread_id) {
+          targetUrn = String(thread.platform_thread_id);
+        }
+      }
+    }
+  }
+
+  // Fallbacks (in order of preference). `conversation_url` is less
+  // useful for dispatch but we keep it so non-LinkedIn platforms that
+  // only need a URL still work. activity_id / signal.id are last-resort
+  // — if the connector rejects them, the error surfaces in the result.
+  const targetId = targetUrn
+    ?? signal.conversation_url
+    ?? signal.activity_id
+    ?? signal.id;
 
   return {
     ok: true,
     platform: normalizePlatformAlias(String(signal.platform || '')),
     targetId: String(targetId),
-    threadId: null,
+    threadId,
     signalId: signal.id,
     campaignId: signal.campaign_id ?? null,
   };
@@ -179,30 +224,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'platform required' });
     }
 
-    const capability = resolveEngagementCapability(platform, 'reply');
-    if (capability.status !== 'api_verified') {
-      void logAuditEvent({
-        operation: 'INSERT',
-        table: 'engagement_reply_rejected',
-        companyId: organizationId,
-        userId: roleGate.userId ?? 'unknown',
-        success: false,
-        errorMessage: capability.reason ?? 'Unsupported action',
-        metadata: { platform, action: 'reply', code: 'ACTION_NOT_SUPPORTED' },
-      }).catch(() => {});
-      return res.status(400).json({
-        error: capability.reason ?? `Reply is not supported on ${platform}.`,
-        code: 'ACTION_NOT_SUPPORTED',
-        platform,
-        action: 'reply',
-      });
-    }
+    // Capability is action-specific and we don't know whether this is
+    // a DM reply or a comment reply until we've loaded the message
+    // row's message_type. Lookup runs first; the capability check
+    // against the right action type happens below.
 
-    let message: { id: string; thread_id: string; platform_message_id: string | null; post_comment_id: string | null; platform: string | null } | null = null;
+    let message:
+      | {
+          id: string;
+          thread_id: string;
+          platform_message_id: string | null;
+          post_comment_id: string | null;
+          platform: string | null;
+          message_type: string | null;
+          author_id: string | null;
+        }
+      | null = null;
+    // LinkedIn uses POST URNs (urn:li:share:... / urn:li:ugcPost:...) as
+    // the socialActions target for comment replies; DMs instead need the
+    // conversation id from engagement_threads.platform_thread_id. We
+    // capture both here and branch below on message_type.
+    let threadPlatformUrn: string | null = null;
+    // For DM dispatch via the Chrome extension we resolve the recipient's
+    // identity (LinkedIn profile URL preferred, display name as fallback)
+    // so the executor's buildDmCommandChain can route through start_new_dm
+    // instead of trying to open a non-existent thread by synthetic id.
+    let recipientProfileUrl: string | null = null;
+    let recipientDisplayName: string | null = null;
     if (!resolvedFromSignal) {
       const { data: msg, error: msgError } = await supabase
         .from('engagement_messages')
-        .select('id, thread_id, platform_message_id, post_comment_id, platform')
+        .select('id, thread_id, platform_message_id, post_comment_id, platform, message_type, author_id, raw_payload')
         .eq('id', messageId)
         .maybeSingle();
 
@@ -216,7 +268,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const { data: thread } = await supabase
         .from('engagement_threads')
-        .select('id, organization_id')
+        .select('id, organization_id, platform_thread_id')
         .eq('id', msg.thread_id)
         .maybeSingle();
 
@@ -224,7 +276,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(403).json({ error: 'Message thread not found or access denied' });
       }
 
+      threadPlatformUrn = (thread as { platform_thread_id?: string | null })?.platform_thread_id ?? null;
       message = msg as typeof message;
+
+      // Pull the OTHER party's identity for DM dispatch. The legacy
+      // ingester wrote synthetic platform_thread_ids ("ember64", etc.) so
+      // we can't navigate by URL. The participant identity is reliable —
+      // every DM has an engagement_authors row with a display_name (and
+      // sometimes a LinkedIn profile URL).
+      if (msg.author_id) {
+        const { data: author } = await supabase
+          .from('engagement_authors')
+          .select('display_name, platform_user_id, profile_url')
+          .eq('id', msg.author_id)
+          .maybeSingle();
+        if (author) {
+          const profileFromUrl = typeof author.profile_url === 'string' && /^https?:\/\//i.test(author.profile_url)
+            ? author.profile_url
+            : null;
+          const profileFromUserId = typeof author.platform_user_id === 'string' && /^https?:\/\//i.test(author.platform_user_id)
+            ? author.platform_user_id
+            : null;
+          recipientProfileUrl = profileFromUrl ?? profileFromUserId;
+          recipientDisplayName = typeof author.display_name === 'string' ? author.display_name : null;
+        }
+      }
     }
 
     // NOTE: we intentionally do NOT insert a "pending" comment_replies row
@@ -233,19 +309,100 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // consumer cleans up. The row is inserted only after the platform confirms.
 
     const actionId = crypto.randomUUID();
-    const targetId =
-      resolvedTargetId
-      ?? message?.platform_message_id
-      ?? (messageId as string);
 
-    // Route through the centralized execution pipeline: auto_insert writes
-    // a pending community_ai_actions row keyed by actionId so the
-    // lifecycle (correlation id, metrics, intelligence joins) works even
-    // though the caller didn't pre-create a row.
-    // Thread the caller-supplied correlation id (issued at suggestion-shown
-    // time) into executeAction so the entire "suggestion → action → result"
-    // chain shares the same id. If no correlation id was supplied, the
-    // executor generates one — still usable for post-hoc acceptance joins.
+    // ── Branch: DM reply vs comment reply ─────────────────────────────
+    // DMs do NOT have an API path on LinkedIn — send dispatches through
+    // the extension's continue_thread handler via the browser-mode
+    // execution route. Comments continue through the API connector with
+    // the POST URN. The 'dm' vs 'direct_message' value normalisation
+    // lives in lib/engagement/messageRoles so every layer sees the same
+    // truth.
+    const isDm = isDmMessageType(message?.message_type);
+
+    // Reject replies targeting placeholder seed rows — their platform
+    // message ids are synthetic (urn:li:activity:.../#demo-comment-N) and
+    // can't be threaded under a real comment. Without this guard the
+    // request silently lands as a brand-new top-level comment on the
+    // post, which is the bug the user reported. Real scraped comments
+    // have proper urn:li:comment:(...) ids and pass through fine.
+    const messageRawPayload = (message as { raw_payload?: Record<string, unknown> } | null)?.raw_payload;
+    const isPlaceholderTarget = messageRawPayload?.placeholder === true;
+    if (isPlaceholderTarget) {
+      return res.status(409).json({
+        error:
+          'This is a demo seed row — replies require a real LinkedIn comment URN. ' +
+          'Visit the LinkedIn post to let the extension scrape real comment IDs, then reply against those.',
+        code: 'PLACEHOLDER_TARGET',
+        platform,
+      });
+    }
+
+    const capabilityAction: 'reply' | 'dm' = isDm ? 'dm' : 'reply';
+    const capability = resolveEngagementCapability(platform, capabilityAction);
+    if (capability.status !== 'api_verified') {
+      void logAuditEvent({
+        operation: 'INSERT',
+        table: 'engagement_reply_rejected',
+        companyId: organizationId,
+        userId: roleGate.userId ?? 'unknown',
+        success: false,
+        errorMessage: capability.reason ?? 'Unsupported action',
+        metadata: { platform, action: capabilityAction, code: 'ACTION_NOT_SUPPORTED' },
+      }).catch(() => {});
+      return res.status(400).json({
+        error:
+          capability.reason ??
+          `${isDm ? 'DM send' : 'Reply'} is not supported on ${platform}.`,
+        code: 'ACTION_NOT_SUPPORTED',
+        platform,
+        action: capabilityAction,
+      });
+    }
+
+    // Target resolution:
+    //   DM reply:      target_id = the messaging thread's
+    //                  platform_thread_id (conversation id). The
+    //                  executor's buildDmCommandChain detects this
+    //                  shape and emits [open_thread, continue_thread]
+    //                  through the extension.
+    //   Comment (LI):  POST URN (engagement_threads.platform_thread_id,
+    //                  set at publish time from x-restli-id). The
+    //                  connector calls /socialActions/{postUrn}/comments.
+    //   Comment (others): platform_message_id (Twitter tweet id,
+    //                  FB/IG comment id — all usable as-is).
+    const isLinkedIn = platform === 'linkedin';
+    // For DMs, prefer recipient identity over the legacy thread id.
+    // buildDmCommandChain detects:
+    //   profile URL  → start_new_dm with recipientProfileUrl (LinkedIn)
+    //   handle/name  → start_new_dm with recipientHandle
+    // start_new_dm is more reliable than open_thread because it doesn't
+    // require a real LinkedIn-side thread URL — the extension searches
+    // the user list by handle/name and opens the conversation natively.
+    const dmRecipientTarget =
+      recipientProfileUrl
+      || (recipientDisplayName ? recipientDisplayName.trim() : null)
+      || threadPlatformUrn
+      || (messageId as string);
+    const targetId = isDm
+      ? dmRecipientTarget
+      : (resolvedTargetId
+          ?? (isLinkedIn ? (threadPlatformUrn ?? message?.platform_message_id) : message?.platform_message_id)
+          ?? (messageId as string));
+
+    // Replying *to a specific comment* (not top-level commenting on the
+    // post). Detected by the source message being a comment with a comment
+    // URN as its platform_message_id. We forward the comment URN so the
+    // LinkedIn connector adds parentComment to the API body — without it,
+    // the new comment lands as a peer of the original instead of nested
+    // under it, which is what the user reported.
+    const isLinkedInReplyToComment =
+      isLinkedIn
+      && !isDm
+      && message?.message_type === 'comment'
+      && typeof message?.platform_message_id === 'string'
+      && /^urn:li:comment:/i.test(message.platform_message_id);
+    const parentCommentUrn = isLinkedInReplyToComment ? message.platform_message_id : null;
+
     const callerCorrelationId = (body.correlation_id || '').toString().trim() || undefined;
 
     const result = await executeAction(
@@ -254,11 +411,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         tenant_id: organizationId,
         organization_id: organizationId,
         platform,
-        action_type: 'reply',
+        action_type: isDm ? 'dm' : 'reply',
         target_id: targetId,
         suggested_text: replyText,
         playbook_id: null,
-        execution_mode: capability.mode ?? 'api',
+        // capability.mode tells us: 'api' for comment replies, 'browser'
+        // for DMs. The executor respects this and either calls the
+        // connector or persists a community_ai_actions row with
+        // execution_mode='browser' for the extension to claim.
+        execution_mode: capability.mode ?? (isDm ? 'browser' : 'api'),
+        parent_comment_urn: parentCommentUrn,
       },
       true,
       {
@@ -270,7 +432,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     );
 
-    if (!result.ok || result.status !== 'executed') {
+    // Browser-mode (DM) actions queue for the Chrome extension and return
+    // status='dispatched' rather than 'executed'. That's a SUCCESSFUL queue,
+    // not a failure — the extension will run it when the user has the
+    // platform tab open and post the terminal status back via
+    // /api/extension/action-result.
+    //
+    // Dedup case: if the user clicks Send again for the same (platform,
+    // action_type, target) before the extension has processed the FIRST
+    // queued action, the executor's idempotency-key gate returns the prior
+    // row with status='pending'. That's still a queued action — there's
+    // nothing wrong, the extension just hasn't claimed the FIRST one yet.
+    // Treat this exactly like a fresh dispatch from the user's perspective
+    // (queued banner) instead of returning 502 "Execution failed".
+    const isFreshDispatch = result.ok && result.status === 'dispatched';
+    // Dedup branch leaks the row's persisted status (e.g. 'pending') back
+    // onto ExecutionResult — that's a wider set than ResultStatus declares.
+    // String-coerce so the comparison is valid for the runtime values
+    // executeAction actually produces.
+    const resultStatusStr = String(result.status ?? '');
+    const resultDeduplicated = (result as { deduplicated?: boolean }).deduplicated === true;
+    const isDedupOfPendingBrowser =
+      resultDeduplicated
+      && resultStatusStr === 'pending'
+      && (isDm || result.execution_mode === 'browser');
+    const isQueuedForExtension = isFreshDispatch || isDedupOfPendingBrowser;
+    if (!isQueuedForExtension && (!result.ok || result.status !== 'executed')) {
       return res.status(502).json({
         error: typeof result.error === 'string' ? result.error : (result.error as any)?.code ?? 'Execution failed',
         code: 'PLATFORM_EXECUTION_FAILED',
@@ -279,10 +466,74 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    // For browser-dispatched DMs we don't yet have a platform id — the
+    // extension will deliver one later. Surface a queued state so the UI
+    // can show "Queued — open LinkedIn for delivery" instead of pretending
+    // the write is confirmed.
+    if (isQueuedForExtension) {
+      return res.status(202).json({
+        success: true,
+        status: 'queued',
+        mode: 'browser',
+        execution_mode: 'browser',
+        confirmed: false,
+        platform_id: null,
+        correlation_id: result.correlation_id ?? null,
+        action_id: actionId,
+        signal_id: resolvedSignalId,
+        response: result.response,
+        message:
+          isDm
+            ? `Reply queued — open the ${platform} tab so the Omnivyra extension can deliver the DM.`
+            : `Reply queued for the Omnivyra extension to deliver.`,
+      });
+    }
+
     // Platform accepted the write. `confirmed` is only true when the platform
     // also returned a verifiable native id — the distinction matters for UI
     // messaging and is the invariant we lock in tests.
     const confirmed = typeof result.platform_id === 'string' && result.platform_id.length > 0;
+
+    // Mirror the just-sent reply into engagement_messages so the inbox
+    // tree shows it as a child of the original comment. Without this row
+    // the conversation pane never sees a self-reply, and the
+    // "user-replied-last" filter keeps the parent comment in the queue
+    // indefinitely. Idempotent on (thread_id, platform_message_id) — if
+    // a later scrape ingests the actual platform comment URN it
+    // upserts on top.
+    if (!isDm && message?.thread_id) {
+      const replyPlatformId =
+        result.platform_id
+        || (parentCommentUrn
+          ? `local:reply:${parentCommentUrn}:${actionId}`
+          : `local:reply:${targetId}:${actionId}`);
+      const replyRow = {
+        thread_id: message.thread_id as string,
+        source_id: null,
+        platform,
+        platform_message_id: replyPlatformId,
+        message_type: 'comment',
+        content: replyText,
+        direction: 'outgoing',
+        parent_message_id: messageId ?? null,
+        platform_created_at: new Date().toISOString(),
+        like_count: 0,
+        reply_count: 0,
+        raw_payload: {
+          author_self: true,
+          author_name: roleGate.userId ? 'You' : null,
+          ingested_via: 'self_reply',
+          parent_comment_urn: parentCommentUrn,
+          confirmed,
+        },
+      };
+      const { error: replyInsertError } = await supabase
+        .from('engagement_messages')
+        .upsert(replyRow, { onConflict: 'thread_id,platform_message_id' });
+      if (replyInsertError) {
+        console.warn('[engagement/reply] self-reply mirror insert failed:', replyInsertError.message);
+      }
+    }
 
     if (message?.post_comment_id && roleGate.userId) {
       const { error: insertError } = await supabase.from('comment_replies').insert({

@@ -1,5 +1,3 @@
-'use client';
-
 /**
  * /login
  *
@@ -17,6 +15,11 @@ import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 
 type Mode = 'password' | 'forgot' | 'magic-link';
+type ResumeSignupStatus = {
+  ready: boolean;
+  hasPassword: boolean;
+  nextStep: 'set_password' | 'continue_signup' | null;
+};
 
 export default function LoginPage() {
   const router = useRouter();
@@ -37,10 +40,59 @@ export default function LoginPage() {
   const [resetSent,    setResetSent]    = useState(false);
   const [magicSent,    setMagicSent]    = useState(false);
   const [noAccount,    setNoAccount]    = useState(false);
+  const [resumeStatus, setResumeStatus] = useState<ResumeSignupStatus>({
+    ready: false,
+    hasPassword: false,
+    nextStep: null,
+  });
 
   useEffect(() => {
     if (emailParam && !email) setEmail(emailParam);
   }, [emailParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (reason === 'resume_signup') {
+      setMode('magic-link');
+    }
+  }, [reason]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadResumeStatus() {
+      if (reason !== 'resume_signup' || !emailParam) return;
+      try {
+        const response = await fetch('/api/auth/resume-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: String(emailParam).trim().toLowerCase() }),
+        });
+        const json = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (response.ok) {
+          setResumeStatus({
+            ready: true,
+            hasPassword: json.hasPassword === true,
+            nextStep: json.nextStep === 'continue_signup' ? 'continue_signup' : 'set_password',
+          });
+          return;
+        }
+      } catch {
+        // Fall back to the safer flow below.
+      }
+
+      if (!cancelled) {
+        setResumeStatus({
+          ready: true,
+          hasPassword: false,
+          nextStep: 'set_password',
+        });
+      }
+    }
+
+    void loadResumeStatus();
+    return () => { cancelled = true; };
+  }, [reason, emailParam]);
 
   useEffect(() => {
     const supabase = getSupabaseBrowser();
@@ -101,6 +153,11 @@ export default function LoginPage() {
   if (checking) return null;
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const resumeSignupMessage = !resumeStatus.ready
+    ? 'We found an incomplete signup for this email. We are checking the last completed step now.'
+    : resumeStatus.hasPassword
+      ? 'We found an incomplete signup for this email. Your password is already set, so you can sign in with it or use the email link below to continue setup.'
+      : 'We found an incomplete signup for this email. Your password is not set yet. Use the email link below and we will take you to set your password next.';
 
   // ── Method 1: email + password ──────────────────────────────────────────
   async function handleSignIn(e: React.FormEvent) {
@@ -244,11 +301,11 @@ export default function LoginPage() {
   if (magicSent) {
     return (
       <>
-        <Head><title>Check your inbox | OmniVyra</title></Head>
+        <Head><title>Check your inbox | Omnivyra</title></Head>
         <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
           <header className="border-b border-gray-100 bg-white/95">
             <div className="mx-auto flex h-14 max-w-lg items-center px-6">
-              <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
+              <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             </div>
           </header>
           <main className="flex flex-1 items-center justify-center px-6 py-12">
@@ -277,14 +334,14 @@ export default function LoginPage() {
   return (
     <>
       <Head>
-        <title>Log in | OmniVyra</title>
-        <meta name="description" content="Log in to OmniVyra." />
+        <title>Log in | Omnivyra</title>
+        <meta name="description" content="Log in to Omnivyra." />
       </Head>
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         <header className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
-            <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             <Link href="/create-account" className="text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors">
               No account? Create one →
             </Link>
@@ -301,6 +358,14 @@ export default function LoginPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
                 </svg>
                 <p className="text-sm text-blue-800">You already have an account. Sign in below.</p>
+              </div>
+            )}
+            {reason === 'resume_signup' && (
+              <div className="mb-6 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <svg className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0 3.75h.008v.008H12v-.008Zm9-3.758a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+                <p className="text-sm text-amber-800">{resumeSignupMessage}</p>
               </div>
             )}
             {verified === '1' && (
@@ -333,7 +398,7 @@ export default function LoginPage() {
               <p className="mt-2 text-sm text-[#6B7C93]">
                 {mode === 'forgot'
                   ? 'Enter your work email and we\'ll send you a reset link.'
-                  : 'Sign in to your OmniVyra account.'}
+                  : 'Sign in to your Omnivyra account.'}
               </p>
             </div>
 
@@ -405,6 +470,64 @@ export default function LoginPage() {
                   No password? Sign in with a one-time link sent to your email.
                 </p>
               </>
+            )}
+
+            {mode === 'magic-link' && (
+              <div className="animate-fadeIn">
+                <div className="mb-4">
+                  <label htmlFor="email-magic" className="block text-sm font-medium text-[#0B1F33] mb-1.5">Work email</label>
+                  <input
+                    id="email-magic"
+                    type="email"
+                    autoComplete="email"
+                    autoFocus
+                    required
+                    value={email}
+                    onChange={e => { setEmail(e.target.value); setError(null); setNoAccount(false); }}
+                    placeholder="you@company.com"
+                    className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] placeholder-gray-400 outline-none transition focus:border-[#0A66C2]"
+                  />
+                </div>
+
+                <form onSubmit={handleMagicLink}>
+                  {error && <ErrorBox message={error} />}
+                  <button
+                    type="submit"
+                    disabled={!!loading || !resumeStatus.ready}
+                    className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {loading === 'magic'
+                      ? <Spinner label="Sending…" />
+                      : resumeStatus.nextStep === 'set_password'
+                        ? 'Send me a link to set password'
+                        : 'Send me a link to continue setup'}
+                  </button>
+                </form>
+
+                {resumeStatus.hasPassword && (
+                  <>
+                    <div className="my-4 flex items-center gap-3">
+                      <div className="flex-1 h-px bg-gray-200" />
+                      <span className="text-xs text-[#6B7C93]">or</span>
+                      <div className="flex-1 h-px bg-gray-200" />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => { setMode('password'); setError(null); }}
+                      className="w-full rounded-full border-2 border-[#0A66C2] bg-white px-6 py-3.5 text-sm font-semibold text-[#0A66C2] transition hover:bg-[#EBF3FD]"
+                    >
+                      Sign in with password instead
+                    </button>
+                  </>
+                )}
+
+                {!resumeStatus.hasPassword && resumeStatus.ready && (
+                  <p className="mt-3 text-center text-xs text-[#6B7C93]">
+                    After you open the email link, we&apos;ll take you to the password step first.
+                  </p>
+                )}
+              </div>
             )}
 
             {/* ── Forgot password ── */}

@@ -36,6 +36,8 @@ export type ReportViewPayload = {
     primaryOffering: string | null;
     positioning: string | null;
     marketContext: string | null;
+    logoUrl?: string | null;
+    faviconUrl?: string | null;
     positioningStrength?: 'strong' | 'moderate' | 'weak';
     positioningNarrative?: string;
     positioningGap?: string | null;

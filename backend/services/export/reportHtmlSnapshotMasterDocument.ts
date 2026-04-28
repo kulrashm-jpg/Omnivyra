@@ -4,7 +4,32 @@ export function renderSnapshotMasterDocument(input: {
   companyName: string;
   completedMarkup: string;
   incompleteMarkup: string;
+  reportDate?: string;
+  faviconUrl?: string | null;
 }): string {
+  // Render two one-time banners — one at the start of the report and
+  // one at the end. Each shows the favicon next to the company name
+  // alongside the report title and date. We deliberately do not use
+  // a per-page running header anymore; the banners frame the content
+  // exactly twice, which keeps the body free of repeated chrome.
+  const safeFavicon = (() => {
+    const trimmed = String(input.faviconUrl ?? '').trim();
+    return /^https?:\/\//i.test(trimmed) ? trimmed : '';
+  })();
+  const faviconImg = safeFavicon
+    ? `<img class="banner-favicon" src="${escapeHtml(safeFavicon)}" alt="${escapeHtml(input.companyName)} favicon" />`
+    : '';
+  const buildBanner = (variant: 'start' | 'end'): string => `
+    <div class="report-banner ${variant === 'end' ? 'report-banner-end' : 'report-banner-start'}" role="banner">
+      <span class="banner-identity">${faviconImg}<span class="banner-name">${escapeHtml(input.companyName)}</span></span>
+      <span class="banner-meta">
+        <div class="banner-title">Digital Authority Snapshot</div>
+        <div class="banner-date">${escapeHtml(input.reportDate ?? '')}</div>
+      </span>
+    </div>
+  `;
+  const startBanner = buildBanner('start');
+  const endBanner = buildBanner('end');
   return `<!DOCTYPE html>
   <html lang="en">
   <head>
@@ -224,6 +249,59 @@ export function renderSnapshotMasterDocument(input: {
         /* Do NOT use page-break-inside:avoid on sections — they span multiple pages */
       }
       .section-continue { padding-top: 8px; }
+
+      /* ── Report Sub-sections ───────────────────────────────── */
+      /* Subsections are page-flow units inside a report-section. By
+         default they ALLOW page breaks inside themselves so a tall
+         subsection (heading + grid of cards) does not push as one
+         lump and leave dead space. Inner no-break cards stay atomic,
+         and headings stay glued to their first card via break-after
+         rules below. Use the tight modifier to opt in to keeping a
+         small heading+1-2 cards group together. */
+      .report-subsection {
+        margin-top: 12px;
+        padding: 0;
+        background: transparent;
+        border: none;
+        break-inside: auto;
+        page-break-inside: auto;
+      }
+      .report-subsection:first-child { margin-top: 0; }
+      /* Headings inside a subsection glue to whatever follows. This
+         prevents a heading from sitting alone at the bottom of a page
+         while its content moves to the next page. */
+      .report-subsection > h2,
+      .report-subsection > h3,
+      .report-subsection > h4,
+      .report-subsection > .label {
+        break-after: avoid;
+        page-break-after: avoid;
+      }
+      /* Note: we deliberately do NOT add break-before:avoid on
+         subsection's first card / grid. Doing so was pushing small
+         cards onto the next page even when there was room, leaving
+         dead space. The heading's break-after rule above is enough
+         to keep heading + content together within a subsection. */
+      /* Tight: force the entire subsection to stay on one page.
+         Use sparingly — only for small heading+blurb groups that
+         shouldn't be split. */
+      .report-subsection.tight {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      /* Legacy flow modifier — kept as a no-op alias because the
+         default is already auto. Older callers still pass it. */
+      .report-subsection.flow {
+        break-inside: auto;
+        page-break-inside: auto;
+      }
+      /* Stop a tiny final subsection (e.g. a footer) from getting
+         pushed onto its own page. */
+      .report-subsection.attach-prev,
+      .report-block.attach-prev {
+        break-before: avoid;
+        page-break-before: avoid;
+      }
       .section-header {
         display: flex;
         justify-content: space-between;
@@ -237,9 +315,96 @@ export function renderSnapshotMasterDocument(input: {
         letter-spacing: 0.1em;
         text-transform: uppercase;
       }
-      .section-header .company-name { font-weight: 700; color: var(--navy); }
+      .section-header .company-name {
+        font-weight: 700;
+        color: var(--navy);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
       .section-header .report-title { color: var(--faint); }
       .section-header .report-date { color: var(--faint); }
+      .section-header-favicon {
+        width: 26px;
+        height: 26px;
+        object-fit: contain;
+        border-radius: 4px;
+        display: inline-block;
+        vertical-align: middle;
+        margin-right: 6px;
+        background: var(--paper);
+      }
+      .section-header .company-name { font-size: 12px; }
+
+      /* ── Report Banners (start / end) ─────────────────────────
+         The report opens and closes with a banner that shows the
+         favicon, company name, report title, and date. Banners
+         render once each (not per-page) so the body of the report
+         is the actual content, not a repeated chrome strip. */
+      .report-banner {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 16px;
+        border-radius: 4px;
+        background: var(--paper);
+        border: 1px solid var(--line-strong);
+        margin-bottom: 14px;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      .report-banner .banner-identity {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .report-banner .banner-favicon {
+        width: 32px;
+        height: 32px;
+        object-fit: contain;
+        border-radius: 4px;
+        background: var(--paper);
+        flex-shrink: 0;
+      }
+      .report-banner .banner-name {
+        font-family: Georgia, 'Times New Roman', serif;
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--navy);
+        letter-spacing: -0.01em;
+      }
+      .report-banner .banner-meta {
+        text-align: right;
+        font-size: 10px;
+        color: var(--faint);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .report-banner .banner-meta .banner-title {
+        font-weight: 700;
+        color: var(--ink);
+        margin-bottom: 2px;
+      }
+      .report-banner-end {
+        margin-top: 16px;
+        margin-bottom: 0;
+        break-before: avoid;
+        page-break-before: avoid;
+      }
+      .cover-logo {
+        max-width: 125px;
+        max-height: 62px;
+        width: auto;
+        height: auto;
+        object-fit: contain;
+        margin-bottom: 8px;
+        display: block;
+      }
+      .cover-score-panel .cover-logo {
+        margin-left: auto;
+        margin-right: auto;
+      }
 
       /* ── Cards ─────────────────────────────────────────────── */
       .card, .metric-card {
@@ -270,6 +435,10 @@ export function renderSnapshotMasterDocument(input: {
       .score-big { font-family: Georgia, 'Times New Roman', serif; font-size: 36px; font-weight: 700; color: var(--navy); line-height: 1; letter-spacing: -0.03em; }
       .score-med { font-family: Georgia, 'Times New Roman', serif; font-size: 20px; font-weight: 700; color: var(--navy); line-height: 1.1; }
       .score-missing { font-family: Georgia, 'Times New Roman', serif; font-size: 20px; font-weight: 700; color: var(--faint); line-height: 1.1; }
+      .score-tone-green { color: var(--green); }
+      .score-tone-amber { color: var(--amber); }
+      .score-tone-red { color: var(--red); }
+      .score-tone-gray { color: var(--faint); }
       .cover-score-big { font-size: 42px; }
 
       /* ── Score Circle (SVG donut) ──────────────────────────── */
@@ -500,6 +669,26 @@ export function renderSnapshotMasterDocument(input: {
       .cover-score { text-align: center; padding: 16px 20px; }
       .cover-identity h1 { margin-bottom: 4px; }
       .cover-identity .cover-url { margin-bottom: 8px; }
+      /* Brand block keeps the logo (or H1) and the website URL as a
+         tight, vertically-stacked cluster. The URL is horizontally
+         centered relative to whichever brand element is shown above
+         it, regardless of the surrounding column width. */
+      .cover-brand-block {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .cover-brand-block .cover-logo {
+        margin-bottom: 4px;
+      }
+      .cover-brand-block h1 {
+        margin-bottom: 4px;
+      }
+      .cover-brand-block .cover-url {
+        margin-bottom: 0;
+        text-align: center;
+      }
       .cover-tags .badge { }
       .intro-block { padding: 14px; text-align: center; }
 
@@ -511,6 +700,67 @@ export function renderSnapshotMasterDocument(input: {
       .comp-bar-user { background: var(--blue); height: 100%; border-radius: 3px; }
       .comp-bar-comp { background: var(--amber); height: 100%; border-radius: 3px; }
       .comp-val { font-size: 11px; color: var(--faint); text-align: right; }
+      .competition-matrix {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        /* Allow the table to split rows across pages; without this
+           Chrome treats the whole table as atomic and pushes the
+           entire matrix forward whenever it doesn't fully fit. */
+        break-inside: auto;
+        page-break-inside: auto;
+      }
+      .competition-matrix tbody {
+        break-inside: auto;
+        page-break-inside: auto;
+      }
+      .competition-matrix tr {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      .competition-matrix th,
+      .competition-matrix td {
+        border-bottom: 1px solid var(--line);
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: middle;
+      }
+      .competition-matrix th {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--faint);
+        background: var(--surface);
+      }
+      .competition-matrix td {
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .competition-matrix tr:last-child td { border-bottom: none; }
+      .competition-matrix tr.competition-matrix-detail td {
+        padding-top: 0;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .competition-matrix-name {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--ink);
+        margin-bottom: 4px;
+      }
+      .competition-matrix-sub {
+        font-size: 10px;
+        color: var(--faint);
+      }
+      .competition-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
 
       /* ── Data Source Cards ──────────────────────────────────── */
       .data-source-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
@@ -531,7 +781,11 @@ export function renderSnapshotMasterDocument(input: {
       .simple-list li::before { content: '\\2022'; position: absolute; left: 0; color: var(--faint); }
 
       /* ── Charts ─────────────────────────────────────────────── */
-      .svg-chart { width: 100%; max-width: 280px; height: auto; display: block; margin: 8px auto; }
+      .svg-chart { width: 100%; max-width: 320px; height: auto; display: block; margin: 8px auto; overflow: visible; }
+      /* Radar charts get a larger box so labels and the data polygon
+         have room to breathe; users can tie each spoke back to its
+         label and read the value directly off the vertex. */
+      .svg-chart-radar { max-width: 460px; margin: 12px auto 8px; }
       .chart-list { display: grid; gap: 6px; }
       .chart-row { display: grid; grid-template-columns: 120px minmax(0, 1fr) 36px; gap: 8px; align-items: center; }
       .chart-label { font-size: 11px; color: var(--ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -644,9 +898,11 @@ export function renderSnapshotMasterDocument(input: {
     <div class="report-page">
       <div id="pdf-report">
         <!-- PDF-SEGMENT-START -->
+        ${startBanner}
         ${input.completedMarkup}
-        <!-- PDF-SEGMENT-END -->
         ${input.incompleteMarkup}
+        ${endBanner}
+        <!-- PDF-SEGMENT-END -->
       </div>
     </div>
   </body>

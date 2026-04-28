@@ -27,7 +27,7 @@ jest.mock('../../services/userContextService', () => ({
 }));
 
 jest.mock('../../services/omnivyraClientV1', () => ({
-  isOmniVyraEnabled: jest.fn().mockReturnValue(true),
+  isOmnivyraEnabled: jest.fn().mockReturnValue(true),
   evaluateCommunityAiExecutiveNarrative: jest.fn().mockResolvedValue({
     status: 'ok',
     data: {
@@ -128,7 +128,7 @@ describe('Community-AI Executive Narrative', () => {
     expect(actionLogStore.length).toBe(0);
   });
 
-  it('calls OmniVyra once', async () => {
+  it('calls Omnivyra once', async () => {
     setRole('VIEW_ONLY');
     const req = {
       method: 'GET',

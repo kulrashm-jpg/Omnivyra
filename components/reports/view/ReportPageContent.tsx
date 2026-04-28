@@ -594,6 +594,97 @@ export default function ReportPageContent({
 
             {isSnapshotReport(reportData) ? (
               <div id="competitor-intelligence" className="mb-8 scroll-mt-20 space-y-5 report-animate report-animate-delay-4">
+                {reportData.competitorContext ? (
+                  <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Competitive Landscape
+                        </p>
+                        <h2 className="mt-1 text-xl font-bold text-slate-900">
+                          How you compare to your market
+                        </h2>
+                        <p className="mt-3 text-base font-semibold text-slate-900">
+                          {getMarketSummary()}
+                        </p>
+                        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                          {reportData.competitorContext.summary}
+                        </p>
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Market Pressure
+                          </span>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getPressureStyles(
+                              getMarketPressure(),
+                            )}`}
+                          >
+                            {getMarketPressure()}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        {reportData.competitorContext.competitors.map((competitor, idx) => (
+                          <div
+                            key={`${competitor.name}-${idx}`}
+                            className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold text-slate-900">{competitor.name}</p>
+                              <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                                {getCompetitorLabel(competitor.classification, competitor.source)}
+                              </span>
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getStandingStyles(
+                                  competitor.standing,
+                                )}`}
+                              >
+                                {getStandingLabel(competitor.standing)}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-slate-600">{competitor.rationale}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {reportData.competitorContext.strongestGaps[0] ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="flex-1">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                                Strongest Gap
+                              </p>
+                              <h3 className="mt-1 font-semibold text-slate-900">
+                                {reportData.competitorContext.strongestGaps[0].title}
+                              </h3>
+                              <p className="mt-2 text-sm text-slate-700">
+                                {reportData.competitorContext.strongestGaps[0].whyItMatters}
+                              </p>
+                              <p className="mt-3 text-sm font-medium text-slate-800">
+                                Competitors win because {reportData.competitorContext.strongestGaps[0].whyItMatters.toLowerCase()}
+                              </p>
+                              {reportData.competitorContext.strongestGaps[0].leadingCompetitors.length > 0 ? (
+                                <p className="mt-2 text-xs font-medium text-slate-500">
+                                  Led by {reportData.competitorContext.strongestGaps[0].leadingCompetitors.join(', ')}
+                                </p>
+                              ) : null}
+                            </div>
+                            {competitorDrivesTopPriority ? (
+                              <div className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
+                                Drives top priority
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                      <p className="text-sm font-medium text-blue-700">
+                        Fix this with your top priority below.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
                 <CompetitorExecutiveSummary data={reportData.competitorIntelligenceSummary ?? null} />
                 {reportData.competitorVisuals ? (
                   <div className="grid gap-5 xl:grid-cols-2">
@@ -633,97 +724,6 @@ export default function ReportPageContent({
                     description="AI-answer visibility signals are limited in this run. We keep the section visible and explain data strength transparently."
                   />
                 )}
-              </div>
-            ) : null}
-
-            {isSnapshotReport(reportData) && reportData.competitorContext && !reportData.competitorVisuals ? (
-              <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-col gap-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Market Context
-                    </p>
-                    <h2 className="mt-1 text-xl font-bold text-slate-900">
-                      How you compare to your market
-                    </h2>
-                    <p className="mt-3 text-base font-semibold text-slate-900">
-                      {getMarketSummary()}
-                    </p>
-                    <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                      {reportData.competitorContext.summary}
-                    </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Market Pressure
-                      </span>
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getPressureStyles(
-                          getMarketPressure(),
-                        )}`}
-                      >
-                        {getMarketPressure()}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    {reportData.competitorContext.competitors.map((competitor, idx) => (
-                      <div
-                        key={`${competitor.name}-${idx}`}
-                        className="rounded-lg border border-slate-200 bg-slate-50 p-4"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-semibold text-slate-900">{competitor.name}</p>
-                          <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                            {getCompetitorLabel(competitor.classification, competitor.source)}
-                          </span>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getStandingStyles(
-                              competitor.standing,
-                            )}`}
-                          >
-                            {getStandingLabel(competitor.standing)}
-                          </span>
-                        </div>
-                        <p className="mt-2 text-sm text-slate-600">{competitor.rationale}</p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {reportData.competitorContext.strongestGaps[0] ? (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="flex-1">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                            Strongest Gap
-                          </p>
-                          <h3 className="mt-1 font-semibold text-slate-900">
-                            {reportData.competitorContext.strongestGaps[0].title}
-                          </h3>
-                          <p className="mt-2 text-sm text-slate-700">
-                            {reportData.competitorContext.strongestGaps[0].whyItMatters}
-                          </p>
-                          <p className="mt-3 text-sm font-medium text-slate-800">
-                            Competitors win because {reportData.competitorContext.strongestGaps[0].whyItMatters.toLowerCase()}
-                          </p>
-                          {reportData.competitorContext.strongestGaps[0].leadingCompetitors.length > 0 ? (
-                            <p className="mt-2 text-xs font-medium text-slate-500">
-                              Led by {reportData.competitorContext.strongestGaps[0].leadingCompetitors.join(', ')}
-                            </p>
-                          ) : null}
-                        </div>
-                        {competitorDrivesTopPriority ? (
-                          <div className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
-                            Drives top priority
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                  <p className="text-sm font-medium text-blue-700">
-                    Fix this with your top priority below.
-                  </p>
-                </div>
               </div>
             ) : null}
 

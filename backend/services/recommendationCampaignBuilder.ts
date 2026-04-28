@@ -43,7 +43,7 @@ const stringifyContext = (snapshot: RecommendationSnapshot, profile: any) => {
       brand_voice: profile?.brand_voice ?? null,
       goals: profile?.goals ?? null,
       content_themes: profile?.content_themes ?? null,
-      strategy_profile: strategyProfile ?? null,
+      strategic_context: strategyProfile ?? null,
       strategy_instructions: buildStrategyInstructions(strategyProfile),
     },
   };

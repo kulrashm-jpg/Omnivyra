@@ -6,6 +6,11 @@
  *   const auth = await requireExtensionAuth(req, res);
  *   if (!auth) return; // middleware already wrote the error response
  *   const { session } = auth;
+ *
+ * Dev bypass: setting DEV_EXTENSION_AUTH_BYPASS=1 skips both session-token
+ * and HMAC checks — the request body's `organization_id` becomes the
+ * tenant. Only honored when NODE_ENV !== 'production'. Used to unblock
+ * local DOM-scraper testing without grinding through the SW HMAC chain.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -17,6 +22,36 @@ import {
 function take(h: string | string[] | undefined) { return (Array.isArray(h) ? h[0] : h) || ''; }
 
 export async function requireExtensionAuth(req: NextApiRequest, res: NextApiResponse) {
+  // Dev bypass — short-circuit the entire HMAC/session chain when the
+  // operator opts in via env. Refuses to run in production no matter what
+  // the env says, so a stray flag in a deployed env can't disable auth.
+  const bypassEnabled =
+    process.env.NODE_ENV !== 'production'
+    && (process.env.DEV_EXTENSION_AUTH_BYPASS === '1'
+        || process.env.DEV_EXTENSION_AUTH_BYPASS === 'true');
+  if (bypassEnabled) {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { organization_id?: unknown; org_id?: unknown };
+    const orgFromBody = String(body.organization_id ?? body.org_id ?? '').trim();
+    const orgFromQuery = String(req.query.organization_id ?? req.query.org_id ?? '').trim();
+    const orgId = orgFromBody || orgFromQuery;
+    if (!orgId) {
+      res.status(400).json({ success: false, error: 'BYPASS_REQUIRES_ORG_ID' });
+      return null;
+    }
+    // Use a deterministic sentinel UUID for the bypass user so downstream
+    // writes that need a uuid-typed user_id (e.g. extension_sessions
+    // heartbeat) succeed instead of erroring on type mismatch. The string
+    // 'dev-bypass-user' was easier to read in logs but blocked uuid columns.
+    return {
+      session: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        orgId,
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+        hmacNonce: 'dev-bypass',
+      },
+    };
+  }
+
   const authHeader = take(req.headers.authorization);
   const bearer = authHeader.replace(/^Bearer\s+/i, '').trim();
   const session = verifyExtensionSessionToken(bearer);

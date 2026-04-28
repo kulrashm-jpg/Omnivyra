@@ -1,6 +1,6 @@
-import { getOmniVyraAdvisory } from '../../services/omnivyraAdapterService';
+import { getOmnivyraAdvisory } from '../../services/omnivyraAdapterService';
 
-describe('OmniVyra adapter', () => {
+describe('Omnivyra adapter', () => {
   beforeEach(() => {
     process.env.OMNIVYRA_BASE_URL = 'https://omnivyra.test';
   });
@@ -9,12 +9,12 @@ describe('OmniVyra adapter', () => {
     delete process.env.USE_OMNIVYRA;
   });
 
-  it('returns placeholder advisory when OmniVyra disabled', async () => {
-    const advisory = await getOmniVyraAdvisory({ recommendation: '' });
+  it('returns placeholder advisory when Omnivyra disabled', async () => {
+    const advisory = await getOmnivyraAdvisory({ recommendation: '' });
     expect(advisory.source).toBe('placeholder');
   });
 
-  it('returns advisory from OmniVyra when enabled', async () => {
+  it('returns advisory from Omnivyra when enabled', async () => {
     process.env.USE_OMNIVYRA = 'true';
     (global as any).fetch = jest.fn().mockResolvedValue({
       ok: true,
@@ -28,7 +28,7 @@ describe('OmniVyra adapter', () => {
           data: { notes: 'Use short form', timing: '09:00', format: 'text', hashtags: ['#viral'] },
         }),
     });
-    const advisory = await getOmniVyraAdvisory({ recommendation: 'Use short form' });
+    const advisory = await getOmnivyraAdvisory({ recommendation: 'Use short form' });
     expect(advisory.source).toBe('omnivyra');
     expect(advisory.notes).toContain('Use short form');
     expect(advisory.hashtags).toContain('#viral');

@@ -388,6 +388,8 @@ export function composeSnapshotReportFromDecisions(params: {
       primary_offering: companyContext.primaryOffering,
       positioning: companyContext.positioning,
       market_context: companyContext.marketContext,
+      logo_url: companyContext.logoUrl,
+      favicon_url: companyContext.faviconUrl,
       positioning_strength: strategicContext.positioningStrength,
       positioning_narrative: strategicContext.positioningNarrative,
       positioning_gap: strategicContext.positioningGap,

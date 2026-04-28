@@ -160,7 +160,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     setMounted(true);
   }, []);
 
-  const publicRoutes = ['/login', '/signup', '/super-admin/login', '/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite'];
+  const publicRoutes = ['/login', '/super-admin/login', '/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite'];
   const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
   const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');
@@ -215,9 +215,8 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   // Onboarding pages that should NOT get the app header (they have their own layout)
   const isOnboardingRoute = router.pathname.startsWith('/onboarding');
-  const isLoginRoute = router.pathname === '/login' || router.pathname === '/signup' || router.pathname === '/create-account';
+  const isLoginRoute = router.pathname === '/login' || router.pathname === '/create-account';
   const isCaptureRoute = router.pathname.startsWith('/capture');
-
   // Authenticated routes get AppLayout (header + footer)
   const showAppLayout = isAuthenticated && !isPublic && !isOnboardingRoute && !isLoginRoute && !isCaptureRoute;
 

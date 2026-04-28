@@ -102,8 +102,17 @@ export function renderHookFlow(payload: PdfReportPayload, vars: Record<string, s
   ];
   const reportPurpose = ['Read below to see why growth is being suppressed, where the problems sit, and what to fix first to move forward with more confidence.'];
   const scoreDonut = renderScoreDonut(overallScore, { size: 'lg', label: 'Snapshot Score' });
+  // Show the brand identity once: logo (when available) OR the company
+  // name as text. The "name | website" line below drops the name when a
+  // logo is shown so we don't double up.
+  const heroLogoMarkup = vars.company_logo_url
+    ? `<img class="cover-logo" src="${escapeHtml(vars.company_logo_url)}" alt="${escapeHtml(vars.company_name)} logo" />`
+    : '';
+  const heroIdentityLine = vars.company_logo_url
+    ? `${escapeHtml(vars.website_url)}`
+    : `${escapeHtml(vars.company_name)} | ${escapeHtml(vars.website_url)}`;
   return renderNarrativeGroup('section-1', 'Where You Stand', 'Snapshot Hook', [
-    renderReportBlock('score-card', `<div class="page-hero-cover"><div class="page-hero-header"><div class="label">Digital Authority Snapshot, <span class="page-hero-date">${escapeHtml(vars.report_date)}</span></div></div><div class="grid-2 page-hero-grid"><div class="stack-12"><article class="card no-break cover-score-panel"><div class="label">Snapshot Score</div><div class="cover-score-circle">${scoreDonut}</div><div class="cover-url cover-url-strong">${escapeHtml(vars.company_name)} | ${escapeHtml(vars.website_url)}</div><div class="tags cover-tags cover-tags-strong"><span class="badge badge-amber">${escapeHtml(vars.stage_label || '--')}</span><span class="badge badge-green">${escapeHtml(vars.confidence_label || '--')}</span><span class="badge badge-blue">${escapeHtml(movement || '--')}</span></div></article><article class="card no-break"><h3>Why Your Score Is ${escapeHtml(displayScore(overallScore, 'AVAILABLE'))}</h3><p>${escapeHtml(scoreStory)}</p></article><article class="card no-break"><h3>Why You Are Not Growing</h3><p>${escapeHtml(growthReason)}</p></article><article class="card card-accent-amber no-break cover-action-panel"><h3>Core Constraint</h3><p><strong>${escapeHtml(topConstraint?.label || 'Authority Gap')}: ${escapeHtml(displayScore(topConstraint?.score ?? null, topConstraint ? 'AVAILABLE' : 'MISSING'))} vs ${benchmark}+</strong></p><p>This gap is large enough to suppress competitive visibility even if you publish more content.</p><hr class="divider" /><h3>The One Move That Changes Everything</h3><p><strong>${escapeHtml(primaryAction?.title || 'Build comparison and decision-stage pages')}</strong></p>${primaryAction?.timeline ? `<div class="timeline"><div class="timeline-item"><strong>2-4 weeks:</strong> ${escapeHtml(stripTimelinePrefix(primaryAction.timeline.short, '2-4 weeks') || 'Directional movement should appear on the target pages first.')}</div><div class="timeline-item"><strong>1-3 months:</strong> ${escapeHtml(stripTimelinePrefix(primaryAction.timeline.mid, '1-3 months') || 'Stronger click quality and page-level engagement should become visible.')}</div><div class="timeline-item"><strong>3-6 months:</strong> ${escapeHtml(stripTimelinePrefix(primaryAction.timeline.long, '3-6 months') || 'The change should compound into better qualified discovery and conversion readiness.')}</div></div>` : `<div class="timeline"><div class="timeline-item"><strong>2-4 weeks:</strong> Directional movement should appear on the target pages first.</div><div class="timeline-item"><strong>1-3 months:</strong> Stronger click quality and page-level engagement should become visible.</div><div class="timeline-item"><strong>3-6 months:</strong> The change should compound into better qualified discovery and conversion readiness.</div></div>`}</article></div><div class="stack-12"><article class="card card-accent-red no-break cover-context-panel"><h1>${escapeHtml(hookTitle)}</h1><p>${escapeHtml(hookStatement)}</p><div class="cover-explainer"><div class="cover-explainer-block meaning-block"><div class="label">What ${escapeHtml(displayScore(overallScore, 'AVAILABLE'))}, ${escapeHtml(vars.stage_label || '--')}, ${escapeHtml(vars.confidence_label || '--')}, And ${escapeHtml(movement || '--')} Mean</div>${scoreMeaning.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}</div><div class="cover-explainer-block competition-block"><div class="label">What It Means Competitively</div><p>${escapeHtml(whatThisMeansItems.join(' '))}</p></div><div class="cover-explainer-block why-read-block">${reportPurpose.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}</div></div></article><article class="card no-break">${executiveInsights}</article></div></div></div>`, { className: 'report-block-hero', group: 'section-1' }),
+    renderReportBlock('score-card', `<div class="page-hero-cover"><div class="page-hero-header"><div class="label">Digital Authority Snapshot, <span class="page-hero-date">${escapeHtml(vars.report_date)}</span></div></div><div class="grid-2 page-hero-grid"><div class="stack-12"><article class="card no-break cover-score-panel"><div class="label">Snapshot Score</div><div class="cover-score-circle">${scoreDonut}</div>${heroLogoMarkup}<div class="cover-url cover-url-strong">${heroIdentityLine}</div><div class="tags cover-tags cover-tags-strong"><span class="badge badge-amber">${escapeHtml(vars.stage_label || '--')}</span><span class="badge badge-green">${escapeHtml(vars.confidence_label || '--')}</span><span class="badge badge-blue">${escapeHtml(movement || '--')}</span></div></article><article class="card no-break"><h3>Why Your Score Is ${escapeHtml(displayScore(overallScore, 'AVAILABLE'))}</h3><p>${escapeHtml(scoreStory)}</p></article><article class="card no-break"><h3>Why You Are Not Growing</h3><p>${escapeHtml(growthReason)}</p></article><article class="card card-accent-amber no-break cover-action-panel"><h3>Core Constraint</h3><p><strong>${escapeHtml(topConstraint?.label || 'Authority Gap')}: ${escapeHtml(displayScore(topConstraint?.score ?? null, topConstraint ? 'AVAILABLE' : 'MISSING'))} vs ${benchmark}+</strong></p><p>This gap is large enough to suppress competitive visibility even if you publish more content.</p><hr class="divider" /><h3>The One Move That Changes Everything</h3><p><strong>${escapeHtml(primaryAction?.title || 'Build comparison and decision-stage pages')}</strong></p>${primaryAction?.timeline ? `<div class="timeline"><div class="timeline-item"><strong>2-4 weeks:</strong> ${escapeHtml(stripTimelinePrefix(primaryAction.timeline.short, '2-4 weeks') || 'Directional movement should appear on the target pages first.')}</div><div class="timeline-item"><strong>1-3 months:</strong> ${escapeHtml(stripTimelinePrefix(primaryAction.timeline.mid, '1-3 months') || 'Stronger click quality and page-level engagement should become visible.')}</div><div class="timeline-item"><strong>3-6 months:</strong> ${escapeHtml(stripTimelinePrefix(primaryAction.timeline.long, '3-6 months') || 'The change should compound into better qualified discovery and conversion readiness.')}</div></div>` : `<div class="timeline"><div class="timeline-item"><strong>2-4 weeks:</strong> Directional movement should appear on the target pages first.</div><div class="timeline-item"><strong>1-3 months:</strong> Stronger click quality and page-level engagement should become visible.</div><div class="timeline-item"><strong>3-6 months:</strong> The change should compound into better qualified discovery and conversion readiness.</div></div>`}</article></div><div class="stack-12"><article class="card card-accent-red no-break cover-context-panel"><h1>${escapeHtml(hookTitle)}</h1><p>${escapeHtml(hookStatement)}</p><div class="cover-explainer"><div class="cover-explainer-block meaning-block"><div class="label">What ${escapeHtml(displayScore(overallScore, 'AVAILABLE'))}, ${escapeHtml(vars.stage_label || '--')}, ${escapeHtml(vars.confidence_label || '--')}, And ${escapeHtml(movement || '--')} Mean</div>${scoreMeaning.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}</div><div class="cover-explainer-block competition-block"><div class="label">What It Means Competitively</div><p>${escapeHtml(whatThisMeansItems.join(' '))}</p></div><div class="cover-explainer-block why-read-block">${reportPurpose.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}</div></div></article><article class="card no-break">${executiveInsights}</article></div></div></div>`, { className: 'report-block-hero', group: 'section-1' }),
     ...(showReadThisFirst ? [renderReportBlock('insight', '<div class="card no-break intro-block"><strong>Read This First</strong><p>This report answers one question:</p><p><strong>What is the fastest way to turn your current presence into growth?</strong></p></div>', { group: 'section-1', fill: true })] : []),
   ], { hideHeading: true });
 }
@@ -367,6 +376,14 @@ export function renderGeoAeoFlow(payload: PdfReportPayload): string {
   const visuals = payload.geoAeoVisuals;
   const aiReady = hasRealAiVisibilityData(payload);
   const aiScore = geo?.overallAiVisibilityScore ?? null;
+  const hasWebsiteContentSignal = Boolean(
+    safeText(payload.companyContext?.homepageHeadline, 1)
+    || safeText(payload.companyContext?.primaryOffering, 1)
+    || safeText(payload.companyContext?.positioning, 1)
+    || safeText(payload.companyContext?.tagline, 1)
+    || ((payload.seoVisuals?.seoCapabilityRadar.content_quality_score ?? 0) > 0)
+    || ((payload.seoExecutiveSummary?.overallHealthScore ?? 0) > 0),
+  );
 
   const radarData = visuals?.aiAnswerPresenceRadar;
   const radarItems = radarData ? [
@@ -378,13 +395,89 @@ export function renderGeoAeoFlow(payload: PdfReportPayload): string {
     { label: 'Freshness', score: radarData.freshness_score ?? 0 },
   ] : [];
 
+  const getGeoStatus = (label: string, score: number): { title: string; note: string; tone: string } => {
+    if (score > 0) {
+      if (score >= 60) {
+        return {
+          title: `${score}/100`,
+          note: 'A measurable answer-engine signal is already visible here.',
+          tone: '#1B7340',
+        };
+      }
+      if (score >= 30) {
+        return {
+          title: `${score}/100`,
+          note: 'The structure is visible, but it still needs reinforcement to become dependable.',
+          tone: '#B45309',
+        };
+      }
+      return {
+        title: `${score}/100`,
+        note: 'A weak signal exists, but it is still too light to trust as stable answer-engine readiness.',
+        tone: '#991B1B',
+      };
+    }
+
+    if (!hasWebsiteContentSignal) {
+      return {
+        title: 'Not available',
+        note: 'Content is not reachable enough yet to assess this area.',
+        tone: '#8C9DAB',
+      };
+    }
+
+    if (label === 'Answer Coverage') {
+      return {
+        title: 'Needs direct answers',
+        note: 'Pages exist, but they do not yet provide extractable direct-answer sections for AI coverage.',
+        tone: '#B45309',
+      };
+    }
+    if (label === 'Entity Clarity') {
+      return {
+        title: 'Needs entity proof',
+        note: 'The site is reachable, but core brand and service entities are not yet reinforced clearly enough.',
+        tone: '#B45309',
+      };
+    }
+    if (label === 'Topical Authority') {
+      return {
+        title: 'Authority still thin',
+        note: 'Relevant content exists, but the topic cluster is not yet strong enough to signal authority.',
+        tone: '#B45309',
+      };
+    }
+    if (label === 'Citation Readiness') {
+      return {
+        title: 'Needs citations',
+        note: 'Content exists, but proof, sourcing, and citation-friendly formatting are still limited.',
+        tone: '#B45309',
+      };
+    }
+    if (label === 'Content Structure') {
+      return {
+        title: 'Structure needs work',
+        note: 'The site is crawlable, but summaries, FAQ patterns, and heading structure need improvement for extraction.',
+        tone: '#B45309',
+      };
+    }
+    return {
+      title: 'Freshness needs lift',
+      note: 'The content layer exists, but recency and update cadence are not yet strong enough for answer reuse.',
+      tone: '#B45309',
+    };
+  };
+
   const allRadarZero = radarItems.every((item) => item.score === 0);
   const radarVisual = radarItems.length && !allRadarZero ? `<div class="card no-break" style="margin-top:12px;"><h3>AI Answer Readiness Radar</h3><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;">${radarItems.map((item) => {
     return `<div style="text-align:center;"><div class="label">${escapeHtml(item.label)}</div>${renderScoreDonut(item.score, { size: 'sm' })}<div style="font-size:11px;color:#4A6274;margin-top:2px;">${item.score}/100</div></div>`;
   }).join('')}</div></div>` : radarItems.length ? `<div class="card no-break" style="margin-top:12px;border-left:4px solid #B45309;background:#FEF4E4;">
     <h3>AI Readiness Assessment</h3>
-    <p style="font-size:11px;margin-bottom:6px;">Cannot be scored accurately without query-level data. The following areas need attention based on structural analysis:</p>
-    <div class="grid-3" style="margin-top:6px;">${radarItems.map((item) => `<div style="padding:6px;background:#fff;border:1px solid #D4DDE6;border-radius:4px;text-align:center;"><div class="label" style="font-size:9px;">${escapeHtml(item.label)}</div><div style="font-size:11px;color:#B45309;font-weight:600;">Not measurable</div></div>`).join('')}</div>
+    <p style="font-size:11px;margin-bottom:6px;">${hasWebsiteContentSignal ? 'The site has reachable content, but AI-answer readiness is still mostly structural rather than measurable. These are the areas that need strengthening next:' : 'AI-answer readiness cannot be assessed yet because content reachability is still too limited. The framework below shows what will need to be in place once content signals deepen.'}</p>
+    <div class="grid-3" style="margin-top:6px;">${radarItems.map((item) => {
+      const state = getGeoStatus(item.label, item.score);
+      return `<div style="padding:8px;background:#fff;border:1px solid #D4DDE6;border-radius:4px;"><div class="label" style="font-size:9px;">${escapeHtml(item.label)}</div><div style="font-size:13px;color:${state.tone};font-weight:700;margin-top:2px;">${escapeHtml(state.title)}</div><div style="font-size:11px;color:#6B7280;margin-top:6px;line-height:1.45;">${escapeHtml(state.note)}</div></div>`;
+    }).join('')}</div>
   </div>` : '';
 
   const gapCard = geo ? `<div class="card card-accent-amber no-break" style="height:100%;"><h3>Primary AI Visibility Gap</h3><p><strong>${escapeHtml(safeText(geo.primaryGap.title, 1))}</strong></p><p>${escapeHtml(safeText(geo.primaryGap.reasoning, 2))}</p><div class="tags" style="margin-top:6px;"><span class="badge badge-${geo.primaryGap.severity === 'critical' ? 'red' : geo.primaryGap.severity === 'moderate' ? 'amber' : 'green'}">${escapeHtml(geo.primaryGap.severity.toUpperCase())}</span><span class="badge badge-gray">${escapeHtml(geo.primaryGap.type.replace(/_/g, ' ').toUpperCase())}</span></div></div>` : '';
@@ -433,7 +526,7 @@ export function renderGeoAeoFlow(payload: PdfReportPayload): string {
         <table style="width:100%;border:none;border-collapse:collapse;"><tr>
           <td style="vertical-align:middle;width:40%;border:none;"><span class="${confBadgeClass} badge">Confidence: ${escapeHtml(confLevel.toUpperCase())}</span></td>
           <td style="vertical-align:middle;text-align:center;border:none;">
-            <div class="label" style="margin-bottom:6px;">Overall AI Visibility${aiScore && aiScore > 0 ? `: ${aiScore}/100 (estimated)` : ': Not measurable'}</div>
+            <div class="label" style="margin-bottom:6px;">Overall AI Visibility${aiScore && aiScore > 0 ? `: ${aiScore}/100 (estimated)` : hasWebsiteContentSignal ? ': Structurally observed' : ': Not available'}</div>
             ${scoreDonut}
           </td>
         </tr></table>
@@ -612,9 +705,9 @@ export function renderNextLevelCtaFlow(payload: PdfReportPayload, vars: Record<s
     <p style="font-size:10px;color:#1B7340;font-weight:600;margin-top:6px;">Outcome: A complete growth strategy with competitive positioning and lead generation playbook.</p>
   </article>`;
 
-  const footer = `<div style="padding:8px 14px;border-top:1px solid #D4DDE6;text-align:center;">
-    <p style="font-size:9px;color:#8C9DAB;line-height:1.5;margin:0;">Generated for ${escapeHtml(companyName)} &middot; ${escapeHtml(vars.report_date)} &middot; Powered by OmniVyra Digital Authority Engine v2.0</p>
-  </div>`;
+  // The previous "Generated for ... Powered by ..." footer has been
+  // replaced by the end banner that the master document renders once
+  // after the last section. No per-flow footer needed here anymore.
 
   return renderNarrativeGroup('section-cta', 'Next Steps', 'Unlock Deeper Intelligence', [
     renderReportBlock('insight', ctaBlock, { group: 'section-cta' }),
@@ -622,7 +715,6 @@ export function renderNextLevelCtaFlow(payload: PdfReportPayload, vars: Record<s
     renderReportBlock('insight', roadmapHeader, { group: 'section-cta' }),
     renderReportBlock('insight', report2, { group: 'section-cta' }),
     renderReportBlock('insight', report3, { group: 'section-cta' }),
-    renderReportBlock('disclaimer', footer, { group: 'section-cta' }),
   ]);
 }
 

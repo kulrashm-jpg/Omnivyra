@@ -107,14 +107,22 @@ export function renderInlineDisclaimer(kind: 'missing' | 'partial', text: string
   return `<div class="inline-disclaimer ${kind === 'missing' ? 'inline-disclaimer-missing' : 'inline-disclaimer-partial'}">${confidence}<p><strong>${title}.</strong> ${escapeHtml(text)}</p></div>`;
 }
 
-export function sectionHeaderBar(companyName: string, reportDate: string): string {
-  return `
-    <div class="section-header">
-      <span class="company-name">${escapeHtml(companyName)}</span>
-      <span class="report-title">Digital Authority Snapshot</span>
-      <span class="report-date">${escapeHtml(reportDate)}</span>
-    </div>
-  `;
+// The previous implementation rendered a "OMNIVYRA | DIGITAL AUTHORITY
+// SNAPSHOT | DATE" strip inside every section's content. That caused
+// the strip to appear mid-page wherever a section started.
+//
+// The strip is now a single page-level fixed-position element rendered
+// once by renderSnapshotMasterDocument so it sits at the top of every
+// printed page automatically. This helper is intentionally a no-op so
+// existing call sites compile without change while the strip is no
+// longer injected into section content. Argument signature is kept
+// backwards-compatible.
+export function sectionHeaderBar(
+  _companyName: string,
+  _reportDate: string,
+  _options?: string | { logoUrl?: string | null; faviconUrl?: string | null } | null,
+): string {
+  return '';
 }
 
 export function renderPagePrintHeader(companyName: string, reportDate: string): string {

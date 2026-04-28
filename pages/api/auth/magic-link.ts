@@ -46,7 +46,21 @@ export default async function handler(
     .eq('email', normalizedEmail)
     .maybeSingle();
 
-  if (!userRow || (userRow as any).is_deleted) {
+  if (!userRow) {
+    try {
+      const { data: authConfirmed, error: rpcErr } = await supabase.rpc('auth_user_confirmed', {
+        p_email: normalizedEmail,
+      });
+      if (!rpcErr && authConfirmed === true) {
+        return res.status(200).json({ proceed: true });
+      }
+    } catch {
+      // Fall through to generic error
+    }
+    return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
+  }
+
+  if ((userRow as any).is_deleted) {
     return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
   }
 

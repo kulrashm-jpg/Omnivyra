@@ -38,6 +38,7 @@ const FIELD_HINTS = {
 } as const;
 
 const SAMPLE_TEXT_LIMIT = 900;
+const STRATEGY_LOCK_FIELDS = ['brand_positioning', 'competitive_advantages', 'growth_priorities'] as const;
 
 function inferSourceSignals(profile: CompanyProfile, latestRefinement?: CompanyProfileRefinement | null) {
   const sourceSummaries = latestRefinement?.source_summaries ?? [];
@@ -250,7 +251,8 @@ export default function CompanyStrategyProfileCard({
   }, [profile]);
 
   const effectiveCompanyId = companyId || profile.company_id;
-  const isLocked = Array.isArray(profile.user_locked_fields) && profile.user_locked_fields.includes('strategy_profile');
+  const isLocked = Array.isArray(profile.user_locked_fields)
+    && STRATEGY_LOCK_FIELDS.some((field) => profile.user_locked_fields?.includes(field));
   const hasStrategy = Boolean(
     draft.worldview ||
     draft.contrarianBeliefs.length ||

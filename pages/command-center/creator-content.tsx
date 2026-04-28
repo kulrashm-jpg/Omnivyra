@@ -26,23 +26,6 @@ type CreatorCard = {
 
 const CREATOR_CARDS: CreatorCard[] = [
   {
-    id: 'carousel',
-    title: 'Carousel',
-    category: 'Multi-Slide',
-    outcome: 'Slide-based content designed for education, authority, and campaign reuse',
-    description: 'Develop a structured multi-slide asset with AI support for message sequencing, visual direction, and platform packaging.',
-    bullets: [
-      'Best for educational and authority-led content',
-      'Can later be used in campaign workflows',
-      'Supports direct social publishing handoff',
-    ],
-    cta: 'Create Carousel',
-    accentFrom: 'from-blue-50',
-    accentTo: 'to-cyan-50',
-    borderColor: 'border-blue-200',
-    ctaColor: 'bg-blue-600 hover:bg-blue-700',
-  },
-  {
     id: 'image',
     title: 'Image',
     category: 'Static Visual',
@@ -58,6 +41,23 @@ const CREATOR_CARDS: CreatorCard[] = [
     accentTo: 'to-teal-50',
     borderColor: 'border-emerald-200',
     ctaColor: 'bg-emerald-600 hover:bg-emerald-700',
+  },
+  {
+    id: 'carousel',
+    title: 'Carousel',
+    category: 'Multi-Slide',
+    outcome: 'Slide-based content designed for education, authority, and campaign reuse',
+    description: 'Develop a structured multi-slide asset with AI support for message sequencing, visual direction, and platform packaging.',
+    bullets: [
+      'Best for educational and authority-led content',
+      'Can later be used in campaign workflows',
+      'Supports direct social publishing handoff',
+    ],
+    cta: 'Create Carousel',
+    accentFrom: 'from-blue-50',
+    accentTo: 'to-cyan-50',
+    borderColor: 'border-blue-200',
+    ctaColor: 'bg-blue-600 hover:bg-blue-700',
   },
   {
     id: 'banner',

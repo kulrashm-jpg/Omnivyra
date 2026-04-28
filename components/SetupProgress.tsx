@@ -30,7 +30,7 @@ export default function SetupProgress() {
           <p className="text-xs text-gray-500 mt-0.5">
             {level1Complete
               ? 'Optional — add more details for better AI output'
-              : 'Complete these steps to get the most from OmniVyra'
+              : 'Complete these steps to get the most from Omnivyra'
             }
           </p>
         </div>

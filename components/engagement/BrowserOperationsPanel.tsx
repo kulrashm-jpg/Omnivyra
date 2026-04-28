@@ -64,11 +64,11 @@ export function BrowserOperationsPanel({
           Browser Operations
         </p>
         <h3 className="text-xl font-semibold text-slate-900">
-          Run cross-platform engagement from OmniVyra
+          Run cross-platform engagement from Omnivyra
         </h3>
         <p className="max-w-3xl text-sm leading-6 text-slate-600">
           Use the authenticated browser session as the fallback lane for platforms where API coverage is partial.
-          When a supported messaging or feed surface is open, OmniVyra can attach browser-assisted workflows
+          When a supported messaging or feed surface is open, Omnivyra can attach browser-assisted workflows
           without pushing you back into manual console work.
         </p>
       </div>

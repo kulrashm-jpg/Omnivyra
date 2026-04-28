@@ -6,7 +6,7 @@ export default function FunnelAndConversionAnalysisPage() {
   return (
     <>
       <Head>
-        <title>Funnel and Conversion Analysis | OmniVyra</title>
+        <title>Funnel and Conversion Analysis | Omnivyra</title>
         <meta
           name="description"
           content="Learn how funnel and conversion analysis reveals drop-offs, bottlenecks, and next best actions so teams can improve marketing performance."
@@ -42,8 +42,8 @@ export default function FunnelAndConversionAnalysisPage() {
                 body: 'Conversion trends explain whether performance issues come from weak targeting, weak creative, landing page friction, or poor follow-through after initial interest.',
               },
               {
-                title: 'How OmniVyra helps',
-                body: 'OmniVyra connects funnel behavior, conversion trends, and drop-off analysis with prioritized next best actions so teams can improve outcomes without switching systems.',
+                title: 'How Omnivyra helps',
+                body: 'Omnivyra connects funnel behavior, conversion trends, and drop-off analysis with prioritized next best actions so teams can improve outcomes without switching systems.',
               },
             ].map((section) => (
               <article key={section.title} className="rounded-2xl border border-gray-200/70 bg-white p-8 shadow-[0_2px_12px_rgba(10,31,68,0.05)]">
@@ -58,7 +58,7 @@ export default function FunnelAndConversionAnalysisPage() {
               </Link>{' '}
               and the{' '}
               <Link href="/landing" className="font-semibold text-[#0A66C2]">
-                OmniVyra landing page
+                Omnivyra landing page
               </Link>
               .
             </p>

@@ -1,7 +1,6 @@
 import Head from 'next/head';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { Download, RefreshCw } from 'lucide-react';
 import { getAuthToken } from '@/utils/getAuthToken';
 import {
   type ReportData,
@@ -71,6 +70,7 @@ export default function ReportViewPage() {
 
         setGenerationMessage(null);
         setReportData(data);
+
         if (data.reportType === 'snapshot') {
           setSnapshotHtmlLoading(true);
           setSnapshotHtmlMarkup(null);
@@ -105,6 +105,7 @@ export default function ReportViewPage() {
           setSnapshotHtmlStyles('');
           setSnapshotHtmlLoading(false);
         }
+
         setIsGenerating(false);
       } catch {
         if (!cancelled) {
@@ -291,93 +292,37 @@ export default function ReportViewPage() {
         </Head>
 
         <div className="snapshot-report-shell">
-          {/* ── McKinsey-style report header ── */}
-          <div className="border-b-2 border-[#051C2C] bg-white shadow-sm">
-            <div className="mx-auto max-w-6xl px-6 py-5">
-              {/* Top bar: kicker + actions */}
-              <div className="flex items-center justify-between mb-4">
-                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#8C9DAB]">
-                  Digital Authority Snapshot
+          <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+            <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Report Actions
                 </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleDownloadPDF}
-                    disabled={isDownloading}
-                    className="inline-flex items-center gap-2 rounded border border-[#D4DDE6] bg-white px-4 py-2 text-sm font-semibold text-[#1A3A50] transition hover:bg-[#F5F7FA] disabled:opacity-50"
-                  >
-                    <Download size={16} />
-                    <span>{isDownloading ? 'Downloading...' : 'Download PDF'}</span>
-                  </button>
-                  <button
-                    onClick={handleRegenerate}
-                    disabled={isRegenerating}
-                    className="inline-flex items-center gap-2 rounded bg-[#0077B6] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#005f8f] disabled:opacity-50"
-                  >
-                    <RefreshCw size={16} />
-                    <span>{isRegenerating ? 'Regenerating...' : 'Regenerate'}</span>
-                  </button>
-                </div>
+                <h1 className="mt-1 text-xl font-semibold text-slate-900">
+                  {reportData.title}
+                </h1>
+                <p className="mt-1 text-sm text-slate-600">
+                  Download the latest PDF snapshot or regenerate this report with fresh data.
+                </p>
               </div>
-
-              {/* Company identity row */}
-              <div className="flex items-start gap-6 mb-4">
-                {/* Score circle */}
-                <div className="flex-shrink-0 flex flex-col items-center">
-                  <div className="relative w-[72px] h-[72px]">
-                    <svg width="72" height="72" viewBox="0 0 72 72">
-                      <circle cx="36" cy="36" r="30" fill="none" stroke="#E8EFF6" strokeWidth="6" />
-                      <circle
-                        cx="36" cy="36" r="30" fill="none"
-                        stroke={reportData.overallScore >= 50 ? '#1B7340' : reportData.overallScore >= 30 ? '#B45309' : '#991B1B'}
-                        strokeWidth="6"
-                        strokeDasharray={`${2 * Math.PI * 30}`}
-                        strokeDashoffset={`${2 * Math.PI * 30 - (Math.min(100, reportData.overallScore) / 100) * 2 * Math.PI * 30}`}
-                        strokeLinecap="round"
-                        transform="rotate(-90 36 36)"
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="font-serif text-2xl font-bold text-[#051C2C]">{reportData.overallScore}</span>
-                    </div>
-                  </div>
-                  <span className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-[#8C9DAB]">Score</span>
-                </div>
-                {/* Company info */}
-                <div className="flex-1">
-                  <h1 className="font-serif text-2xl font-bold text-[#051C2C] leading-tight">
-                    {reportData.companyContext?.companyName || reportData.domain}
-                  </h1>
-                  <p className="mt-0.5 text-sm text-[#4A6274]">{reportData.domain}</p>
-                  <div className="mt-2 flex gap-2 flex-wrap">
-                    <span className="inline-flex text-[10px] font-bold uppercase tracking-[0.08em] px-2.5 py-1 rounded bg-[#FEF4E4] text-[#B45309]">
-                      {reportData.overallScore <= 44 ? 'Early-Stage' : reportData.overallScore <= 74 ? 'Growing' : 'Leader'}
-                    </span>
-                    <span className="inline-flex text-[10px] font-bold uppercase tracking-[0.08em] px-2.5 py-1 rounded bg-[#E6F4EC] text-[#1B7340]">
-                      {reportData.confidenceSource ? 'Medium Confidence' : 'Assessed'}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Metric cards row */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded border border-[#D4DDE6] bg-[#F5F7FA] px-4 py-3">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#8C9DAB] mb-1">Overall Score</p>
-                  <p className="font-serif text-xl font-bold text-[#051C2C]">{reportData.overallScore}<span className="text-sm font-normal text-[#8C9DAB]">/100</span></p>
-                </div>
-                <div className="rounded border border-[#D4DDE6] bg-[#F5F7FA] px-4 py-3">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#8C9DAB] mb-1">Primary Diagnosis</p>
-                  <p className="text-xs font-medium text-[#1A3A50] leading-snug line-clamp-3">{reportData.diagnosis}</p>
-                </div>
-                <div className="rounded border border-[#D4DDE6] bg-[#F5F7FA] px-4 py-3">
-                  <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[#8C9DAB] mb-1">Confidence</p>
-                  <p className="text-xs font-medium text-[#1A3A50] leading-snug line-clamp-3">{reportData.confidenceSource || 'Composed from available intelligence sections.'}</p>
-                </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={isDownloading}
+                  className="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isDownloading ? 'Preparing PDF…' : 'Download PDF'}
+                </button>
+                <button
+                  onClick={handleRegenerate}
+                  disabled={isRegenerating}
+                  className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isRegenerating ? 'Regenerating…' : 'Regenerate'}
+                </button>
               </div>
             </div>
-          </div>
 
-          <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
             {fetchError ? (
               <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {fetchError}
@@ -398,16 +343,14 @@ export default function ReportViewPage() {
                 <div dangerouslySetInnerHTML={{ __html: `<div class="report-page">${snapshotHtmlMarkup}</div>` }} />
               </div>
             ) : (
-              <ReportPageContent
-                reportData={reportData}
-                fetchError={fetchError}
-                isDownloading={isDownloading}
-                isRegenerating={isRegenerating}
-                activeSection={activeSection}
-                setActiveSection={setActiveSection}
-                onDownloadPDF={handleDownloadPDF}
-                onRegenerate={handleRegenerate}
-              />
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800 shadow-sm">
+                <div className="font-semibold text-amber-900">Snapshot HTML unavailable</div>
+                <p className="mt-1">
+                  The new snapshot report could not be rendered right now, so the page is not
+                  falling back to the old template. Please regenerate the report or refresh after a
+                  moment.
+                </p>
+              </div>
             )}
           </div>
         </div>

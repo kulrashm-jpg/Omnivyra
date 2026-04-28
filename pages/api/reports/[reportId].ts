@@ -223,6 +223,45 @@ export default async function handler(
       )
     : null;
 
+  // Pull live brand assets so reports generated before logo_url/favicon_url
+  // were persisted still get them. Tolerates missing columns and ignores
+  // errors so a partial schema does not break the render.
+  let liveLogoUrl: string | null = null;
+  let liveFaviconUrl: string | null = null;
+  try {
+    const { data: profileRow } = await supabase
+      .from('company_profiles')
+      .select('logo_url, favicon_url')
+      .eq('company_id', report.company_id)
+      .maybeSingle();
+    const logoCandidate = (profileRow as { logo_url?: string | null } | null)?.logo_url;
+    if (typeof logoCandidate === 'string' && /^https?:\/\//i.test(logoCandidate.trim())) {
+      liveLogoUrl = logoCandidate.trim();
+    }
+    const faviconCandidate = (profileRow as { favicon_url?: string | null } | null)?.favicon_url;
+    if (typeof faviconCandidate === 'string' && /^https?:\/\//i.test(faviconCandidate.trim())) {
+      liveFaviconUrl = faviconCandidate.trim();
+    }
+  } catch {
+    liveLogoUrl = null;
+    liveFaviconUrl = null;
+  }
+  const applyLogoFallback = <T>(payload: T): T => {
+    if (!payload) return payload;
+    const ctxHolder = payload as { companyContext?: { logoUrl?: string | null; faviconUrl?: string | null } | undefined };
+    const ctx = ctxHolder.companyContext;
+    if (!ctx) return payload;
+    let nextCtx = ctx;
+    if (liveLogoUrl && !(typeof ctx.logoUrl === 'string' && ctx.logoUrl.trim())) {
+      nextCtx = { ...nextCtx, logoUrl: liveLogoUrl };
+    }
+    if (liveFaviconUrl && !(typeof ctx.faviconUrl === 'string' && ctx.faviconUrl.trim())) {
+      nextCtx = { ...nextCtx, faviconUrl: liveFaviconUrl };
+    }
+    if (nextCtx !== ctx) ctxHolder.companyContext = nextCtx;
+    return payload;
+  };
+
   const mapStoredReportToPayload = (
     reportRow: {
       id: string;
@@ -297,7 +336,8 @@ export default async function handler(
       timelineReports: timelineReports ?? [],
       mapStoredReportToPayload,
     });
-    const sanitizedWithComparison = sanitizeReportViewPayload(withComparison);
+    applyLogoFallback(withComparison);
+    const sanitizedWithComparison = applyLogoFallback(sanitizeReportViewPayload(withComparison));
     if (format === 'html') {
       const html = type === 'snapshot'
         ? renderOmnivyraSnapshotMasterHtml(sanitizedWithComparison).html
@@ -353,7 +393,8 @@ export default async function handler(
     timelineReports: timelineReports ?? [],
     mapStoredReportToPayload,
   });
-  const sanitizedPayloadWithComparison = sanitizeReportViewPayload(payloadWithComparison);
+  applyLogoFallback(payloadWithComparison);
+  const sanitizedPayloadWithComparison = applyLogoFallback(sanitizeReportViewPayload(payloadWithComparison));
 
   if (format === 'html') {
     const html = type === 'snapshot'

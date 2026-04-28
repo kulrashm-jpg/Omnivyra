@@ -130,7 +130,7 @@ export const TREND_SOURCE_LEGEND: TrendSourceLegendItem[] = [
   { key: 'newsapi',   label: 'NewsAPI',   description: 'NewsAPI headlines and breaking topics.',        badgeClass: 'bg-blue-100 text-blue-700' },
   { key: 'reddit',    label: 'Reddit',    description: 'Reddit community trend signals.',               badgeClass: 'bg-orange-100 text-orange-700' },
   { key: 'serpapi',   label: 'SerpAPI',   description: 'SerpAPI Google Trends signals.',               badgeClass: 'bg-green-100 text-green-700' },
-  { key: 'omnivyra',  label: 'OmniVyra',  description: 'OmniVyra intelligence curated trends.',        badgeClass: 'bg-purple-100 text-purple-700' },
+  { key: 'omnivyra',  label: 'Omnivyra',  description: 'Omnivyra intelligence curated trends.',        badgeClass: 'bg-purple-100 text-purple-700' },
 ];
 export default function RecommendationsTypesPage() {
   return null;

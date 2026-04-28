@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Wait for Next.js dev server to be fully ready
- * Checks for both port availability and routes-manifest.json existence
+ * Checks /api/ready and presence of a build-manifest.json
  * Usage: node scripts/wait-for-next.js [timeout_ms] [port]
  */
 
@@ -14,10 +14,18 @@ const PORT = parseInt(process.argv[3] || '3000', 10);
 const POLL_INTERVAL = 500; // ms
 const START_TIME = Date.now();
 
+// In Next.js 16 dev, distDir is .next/dev; routes-manifest.json is production-only,
+// so check build-manifest.json which is written in both modes.
+const CANDIDATE_MANIFESTS = [
+  '.next/dev/build-manifest.json',
+  '.next/build-manifest.json',
+];
+
 function isRouteManifestReady() {
   try {
-    const manifestPath = path.join(process.cwd(), '.next/dev/routes-manifest.json');
-    return fs.existsSync(manifestPath);
+    return CANDIDATE_MANIFESTS.some((rel) =>
+      fs.existsSync(path.join(process.cwd(), rel))
+    );
   } catch {
     return false;
   }

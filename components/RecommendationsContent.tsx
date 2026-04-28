@@ -1052,7 +1052,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
 
               {omnivyraStatus && (
                 <div className="bg-white rounded-lg shadow p-6">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-3">OmniVyra Status</h3>
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3">Omnivyra Status</h3>
                   <div className="flex items-center gap-2 text-xs text-gray-700">
                     <span className={`px-2 py-0.5 rounded-full ${omnivyraStatusColor}`}>
                       {omnivyraStatus.status}
@@ -1076,7 +1076,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
                       Why these recommendations?
                     </summary>
                     <div className="mt-2 text-sm text-gray-600">
-                      {engineResult.omnivyra_metadata.explanation || 'OmniVyra explanation not available.'}
+                      {engineResult.omnivyra_metadata.explanation || 'Omnivyra explanation not available.'}
                     </div>
                     <div className="mt-2 text-xs text-gray-500">
                       Decision ID: {engineResult.omnivyra_metadata.decision_id || '—'}
@@ -1096,7 +1096,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
               {engineResult.omnivyra_learning && (
                 <div className="bg-white rounded-lg shadow p-6">
                   <h3 className="text-sm font-semibold text-gray-900 mb-2">
-                    Learning sent to OmniVyra
+                    Learning sent to Omnivyra
                   </h3>
                   <div className="text-xs text-gray-700">
                     {engineResult.omnivyra_learning.status === 'sent' && '✅ Sent'}

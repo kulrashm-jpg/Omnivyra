@@ -122,6 +122,146 @@ function validateBlueprintAgainstTemplate(input: {
   }
 }
 
+function buildTemplateAlignmentInstruction(input: {
+  assetType: string;
+  template: { structure_schema?: Record<string, unknown> };
+}): string {
+  const structure = safeObject(input.template.structure_schema);
+  const expectedFrameCount = structure.frame_count == null ? null : Number(structure.frame_count);
+  const expectedRoles = Array.isArray(structure.frame_roles) ? structure.frame_roles.map(String) : [];
+
+  if (input.assetType === 'carousel') {
+    return [
+      'Template contract is mandatory.',
+      expectedFrameCount ? `Return exactly ${expectedFrameCount} slides.` : '',
+      expectedRoles.length > 0 ? `Slides must use this role order exactly: ${expectedRoles.join(', ')}.` : '',
+      'Every slide must include: slide_number, role, headline, body_text, visual_description, design_note.',
+      'Do not omit or merge slides.',
+    ].filter(Boolean).join(' ');
+  }
+
+  if (input.assetType === 'video') {
+    return [
+      'Template contract is mandatory.',
+      expectedFrameCount ? `Return exactly ${expectedFrameCount} scenes.` : '',
+      expectedRoles.length > 0 ? `Scenes must use this role order exactly: ${expectedRoles.join(', ')}.` : '',
+      'Every scene must include: role, visual, dialogue or text, and duration_seconds.',
+    ].filter(Boolean).join(' ');
+  }
+
+  if (input.assetType === 'image') {
+    return 'Template contract is mandatory. Return a single-frame visual blueprint with clear headline or visual_description.';
+  }
+
+  return 'Template contract is mandatory. Return a blueprint that matches the provided structure_schema exactly.';
+}
+
+function alignCarouselBlueprintToTemplate(
+  blueprint: Record<string, unknown>,
+  template: { structure_schema?: Record<string, unknown> }
+): Record<string, unknown> {
+  const structure = safeObject(template.structure_schema);
+  const expectedFrameCount = structure.frame_count == null ? null : Number(structure.frame_count);
+  const expectedRoles = Array.isArray(structure.frame_roles) ? structure.frame_roles.map(String) : [];
+  const sourceSlides = toArrayOfObjects(blueprint.slides);
+
+  if (!expectedFrameCount || expectedFrameCount <= 0) {
+    return blueprint;
+  }
+
+  const fallbackSlide = sourceSlides[sourceSlides.length - 1] ?? {};
+  const hookScene = safeObject(blueprint.hook_scene);
+  const ctaSlide = safeObject(blueprint.cta_slide);
+  const hookHeadline = String(blueprint.headline ?? blueprint.title ?? hookScene.text ?? '').trim();
+  const hookBody = String(blueprint.summary ?? blueprint.narrative_intent ?? '').trim();
+  const ctaHeadline = String(ctaSlide.headline ?? blueprint.cta ?? 'Next Step').trim();
+  const ctaBody = String(ctaSlide.cta_text ?? safeObject(blueprint.cta_scene).text ?? 'Learn more').trim();
+  const defaultVisual = String(blueprint.visual_description ?? fallbackSlide.visual_description ?? fallbackSlide.visual ?? '').trim();
+
+  const slides = Array.from({ length: expectedFrameCount }, (_, index) => {
+    const existing = sourceSlides[index] ?? fallbackSlide;
+    const role = expectedRoles[index] ?? String(existing.role ?? (index === 0 ? 'hook' : index === expectedFrameCount - 1 ? 'cta' : 'insight'));
+    const isFirst = index === 0;
+    const isLast = index === expectedFrameCount - 1;
+
+    return {
+      ...existing,
+      slide_number: index + 1,
+      role,
+      headline: String(
+        existing.headline ??
+        (isFirst ? hookHeadline : isLast ? ctaHeadline : blueprint.topic ?? blueprint.carousel_theme ?? hookHeadline)
+      ).trim(),
+      body_text: String(
+        existing.body_text ??
+        (isFirst ? hookBody : isLast ? ctaBody : (hookBody || `Key ${role} point for slide ${index + 1}.`))
+      ).trim(),
+      visual_description: String((existing.visual_description ?? existing.visual ?? defaultVisual) || `Visual direction for ${role} slide ${index + 1}.`).trim(),
+      design_note: String(existing.design_note ?? blueprint.design_note ?? `Match the ${role} role with clear visual hierarchy.`).trim(),
+      icon_suggestion: String(existing.icon_suggestion ?? '').trim(),
+    };
+  });
+
+  return {
+    ...blueprint,
+    total_slides: expectedFrameCount,
+    slides,
+  };
+}
+
+function alignVideoBlueprintToTemplate(
+  blueprint: Record<string, unknown>,
+  template: { structure_schema?: Record<string, unknown> }
+): Record<string, unknown> {
+  const structure = safeObject(template.structure_schema);
+  const expectedFrameCount = structure.frame_count == null ? null : Number(structure.frame_count);
+  const expectedRoles = Array.isArray(structure.frame_roles) ? structure.frame_roles.map(String) : [];
+  if (!expectedFrameCount || expectedFrameCount <= 0) {
+    return blueprint;
+  }
+
+  const sourceScenes = toArrayOfObjects(blueprint.scenes);
+  const sourceFrames = toArrayOfObjects(blueprint.frames);
+  const existingSequence = sourceScenes.length > 0 ? sourceScenes : sourceFrames;
+  const fallbackScene = existingSequence[existingSequence.length - 1] ?? {};
+  const hookScene = safeObject(blueprint.hook_scene);
+  const ctaScene = safeObject(blueprint.cta_scene || blueprint.resolution_frame);
+
+  const scenes = Array.from({ length: expectedFrameCount }, (_, index) => {
+    const existing = existingSequence[index] ?? fallbackScene;
+    const role = expectedRoles[index] ?? String(existing.role ?? (index === 0 ? 'hook' : index === expectedFrameCount - 1 ? 'cta' : 'insight'));
+    const isFirst = index === 0;
+    const isLast = index === expectedFrameCount - 1;
+    return {
+      ...existing,
+      scene_number: index + 1,
+      role,
+      visual: String(existing.visual ?? (isFirst ? hookScene.visual : isLast ? ctaScene.visual : fallbackScene.visual) ?? `Visual for ${role} scene ${index + 1}.`).trim(),
+      dialogue: String(existing.dialogue ?? existing.text ?? (isFirst ? hookScene.text : isLast ? ctaScene.text : blueprint.summary) ?? '').trim(),
+      duration_seconds: Number(existing.duration_seconds ?? 3) || 3,
+    };
+  });
+
+  return {
+    ...blueprint,
+    scenes,
+  };
+}
+
+function alignBlueprintToTemplate(input: {
+  assetType: string;
+  blueprint: Record<string, unknown>;
+  template: { structure_schema?: Record<string, unknown> };
+}): Record<string, unknown> {
+  if (input.assetType === 'carousel') {
+    return alignCarouselBlueprintToTemplate(input.blueprint, input.template);
+  }
+  if (input.assetType === 'video') {
+    return alignVideoBlueprintToTemplate(input.blueprint, input.template);
+  }
+  return input.blueprint;
+}
+
 function normalizeCreatorAssetPayload(input: {
   assetType: string;
   blueprint: Record<string, unknown>;
@@ -320,9 +460,13 @@ async function generateBlueprint(context: CreatorGenerationContext): Promise<Rec
 Input:
 ${JSON.stringify(promptInput, null, 2)}
 
+Template alignment rule:
+${buildTemplateAlignmentInstruction({ assetType, template })}
+
 Return JSON only.`;
 
   const result = await runCompletionWithOperation({
+    companyId: context.companyId,
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     operation: `creator_execution_blueprint_${assetType}`,
     temperature: 0,
@@ -334,10 +478,15 @@ Return JSON only.`;
   });
 
   const parsed = JSON.parse(String(result?.output || '{}')) as Record<string, unknown>;
+  const aligned = alignBlueprintToTemplate({
+    assetType,
+    blueprint: parsed,
+    template,
+  });
   return {
-    ...parsed,
+    ...aligned,
     metadata: {
-      ...(safeObject(parsed.metadata)),
+      ...(safeObject(aligned.metadata)),
       template_id: template.id,
       asset_type: assetType,
     },
@@ -511,6 +660,7 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
         summary: intent.summary,
         targetAudience: intent.audience,
         assetType,
+        companyId: intent.companyId,
         campaignContext: {
           creator_card: intent.creatorCard ?? undefined,
           enriched_intent: intent.enrichedIntent ?? undefined,

@@ -98,27 +98,51 @@ export async function runPostGeneration(
     : '';
 
   const templateInstruction = resolveTemplateInstruction(input.template_name);
+  const masterNeutralityInstruction = [
+    'Master-content rule for this post:',
+    '- Write the master draft as platform-agnostic source content.',
+    '- Do NOT optimize the master draft specifically for LinkedIn or any other single platform.',
+    '- Do NOT use platform-specific cues such as "LinkedIn post", "professional network", or channel-native formatting in the master draft.',
+    '- Save platform-native shaping for the variant generation step only.',
+  ].join('\n');
   const extraInstruction = [
     companyEnforcement || undefined,
     templateInstruction,
+    masterNeutralityInstruction,
     buildPostFactualGuardrails(input),
     typeof input.extra_instruction === 'string' && input.extra_instruction.trim()
       ? input.extra_instruction.trim()
       : undefined,
   ].filter(Boolean).join('\n\n');
 
-  const item = {
+  const masterItem = {
     execution_id: `post-${Date.now()}`,
     company_id: input.company_id,
-    platform,
+    platform: 'multi',
     content_type: 'post',
     topic: input.topic.trim(),
     title: input.topic.trim(),
     intent: {
-      objective: input.objective || input.intent || 'Create a platform-native authority post.',
+      objective: input.objective || input.intent || 'Create a strong master post that can be repurposed across platforms.',
       target_audience: input.target_audience || 'Professional audience aligned to company context',
       tone: input.tone || 'Clear, credible, and engaging',
       cta_type: input.cta || 'Soft CTA',
+    },
+    active_platform_targets: [
+      {
+        platform: 'multi',
+        content_type: 'post',
+      },
+    ],
+    ...(extraInstruction ? { extra_instruction: extraInstruction } : {}),
+  };
+
+  const variantItem = {
+    ...masterItem,
+    platform,
+    intent: {
+      ...masterItem.intent,
+      objective: input.objective || input.intent || 'Create a platform-native authority post.',
     },
     active_platform_targets: [
       {
@@ -126,12 +150,11 @@ export async function runPostGeneration(
         content_type: 'post',
       },
     ],
-    ...(extraInstruction ? { extra_instruction: extraInstruction } : {}),
   };
 
-  let master_content = await generateMasterContentFromIntent(item);
+  let master_content = await generateMasterContentFromIntent(masterItem);
   let [platform_variant] = await buildPlatformVariantsFromMaster({
-    ...item,
+    ...variantItem,
     master_content,
   });
 
@@ -158,18 +181,18 @@ export async function runPostGeneration(
 
       if (score.score < threshold) {
         const diagnostic = buildDiagnosticRetryReasons(score, identity);
-        const regenItem = {
-          ...item,
+        const regenMasterItem = {
+          ...masterItem,
           extra_instruction: [
-            item.extra_instruction ?? '',
+            masterItem.extra_instruction ?? '',
             `\n\n## PREVIOUS DRAFT FAILED COMPANY-CONTEXT CHECK (score ${score.score}/100)\n${diagnostic}`,
           ].filter(Boolean).join(''),
         };
         try {
           retryCount = 1;
-          const regenMaster = await generateMasterContentFromIntent(regenItem);
+          const regenMaster = await generateMasterContentFromIntent(regenMasterItem);
           const [regenVariant] = await buildPlatformVariantsFromMaster({
-            ...regenItem,
+            ...variantItem,
             master_content: regenMaster,
           });
           if (regenVariant) {

@@ -204,9 +204,16 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
   }, [refresh]);
 
   useEffect(() => {
+    // Extension status polling. Was 5s — way too aggressive: every refresh
+    // triggers an SW round-trip + re-renders cascade through the dashboard
+    // (PlatformHealthStrip, tab counts, etc.), so clicking Reply on a comment
+    // would visibly flicker through a "checking platform status" loop. 60s
+    // matches the platform-health hook's staleness window and is plenty
+    // for an inbox surface; focus + visibility events still kick a fresh
+    // refresh when the user actually returns to the tab.
     const intervalId = window.setInterval(() => {
       void refresh();
-    }, 5000);
+    }, 60000);
 
     const handleFocus = () => {
       void refresh();

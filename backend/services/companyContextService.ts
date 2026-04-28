@@ -206,8 +206,17 @@ export function buildCompanyContext(
     key_metrics: includeEmpty || profile?.key_metrics ? (profile?.key_metrics ?? null) : undefined,
   };
 
+  const recommendationContext = profile?.recommendation_context;
   const recommendation_notes =
-    (profile as { recommendation_context?: string | null })?.recommendation_context?.trim() || null;
+    recommendationContext && typeof recommendationContext === 'object'
+      ? [
+          recommendationContext.key_threat,
+          recommendationContext.biggest_advantage,
+          recommendationContext.strategic_focus,
+        ]
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          .join(' | ') || null
+      : null;
 
   return {
     identity,

@@ -24,7 +24,10 @@ const SERVICE_PREFIXES: Array<{ prefix: string; name: string }> = [
   { prefix: 'https://fcm.googleapis.com',              name: 'firebase'    },
   { prefix: 'https://hooks.slack.com',                 name: 'slack'       },
   { prefix: 'https://api.stripe.com',                  name: 'stripe'      },
-  { prefix: 'https://api.resend.com',                  name: 'resend'      },
+  // Resend prefix removed — outbound email is now Amazon SES via SMTP
+  // (nodemailer in backend/services/sesTransport.ts), not HTTP API. SES
+  // SMTP traffic doesn't go through fetch and isn't instrumented here.
+  { prefix: 'https://email.amazonaws.com',             name: 'ses'         },
   { prefix: 'https://api.sendgrid.com',                name: 'sendgrid'    },
   { prefix: 'https://upstash.io',                      name: 'upstash'     },
 ];

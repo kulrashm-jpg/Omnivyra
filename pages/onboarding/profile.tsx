@@ -21,6 +21,7 @@ const INDUSTRIES = [
 ];
 
 type Step = 'form' | 'done' | 'error';
+const PROFILE_DRAFT_KEY = 'onboarding_profile_draft_v1';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -43,6 +44,34 @@ export default function ProfilePage() {
       setAccessToken(data.session.access_token);
     });
   }, [router]);
+
+  useEffect(() => {
+    try {
+      const draftRaw = localStorage.getItem(PROFILE_DRAFT_KEY);
+      if (!draftRaw) return;
+      const draft = JSON.parse(draftRaw) as {
+        fullName?: string;
+        jobTitle?: string;
+        industry?: string;
+      };
+      if (draft.fullName) setFullName(draft.fullName);
+      if (draft.jobTitle) setJobTitle(draft.jobTitle);
+      if (draft.industry) setIndustry(draft.industry);
+    } catch {
+      // Ignore unreadable draft state
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        PROFILE_DRAFT_KEY,
+        JSON.stringify({ fullName, jobTitle, industry }),
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [fullName, jobTitle, industry]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -73,6 +102,12 @@ export default function ProfilePage() {
         throw new Error(json.error ?? 'Failed to save profile');
       }
 
+      try {
+        localStorage.removeItem(PROFILE_DRAFT_KEY);
+      } catch {
+        // ignore storage failures
+      }
+
       // Clear intent data
       ['intent_goals', 'intent_team', 'intent_challenge']
         .forEach(k => sessionStorage.removeItem(k));
@@ -89,12 +124,12 @@ export default function ProfilePage() {
 
   return (
     <>
-      <Head><title>Complete Profile | OmniVyra</title></Head>
+      <Head><title>Complete Profile | Omnivyra</title></Head>
 
       <div className="min-h-screen bg-[#F5F9FF] flex flex-col">
         <header className="border-b border-gray-100 bg-white/95">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
-            <Link href="/"><img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" /></Link>
+            <Link href="/"><img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" /></Link>
             {step === 'form' && <span className="text-xs text-[#6B7C93]">Step 1 of 2</span>}
           </div>
           <div className="h-0.5 w-full bg-gray-100">

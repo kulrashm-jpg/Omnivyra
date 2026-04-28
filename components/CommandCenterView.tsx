@@ -284,7 +284,9 @@ export default function CommandCenterView({ d }: { d: S }) {
     features,
   } = d;
 
-  const cards = enhancedCards as unknown as EnhancedCardLike[];
+  const cards = Array.isArray(enhancedCards)
+    ? (enhancedCards as unknown as EnhancedCardLike[])
+    : [];
   const topProgressItems = useMemo(
     () => [
       { id: 'setup', label: 'Setup', value: setupPct, tone: 'blue' as const, summary: setupSummary, sections: setupSections },

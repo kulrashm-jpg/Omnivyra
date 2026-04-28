@@ -42,7 +42,7 @@ jest.mock('../../services/campaignRecommendationService', () => ({
   }),
 }));
 jest.mock('../../services/omnivyraClientV1', () => ({
-  isOmniVyraEnabled: jest.fn().mockReturnValue(true),
+  isOmnivyraEnabled: jest.fn().mockReturnValue(true),
   getTrendRelevance: jest.fn().mockResolvedValue({
     status: 'ok',
     data: { relevant_trends: [{ topic: 'AI marketing' }], ignored_trends: [] },
@@ -53,7 +53,7 @@ jest.mock('../../services/omnivyraClientV1', () => ({
     confidence: 0.8,
     explanation: 'Ranked',
   }),
-  getOmniVyraHealthReport: jest.fn().mockReturnValue({
+  getOmnivyraHealthReport: jest.fn().mockReturnValue({
     status: 'healthy',
     endpoints: {},
     avg_latency_ms: 0,
@@ -126,7 +126,7 @@ jest.mock('../../services/contentOverlapService', () => ({
   }),
 }));
 
-describe('OmniVyra learning bridge', () => {
+describe('Omnivyra learning bridge', () => {
   beforeEach(() => {
     process.env.OMNIVYRA_BASE_URL = 'https://omnivyra.test';
     process.env.USE_OMNIVYRA = 'true';
@@ -149,7 +149,7 @@ describe('OmniVyra learning bridge', () => {
     });
 
     const omnivyraClient = require('../../services/omnivyraClientV1');
-    omnivyraClient.isOmniVyraEnabled.mockReturnValue(true);
+    omnivyraClient.isOmnivyraEnabled.mockReturnValue(true);
     omnivyraClient.getTrendRelevance.mockResolvedValue({
       status: 'ok',
       data: { relevant_trends: [{ topic: 'AI marketing' }], ignored_trends: [] },
@@ -269,7 +269,7 @@ describe('OmniVyra learning bridge', () => {
     expect(result.status).toBe('skipped');
   });
 
-  it('marks failure when OmniVyra is unreachable', async () => {
+  it('marks failure when Omnivyra is unreachable', async () => {
     (global as any).fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
     const result = await sendLearningSnapshot({
       companyId: 'comp-1',

@@ -3,7 +3,7 @@ import { getContentAssetById, listContentVersions } from '../../../backend/db/co
 import { generatePromotionMetadata } from '../../../backend/services/promotionMetadataService';
 import { formatPlatformContent } from '../../../backend/services/platformContentFormatter';
 import { validatePlatformCompliance } from '../../../backend/services/platformComplianceService';
-import { getOmniVyraAdvisory } from '../../../backend/services/omnivyraAdapterService';
+import { getOmnivyraAdvisory } from '../../../backend/services/omnivyraAdapterService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       content: latest,
     });
 
-    const omnivyraAdvisory = await getOmniVyraAdvisory({
+    const omnivyraAdvisory = await getOmnivyraAdvisory({
       recommendation: omnivyraRecommendation,
       context: { companyId, contentAssetId, platform, contentType },
     });

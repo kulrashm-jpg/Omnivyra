@@ -189,7 +189,7 @@ export default function PricingPreview() {
           {creditsExpanded && (
             <div className="border-t border-[#E6EEF8] px-6 pb-6 pt-4">
               <p className="text-[15px] leading-relaxed text-gray-600">
-                Every action on OmniVyra consumes AI credits.
+                Every action on Omnivyra consumes AI credits.
               </p>
               <p className="mt-4 text-sm font-medium text-gray-700">Example usage:</p>
               <ul className="mt-2 space-y-1.5 text-sm text-gray-600">

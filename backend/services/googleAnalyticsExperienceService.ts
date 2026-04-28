@@ -182,7 +182,7 @@ export function buildTrackingAssistResponse(input: TrackingAssistRequest): {
     validation_steps: [
       'Publish the change and open the site in a new browser tab.',
       'Use Google Analytics Realtime to confirm an active page view appears.',
-      'Wait for the next OmniVyra sync and then confirm the integration moves from waiting to ready.',
+      'Wait for the next Omnivyra sync and then confirm the integration moves from waiting to ready.',
     ],
   };
 }

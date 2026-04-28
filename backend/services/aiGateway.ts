@@ -60,6 +60,10 @@ const FEATURE_AREA_MAP: Record<string, string> = {
   conversationTriage:                'Engagement',
   conversationMemorySummary:         'Engagement',
   responseGeneration:                'Engagement',
+  // User-initiated reply suggestions in the engagement inbox right-rail.
+  // Lets the per-feature token-consumption report attribute these calls
+  // correctly instead of dumping them in 'Other'.
+  engagement_reply_suggestions:      'Engagement',
 
   // Insights
   generateContentIdeas:              'Insights',

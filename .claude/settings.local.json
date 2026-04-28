@@ -190,7 +190,10 @@
       "Bash(find /c/virality -type f -name \"*.ts\" -exec grep -l \"newsletter.*linkedin\\\\|linkedin.*newsletter\" {} \\\\;)",
       "Bash(find /c/virality/backend -type f -name \"*.ts\" -exec grep -l \"Newsletter\\\\|NEWSLETTER\" {} \\\\;)",
       "Read(//c/tmp/**)",
-      "mcp__supabase__apply_migration"
+      "mcp__supabase__apply_migration",
+      "Bash(netstat -ano -p tcp)",
+      "Bash(npm run *)",
+      "Bash(echo \"EXIT=$?\")"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

@@ -17,8 +17,8 @@ import {
 import {
   getTrendRanking,
   getTrendRelevance,
-  getOmniVyraHealthReport,
-  isOmniVyraEnabled,
+  getOmnivyraHealthReport,
+  isOmnivyraEnabled,
   TrendSignalInput,
 } from '../omnivyraClientV1';
 import { getLastFallbackReason, getLastMeta, setLastFallbackReason } from '../omnivyraHealthService';

@@ -3,6 +3,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
+import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse = { error: string; code?: string };
@@ -102,7 +103,7 @@ export default async function handler(
         .eq('id', user.id)
         .single();
 
-      route = (userRow as any)?.name ? '/dashboard' : '/onboarding/profile';
+      route = (userRow as any)?.name ? await getUserPreferenceRoute(user.id) : '/onboarding/profile';
     } else {
       const { data: existingRole } = await supabase
         .from('user_company_roles')
@@ -119,7 +120,7 @@ export default async function handler(
           .select('name')
           .eq('id', user.id)
           .single();
-        route = (userRow as any)?.name ? '/dashboard' : '/onboarding/profile';
+        route = (userRow as any)?.name ? await getUserPreferenceRoute(user.id) : '/onboarding/profile';
       }
     }
   }

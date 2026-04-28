@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
+import PlatformIcon from '../ui/PlatformIcon';
 
 type ShortformPayload = {
   output?: {
@@ -48,6 +49,13 @@ type Props = {
   createPath: string;
 };
 
+type ConnectedAccount = {
+  connected?: boolean;
+  category?: string;
+  platform_key?: string;
+  platform_label?: string;
+};
+
 export default function ShortformResultPage({
   contentType,
   pageTitle,
@@ -58,10 +66,11 @@ export default function ShortformResultPage({
   createPath,
 }: Props) {
   const router = useRouter();
-  const { user, isLoading } = useCompanyContext();
+  const { user, isLoading, selectedCompanyId } = useCompanyContext();
   const [payload, setPayload] = useState<ShortformPayload | null>(null);
   const [copied, setCopied] = useState(false);
   const [hashtagsCopied, setHashtagsCopied] = useState(false);
+  const [connectedPlatforms, setConnectedPlatforms] = useState<Array<{ key: string; label: string }>>([]);
 
   const token = typeof router.query.prefill === 'string' ? router.query.prefill : '';
 
@@ -70,11 +79,45 @@ export default function ShortformResultPage({
     try {
       const raw = sessionStorage.getItem(token);
       if (!raw) return;
+      try {
+        window.localStorage.setItem(token, raw);
+      } catch {
+        // Ignore localStorage write failures and keep the current-tab session flow working.
+      }
       setPayload(JSON.parse(raw) as ShortformPayload);
     } catch {
       setPayload(null);
     }
   }, [token]);
+
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setConnectedPlatforms([]);
+      return;
+    }
+
+    let active = true;
+    fetch(`/api/social-accounts/status?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
+      .then((response) => (response.ok ? response.json() : { accounts: [] }))
+      .then((data) => {
+        if (!active) return;
+        const accounts = Array.isArray(data?.accounts) ? data.accounts as ConnectedAccount[] : [];
+        const unique = new Map<string, string>();
+        for (const account of accounts) {
+          const key = String(account.platform_key || '').trim().toLowerCase().replace(/^twitter$/i, 'x');
+          if (!account.connected || account.category !== 'social' || !key || unique.has(key)) continue;
+          unique.set(key, account.platform_label || key);
+        }
+        setConnectedPlatforms(Array.from(unique.entries()).map(([key, label]) => ({ key, label })));
+      })
+      .catch(() => {
+        if (active) setConnectedPlatforms([]);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedCompanyId]);
 
   const generatedContent = payload?.output?.platform_variant?.generated_content || '';
   const hashtags = payload?.output?.platform_variant?.discoverability_meta?.hashtags || [];
@@ -89,7 +132,6 @@ export default function ShortformResultPage({
     const topicQuery = topic ? `&topic=${encodeURIComponent(topic)}` : '';
     const prefillQuery = token ? `&prefill=${encodeURIComponent(token)}` : '';
     const normalizedType = encodeURIComponent(contentType);
-
     return {
       intelligence: '/posts/intelligence',
       social: `/multi-platform-scheduler?source=${contentType}-result&contentType=${normalizedType}${topicQuery}${prefillQuery}`,
@@ -149,7 +191,7 @@ export default function ShortformResultPage({
   return (
     <>
       <Head>
-        <title>{pageTitle} | OmniVyra</title>
+        <title>{pageTitle} | Omnivyra</title>
       </Head>
 
       <div className={`min-h-screen bg-gradient-to-br ${accentSurfaceClassName} p-6`}>
@@ -243,6 +285,49 @@ export default function ShortformResultPage({
                 </div>
               </div>
 
+              {socialWorkflowLinks && (
+                <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Turn This Post Into Action</p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Keep the momentum going by publishing this post, reworking it with fresh intelligence, or using it as the seed for a campaign.
+                  </p>
+                  <div className="mt-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Repurpose For Connected Platforms</p>
+                    {connectedPlatforms.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {connectedPlatforms.map((platform) => (
+                          <Link
+                            key={platform.key}
+                            href={`${socialWorkflowLinks.social}&platform=${encodeURIComponent(platform.key)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                          >
+                            <PlatformIcon platform={platform.key} size={16} />
+                            {platform.label}
+                          </Link>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600">
+                        No connected social platforms were found for the currently selected company.
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    <Link href={socialWorkflowLinks.social} className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}>
+                      Post to social
+                    </Link>
+                    <Link href={socialWorkflowLinks.campaign} className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                      Use in campaign
+                    </Link>
+                    <Link href={socialWorkflowLinks.intelligence} className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
+                      Return to post intelligence
+                    </Link>
+                  </div>
+                </div>
+              )}
+
               <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Adaptation Details</p>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -274,26 +359,6 @@ export default function ShortformResultPage({
                   </Link>
                 </div>
               </div>
-
-              {socialWorkflowLinks && (
-                <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Turn This Post Into Action</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Keep the momentum going by publishing this post, reworking it with fresh intelligence, or using it as the seed for a campaign.
-                  </p>
-                  <div className="mt-4 space-y-3">
-                    <Link href={socialWorkflowLinks.social} className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}>
-                      Post to social
-                    </Link>
-                    <Link href={socialWorkflowLinks.campaign} className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-                      Use in campaign
-                    </Link>
-                    <Link href={socialWorkflowLinks.intelligence} className="inline-flex w-full items-center justify-center rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">
-                      Return to post intelligence
-                    </Link>
-                  </div>
-                </div>
-              )}
             </section>
           </div>
         </div>

@@ -1,6 +1,6 @@
 import { getPlatformRule, listPlatformRules, upsertPlatformRule } from '../db/platformPromotionStore';
-import { OmniVyraAdvisory } from './omnivyraAdapterService';
-import { getPlatformRules, isOmniVyraEnabled } from './omnivyraClientV1';
+import { OmnivyraAdvisory } from './omnivyraAdapterService';
+import { getPlatformRules, isOmnivyraEnabled } from './omnivyraClientV1';
 import { setLastFallbackReason } from './omnivyraHealthService';
 
 const fallbackRules: Array<any> = [
@@ -101,13 +101,13 @@ export async function ensureFallbackPlatformRules(): Promise<void> {
 export async function getRulesForPlatform(input: {
   platform: string;
   contentType: string;
-  omnivyraAdvisory?: OmniVyraAdvisory;
+  omnivyraAdvisory?: OmnivyraAdvisory;
 }): Promise<any> {
   const normalizedPlatform = input.platform.toLowerCase();
   const normalizedType = input.contentType.toLowerCase();
 
   let fallbackReason: string | null = null;
-  if (isOmniVyraEnabled()) {
+  if (isOmnivyraEnabled()) {
     const response = await getPlatformRules({
       platform: normalizedPlatform,
       contentType: normalizedType,

@@ -422,9 +422,6 @@ export async function handleOAuthCallback(
   if (!state.companyId) {
     throw new Error('OAuth state is missing company context');
   }
-  if (!state.userId) {
-    throw new Error('OAuth state is missing user context');
-  }
   if (!input.requestBaseUrl) {
     throw new Error('Request base URL is required for GA4 OAuth callback');
   }

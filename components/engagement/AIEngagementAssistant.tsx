@@ -16,6 +16,10 @@ export interface AIEngagementAssistantProps {
   onFilterByAuthor?: (authorName: string, platform: string) => void;
   onUseSuggestedReply?: (replyText: string) => void;
   onSendSuggestedReply?: (replyText: string) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
+  /** When set, the assistant generates a suggested reply for THIS specific
+   *  message instead of defaulting to the latest inbound. Drives the
+   *  per-comment AI suggestion behaviour in People Reaction mode. */
+  replyTargetMessageId?: string | null;
   className?: string;
 }
 
@@ -85,6 +89,7 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
   onSelectThread,
   onUseSuggestedReply,
   onSendSuggestedReply,
+  replyTargetMessageId = null,
   className = '',
 }: AIEngagementAssistantProps) {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
@@ -99,7 +104,25 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
   const [sendingSuggestedReply, setSendingSuggestedReply] = useState(false);
   const [suggestedReplyStatus, setSuggestedReplyStatus] = useState<string | null>(null);
 
+  // Post threads (People Reaction) — comments don't auto-suggest. The user
+  // explicitly picks which comment to respond to via Reply. DM threads keep
+  // the latest-inbound default so the operator sees a suggestion immediately
+  // on opening the conversation, which is the expected DM-triage workflow.
+  const isPostThread =
+    thread?.latest_message_type === 'comment' || thread?.latest_message_type === 'reaction';
+
   const targetMessageId = useMemo(() => {
+    // Caller-supplied target wins. This is what the user explicitly clicked
+    // Reply on — generating against any other message would surface a wrong
+    // suggestion and silently fight the user.
+    if (replyTargetMessageId) {
+      const explicit = messages.find((m) => m.id === replyTargetMessageId);
+      if (explicit) return explicit.id;
+    }
+
+    // For post threads, no explicit target = no suggestion. The user picks.
+    if (isPostThread) return null;
+
     const sorted = [...messages].sort((a, b) => {
       const ta = new Date(a.platform_created_at ?? a.created_at ?? 0).getTime();
       const tb = new Date(b.platform_created_at ?? b.created_at ?? 0).getTime();
@@ -113,20 +136,19 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
     });
 
     return inbound?.id ?? thread?.latest_message_id ?? sorted[0]?.id ?? null;
-  }, [messages, thread?.latest_message_id]);
+  }, [messages, thread?.latest_message_id, replyTargetMessageId, isPostThread]);
 
-  const fetchSignals = useCallback(async () => {
+  // Two separate fetch paths so changing the reply target doesn't refetch
+  // thread-level context. Clicking Reply on a different comment only
+  // refires the suggestion fetch — opportunities/strategies/replies stay
+  // cached for the duration of the thread.
+  const fetchThreadContext = useCallback(async () => {
     if (!organizationId || !thread?.thread_id) {
       setOpportunities([]);
       setReplies([]);
       setStrategies([]);
-      setSuggestions([]);
-      setLoading(false);
       return;
     }
-
-    setLoading(true);
-    setError(null);
     try {
       const opportunityUrl = `/api/engagement/opportunities?thread_id=${encodeURIComponent(thread.thread_id)}&organization_id=${encodeURIComponent(organizationId)}`;
       let strategyUrl = '';
@@ -142,62 +164,62 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
       if (thread.classification_category) {
         replyUrl += `&classification_category=${encodeURIComponent(thread.classification_category)}`;
       }
-      const suggestionUrl = targetMessageId
-        ? `/api/engagement/suggestions?${new URLSearchParams({
-            message_id: targetMessageId,
-            organization_id: organizationId,
-            organizationId: organizationId,
-          }).toString()}`
-        : null;
-
-      const requests = [
-        apiFetch(opportunityUrl),
-        apiFetch(replyUrl),
-      ];
-      if (strategyUrl) {
-        requests.push(apiFetch(strategyUrl));
-      }
-      if (suggestionUrl) {
-        requests.push(apiFetch(suggestionUrl));
-      }
+      const requests = [apiFetch(opportunityUrl), apiFetch(replyUrl)];
+      if (strategyUrl) requests.push(apiFetch(strategyUrl));
 
       const responses = await Promise.all(requests);
       const firstFailure = responses.find((response) => !response.ok);
-      if (firstFailure) {
-        throw new Error(firstFailure.statusText || 'Failed to load engagement signals');
-      }
+      if (firstFailure) throw new Error(firstFailure.statusText || 'Failed to load engagement context');
 
       const payloads = await Promise.all(responses.map((response) => response.json()));
       setOpportunities(payloads[0]?.opportunities ?? []);
       setReplies(payloads[1]?.replies ?? []);
-      const strategyPayloadIndex = strategyUrl ? 2 : -1;
-      const suggestionPayloadIndex = suggestionUrl ? (strategyUrl ? 3 : 2) : -1;
-      setStrategies(strategyPayloadIndex >= 0 ? payloads[strategyPayloadIndex]?.strategies ?? [] : []);
-      setSuggestions(
-        suggestionPayloadIndex >= 0 && Array.isArray(payloads[suggestionPayloadIndex]?.suggestions)
-          ? payloads[suggestionPayloadIndex].suggestions
-          : []
-      );
+      setStrategies(strategyUrl ? payloads[2]?.strategies ?? [] : []);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : 'Failed to load engagement copilot');
       setOpportunities([]);
       setReplies([]);
       setStrategies([]);
-      setSuggestions([]);
-    } finally {
-      setLoading(false);
     }
   }, [
     organizationId,
-    targetMessageId,
     thread?.thread_id,
     thread?.classification_category,
     thread?.sentiment,
   ]);
 
+  const fetchSuggestion = useCallback(async () => {
+    if (!organizationId || !targetMessageId) {
+      setSuggestions([]);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const suggestionUrl = `/api/engagement/suggestions?${new URLSearchParams({
+        message_id: targetMessageId,
+        organization_id: organizationId,
+        organizationId: organizationId,
+      }).toString()}`;
+      const response = await apiFetch(suggestionUrl);
+      if (!response.ok) throw new Error(response.statusText || 'Failed to load suggestion');
+      const payload = await response.json();
+      setSuggestions(Array.isArray(payload?.suggestions) ? payload.suggestions : []);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load suggestion');
+      setSuggestions([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [organizationId, targetMessageId]);
+
   useEffect(() => {
-    void fetchSignals();
-  }, [fetchSignals]);
+    void fetchThreadContext();
+  }, [fetchThreadContext]);
+
+  useEffect(() => {
+    void fetchSuggestion();
+  }, [fetchSuggestion]);
 
   const topOpportunity = opportunities[0] ?? null;
   const topReply = replies[0] ?? null;
@@ -416,7 +438,11 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
               </div>
             </>
           ) : (
-            <p className="mt-3 text-sm text-slate-500">No suggested reply yet. Open the reply composer to generate one.</p>
+            <p className="mt-3 text-sm text-slate-500">
+              {isPostThread
+                ? 'Click Reply on a specific comment to generate a suggestion for it.'
+                : 'No suggested reply yet. Open the reply composer to generate one.'}
+            </p>
           )}
         </div>
 

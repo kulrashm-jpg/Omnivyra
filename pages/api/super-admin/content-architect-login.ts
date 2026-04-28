@@ -56,6 +56,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     'SameSite=Lax',
     'Max-Age=86400',
   ].join('; ');
+  const scopedCompanyId = String(process.env.CONTENT_ARCHITECT_COMPANY_ID ?? '').trim();
+  const companyCookie = scopedCompanyId
+    ? [
+        `content_architect_company_id=${encodeURIComponent(scopedCompanyId)}`,
+        'Path=/',
+        'HttpOnly',
+        'SameSite=Lax',
+        'Max-Age=86400',
+      ].join('; ')
+    : [
+        'content_architect_company_id=',
+        'Path=/',
+        'HttpOnly',
+        'SameSite=Lax',
+        'Max-Age=0',
+      ].join('; ');
   const clearSuperAdmin = [
     'super_admin_session=',
     'Path=/',
@@ -63,6 +79,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     'SameSite=Lax',
     'Max-Age=0',
   ].join('; ');
-  res.setHeader('Set-Cookie', [sessionCookie, clearSuperAdmin]);
+  res.setHeader('Set-Cookie', [sessionCookie, companyCookie, clearSuperAdmin]);
   return res.status(200).json({ success: true });
 }

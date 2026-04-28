@@ -59,9 +59,10 @@ export {
 } from './companyProfile/problemTransformation';
 
 export { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
+export { generateMarketingIntelligenceDraft } from './companyProfile/marketingIntelligence';
 
 // ─── Private imports used by this module ─────────────────────────────────────
-import type { CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput } from './companyProfile/types';
+import type { StrategyProfile, RecommendationContext, CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput } from './companyProfile/types';
 import { COMMERCIAL_FIELD_NAMES, MARKETING_INTELLIGENCE_FIELD_NAMES, PROBLEM_TRANSFORMATION_FIELD_NAMES } from './companyProfile/fieldConstants';
 import {
   normalizeCompanyId,
@@ -69,6 +70,8 @@ import {
   splitToList,
   normalizeUrl,
   shouldSkipUrl,
+  updateArrayField,
+  updateScalarField,
 } from './companyProfile/normalization';
 import {
   crawlWebsiteSources,
@@ -87,7 +90,9 @@ import {
 } from './companyProfile/extractionSchema';
 import { refineProblemTransformationAnswers } from './companyProfile/problemTransformation';
 import { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
+import { generateMarketingIntelligenceDraft } from './companyProfile/marketingIntelligence';
 import { buildSavePayload } from './companyProfile/savePayload';
+import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
 
 const COMPANY_PROFILES_TABLE = 'company_profiles' as const;
 const COMPANY_PROFILE_FALLBACK_COLUMNS = [
@@ -96,6 +101,8 @@ const COMPANY_PROFILE_FALLBACK_COLUMNS = [
   'industry',
   'category',
   'website_url',
+  'logo_url',
+  'favicon_url',
   'industry_list',
   'category_list',
   'geography_list',
@@ -147,7 +154,6 @@ const COMPANY_PROFILE_FALLBACK_COLUMNS = [
   'brand_positioning',
   'competitive_advantages',
   'growth_priorities',
-  'strategy_profile',
   'campaign_purpose_intent',
   'core_problem_statement',
   'pain_symptoms',
@@ -164,6 +170,421 @@ const COMPANY_PROFILE_FALLBACK_COLUMNS = [
   'platform_content_type_prefs',
   'report_settings',
 ] as const;
+
+const MARKET_PULSE_DEFAULT_CATEGORY_SET = [
+  'competitor_moves',
+  'product_positioning',
+  'partnerships_alliances',
+  'growth_expansion',
+  'hiring_talent',
+  'regulatory_policy',
+  'capital_business_health',
+  'demand_category_momentum',
+  'technology_platform_shifts',
+] as const;
+
+function normalizeNonEmptyText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter((item) => item.length > 0),
+    ),
+  );
+}
+
+function coerceStrategyList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(
+    value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0),
+  ));
+}
+
+function joinStrategyList(value: unknown): string | null {
+  const normalized = coerceStrategyList(value);
+  return normalized.length > 0 ? normalized.join('; ') : null;
+}
+
+function mergeTextBlocks(...values: Array<string | null | undefined>): string | null {
+  const merged = values
+    .map((value) => normalizeNonEmptyText(value))
+    .filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+
+  return merged.length > 0 ? merged.join('\n\n') : null;
+}
+
+function createEmptyRecommendationContext(): RecommendationContext {
+  return {
+    version: 1,
+    key_threat: '',
+    biggest_advantage: '',
+    strategic_focus: '',
+    contrarian_beliefs: [],
+    typical_angles: [],
+    insights: [],
+  };
+}
+
+function normalizeRecommendationContext(
+  value: unknown,
+): RecommendationContext | null {
+  const parsed = safeParseRecommendationContext(value);
+  if (!parsed) return null;
+
+  const source = withRecommendationContextDefaults(parsed);
+
+  return {
+    version: typeof source.version === 'number' ? source.version : 1,
+    key_threat: normalizeNonEmptyText(source.key_threat) ?? '',
+    biggest_advantage: normalizeNonEmptyText(source.biggest_advantage) ?? '',
+    strategic_focus: normalizeNonEmptyText(source.strategic_focus) ?? '',
+    contrarian_beliefs: coerceStrategyList(source.contrarian_beliefs),
+    typical_angles: coerceStrategyList(source.typical_angles),
+    insights: Array.isArray(source.insights)
+      ? source.insights.filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === 'object' && !Array.isArray(item),
+        )
+      : createEmptyRecommendationContext().insights,
+  };
+}
+
+function buildStrategyRecommendationContext(
+  strategyProfile: StrategyProfile | null | undefined,
+  existingValue: RecommendationContext | null | undefined,
+): RecommendationContext | null {
+  if (!strategyProfile) return existingValue ?? null;
+
+  const existing = normalizeRecommendationContext(existingValue) ?? createEmptyRecommendationContext();
+
+  return {
+    version: existing.version || 1,
+    key_threat: normalizeNonEmptyText(strategyProfile.worldview) ?? existing.key_threat,
+    biggest_advantage: joinStrategyList(strategyProfile.differentiation) ?? existing.biggest_advantage,
+    strategic_focus: joinStrategyList(strategyProfile.primaryFocus) ?? existing.strategic_focus,
+    contrarian_beliefs:
+      coerceStrategyList(strategyProfile.contrarianBeliefs).length > 0
+        ? coerceStrategyList(strategyProfile.contrarianBeliefs)
+        : existing.contrarian_beliefs,
+    typical_angles:
+      coerceStrategyList(strategyProfile.typicalAngles).length > 0
+        ? coerceStrategyList(strategyProfile.typicalAngles)
+        : existing.typical_angles,
+    insights: existing.insights,
+  };
+}
+
+function mapStrategyProfileToExistingFields(
+  strategyProfile: StrategyProfile | null | undefined,
+  existing?: Pick<
+    CompanyProfile,
+    'brand_positioning' | 'growth_priorities' | 'competitive_advantages' | 'recommendation_context'
+  > | null,
+): Partial<CompanyProfile> {
+  if (!strategyProfile) return {};
+
+  const biggestAdvantage = joinStrategyList(strategyProfile.differentiation);
+  const strategicFocus = joinStrategyList(strategyProfile.primaryFocus);
+  const keyThreat = normalizeNonEmptyText(strategyProfile.worldview);
+
+  return {
+    brand_positioning: biggestAdvantage ?? existing?.brand_positioning ?? null,
+    growth_priorities: strategicFocus ?? existing?.growth_priorities ?? null,
+    competitive_advantages: mergeTextBlocks(
+      biggestAdvantage,
+      existing?.competitive_advantages,
+      keyThreat,
+    ),
+    recommendation_context: buildStrategyRecommendationContext(
+      strategyProfile,
+      existing?.recommendation_context,
+    ),
+  };
+}
+
+function fillMissingText(current: string | null | undefined, fallback: string | null | undefined): string | null {
+  const existing = normalizeNonEmptyText(current);
+  if (existing) return existing;
+  return normalizeNonEmptyText(fallback) ?? null;
+}
+
+function fillMissingList(current: string[] | null | undefined, fallback: string[] | null | undefined): string[] | null {
+  const existing = Array.isArray(current)
+    ? current.map((item) => normalizeNonEmptyText(item)).filter((item): item is string => Boolean(item))
+    : [];
+
+  if (existing.length > 0) return existing;
+
+  const next = Array.isArray(fallback)
+    ? fallback.map((item) => normalizeNonEmptyText(item)).filter((item): item is string => Boolean(item))
+    : [];
+
+  return next.length > 0 ? Array.from(new Set(next)).slice(0, 8) : null;
+}
+
+function inferBusinessModelLabel(input: {
+  category?: string | null;
+  industry?: string | null;
+  productsServices?: string[] | null;
+  websiteUrl?: string | null;
+}): string | null {
+  const text = [
+    input.category,
+    input.industry,
+    ...(input.productsServices ?? []),
+    input.websiteUrl,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (!text) return null;
+  if (/\bmarketplace\b/.test(text)) return 'Marketplace';
+  if (/\bagency\b|\bconsult(ing|ancy)?\b|\bservice(s)?\b/.test(text)) return 'Service';
+  if (/\becommerce\b|\bstore\b|\bretail\b/.test(text)) return 'Commerce';
+  if (/\bmanufacturer\b|\bmanufacturing\b|\bvehicle\b|\bapparel\b|\bfootwear\b|\bhardware\b/.test(text)) return 'Manufacturer';
+  if (/\bsaas\b|\bsoftware\b|\bplatform\b|\bcrm\b|\bautomation\b|\bpayments\b/.test(text)) return 'SaaS';
+  return null;
+}
+
+function inferPartnershipPriorities(input: {
+  businessModel?: string | null;
+  productsServices?: string[];
+  category?: string | null;
+}): string[] {
+  const text = [input.businessModel, input.category, ...(input.productsServices ?? [])]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/\bpayments\b|\bapi\b|\bplatform\b|\bintegration\b/.test(text)) {
+    return ['integration partners', 'platform partners'];
+  }
+  if (/\bmarketplace\b|\bagency\b|\bservice\b/.test(text)) {
+    return ['channel partners', 'referral partners'];
+  }
+  if (/\bcommerce\b|\bretail\b|\bmanufacturer\b/.test(text)) {
+    return ['distribution partners', 'channel partners'];
+  }
+  if (/\bsaas\b|\bsoftware\b|\bcrm\b|\bautomation\b/.test(text)) {
+    return ['integration partners', 'channel partners'];
+  }
+  return [];
+}
+
+function inferCriticalHiringFunctions(input: {
+  businessModel?: string | null;
+  productsServices?: string[];
+  category?: string | null;
+}): string[] {
+  const text = [input.businessModel, input.category, ...(input.productsServices ?? [])]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (/\bpayments\b|\bapi\b|\bplatform\b|\bsoftware\b|\bsaas\b/.test(text)) {
+    return ['engineering', 'product', 'customer success'];
+  }
+  if (/\bagency\b|\bservice\b|\bconsult(ing|ancy)?\b/.test(text)) {
+    return ['delivery', 'account management', 'business development'];
+  }
+  if (/\bcommerce\b|\bretail\b|\bmarketplace\b/.test(text)) {
+    return ['operations', 'partnerships', 'growth marketing'];
+  }
+  if (/\bmanufacturer\b|\bmanufacturing\b|\bvehicle\b|\bapparel\b|\bfootwear\b/.test(text)) {
+    return ['operations', 'supply chain', 'sales'];
+  }
+  return [];
+}
+
+function inferRegulatoryPolicySensitivity(input: {
+  businessModel?: string | null;
+  industry?: string | null;
+  geography?: string[];
+  productsServices?: string[];
+}): string[] {
+  const text = [input.businessModel, input.industry, ...(input.productsServices ?? []), ...(input.geography ?? [])]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  const sensitivities = new Set<string>();
+
+  if (/\bpayments\b|\bfintech\b/.test(text)) {
+    sensitivities.add('financial compliance');
+    sensitivities.add('data privacy');
+  }
+  if (/\bmarketplace\b|\bservice\b|\bagency\b/.test(text)) {
+    sensitivities.add('labor laws');
+  }
+  if (/\bhealth\b|\bmedical\b|\bpharma\b/.test(text)) {
+    sensitivities.add('sector regulation');
+  }
+  if (/\bmanufacturer\b|\bcommerce\b|\bretail\b|\bapparel\b|\bfootwear\b/.test(text)) {
+    sensitivities.add('trade policy');
+  }
+  if ((input.geography ?? []).length > 1) {
+    sensitivities.add('cross-border compliance');
+  }
+  if (sensitivities.size === 0 && /\bdata\b|\bsoftware\b|\bplatform\b|\bsaas\b/.test(text)) {
+    sensitivities.add('data privacy');
+  }
+
+  return Array.from(sensitivities);
+}
+
+function inferMarketPulseCategories(input: {
+  businessModel?: string | null;
+  category?: string | null;
+  goals?: string[];
+  productsServices?: string[];
+  competitors?: string[];
+}): string[] {
+  const text = [
+    input.businessModel,
+    input.category,
+    ...(input.goals ?? []),
+    ...(input.productsServices ?? []),
+    ...(input.competitors ?? []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  const categories = new Set<string>();
+  if ((input.competitors ?? []).length > 0) categories.add('competitor_moves');
+  if (/\bgrowth\b|\bexpand\b|\bexpansion\b|\bscale\b/.test(text)) categories.add('growth_expansion');
+  if (/\bpartner\b|\bintegration\b|\balliance\b|\bchannel\b/.test(text)) categories.add('partnerships_alliances');
+  if (/\bhiring\b|\btalent\b|\brecruit\b/.test(text)) categories.add('hiring_talent');
+  if (/\bregulat|\bpolicy\b|\bprivacy\b|\bcompliance\b|\blabor law\b|\btrade\b/.test(text)) categories.add('regulatory_policy');
+  if (/\bproduct\b|\bplatform\b|\bsaas\b|\bsoftware\b|\bfeature\b|\bpositioning\b/.test(text)) categories.add('product_positioning');
+  if (/\bai\b|\bautomation\b|\bapi\b|\btech\b/.test(text)) categories.add('technology_platform_shifts');
+  if (/\bdemand\b|\bcategory\b|\bmarket\b/.test(text)) categories.add('demand_category_momentum');
+
+  const filtered = Array.from(categories).filter((item) =>
+    MARKET_PULSE_DEFAULT_CATEGORY_SET.includes(item as (typeof MARKET_PULSE_DEFAULT_CATEGORY_SET)[number]),
+  );
+
+  return filtered.length > 0 ? filtered : ['competitor_moves', 'growth_expansion', 'regulatory_policy'];
+}
+
+function withExistingList(existing: string[] | null | undefined, next: string[]): string[] | null {
+  const normalizedExisting = normalizeStringArray(existing);
+  if (normalizedExisting.length > 0) return normalizedExisting;
+  return next.length > 0 ? next : null;
+}
+
+function withExistingText(existing: string | null | undefined, next: string | null): string | null {
+  return normalizeNonEmptyText(existing) ?? next ?? null;
+}
+
+function buildAiMarketPulseSettings(
+  workingProfile: CompanyProfile,
+  extraction: CompanyProfileExtractionOutput,
+): NonNullable<NonNullable<CompanyProfile['report_settings']>['market_pulse']> | null {
+  const existing = workingProfile.report_settings?.market_pulse ?? null;
+
+  const geography = Array.from(
+    new Set([
+      ...normalizeStringArray(workingProfile.geography_list),
+      ...normalizeStringArray(extraction.geography?.value),
+      ...splitToList(workingProfile.geography),
+    ]),
+  );
+  const competitors = Array.from(
+    new Set([
+      ...normalizeStringArray(workingProfile.competitors_list),
+      ...normalizeStringArray(extraction.competitors?.value),
+      ...splitToList(workingProfile.competitors),
+    ]),
+  );
+  const productsServices = Array.from(
+    new Set([
+      ...normalizeStringArray(workingProfile.products_services_list),
+      ...normalizeStringArray(extraction.products_services?.value),
+      ...splitToList(workingProfile.products_services),
+    ]),
+  );
+  const goals = Array.from(
+    new Set([
+      ...normalizeStringArray(workingProfile.goals_list),
+      ...normalizeStringArray(extraction.goals?.value),
+      ...splitToList(workingProfile.goals),
+      ...splitToList(workingProfile.growth_priorities),
+    ]),
+  );
+
+  const businessModel = inferBusinessModelLabel({
+    category: workingProfile.category ?? (Array.isArray(extraction.category?.value) ? extraction.category.value.join(', ') : String(extraction.category?.value || '')),
+    industry: workingProfile.industry ?? (Array.isArray(extraction.industry?.value) ? extraction.industry.value.join(', ') : String(extraction.industry?.value || '')),
+    productsServices,
+    websiteUrl: workingProfile.website_url ?? null,
+  });
+
+  const next = {
+    primary_operating_markets: withExistingList(existing?.primary_operating_markets, geography),
+    target_expansion_markets: existing?.target_expansion_markets ?? null,
+    named_competitors: withExistingList(existing?.named_competitors, competitors),
+    business_model: withExistingText(existing?.business_model, businessModel),
+    core_offerings: withExistingList(existing?.core_offerings, productsServices),
+    growth_priorities: withExistingList(existing?.growth_priorities, goals),
+    partnership_priorities: withExistingList(
+      existing?.partnership_priorities,
+      inferPartnershipPriorities({
+        businessModel,
+        productsServices,
+        category: workingProfile.category ?? null,
+      }),
+    ),
+    critical_hiring_functions: withExistingList(
+      existing?.critical_hiring_functions,
+      inferCriticalHiringFunctions({
+        businessModel,
+        productsServices,
+        category: workingProfile.category ?? null,
+      }),
+    ),
+    regulatory_policy_sensitivity: withExistingList(
+      existing?.regulatory_policy_sensitivity,
+      inferRegulatoryPolicySensitivity({
+        businessModel,
+        industry: workingProfile.industry ?? null,
+        geography,
+        productsServices,
+      }),
+    ),
+    default_categories: withExistingList(
+      existing?.default_categories,
+      inferMarketPulseCategories({
+        businessModel,
+        category: workingProfile.category ?? null,
+        goals,
+        productsServices,
+        competitors,
+      }),
+    ),
+    exclusions: existing?.exclusions ?? null,
+    preferred_regions: withExistingList(existing?.preferred_regions, geography),
+    updated_at: new Date().toISOString(),
+  };
+
+  const hasAnyValue = Object.entries(next).some(([key, value]) => {
+    if (key === 'updated_at') return false;
+    if (Array.isArray(value)) return value.length > 0;
+    return normalizeNonEmptyText(value as string | null | undefined) !== null;
+  });
+
+  return hasAnyValue ? next : null;
+}
 
 let companyProfileColumnsCache: Set<string> | null = null;
 
@@ -249,7 +670,10 @@ const fetchProfileRaw = async (companyId: string): Promise<CompanyProfile | null
     if (error.code === 'PGRST116') return null;
     throw new Error(`Failed to fetch company profile: ${error.message}`);
   }
-  return data;
+  return {
+    ...(data as CompanyProfile),
+    recommendation_context: normalizeRecommendationContext((data as CompanyProfile)?.recommendation_context),
+  };
 };
 
 export const getLatestProfile = async (): Promise<CompanyProfile | null> => {
@@ -260,7 +684,11 @@ export const getLatestProfile = async (): Promise<CompanyProfile | null> => {
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`Failed to fetch latest company profile: ${error.message}`);
-  return data ?? null;
+  if (!data) return null;
+  return {
+    ...(data as CompanyProfile),
+    recommendation_context: normalizeRecommendationContext((data as CompanyProfile)?.recommendation_context),
+  };
 };
 
 const storeRefinementAudit = async (details: CompanyProfileRefinementDetails) => {
@@ -315,10 +743,6 @@ export async function saveProfile(
     const val = input[key as keyof CompanyProfile];
     const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
     if (hasVal) { lockedSet.add(key); didLock = true; }
-  }
-  if (source === 'user' && (input.strategy_profile !== undefined || input.strategyProfile !== undefined)) {
-    lockedSet.add('strategy_profile');
-    didLock = true;
   }
   if (didLock) {
     payload.user_locked_fields = Array.from(lockedSet);
@@ -407,7 +831,7 @@ export async function saveProblemTransformationAnswers(
 
 export async function saveStrategyProfileOverride(
   companyId: string,
-  strategyProfile: CompanyProfile['strategy_profile'],
+  strategyProfile: StrategyProfile | null | undefined,
   options?: { source?: 'user' | 'ai_refined' }
 ): Promise<CompanyProfile> {
   const resolvedId = normalizeCompanyId(companyId);
@@ -416,8 +840,7 @@ export async function saveStrategyProfileOverride(
     {
       ...(existing || { company_id: resolvedId }),
       company_id: resolvedId,
-      strategy_profile: strategyProfile ?? null,
-      strategyProfile: strategyProfile ?? null,
+      ...mapStrategyProfileToExistingFields(strategyProfile, existing),
     },
     { source: options?.source ?? 'user' },
   );
@@ -433,22 +856,12 @@ export async function deriveAndStoreStrategyProfile(
   const resolvedId = normalizeCompanyId(companyId);
   const profile = await fetchProfileRaw(resolvedId);
   if (!profile) return null;
-  const locked = Array.isArray(profile.user_locked_fields) && profile.user_locked_fields.includes('strategy_profile');
-  if (locked && !options?.forceOverride) {
-    return profile;
-  }
-  const nextLockedFields = locked && options?.forceOverride
-    ? (profile.user_locked_fields || []).filter((field) => field !== 'strategy_profile')
-    : profile.user_locked_fields;
   const derived = await deriveStrategyProfileDraft(profile, options?.sourceSummaries ?? []);
   if (!derived.strategyProfile) return profile;
   return saveProfile(
     {
       ...profile,
-      strategy_profile: derived.strategyProfile,
-      strategyProfile: derived.strategyProfile,
-      user_locked_fields: nextLockedFields,
-      last_edited_by: locked && options?.forceOverride ? null : profile.last_edited_by,
+      ...mapStrategyProfileToExistingFields(derived.strategyProfile, profile),
     },
     { source: 'ai_refined' },
   );
@@ -606,15 +1019,65 @@ const runProfileRefinement = async (
     catch { console.warn('[refine] Missing-field questionnaire generation failed.'); }
   }
 
-  const derivedStrategyProfile = await deriveStrategyProfileDraft(workingProfile, evidenceForExtraction);
-  const strategyProfileLocked = Array.isArray(workingProfile.user_locked_fields)
-    && workingProfile.user_locked_fields.includes('strategy_profile');
+  const baseRefinedPayload = buildRefinedPayload(workingProfile, extraction);
+  const mergedProfileForStrategy = {
+    ...workingProfile,
+    ...baseRefinedPayload,
+  } as CompanyProfile;
+  const [derivedStrategyProfile, marketingIntelligenceDraft] = await Promise.all([
+    deriveStrategyProfileDraft(mergedProfileForStrategy, evidenceForExtraction),
+    generateMarketingIntelligenceDraft(mergedProfileForStrategy),
+  ]);
+
   const refinedPayload = {
-    ...buildRefinedPayload(workingProfile, extraction),
-    strategy_profile: strategyProfileLocked
-      ? (workingProfile.strategy_profile ?? workingProfile.strategyProfile ?? null)
-      : (derivedStrategyProfile.strategyProfile ?? workingProfile.strategy_profile ?? workingProfile.strategyProfile ?? null),
+    ...baseRefinedPayload,
+    ...mapStrategyProfileToExistingFields(derivedStrategyProfile.strategyProfile, {
+      brand_positioning: baseRefinedPayload.brand_positioning ?? workingProfile.brand_positioning ?? null,
+      growth_priorities: baseRefinedPayload.growth_priorities ?? workingProfile.growth_priorities ?? null,
+      competitive_advantages: baseRefinedPayload.competitive_advantages ?? workingProfile.competitive_advantages ?? null,
+      recommendation_context: workingProfile.recommendation_context ?? null,
+    }),
+    marketing_channels: fillMissingText(
+      baseRefinedPayload.marketing_channels ?? workingProfile.marketing_channels ?? null,
+      marketingIntelligenceDraft.marketing_channels,
+    ),
+    content_strategy: fillMissingText(
+      baseRefinedPayload.content_strategy ?? workingProfile.content_strategy ?? null,
+      marketingIntelligenceDraft.content_strategy,
+    ),
+    campaign_focus: fillMissingText(
+      baseRefinedPayload.campaign_focus ?? workingProfile.campaign_focus ?? null,
+      marketingIntelligenceDraft.campaign_focus,
+    ),
+    key_messages: fillMissingText(
+      baseRefinedPayload.key_messages ?? workingProfile.key_messages ?? null,
+      marketingIntelligenceDraft.key_messages,
+    ),
+    brand_positioning: fillMissingText(
+      baseRefinedPayload.brand_positioning ?? workingProfile.brand_positioning ?? null,
+      marketingIntelligenceDraft.brand_positioning,
+    ),
+    competitive_advantages: fillMissingText(
+      baseRefinedPayload.competitive_advantages ?? workingProfile.competitive_advantages ?? null,
+      marketingIntelligenceDraft.competitive_advantages,
+    ),
+    growth_priorities: fillMissingText(
+      baseRefinedPayload.growth_priorities ?? workingProfile.growth_priorities ?? null,
+      marketingIntelligenceDraft.growth_priorities,
+    ),
+    competitors_list: fillMissingList(
+      (Array.isArray(baseRefinedPayload.competitors_list) ? baseRefinedPayload.competitors_list : null) ??
+        workingProfile.competitors_list ??
+        null,
+      marketingIntelligenceDraft.competitors,
+    ),
   };
+
+  refinedPayload.competitors =
+    fillMissingText(
+      refinedPayload.competitors ?? workingProfile.competitors ?? null,
+      Array.isArray(refinedPayload.competitors_list) ? refinedPayload.competitors_list.join(', ') : null,
+    ) ?? null;
 
   const { data, error } = await supabase
     .from('company_profiles')
@@ -640,8 +1103,8 @@ const runProfileRefinement = async (
 };
 
 function buildRefinedPayload(workingProfile: CompanyProfile, extraction: CompanyProfileExtractionOutput) {
-  const { updateArrayField, updateScalarField } = require('./companyProfile/normalization');
   const existingConfidence = workingProfile.field_confidence || {};
+  const marketPulseSettings = buildAiMarketPulseSettings(workingProfile, extraction);
 
   const industryUpdate = updateArrayField(workingProfile.industry_list ?? splitToList(workingProfile.industry), extraction.industry?.value, extraction.industry?.source, existingConfidence.industry, extraction.industry?.confidence);
   const categoryUpdate = updateArrayField(workingProfile.category_list ?? splitToList(workingProfile.category), extraction.category?.value, extraction.category?.source, existingConfidence.category, extraction.category?.confidence);
@@ -751,6 +1214,10 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
     brand_positioning: workingProfile.brand_positioning ?? null,
     competitive_advantages: workingProfile.competitive_advantages ?? null,
     growth_priorities: workingProfile.growth_priorities ?? null,
+    report_settings: {
+      ...(workingProfile.report_settings ?? {}),
+      market_pulse: marketPulseSettings ?? workingProfile.report_settings?.market_pulse ?? null,
+    },
   };
 }
 

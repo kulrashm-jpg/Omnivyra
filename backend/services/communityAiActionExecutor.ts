@@ -18,7 +18,7 @@ type CommunityAiAction = {
   tenant_id: string;
   organization_id: string;
   platform: string;
-  action_type: 'like' | 'reply' | 'share' | 'follow' | 'schedule';
+  action_type: 'like' | 'reply' | 'share' | 'follow' | 'schedule' | 'dm';
   target_id: string;
   suggested_text: string | null;
   playbook_id?: string | null;
@@ -30,6 +30,12 @@ type CommunityAiAction = {
   risk_level?: 'low' | 'medium' | 'high' | null;
   approved_at?: string | null;
   status?: string | null;
+  /** When this is a reply *to a specific comment* (not a top-level comment
+   *  on a post), this carries the URN of the comment being replied to. The
+   *  LinkedIn connector forwards it as `parentComment` in the API body so
+   *  the new comment is threaded under the original instead of becoming a
+   *  separate top-level comment. */
+  parent_comment_urn?: string | null;
 };
 
 type ExecutionMode = 'api' | 'rpa' | 'browser' | 'manual';
@@ -65,6 +71,10 @@ type ExecutionResult = {
   auto_executed?: boolean;
   /** Audit join key: the automation_logs row that decided this run. */
   automation_decision_log_id?: string | null;
+  /** True when this result reflects a prior terminal row (idempotency-key
+   *  collision). Status mirrors the prior row, not the second run attempt. */
+  deduplicated?: boolean;
+  prior_action_id?: string | null;
 };
 
 type MetricEventType =
@@ -253,7 +263,7 @@ const TERMINAL_ROW_STATUSES = new Set([
   'blocked',
 ]);
 
-const allowedActions = new Set(['like', 'reply', 'share', 'follow', 'schedule']);
+const allowedActions = new Set(['like', 'reply', 'share', 'follow', 'schedule', 'dm']);
 
 const validateAction = (action: CommunityAiAction) => {
   if (!action?.tenant_id) return { ok: false, error: 'TENANT_ID_REQUIRED' };
@@ -542,6 +552,13 @@ const runApiExecution = async (action: CommunityAiAction): Promise<ExecutionResu
 };
 
 const runRpaExecution = async (action: CommunityAiAction): Promise<ExecutionResult> => {
+  // RPA has no DM implementation. DMs flow exclusively via the
+  // extension's browser runtime; a DM that reached RPA is a routing
+  // bug upstream — fail loud rather than silently dispatch to a
+  // handler that can't perform the action.
+  if (action.action_type === 'dm') {
+    return { ok: false, status: 'failed', error: 'RPA_DM_NOT_SUPPORTED', execution_mode: 'rpa' };
+  }
   try {
     const rpaResult = await withTimeout(
       executeRpaTask({
@@ -817,7 +834,7 @@ export async function persistExecutionResult(input: {
    * intermediate success and marks the row terminal on the last step.
    */
   command_chain?: CommandChainStep[];
-}): Promise<{ ok: boolean; current_status?: string; error?: string }> {
+}): Promise<{ ok: boolean; current_status?: string; error?: string; deduplicated?: boolean; prior_action_id?: string | null }> {
   const result = input.result;
   const finalStatus = result.status === 'dispatched' ? 'pending' : result.status;
   const effectiveMode = result.execution_mode || null;
@@ -884,7 +901,12 @@ export async function persistExecutionResult(input: {
         .eq('idempotency_key', update.idempotency_key)
         .maybeSingle();
       if (prior?.id) {
-        return { ok: true, current_status: prior.status || finalStatus };
+        return {
+          ok: true,
+          current_status: prior.status || finalStatus,
+          deduplicated: true,
+          prior_action_id: prior.id,
+        };
       }
     }
     return { ok: false, error: updateError.message };
@@ -1064,6 +1086,31 @@ export const executeAction = async (
         error: persistOutcome.error || 'PERSIST_FAILED',
         response: { ...(runResult.response || {}), persist_error: persistOutcome.error || 'PERSIST_FAILED', current_status: persistOutcome.current_status },
       };
+    }
+    // Dedup: persist hit the (org, idempotency_key) unique index, meaning a
+    // prior row already terminalized this action. Reflect the prior terminal
+    // status instead of whatever the second runExecution produced — otherwise
+    // a second click on a successful Like would surface as 502 "Execution
+    // failed" even though LinkedIn already accepted the like.
+    if (persistOutcome.deduplicated && persistOutcome.current_status) {
+      const priorStatus = persistOutcome.current_status;
+      const priorIsTerminalSuccess = priorStatus === 'executed' || priorStatus === 'sent_unverified';
+      return {
+        ok: priorIsTerminalSuccess,
+        status: priorStatus,
+        deduplicated: true,
+        prior_action_id: persistOutcome.prior_action_id ?? null,
+        correlation_id: correlationId,
+        execution_mode: runResult.execution_mode,
+        response: {
+          ...(runResult.response || {}),
+          dedup: {
+            reason: 'idempotency_key_collision',
+            prior_status: priorStatus,
+            prior_action_id: persistOutcome.prior_action_id ?? null,
+          },
+        },
+      } as ExecutionResult;
     }
   }
 

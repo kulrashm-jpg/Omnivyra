@@ -3,7 +3,7 @@ import { fetchPlaybookEffectiveness } from './playbookEffectivenessService';
 import { fetchNetworkIntelligence } from './networkIntelligenceService';
 import {
   evaluateCommunityAiExecutiveNarrative,
-  isOmniVyraEnabled,
+  isOmnivyraEnabled,
 } from '../omnivyraClientV1';
 
 export type ExecutiveNarrativeInput = {
@@ -66,9 +66,9 @@ export const buildExecutiveNarrative = async (
     fetchNetworkIntelligence(filters),
   ]);
 
-  if (!isOmniVyraEnabled()) {
+  if (!isOmnivyraEnabled()) {
     return {
-      overview: 'OmniVyra disabled.',
+      overview: 'Omnivyra disabled.',
       key_shifts: [],
       risks_to_watch: [],
       recommendations_to_review: [],
@@ -100,7 +100,7 @@ export const buildExecutiveNarrative = async (
       reason: response.error?.message,
     });
     return {
-      overview: 'OmniVyra unavailable.',
+      overview: 'Omnivyra unavailable.',
       key_shifts: [],
       risks_to_watch: [],
       recommendations_to_review: [],

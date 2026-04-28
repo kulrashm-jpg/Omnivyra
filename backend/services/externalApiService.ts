@@ -35,7 +35,7 @@ export {
   lastSignalConfidenceSummary,
   normalizeTrendSignals,
   toTrendInput,
-  mapOmniVyraTrends,
+  mapOmnivyraTrends,
   applyRankingOrder,
   computeFreshnessScore,
   computeReliabilityScore,

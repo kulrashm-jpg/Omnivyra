@@ -46,7 +46,7 @@ describe('Platform promotion metadata', () => {
     expect((global as any).fetch).not.toHaveBeenCalled();
   });
 
-  it('uses OmniVyra metadata when enabled', async () => {
+  it('uses Omnivyra metadata when enabled', async () => {
     process.env.USE_OMNIVYRA = 'true';
     (global as any).fetch = jest.fn().mockResolvedValue({
       ok: true,

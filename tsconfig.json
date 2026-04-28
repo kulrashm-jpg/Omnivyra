@@ -30,12 +30,8 @@
     "pages/**/*.tsx",
     "components/**/*.ts",
     "components/**/*.tsx",
-    "backend/**/*.ts",
-    "backend/**/*.tsx",
     "lib/**/*.ts",
-    "lib/**/*.tsx",
-    "scripts/**/*.ts",
-    "scripts/**/*.tsx"
+    "lib/**/*.tsx"
   ],
   "exclude": [
     "node_modules",

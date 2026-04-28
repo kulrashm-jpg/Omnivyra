@@ -59,6 +59,95 @@ export default function ManagedIntelligencePage({
     selectedCompanyName,
   });
 
+  const normalizePostGenerationResult = (result: any) => {
+    const generatedContent = typeof result?.platform_variant?.generated_content === 'string'
+      ? result.platform_variant.generated_content
+      : '';
+    const masterContent = typeof result?.master_content?.content === 'string'
+      ? result.master_content.content
+      : '';
+    const variantFailed =
+      typeof result?.platform_variant?.generation_status === 'string' &&
+      result.platform_variant.generation_status.toLowerCase() === 'failed';
+    const placeholderDetected =
+      generatedContent.includes('[PLATFORM ADAPTATION FAILED]') ||
+      generatedContent.trim() === 'Based on master content.';
+
+    if ((!variantFailed && !placeholderDetected) || !masterContent.trim()) {
+      return result;
+    }
+
+    return {
+      ...result,
+      platform_variant: {
+        ...result.platform_variant,
+        generated_content: masterContent,
+        generation_status: 'generated',
+        adaptation_trace: {
+          ...result.platform_variant?.adaptation_trace,
+          adaptation_reason: 'Used master content fallback because platform adaptation failed.',
+          actual_length_used: masterContent.length,
+        },
+      },
+    };
+  };
+
+  const generatePostFromIdea = async (input: {
+    topic: string;
+    intent?: string;
+    tone?: string;
+    reason?: string;
+    source: string;
+  }) => {
+    if (!selectedCompanyId) {
+      throw new Error('Select a company before generating a post.');
+    }
+
+    const response = await fetch('/api/posts/generate', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company_id: selectedCompanyId,
+        topic: input.topic,
+        platform: 'linkedin',
+        intent: input.intent,
+        tone: input.tone || undefined,
+        template_name: formatLabel,
+        extra_instruction: input.reason || undefined,
+      }),
+    });
+
+    const rawResult = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(
+        (rawResult as { error?: string }).error || 'Failed to generate post',
+      );
+    }
+
+    const result = normalizePostGenerationResult(rawResult);
+    const prefillToken = `post_prefill_${Date.now()}`;
+    try {
+      sessionStorage.setItem(
+        prefillToken,
+        JSON.stringify({
+          output: result,
+          source: input.source,
+          topic: input.topic,
+          platform: 'linkedin',
+          template_name: formatLabel,
+        }),
+      );
+    } catch {
+      // Ignore storage issues and still attempt navigation.
+    }
+
+    await router.push({
+      pathname: '/posts/result',
+      query: { prefill: prefillToken },
+    });
+  };
+
   if (authLoading || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
@@ -78,7 +167,7 @@ export default function ManagedIntelligencePage({
   return (
     <>
       <Head>
-        <title>{pageTitle} | OmniVyra</title>
+        <title>{pageTitle} | Omnivyra</title>
       </Head>
 
       <div className={`min-h-screen bg-gradient-to-br ${accentSurfaceClassName} p-6`}>
@@ -243,6 +332,16 @@ export default function ManagedIntelligencePage({
                     <button
                       type="button"
                       onClick={() => {
+                        if (contentType === 'post') {
+                          void generatePostFromIdea({
+                            topic: card.topic,
+                            intent: card.intent,
+                            reason: card.reason,
+                            source: 'post_intelligence_card',
+                          });
+                          return;
+                        }
+
                         const bundleToken = `${contentType.replace(/[^a-z]/g, '_')}_bundle_${Date.now()}`;
                         try {
                           sessionStorage.setItem(bundleToken, JSON.stringify(buildCardBundle(card, index)));
@@ -265,7 +364,7 @@ export default function ManagedIntelligencePage({
                       }}
                       className={`inline-flex items-center gap-1.5 text-sm font-semibold ${accentClassName}`}
                     >
-                      Write this <ArrowRight className="h-4 w-4" />
+                      {contentType === 'post' ? 'Generate this post' : 'Write this'} <ArrowRight className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -330,7 +429,7 @@ export default function ManagedIntelligencePage({
           contentLabel={contentType.replace('-', ' ')}
           contentType={contentType}
           contentModeLabel={formatLabel}
-          onCardCreated={(card) => {
+          onCardCreated={async (card) => {
             const token = `ai_card_${contentType.replace(/[^a-z]/g, '_')}_${Date.now()}`;
             try {
               sessionStorage.setItem(token, JSON.stringify(card));
@@ -347,6 +446,17 @@ export default function ManagedIntelligencePage({
               },
               ...previous,
             ]);
+
+            if (contentType === 'post') {
+              await generatePostFromIdea({
+                topic: card.topic,
+                intent: card.intent,
+                tone: card.tone,
+                reason: card.reason,
+                source: 'post_ai_card',
+              });
+              return;
+            }
 
             void router.push({
               pathname: templatePath,

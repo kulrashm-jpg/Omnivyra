@@ -71,9 +71,12 @@ async function downloadRemoteVideo(videoUrl: string): Promise<{
   });
 
   const buffer = Buffer.from(response.data);
+  const rawContentType = response.headers['content-type'];
   return {
     buffer,
-    contentType: response.headers['content-type'] || 'application/octet-stream',
+    contentType: typeof rawContentType === 'string' && rawContentType
+      ? rawContentType
+      : 'application/octet-stream',
     contentLength: buffer.byteLength,
   };
 }

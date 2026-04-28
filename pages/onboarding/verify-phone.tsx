@@ -109,7 +109,7 @@ export default function VerifyPhonePage() {
   return (
     <>
       <Head>
-        <title>Verify Phone | OmniVyra</title>
+        <title>Verify Phone | Omnivyra</title>
         <meta name="robots" content="noindex" />
       </Head>
 
@@ -119,7 +119,7 @@ export default function VerifyPhonePage() {
         <header className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
             <Link href="/">
-              <img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" />
+              <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
             </Link>
             {step !== 'error' && (
               <span className="text-xs text-[#6B7C93]">Security check</span>

@@ -9,7 +9,7 @@
 import { getRulesForPlatform } from './platformRulesService';
 import { savePlatformVariant } from '../db/platformPromotionStore';
 import { processContent } from './unifiedContentProcessor';
-import { OmniVyraAdvisory } from './omnivyraAdapterService';
+import { OmnivyraAdvisory } from './omnivyraAdapterService';
 
 export async function formatPlatformContent(input: {
   contentAssetId: string;
@@ -17,7 +17,7 @@ export async function formatPlatformContent(input: {
   contentType: string;
   content: { caption?: string; hook?: string; callToAction?: string };
   hashtags?: string[];
-  omnivyraAdvisory?: OmniVyraAdvisory;
+  omnivyraAdvisory?: OmnivyraAdvisory;
 }): Promise<any> {
   const rule = await getRulesForPlatform({
     platform: input.platform,

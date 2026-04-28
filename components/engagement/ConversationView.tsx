@@ -25,11 +25,31 @@ function formatTimestamp(iso: string | null | undefined): string {
   }
 }
 
-function authorDisplay(authorId: string | null, threadAuthor: string | null): string {
-  if (authorId === '__self__') return 'You';
+function authorDisplay(
+  msg: { author_id: string | null; author_display_name?: string | null; author_self?: boolean },
+  threadAuthor: string | null
+): string {
+  if (msg.author_self) return 'You';
+  if (msg.author_id === '__self__') return 'You';
+  if (msg.author_display_name) return msg.author_display_name;
   if (threadAuthor) return threadAuthor;
-  if (authorId) return authorId.slice(0, 8) + '…';
+  if (msg.author_id) return msg.author_id.slice(0, 8) + '…';
   return 'Unknown';
+}
+
+function authorInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function avatarColor(name: string): string {
+  // Deterministic color from name — same name always gets same hue.
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash << 5) - hash + name.charCodeAt(i);
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 55%, 45%)`;
 }
 
 export interface ConversationViewProps {
@@ -50,6 +70,10 @@ export interface ConversationViewProps {
   onLike?: (messageId: string, platform: string) => void;
   onIgnore?: (threadId: string) => void;
   onMarkResolved?: () => void;
+  /** Notify parent when the user picks a specific comment/message to reply
+   *  to. Lets the AI assistant generate a suggestion for THAT message
+   *  instead of the thread-level latest-inbound default. */
+  onReplyTargetChange?: (messageId: string | null) => void;
   className?: string;
 }
 
@@ -66,17 +90,70 @@ export const ConversationView = React.memo(function ConversationView({
   onLike,
   onIgnore,
   onMarkResolved,
+  onReplyTargetChange,
   className = '',
 }: ConversationViewProps) {
   const router = useRouter();
-  const [replyingTo, setReplyingTo] = React.useState<EngagementMessage | null>(null);
+  const [replyingTo, _setReplyingToInternal] = React.useState<EngagementMessage | null>(null);
+  const composerRef = React.useRef<HTMLDivElement | null>(null);
+  // Wrapper so every replyTarget change also notifies the parent. Parent
+  // forwards the id to the AI assistant for comment-specific suggestions.
+  const setReplyingTo = React.useCallback(
+    (next: EngagementMessage | null) => {
+      _setReplyingToInternal(next);
+      onReplyTargetChange?.(next?.id ?? null);
+      // Pull the composer into view when a specific comment is targeted —
+      // otherwise it lives at the bottom of the page and the user thinks
+      // they're writing a top-level comment instead of a threaded reply.
+      if (next) {
+        requestAnimationFrame(() => {
+          composerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+      }
+    },
+    [onReplyTargetChange]
+  );
   const [replyText, setReplyText] = React.useState('');
   const [showSuggestions, setShowSuggestions] = React.useState(false);
   const [savingPattern, setSavingPattern] = React.useState(false);
   const [patternError, setPatternError] = React.useState<string | null>(null);
+
+  // Reset composer state whenever the active thread changes. Without this,
+  // `replyingTo` and `replyText` carry over from the previous thread, and
+  // the next Send posts a message_id that no longer belongs to the visible
+  // thread_id — server rejects with "message_id does not belong to thread_id".
+  // Tracked via ref so unrelated parent re-renders don't wipe the draft.
+  const lastThreadIdRef = React.useRef<string | null | undefined>(thread?.thread_id);
+  React.useEffect(() => {
+    if (lastThreadIdRef.current !== thread?.thread_id) {
+      lastThreadIdRef.current = thread?.thread_id;
+      _setReplyingToInternal(null);
+      setReplyText('');
+      setShowSuggestions(false);
+      onReplyTargetChange?.(null);
+    }
+  }, [thread?.thread_id, onReplyTargetChange]);
   const [hydratedReplyToken, setHydratedReplyToken] = React.useState<string | null>(null);
 
   const threadAuthor = thread?.author_name ?? thread?.author_username ?? null;
+
+  // A "post thread" is one whose platform_thread_id is a LinkedIn activity
+  // URN — these are surfaced via People Reaction, and the messages under
+  // them are comments + reactions, not DMs. Render a post-style banner so
+  // the user can see WHICH post they're triaging instead of a generic
+  // "Thread" header.
+  const isPostThread = useMemo(() => {
+    const ptid = thread?.platform_thread_id ?? '';
+    return /^urn:li:(activity|share|ugcPost):/i.test(ptid)
+      || thread?.latest_message_type === 'comment'
+      || thread?.latest_message_type === 'reaction';
+  }, [thread]);
+
+  const postUrl = thread?.post_url ?? (
+    thread?.platform_thread_id
+      ? `https://www.linkedin.com/feed/update/${encodeURIComponent(thread.platform_thread_id)}/`
+      : null
+  );
 
   const latestMessage = useMemo(() => {
     if (!messages.length) return null;
@@ -116,12 +193,18 @@ export const ConversationView = React.memo(function ConversationView({
   }, [hydratedReplyToken, latestMessage, prefillReplyToken, thread?.thread_id]);
 
   const messageTree = useMemo(() => {
+    // Filter out pure reaction-type rows — they're a count, not a
+    // conversation surface. Only comment / direct_message messages render.
+    const visibleMessages = messages.filter(
+      (m) => m.message_type !== 'reaction'
+    );
+
     const byId = new Map<string, EngagementMessage>();
     const roots: EngagementMessage[] = [];
-    for (const m of messages) {
+    for (const m of visibleMessages) {
       byId.set(m.id, { ...m });
     }
-    for (const m of messages) {
+    for (const m of visibleMessages) {
       const msg = byId.get(m.id)!;
       const parent = m.parent_message_id ? byId.get(m.parent_message_id) : null;
       if (parent) {
@@ -132,13 +215,62 @@ export const ConversationView = React.memo(function ConversationView({
         roots.push(msg);
       }
     }
-    roots.sort(
+
+    // For post threads (People Reaction), keep only comments where the
+    // *other party* spoke last — recursively across the entire sub-thread,
+    // not just the direct children. Same conversation rule as DMs:
+    //
+    //   - Walk every node in the sub-tree (top-level comment + all replies)
+    //   - Find the message with the latest timestamp
+    //   - If that latest message is author_self=true → user replied last,
+    //     hide the comment
+    //   - If that latest message is from the other party → keep it visible
+    //
+    // This handles arbitrary nesting: Hari Om → me → Hari Om → me, etc.
+    // Each new other-party reply at any depth re-surfaces the comment until
+    // the user responds again.
+    const findLatestInSubtree = (root: EngagementMessage & { children?: EngagementMessage[] }): EngagementMessage => {
+      let latest: EngagementMessage = root;
+      const stack: Array<EngagementMessage & { children?: EngagementMessage[] }> = [root];
+      while (stack.length > 0) {
+        const node = stack.pop()!;
+        const nodeTs = new Date(node.platform_created_at ?? node.created_at ?? 0).getTime();
+        const latestTs = new Date(latest.platform_created_at ?? latest.created_at ?? 0).getTime();
+        if (nodeTs > latestTs) latest = node;
+        const children = node.children ?? [];
+        for (const child of children) stack.push(child as EngagementMessage & { children?: EngagementMessage[] });
+      }
+      return latest;
+    };
+
+    const isPostContext =
+      thread?.latest_message_type === 'comment' || thread?.latest_message_type === 'reaction';
+    const filteredRoots = isPostContext
+      ? roots.filter((root) => {
+          const latest = findLatestInSubtree(root as EngagementMessage & { children?: EngagementMessage[] });
+          // Latest event in this entire sub-thread is from the user → handled.
+          if (latest.author_self === true) return false;
+          // Other party spoke last → still needs attention.
+          return true;
+        })
+      : roots;
+
+    filteredRoots.sort(
       (a, b) =>
         new Date(b.platform_created_at ?? b.created_at ?? 0).getTime() -
         new Date(a.platform_created_at ?? a.created_at ?? 0).getTime()
     );
-    return roots;
-  }, [messages]);
+
+    // DM convention: a thread surfaces in "Needs Response" only when the
+    // other party sent the latest message (handled upstream in the
+    // dmThreads filter). In the conversation pane we cap the display at
+    // the 3 most recent messages of the merged chain. More than that is
+    // archive territory and lives on LinkedIn itself.
+    if (!isPostContext && filteredRoots.length > 3) {
+      return filteredRoots.slice(0, 3);
+    }
+    return filteredRoots;
+  }, [messages, thread?.latest_message_type]);
 
   const handleInsertSuggestion = useCallback((text: string) => {
     setReplyText((prev) => prev + (prev ? ' ' : '') + text);
@@ -233,33 +365,187 @@ export const ConversationView = React.memo(function ConversationView({
     [onLike]
   );
 
-  const renderMessage = (msg: EngagementMessage & { children?: EngagementMessage[] }, depth = 0) => (
+  const renderMessage = (msg: EngagementMessage & { children?: EngagementMessage[] }, depth = 0) => {
+    // Pending outbound DM — server-side virtual row representing a queued
+    // community_ai_actions row that the Chrome extension hasn't delivered
+    // yet. Renders as a dimmed self-message with an explicit "queued" badge
+    // and a Cancel button. Cancel routes to /api/engagement/cancel-queued
+    // which marks the row failed/user_cancelled, freeing the composer to
+    // accept a new reply.
+    if (msg.is_pending_outbound) {
+      return (
+        <div key={msg.id} className="my-2 ml-auto max-w-[80%]">
+          <div className="rounded-2xl bg-amber-50 border border-amber-200 px-3 py-2">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-amber-800">
+              <span>⏳ Queued · not yet delivered</span>
+            </div>
+            <p className="mt-1 text-sm text-slate-800 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
+            <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-600">
+              <span>Will be sent when the LinkedIn tab is open and the Omnivyra extension claims the action.</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!msg.pending_action_id) return;
+                  if (typeof window !== 'undefined' && !window.confirm('Cancel this queued reply? You can rewrite and send a new one after.')) return;
+                  try {
+                    const res = await fetch('/api/engagement/cancel-queued', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      credentials: 'include',
+                      body: JSON.stringify({
+                        organization_id: organizationId,
+                        action_id: msg.pending_action_id,
+                      }),
+                    });
+                    if (!res.ok) {
+                      const body = await res.json().catch(() => ({}));
+                      window.alert(body?.error ?? 'Failed to cancel queued reply');
+                      return;
+                    }
+                    onReplySent?.();
+                  } catch (e) {
+                    window.alert((e as Error)?.message ?? 'Failed to cancel queued reply');
+                  }
+                }}
+                className="font-medium text-amber-900 hover:text-amber-700 underline-offset-2 hover:underline"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const displayName = authorDisplay(msg, depth === 0 ? threadAuthor : null);
+    // Avatar initials should reflect the actual account, not the display
+    // string. When the comment is the logged-in user's own ("You"), use the
+    // account's real name (carried on author_display_name) to compute KR;
+    // showing a "Y" initial is wrong because two different LinkedIn accounts
+    // named "Kuldeep" would otherwise be indistinguishable.
+    const accountName = msg.author_self ? (msg.author_display_name || displayName) : displayName;
+    const initials = authorInitials(accountName);
+    const avatarBg = avatarColor(accountName);
+    // Profile pic — when present, render an actual image. Initials are
+    // the fallback for when the scraper hasn't captured a pic or the URL
+    // fails to load (LinkedIn CDN can return 403 in rare cases).
+    const avatarImgSrc = (msg.author_avatar_url ?? '').trim() || null;
+    return (
     <div key={msg.id} className={depth > 0 ? 'ml-6 mt-2 pl-4 border-l-2 border-slate-200' : ''}>
       <div className="flex gap-2 py-2">
-        <div className="w-8 h-8 rounded-full bg-slate-300 flex items-center justify-center text-xs font-medium text-slate-600 shrink-0">
-          {(msg.author_id ?? '?').slice(0, 1).toUpperCase()}
+        {avatarImgSrc ? (
+          // eslint-disable-next-line @next/next/no-img-element -- third-party CDN, not a Next-optimised asset
+          <img
+            src={avatarImgSrc}
+            alt={displayName}
+            className="w-8 h-8 rounded-full object-cover bg-slate-200 shrink-0"
+            referrerPolicy="no-referrer"
+            onError={(e) => {
+              // Fall back to initials by hiding the broken img.
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+              const fallback = (e.currentTarget.nextSibling as HTMLElement | null);
+              if (fallback) fallback.style.display = 'flex';
+            }}
+          />
+        ) : null}
+        <div
+          className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
+          style={{ backgroundColor: avatarBg, display: avatarImgSrc ? 'none' : 'flex' }}
+          title={displayName}
+        >
+          {initials}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-slate-800">
-              {authorDisplay(msg.author_id, depth === 0 ? threadAuthor : null)}
+              {displayName}
             </span>
+            {msg.author_handle && (
+              <a
+                href={`https://www.linkedin.com/in/${msg.author_handle}/`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-slate-500 hover:text-slate-700"
+              >
+                @{msg.author_handle}
+              </a>
+            )}
             <PlatformIcon platform={msg.platform ?? ''} size={12} />
             <span className="text-xs text-slate-500">{formatTimestamp(msg.platform_created_at ?? msg.created_at)}</span>
           </div>
           <p className="text-sm text-slate-700 mt-0.5 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
+          {/* Per-comment engagement chips — mirrors LinkedIn's tiny
+              "👍 N · 💬 N replies" row underneath each comment. Hidden when
+              both counts are zero so we don't clutter empty rows. */}
+          {((msg.like_count ?? 0) > 0 || (msg.reply_count ?? 0) > 0) && (
+            <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-500">
+              {(msg.like_count ?? 0) > 0 && (
+                <span title="Reactions on this comment">👍 {msg.like_count}</span>
+              )}
+              {(msg.reply_count ?? 0) > 0 && (
+                <span title="Replies to this comment">
+                  💬 {msg.reply_count} {msg.reply_count === 1 ? 'reply' : 'replies'}
+                </span>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-2 mt-1">
+            {!msg.author_self && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (typeof window !== 'undefined' && !window.confirm('Mark this message as sent by you? It will drop from "Needs Response".')) return;
+                  try {
+                    const res = await fetch('/api/engagement/message/mark-self', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      credentials: 'include',
+                      body: JSON.stringify({
+                        organization_id: organizationId,
+                        message_id: msg.id,
+                      }),
+                    });
+                    if (!res.ok) {
+                      const body = await res.json().catch(() => ({}));
+                      window.alert(body?.error ?? 'Failed to mark message as sent by you');
+                      return;
+                    }
+                    onReplySent?.();
+                  } catch (e) {
+                    window.alert((e as Error)?.message ?? 'Failed to mark message');
+                  }
+                }}
+                title="Use this when LinkedIn attributed your own reply to the other party (common when you and the contact share a display name)."
+                className="text-xs text-slate-400 hover:text-amber-700 underline-offset-2 hover:underline"
+              >
+                I sent this
+              </button>
+            )}
             {(() => {
               const msgPlatform = msg.platform ?? '';
               const likeCap = resolveEngagementCapability(msgPlatform, 'like');
               const replyCap = resolveEngagementCapability(msgPlatform, 'reply');
+              // Both Like and Reply stay enabled even on placeholder rows
+              // so the operator can validate the full UI flow. The actions
+              // will hit a 502 from LinkedIn when targeting a synthetic
+              // URN, but that's surfaced via toast/tooltip rather than
+              // blocking the UX. Real scraped comments work end-to-end.
+              const isPlaceholder = msg.is_placeholder === true;
+              const likeDisabled = likeCap.status !== 'api_verified';
+              const replyDisabled = replyCap.status !== 'api_verified';
+              const likeTitle = isPlaceholder
+                ? 'Demo seed — clicking will call LinkedIn but the synthetic URN is rejected; real scraped comments will succeed.'
+                : (likeCap.status === 'api_verified' ? undefined : likeCap.reason);
+              const replyTitle = isPlaceholder
+                ? 'Demo seed: composer + AI suggestion will work; sending requires a real scraped URN.'
+                : (replyCap.status === 'api_verified' ? undefined : replyCap.reason);
               return (
                 <>
                   <button
                     type="button"
                     onClick={() => handleLike(msg)}
-                    disabled={likeCap.status !== 'api_verified'}
-                    title={likeCap.status === 'api_verified' ? undefined : likeCap.reason}
+                    disabled={likeDisabled}
+                    title={likeTitle}
                     className="text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Like {typeof msg.like_count === 'number' && msg.like_count > 0 ? `(${msg.like_count})` : ''}
@@ -270,8 +556,8 @@ export const ConversationView = React.memo(function ConversationView({
                       setReplyingTo(msg);
                       setShowSuggestions(true);
                     }}
-                    disabled={replyCap.status !== 'api_verified'}
-                    title={replyCap.status === 'api_verified' ? undefined : replyCap.reason}
+                    disabled={replyDisabled}
+                    title={replyTitle}
                     className="text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Reply
@@ -284,7 +570,8 @@ export const ConversationView = React.memo(function ConversationView({
       </div>
       {(msg.children ?? []).map((child) => renderMessage(child, depth + 1))}
     </div>
-  );
+    );
+  };
 
   if (!thread) {
     return (
@@ -366,17 +653,152 @@ export const ConversationView = React.memo(function ConversationView({
         </div>
       </div>
 
+      {/* Post banner — only shown for People Reaction threads (post URN as
+          platform_thread_id). Mirrors LinkedIn's post-on-top, comments-below
+          layout so triagers can see the actual post above the comment list. */}
+      {isPostThread && (
+        <div className="border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white px-4 py-3">
+          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50">
+              <span className="text-base">📝</span>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                <span>Your post</span>
+                <PlatformIcon platform={thread.platform} size={12} />
+                {thread.post_stats_source === 'manual_seed' && (
+                  <span
+                    className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 normal-case tracking-normal"
+                    title="These numbers are seeded demo values, not live from LinkedIn. Open the post on LinkedIn (link below) to trigger the scraper and refresh with real numbers."
+                  >
+                    DEMO
+                  </span>
+                )}
+                {/* Stats row mirrors what LinkedIn shows under a post:
+                    impressions, reactions, comments. Falls back to the
+                    response count when scrape data is missing. */}
+                <span className="ml-2 flex items-center gap-3 text-[11px] text-slate-500 normal-case tracking-normal">
+                  {typeof thread.post_impression_count === 'number' && (
+                    <span title="Impressions">📊 {thread.post_impression_count.toLocaleString()} impressions</span>
+                  )}
+                  {typeof thread.post_reaction_count === 'number' && (
+                    <span title="Reactions">👍 {thread.post_reaction_count}</span>
+                  )}
+                  <span title="Responses captured in inbox">
+                    💬 {typeof thread.post_comment_count === 'number'
+                      ? thread.post_comment_count
+                      : messages.length}
+                    {' '}
+                    {(thread.post_comment_count ?? messages.length) === 1 ? 'response' : 'responses'}
+                  </span>
+                </span>
+              </div>
+              {thread.post_text_preview ? (
+                <p className="mt-1 line-clamp-3 text-sm text-slate-700 whitespace-pre-wrap">
+                  {thread.post_text_preview}
+                </p>
+              ) : (
+                <p className="mt-1 text-sm text-slate-500 italic">
+                  Post preview not yet ingested. Visit the post on LinkedIn to refresh.
+                </p>
+              )}
+              {postUrl && (
+                <a
+                  href={postUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-900"
+                >
+                  Open on LinkedIn ↗
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
         {messageTree.map((msg) => renderMessage(msg))}
       </div>
 
-      {replyTarget && (
-        <div className="p-4 border-t border-slate-200 space-y-4">
+      {(() => {
+        // Lock the composer when there's already a queued outbound DM for
+        // this thread that the extension hasn't delivered. Sending a
+        // second one before the first lands would either dedup-error
+        // (idempotency-key collision) or pile up additional pending rows
+        // — both are confusing. Force the user to either let it deliver
+        // or cancel the queued one first.
+        const pendingForThisThread = messages.find(
+          (m) => m.is_pending_outbound === true && m.thread_id === thread.thread_id,
+        );
+        if (pendingForThisThread) {
+          return (
+            <div className="p-4 border-t border-slate-200">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                A reply is queued for this conversation and waiting on the LinkedIn tab to deliver it.
+                You can&apos;t send another reply until that one is delivered or you cancel it from the
+                queued message above.
+              </div>
+            </div>
+          );
+        }
+        return null;
+      })()}
+
+      {replyTarget && !messages.some(
+        (m) => m.is_pending_outbound === true && m.thread_id === thread.thread_id,
+      ) && (
+        <div ref={composerRef} className="p-4 border-t border-slate-200 space-y-4">
+          {/* Reply-target banner — makes it explicit which comment the
+              composer is threaded under, otherwise the composer sits at
+              the bottom of the page and the user can't tell whether it's
+              a nested reply or a new top-level comment. The X cancels
+              the reply target so the composer becomes a top-level
+              comment composer (some platforms allow this; LinkedIn
+              currently still requires explicit targeting). */}
+          {(() => {
+            const replyAuthorName = (replyTarget as EngagementMessage & { author_display_name?: string | null }).author_display_name
+              || replyTarget.author_id
+              || 'comment';
+            const isExplicitReply = replyingTo !== null;
+            return (
+              <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">
+                    {isExplicitReply ? 'Replying to' : 'New comment on this post'}
+                  </div>
+                  {isExplicitReply && (
+                    <div className="mt-0.5">
+                      <span className="text-sm font-medium text-slate-800">{replyAuthorName}</span>
+                      <span className="text-sm text-slate-600">
+                        {' — '}
+                        <span className="line-clamp-1">{replyTarget.content || '(empty)'}</span>
+                      </span>
+                    </div>
+                  )}
+                </div>
+                {isExplicitReply && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReplyingTo(null);
+                      setShowSuggestions(false);
+                    }}
+                    className="text-xs text-blue-700 hover:text-blue-900"
+                    title="Cancel reply target"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            );
+          })()}
           <ReplyComposer
             threadId={thread.thread_id}
             messageId={replyTarget.id}
             platform={replyTarget.platform ?? thread.platform}
             organizationId={organizationId}
+            messageType={replyTarget.message_type}
             value={replyText}
             onChange={setReplyText}
             onExecuteReply={onExecuteReply}

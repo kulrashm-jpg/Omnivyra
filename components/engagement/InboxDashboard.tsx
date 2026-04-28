@@ -4,7 +4,10 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
+import { isDmMessageType } from '@/lib/engagement/messageRoles';
 import { PlatformTabs } from '@/components/engagement/PlatformTabs';
+import { PlatformHealthStrip } from '@/components/engagement/PlatformHealthStrip';
+import { useEngagementPlatformHealth } from '@/hooks/useEngagementPlatformHealth';
 import { ExtensionStatusPanel } from '@/components/engagement/ExtensionStatusPanel';
 import { LinkedInOperationsPanel } from '@/components/engagement/LinkedInOperationsPanel';
 import { BrowserOperationsPanel } from '@/components/engagement/BrowserOperationsPanel';
@@ -53,7 +56,7 @@ export function InboxDashboard({
   const [selectedThread, setSelectedThread] = useState<InboxThread | null>(null);
   const [mobileTab, setMobileTab] = useState<'threads' | 'conversation' | 'assistant'>('threads');
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
-  const [activeQueueFilter, setActiveQueueFilter] = useState<ThreadQueueGroup | 'all'>('Needs Response');
+  const [activeQueueFilter, setActiveQueueFilter] = useState<ThreadQueueGroup | 'all' | 'People Reacted'>('Needs Response');
   const [recommendedThreadId, setRecommendedThreadId] = useState<string | null>(null);
   const [recommendationSetAt, setRecommendationSetAt] = useState<number | null>(null);
   const [recommendationIsFading, setRecommendationIsFading] = useState(false);
@@ -61,6 +64,22 @@ export function InboxDashboard({
   const [authorFilter, setAuthorFilter] = useState<{ authorName: string; platform: string } | null>(
     null
   );
+  // Tracks which specific comment/message the user is replying to. Lifted up
+  // from ConversationView so AIEngagementAssistant can target THAT message
+  // for its suggestion instead of always defaulting to the latest inbound.
+  const [replyTargetMessageId, setReplyTargetMessageId] = useState<string | null>(null);
+  // Switching primary tab is the user's signal that they want fresh data
+  // for that view — kick a re-fetch. Skips first mount (the inbox load
+  // already runs there) and avoids a double-fetch on initial render.
+  const isFirstFilterRender = useRef(true);
+  useEffect(() => {
+    if (isFirstFilterRender.current) {
+      isFirstFilterRender.current = false;
+      return;
+    }
+    refresh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeQueueFilter]);
   const [browserAssistError, setBrowserAssistError] = useState<string | null>(null);
   const [browserAssistBusyPlatform, setBrowserAssistBusyPlatform] = useState<string | null>(null);
   const [browserAssistStatusByPlatform, setBrowserAssistStatusByPlatform] = useState<Record<string, string | null>>({});
@@ -88,6 +107,15 @@ export function InboxDashboard({
     refresh: refreshWorkQueue,
   } = useWorkQueue(organizationId);
   const { platforms: integrations } = useCompanyIntegrations(organizationId);
+  // Per-platform health (API / RPA / Extension / Publish adapter + ingress).
+  // Renders as a compact strip under the platform tabs so the operator
+  // can tell at a glance whether a given platform's selected actions
+  // will actually execute. Read-only; no mutation of tokens or sessions.
+  const {
+    platforms: platformHealth,
+    loading: platformHealthLoading,
+    refresh: refreshPlatformHealth,
+  } = useEngagementPlatformHealth(organizationId);
   const {
     status: extensionStatus,
     auth: extensionAuth,
@@ -117,7 +145,8 @@ export function InboxDashboard({
     addOptimisticMessage,
   } = useEngagementMessages(
     organizationId,
-    selectedThread?.thread_id ?? null
+    selectedThread?.thread_id ?? null,
+    selectedThread?.sibling_thread_ids ?? []
   );
   const hasLinkedInConnection = useMemo(
     () => integrations.some((integration) => normalizePlatform(integration.platform) === 'linkedin'),
@@ -172,10 +201,62 @@ export function InboxDashboard({
         t.platform === authorFilter.platform
     );
   }, [items, authorFilter]);
-  const visibleQueueItems = useMemo(
-    () => filterThreadsForQueue(filteredItems, activeQueueFilter),
-    [filteredItems, activeQueueFilter]
+  // Split filteredItems into the two universes the UI cares about:
+  //   - dmThreads:      DMs and direct conversations (Needs Response domain)
+  //   - postThreads:    activity on the user's posts (People Reaction domain)
+  // Doing the split once here keeps the count badges consistent with what's
+  // actually shown in each tab.
+  const isPostThread = (t: typeof filteredItems[number]) =>
+    t.latest_message_type === 'comment' || t.latest_message_type === 'reaction';
+  // "Needs response" rule: only DMs where the *other party* sent the last
+  // message AND the user hasn't already queued an outbound reply through
+  // the engagement pipeline. If the user already replied (outgoing or
+  // author_self=true on the latest, OR an in-flight community_ai_actions
+  // row exists), the thread drops out of the queue until the counterparty
+  // sends something new — otherwise the operator sees their own replies
+  // sitting in the inbox waiting for action that's already been taken.
+  const otherPartyRepliedLast = (t: typeof filteredItems[number]) => {
+    if (t.latest_message_direction === 'outgoing') return false;
+    if (t.latest_message_author_self === true) return false;
+    if (t.has_pending_outbound_action === true) return false;
+    return true;
+  };
+  const dmThreads = useMemo(
+    () => filteredItems.filter((t) => !isPostThread(t) && otherPartyRepliedLast(t)),
+    [filteredItems]
   );
+  // People Reaction visibility rules (operator-defined):
+  //   1. Only posts whose latest activity is within the last 2 days.
+  //      The window is rolling — every fetch advances "now," so when the
+  //      user signs back in after a gap they see whatever's actionable in
+  //      the current 2-day slice rather than an unbounded backlog.
+  //   2. (Future) hide once all comments are responded to. For now we
+  //      keep posts visible as long as any comment-type message exists.
+  //
+  // Note: Date.now() lives INSIDE the useMemo, not in deps, otherwise the
+  // ms-level drift on every render would re-create the array reference,
+  // invalidate visibleQueueItems, fire the recommendation useEffect, and
+  // trigger an infinite re-render loop ("Maximum update depth exceeded").
+  const POST_VISIBILITY_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
+  const postThreads = useMemo(() => {
+    const cutoff = Date.now() - POST_VISIBILITY_WINDOW_MS;
+    return filteredItems.filter((t) => {
+      if (!isPostThread(t)) return false;
+      const ts = t.latest_message_time ? new Date(t.latest_message_time).getTime() : NaN;
+      if (!Number.isFinite(ts)) return true; // missing timestamp — don't hide
+      return ts >= cutoff;
+    });
+  }, [filteredItems]);
+
+  const visibleQueueItems = useMemo(() => {
+    if (activeQueueFilter === 'People Reacted') return postThreads;
+    // Needs Response / High Priority / Waiting / Done are DM-domain views;
+    // run queue grouping only over DM threads so post threads never leak
+    // into the priority queues.
+    return filterThreadsForQueue(dmThreads, activeQueueFilter);
+  }, [activeQueueFilter, dmThreads, postThreads]);
+
+  const peopleReactedCount = postThreads.length;
 
   useEffect(() => {
     if (!threadIdFromUrl || items.length === 0) return;
@@ -193,6 +274,13 @@ export function InboxDashboard({
     (thread: InboxThread) => {
       setSelectedThread(thread);
       replaceEngagementRoute({ thread: thread.thread_id });
+      // Refresh on click. The inbox row carries last-known stats from the
+      // most recent scrape; clicking is the user's signal that they want
+      // current numbers. Cheap: hits the inbox API which is just a DB read.
+      // For post threads the banner re-renders with whatever the last
+      // scrape persisted; future improvement is to also kick a re-scrape
+      // through the extension here.
+      refresh();
       void recordEngagementEvent('thread_opened', {
         organization_id: organizationId,
         thread_id: thread.thread_id,
@@ -214,7 +302,7 @@ export function InboxDashboard({
         });
       }
     },
-    [organizationId, replaceEngagementRoute]
+    [organizationId, replaceEngagementRoute, refresh]
   );
 
   const handleSelectThreadById = useCallback(
@@ -244,9 +332,80 @@ export function InboxDashboard({
     refreshWorkQueue();
     refreshLinkedInOverview();
     setRecommendationSeed((current) => current + 1);
+    // Clear the per-attempt auth lockout. The auto-auth useEffect (which
+    // is declared later in the file but registered before user clicks)
+    // will see the cleared ref on the next render — triggered by the
+    // state changes above — and re-attempt the redemption. We don't call
+    // bootstrapExtensionAuth() directly here because it's declared below
+    // and JS TDZ would reject it from inside this useCallback.
+    attemptedExtensionAuthRef.current = null;
   }, [refresh, refreshCounts, refreshWorkQueue, refreshLinkedInOverview]);
 
-  const queueCounts = useMemo(() => getThreadQueueCounts(filteredItems), [filteredItems]);
+  // Counts must mirror what the user actually sees in the Needs Response
+  // tab: DM threads where the other party replied last. Computing from
+  // filteredItems would inflate the badge with post threads (now under
+  // People Reaction) and self-replied DMs that we already filter out.
+  const queueCounts = useMemo(() => getThreadQueueCounts(dmThreads), [dmThreads]);
+
+  // Per-platform counts for the platform tabs. These are derived client-side
+  // from the same filtered universes the rest of the UI uses, so the tab
+  // badge for each platform = (DMs needing attention + posts with reactions)
+  // and matches what the user sees when they click that platform tab.
+  // Server-side `counts` is ignored here because it doesn't apply the
+  // "I-replied-last" or DM/post split filters.
+  const platformCounts = useMemo(() => {
+    type Tier = 'low' | 'medium' | 'high';
+    const tierFromScore = (score: number): Tier => {
+      if (score >= 60) return 'high';
+      if (score >= 30) return 'medium';
+      return 'low';
+    };
+    const tierRank: Record<Tier, number> = { low: 0, medium: 1, high: 2 };
+    const next: Record<string, { thread_count: number; unread_count: number; max_priority_tier: Tier }> = {};
+    const all = [...dmThreads, ...postThreads];
+    for (const t of all) {
+      const slug = (t.platform || '').toLowerCase().trim();
+      if (!slug) continue;
+      const cell = next[slug] ?? { thread_count: 0, unread_count: 0, max_priority_tier: 'low' as Tier };
+      cell.thread_count += 1;
+      cell.unread_count += t.unread_count ?? 0;
+      const tier = tierFromScore(Number(t.priority_score ?? 0));
+      if (tierRank[tier] > tierRank[cell.max_priority_tier]) cell.max_priority_tier = tier;
+      next[slug] = cell;
+    }
+    return next;
+  }, [dmThreads, postThreads]);
+
+  // Client-side workQueue replaces the server's stale per-platform actionable
+  // counts. Same filtered universe as platformCounts: actionable_threads =
+  // # of (DMs needing attention + posts with reactions) for that platform.
+  // The orange badge on the platform tabs reads from this.
+  const clientWorkQueue = useMemo(() => {
+    const byPlatform: Record<string, { actionable_threads: number; high_priority_threads: number }> = {};
+    for (const t of dmThreads) {
+      const slug = (t.platform || '').toLowerCase().trim();
+      if (!slug) continue;
+      const cell = byPlatform[slug] ?? { actionable_threads: 0, high_priority_threads: 0 };
+      cell.actionable_threads += 1;
+      const isHigh = (t.triage_priority ?? 0) >= 7 || (t.priority_score ?? 0) >= 60;
+      if (isHigh) cell.high_priority_threads += 1;
+      byPlatform[slug] = cell;
+    }
+    for (const t of postThreads) {
+      const slug = (t.platform || '').toLowerCase().trim();
+      if (!slug) continue;
+      const cell = byPlatform[slug] ?? { actionable_threads: 0, high_priority_threads: 0 };
+      cell.actionable_threads += 1;
+      byPlatform[slug] = cell;
+    }
+    return {
+      platforms: Object.entries(byPlatform).map(([platform, v]) => ({
+        platform,
+        actionable_threads: v.actionable_threads,
+        high_priority_threads: v.high_priority_threads,
+      })),
+    };
+  }, [dmThreads, postThreads]);
   const recommendedThreadInScope = useMemo(
     () => filteredItems.find((thread) => thread.thread_id === recommendedThreadId) ?? null,
     [filteredItems, recommendedThreadId]
@@ -320,7 +479,7 @@ export function InboxDashboard({
     if (normalized === 'x') {
       return 'X replies and direct-message actions require a verified browser-assisted send. Open X Messages or the relevant reply surface before sending.';
     }
-    return `${normalized} engagement actions require a verified browser-assisted send before OmniVyra can trust them.`;
+    return `${normalized} engagement actions require a verified browser-assisted send before Omnivyra can trust them.`;
   }, [getBrowserActionPlatform]);
   const extensionUserLabel =
     extensionAuth?.user?.email ||
@@ -605,20 +764,26 @@ export function InboxDashboard({
       messageId,
       platform,
       replyText,
+      messageType,
     }: {
       threadId: string;
       messageId: string;
       platform: string;
       replyText: string;
+      messageType?: string | null;
     }) => {
-      // All user-initiated reply sends go through the same API path. The
-      // route rejects unsupported (platform, action) pairs at the boundary;
-      // we trust its contract (status === 'executed' + platform response)
-      // and do not push optimistic messages — success is only confirmed when
-      // the platform acknowledges.
-      const capability = resolveEngagementCapability(platform, 'reply');
+      // DMs and comment-replies route through the same /api/engagement/reply
+      // endpoint, but the capability key differs: 'dm' vs 'reply'. The
+      // server picks the action_type from message_type itself; this client
+      // check is just a fast-fail so we don't POST when the platform is
+      // unsupported for the action.
+      const isDm = isDmMessageType(messageType);
+      const capabilityAction = isDm ? 'dm' : 'reply';
+      const capability = resolveEngagementCapability(platform, capabilityAction);
       if (capability.status !== 'api_verified') {
-        throw new Error(capability.reason ?? `Replies are not supported on ${platform}.`);
+        throw new Error(
+          capability.reason ?? `${isDm ? 'DM' : 'Reply'} is not supported on ${platform}.`
+        );
       }
 
       const res = await fetch('/api/engagement/reply', {
@@ -637,24 +802,35 @@ export function InboxDashboard({
       const json = (await res.json().catch(() => ({}))) as {
         error?: string;
         status?: string;
+        mode?: string;
         confirmed?: boolean;
         platform_id?: string | null;
         success?: boolean;
+        message?: string;
       };
-      if (!res.ok) {
+      if (!res.ok && res.status !== 202) {
         throw new Error(json.error || res.statusText || 'Failed to send reply');
       }
-      if (json.status !== 'executed' || json.success !== true) {
+      // Server contract: 'executed' = platform confirmed; 'queued' = handed
+      // off to the Chrome extension for browser-mode delivery (DMs).
+      // Anything else is a failure.
+      const isQueued = json.status === 'queued' || json.mode === 'browser';
+      if (json.success !== true || (json.status !== 'executed' && !isQueued)) {
         throw new Error(json.error || 'Platform did not confirm the reply was sent');
       }
 
       await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
 
       const niceLabel = platform === 'twitter' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
-      // Three visible states aligned to the server contract:
-      //   confirmed + platform_id → "Confirmed by <platform> (id: …)"
-      //   executed without id     → "Sent to <platform>. Awaiting confirmation."
-      //   anything else thrown above as an error.
+      if (isQueued) {
+        return {
+          mode: 'browser_queued',
+          platform,
+          message:
+            json.message ||
+            `${isDm ? 'DM' : 'Reply'} queued — open the ${niceLabel} tab so the Omnivyra extension can deliver it.`,
+        };
+      }
       const message =
         json.confirmed && json.platform_id
           ? `Reply confirmed by ${niceLabel} (id: ${json.platform_id}).`
@@ -714,6 +890,7 @@ export function InboxDashboard({
         messageId: targetMessage.id,
         platform: targetMessage.platform ?? selectedThread.platform,
         replyText,
+        messageType: targetMessage.message_type ?? null,
       });
     },
     [getPreferredReplyMessage, handleExecuteReply, selectedThread]
@@ -832,7 +1009,12 @@ export function InboxDashboard({
   );
 
   useEffect(() => {
-    if (!browserAssistEnabled) return;
+    // Extension auth (claim-code redemption → HMAC secret) is required for
+    // EVERY /api/extension/* call: DM/comment scraping, command polling,
+    // platform health, etc. It is NOT specific to the browser-assist
+    // feature, so we don't gate the bootstrap on browserAssistEnabled.
+    // Without this, the SW never gets an HMAC secret and every signed
+    // POST returns SIGNATURE_UNAVAILABLE.
     if (!organizationId || !extensionStatus?.runtimeId || extensionError) return;
     if (extensionAuth?.isAuthenticated) {
       attemptedExtensionAuthRef.current = null;
@@ -856,12 +1038,18 @@ export function InboxDashboard({
   const handleLike = useCallback(
     async (messageId: string, platform: string) => {
       if (!organizationId) return;
-      try {
-        const capability = resolveEngagementCapability(platform, 'like');
-        if (capability.status !== 'api_verified') {
-          throw new Error(capability.reason ?? `Like is not supported on ${platform}.`);
-        }
 
+      // Capability gate (synchronous; no fetch needed). Reporting via
+      // setBrowserAssistError so the user sees an inline message instead
+      // of throwing — Next.js 16's dev overlay otherwise turns any throw
+      // here into a fullscreen "Runtime Error" page even if it's caught.
+      const capability = resolveEngagementCapability(platform, 'like');
+      if (capability.status !== 'api_verified') {
+        setBrowserAssistError(capability.reason ?? `Like is not supported on ${platform}.`);
+        return;
+      }
+
+      try {
         const res = await fetch('/api/engagement/like', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -874,19 +1062,26 @@ export function InboxDashboard({
         });
         const json = (await res.json().catch(() => ({}))) as {
           error?: string;
+          code?: string;
           status?: string;
           confirmed?: boolean;
           platform_id?: string | null;
           success?: boolean;
         };
-        if (!res.ok) {
-          throw new Error(json.error || res.statusText || 'Failed to like message');
+
+        if (!res.ok || json.status !== 'executed' || json.success !== true) {
+          // Surface the server's reason inline. No throw — Next.js dev
+          // overlay would intercept it as a runtime error otherwise.
+          const reason = json.error
+            || (json.code === 'PLACEHOLDER_TARGET'
+              ? 'Demo seed row — real LinkedIn URN required to like.'
+              : 'Platform did not confirm the like.');
+          console.warn('[engagement] like rejected:', { code: json.code, reason });
+          setBrowserAssistError(reason);
+          return;
         }
-        if (json.status !== 'executed' || json.success !== true) {
-          throw new Error(json.error || 'Platform did not confirm the like was applied');
-        }
-        // We don't show a toast for likes, but the log distinction matters
-        // for observability: confirmed like vs sent-but-unconfirmed like.
+
+        // Observability distinction: confirmed like vs sent-but-unconfirmed.
         if (!json.confirmed) {
           console.info('[engagement] like accepted by platform but no id returned', {
             messageId,
@@ -895,7 +1090,11 @@ export function InboxDashboard({
         }
         refreshMessages();
       } catch (err) {
-        console.error('[engagement] like failed:', err);
+        // Network-level error or JSON parse failure — same inline path.
+        console.error('[engagement] like network error:', err);
+        setBrowserAssistError(
+          err instanceof Error ? err.message : 'Like request failed'
+        );
       }
     },
     [organizationId, refreshMessages]
@@ -1018,53 +1217,63 @@ export function InboxDashboard({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/90 px-3 py-3 shadow-sm">
-            <button
-              type="button"
-              onClick={() => setActiveQueueFilter('Needs Response')}
-              aria-pressed={activeQueueFilter === 'Needs Response'}
-              className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'Needs Response' ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-900'}`}
-            >
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">Needs response</span>
-              <span className="text-base font-semibold text-slate-900">{actionableThreads}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveQueueFilter('High Priority')}
-              aria-pressed={activeQueueFilter === 'High Priority'}
-              className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'High Priority' ? 'bg-amber-500 text-white' : 'bg-amber-50 text-amber-900'}`}
-            >
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">High priority</span>
-              <span className="text-base font-semibold text-slate-900">{highPriorityThreads}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveQueueFilter('Waiting')}
-              aria-pressed={activeQueueFilter === 'Waiting'}
-              className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'Waiting' ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-700'}`}
-            >
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Waiting</span>
-              <span className="text-base font-semibold text-slate-900">{waitingThreads}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveQueueFilter('all')}
-              aria-pressed={activeQueueFilter === 'all'}
-              className={`inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200 ${activeQueueFilter === 'all' ? 'ring-2 ring-indigo-200' : ''}`}
-            >
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Platforms</span>
-              <span className="text-base font-semibold text-slate-900">{connectedPlatformsCount}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveQueueFilter('all')}
-              aria-pressed={activeQueueFilter === 'all'}
-              className={`inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200 ${activeQueueFilter === 'all' ? 'ring-2 ring-indigo-200' : ''}`}
-            >
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Visible threads</span>
-              <span className="text-base font-semibold text-slate-900">{filteredItems.length}</span>
-            </button>
-          </div>
+          {/* Primary view-mode tabs (Needs Response | People Reaction) used
+              to live here, but they're duplicated by the sticky tabs at
+              the top of the left column (where the user actually scrolls).
+              Removed to declutter the header area. */}
+
+          {/* Secondary priority filters — only relevant inside Needs Response.
+              Hidden in People Reaction mode where threads are organised by
+              post, not priority. */}
+          {activeQueueFilter !== 'People Reacted' && (
+            <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/90 px-3 py-3 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setActiveQueueFilter('Needs Response')}
+                aria-pressed={activeQueueFilter === 'Needs Response'}
+                className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'Needs Response' ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-900'}`}
+              >
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">Needs response</span>
+                <span className="text-base font-semibold text-slate-900">{actionableThreads}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveQueueFilter('High Priority')}
+                aria-pressed={activeQueueFilter === 'High Priority'}
+                className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'High Priority' ? 'bg-amber-500 text-white' : 'bg-amber-50 text-amber-900'}`}
+              >
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">High priority</span>
+                <span className="text-base font-semibold text-slate-900">{highPriorityThreads}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveQueueFilter('Waiting')}
+                aria-pressed={activeQueueFilter === 'Waiting'}
+                className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'Waiting' ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-700'}`}
+              >
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Waiting</span>
+                <span className="text-base font-semibold text-slate-900">{waitingThreads}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveQueueFilter('all')}
+                aria-pressed={activeQueueFilter === 'all'}
+                className={`inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200 ${activeQueueFilter === 'all' ? 'ring-2 ring-indigo-200' : ''}`}
+              >
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Platforms</span>
+                <span className="text-base font-semibold text-slate-900">{connectedPlatformsCount}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveQueueFilter('all')}
+                aria-pressed={activeQueueFilter === 'all'}
+                className={`inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200 ${activeQueueFilter === 'all' ? 'ring-2 ring-indigo-200' : ''}`}
+              >
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Visible threads</span>
+                <span className="text-base font-semibold text-slate-900">{dmThreads.length + postThreads.length}</span>
+              </button>
+            </div>
+          )}
 
           {/* Browser-assist runtime surfaces are gated by a hard-off feature
               flag. They describe capabilities (DM / messaging / Sales Navigator /
@@ -1129,13 +1338,30 @@ export function InboxDashboard({
         </div>
 
         <PlatformTabs
-          counts={counts}
+          counts={platformCounts}
           selectedPlatform={selectedPlatform}
           onSelectPlatform={handleSelectPlatform}
-          workQueue={workQueue}
+          workQueue={clientWorkQueue as typeof workQueue}
           platforms={integrations.map((integration) => integration.platform)}
           loading={countsLoading || workQueueLoading}
           className="mt-4"
+        />
+
+        {/*
+          Status strip for the selected platform: overall dot, per-mechanism
+          badges (API / RPA / Ext / Publish × reply / like / DM / post), and
+          ingress summary (polling / webhook / extension_events). When the
+          "All" tab is selected, renders a compact row of per-platform dots
+          instead of the full grid.
+        */}
+        <PlatformHealthStrip
+          platforms={platformHealth}
+          selectedPlatform={selectedPlatform}
+          organizationId={organizationId}
+          onSelectPlatform={handleSelectPlatform}
+          onHealthRefresh={refreshPlatformHealth}
+          loading={platformHealthLoading}
+          className="mt-3"
         />
       </header>
 
@@ -1181,8 +1407,36 @@ export function InboxDashboard({
             mobileTab !== 'threads' ? 'hidden md:flex' : 'flex'
           } md:min-w-0 md:max-w-[360px] md:flex-[0_0_30%]`}
         >
+          {/* Sticky primary view-mode tabs at the top of the left column.
+              These are duplicated from the page header so they stay visible
+              when the user scrolls the thread list. Two tabs cover the two
+              fundamental triage modes (DMs vs reactions on your posts). */}
+          <div className="sticky top-0 z-10 flex shrink-0 border-b border-slate-200 bg-white">
+            <button
+              type="button"
+              onClick={() => setActiveQueueFilter('Needs Response')}
+              aria-pressed={activeQueueFilter !== 'People Reacted'}
+              className={`flex flex-1 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold transition ${activeQueueFilter !== 'People Reacted' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-transparent text-slate-600 hover:bg-slate-50'}`}
+            >
+              <span>📥 Needs Response</span>
+              <span className={`rounded-full px-2 py-0.5 text-xs ${activeQueueFilter !== 'People Reacted' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                {actionableThreads}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveQueueFilter('People Reacted')}
+              aria-pressed={activeQueueFilter === 'People Reacted'}
+              className={`flex flex-1 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold transition ${activeQueueFilter === 'People Reacted' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-transparent text-slate-600 hover:bg-slate-50'}`}
+            >
+              <span>💬 People Reaction</span>
+              <span className={`rounded-full px-2 py-0.5 text-xs ${activeQueueFilter === 'People Reacted' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                {peopleReactedCount}
+              </span>
+            </button>
+          </div>
           <ThreadList
-            items={filteredItems}
+            items={activeQueueFilter === 'People Reacted' ? postThreads : dmThreads}
             loading={loading}
             selectedThreadId={selectedThread?.thread_id}
             recommendedThreadId={recommendedThread?.thread_id ?? null}
@@ -1223,6 +1477,7 @@ export function InboxDashboard({
             onLike={handleLike}
             onIgnore={handleIgnore}
             onMarkResolved={handleMarkResolved}
+            onReplyTargetChange={setReplyTargetMessageId}
           />
         </section>
 
@@ -1235,6 +1490,7 @@ export function InboxDashboard({
               recommendedThread={recommendedThread}
               onUseSuggestedReply={handleUseSuggestedReply}
               onSendSuggestedReply={handleSendSuggestedReply}
+              replyTargetMessageId={replyTargetMessageId}
               onSelectThread={(threadId) => {
                 handleSelectThreadById(threadId);
                 setMobileTab('threads');
@@ -1281,6 +1537,7 @@ export function InboxDashboard({
                     recommendedThread={recommendedThread}
                     onUseSuggestedReply={handleUseSuggestedReply}
                     onSendSuggestedReply={handleSendSuggestedReply}
+                    replyTargetMessageId={replyTargetMessageId}
                     onSelectThread={(threadId) => {
                       handleSelectThreadById(threadId);
                       setMobileTab('threads');
@@ -1310,6 +1567,7 @@ export function InboxDashboard({
             recommendedThread={recommendedThread}
             onUseSuggestedReply={handleUseSuggestedReply}
             onSendSuggestedReply={handleSendSuggestedReply}
+            replyTargetMessageId={replyTargetMessageId}
             onSelectThread={(threadId) => {
               handleSelectThreadById(threadId);
               setMobileTab('threads');

@@ -26,15 +26,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '../../../backend/db/supabaseClient';
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
-import { createCredit, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
+import {
+  grantInitialFreeCredit,
+  INITIAL_FREE_CREDIT_CATEGORY,
+} from '../../../backend/services/initialFreeCreditService';
 import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
-
-// One-time org-scoped free credit grant. Enforced by the partial UNIQUE index
-// on free_credit_claims(organization_id) WHERE category='initial_free_credit'.
-// Extensions beyond this are admin-granted via /api/admin/credits/grant.
-const INITIAL_CREDITS_DEFAULT = 300;
-const EXPIRY_DAYS_DEFAULT     = 14;
-const INITIAL_CREDIT_CATEGORY = 'initial_free_credit';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -122,15 +118,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       updated_at:   new Date().toISOString(),
     }).eq('id', userId);
 
-    // ── 1. Load credit config ───────────────────────────────────────────────
+    // ── 1. (no-op) Initial credit amount + expiry are now resolved by the
+    //         shared grantInitialFreeCredit() service from
+    //         free_credit_config + sane defaults (50 / 14 days). Kept here
+    //         only so downstream free_credit_profiles inserts and the
+    //         response payload have an authoritative expected amount.
     const { data: creditConfig } = await supabase
       .from('free_credit_config')
       .select('credits, expiry_days')
-      .eq('category', INITIAL_CREDIT_CATEGORY)
+      .eq('category', INITIAL_FREE_CREDIT_CATEGORY)
       .eq('is_active', true)
       .maybeSingle();
-    const initialCredits = (creditConfig as any)?.credits    ?? INITIAL_CREDITS_DEFAULT;
-    const expiryDays     = (creditConfig as any)?.expiry_days ?? EXPIRY_DAYS_DEFAULT;
+    const initialCredits = (creditConfig as { credits?: number } | null)?.credits ?? 50;
+    const expiryDays     = (creditConfig as { expiry_days?: number } | null)?.expiry_days ?? 14;
     const expiryAt       = new Date(Date.now() + expiryDays * 86400 * 1000).toISOString();
 
     // ── 2. Domain eligibility ───────────────────────────────────────────────
@@ -242,37 +242,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ── 5. Check if credits already claimed for this company (org-level dedup) ─
-    // Only the FIRST person to register for a company gets COMPANY_ADMIN + credits.
-    // DB also enforces this via UNIQUE(org_id) partial index on category='initial_free_credit'.
+    // Block 2nd-and-beyond self-registrations to a previously credited company.
+    // (DB enforces one-per-org via the UNIQUE index on free_credit_claims for
+    // category='initial_free_credit' — this app-layer check just gives a
+    // friendlier 403 than letting the constraint fire.)
     const { data: orgClaim } = await supabase
       .from('free_credit_claims')
       .select('id, user_id')
       .eq('organization_id', companyId)
-      .eq('category', INITIAL_CREDIT_CATEGORY)
+      .eq('category', INITIAL_FREE_CREDIT_CATEGORY)
       .maybeSingle();
 
-    if (orgClaim) {
-      // Company already exists and has credits — block self-registration.
-      // 2nd person and beyond must be invited by COMPANY_ADMIN or SUPER_ADMIN.
+    if (orgClaim && (orgClaim as { user_id: string }).user_id !== userId) {
       return res.status(403).json({
         code:  'INVITE_REQUIRED',
         error: 'This company is already registered. Ask your company admin to invite you.',
       });
     }
 
-    // ── 6. Check user's own claim (same user re-submitting) ─────────────────
-    const { data: existingClaim } = await supabase
-      .from('free_credit_claims')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('category', INITIAL_CREDIT_CATEGORY)
-      .maybeSingle();
-
-    if (existingClaim) {
-      return res.status(200).json({ success: true, credits: initialCredits, alreadyClaimed: true });
-    }
-
-    // ── 7. Ensure company role — first registrant gets COMPANY_ADMIN ─────────
+    // ── 6. Ensure company role — first registrant gets COMPANY_ADMIN ─────────
     const { data: existingMembership } = await supabase
       .from('user_company_roles')
       .select('id, role')
@@ -291,80 +279,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ── 8. Grant credits ────────────────────────────────────────────────────
+    // ── 7. Grant initial free credits via the single shared service ─────────
     const orgId = companyId!;
+    const claimDomain = authEmail.includes('@') ? authEmail.split('@')[1].toLowerCase() : null;
+    const grantResult = await grantInitialFreeCredit({
+      orgId,
+      userId,
+      emailDomain: claimDomain,
+    });
 
-    await supabase.from('organization_credits').upsert({
-      organization_id:    orgId,
-      free_balance:       0,
-      paid_balance:       0,
-      incentive_balance:  0,
-      lifetime_purchased: 0,
-      lifetime_consumed:  0,
-      credit_rate_usd:    0.001,
-    }, { onConflict: 'organization_id', ignoreDuplicates: true });
-
-    try {
-      await createCredit({
-        orgId,
-        amount:         initialCredits,
-        category:       'free',
-        referenceType:  'free_credits',
-        referenceId:    orgId,
-        note:           `Free credits — onboarding (expires ${expiryAt.slice(0, 10)})`,
-        performedBy:    userId,
-        idempotencyKey: makeIdempotencyKey(orgId, 'initial_free_credit', orgId),
-      });
-    } catch (creditErr: any) {
-      // Must NOT record a claim if the grant itself failed — otherwise the user
-      // is permanently locked out of the retry path (the user-claim check in
-      // step 6 would short-circuit next time with alreadyClaimed=true).
-      console.error('[onboarding/complete] credit grant failed:', creditErr?.message);
+    if (grantResult.granted === false && grantResult.reason === 'grant_failed') {
       return res.status(500).json({
-        error: 'Could not grant free credits. Please try again in a moment.',
+        error: grantResult.message ?? 'Could not grant free credits. Please try again in a moment.',
         code:  'CREDIT_GRANT_FAILED',
       });
     }
 
-    // ── 9. Log claim (this row IS the "org is credited" marker) ─────────────
-    // The partial UNIQUE index on free_credit_claims(org_id) WHERE
-    // category='initial_free_credit' enforces one-per-org at the DB layer.
-    // A 23505 here means a concurrent onboarding won the race — the credit
-    // grant above was idempotent via the ledger key, so treat as success.
-    const claimDomain = authEmail.includes('@') ? authEmail.split('@')[1].toLowerCase() : null;
-    const { error: claimErr } = await supabase.from('free_credit_claims').insert({
-      user_id:         userId,
-      organization_id: orgId,
-      category:        INITIAL_CREDIT_CATEGORY,
-      credits_granted: initialCredits,
-      domain:          claimDomain,
-    });
-    if (claimErr && (claimErr as any).code !== '23505') {
-      console.error('[onboarding/complete] claim insert failed:', claimErr.message);
+    // ── 8. Backfill users.company_id ────────────────────────────────────────
+    await supabase
+      .from('users')
+      .update({ company_id: orgId, role: 'COMPANY_ADMIN', onboarding_state: 'company_complete' })
+      .eq('id', userId);
+
+    if (grantResult.granted) {
+      return res.status(200).json({
+        success:        true,
+        credits:        grantResult.credits,
+        expiresAt:      grantResult.expiresAt,
+        alreadyClaimed: false,
+      });
     }
 
-    // ── 9a. Stamp the org as credited ───────────────────────────────────────
-    // Denormalized mirror of the free_credit_claims row — lets UI and admin
-    // tools check "has this org been credited yet" without joining the claims
-    // table. Only sets when unset so replays don't overwrite the original
-    // timestamp. Non-fatal if it fails — the claim row is authoritative.
-    const { error: flagErr } = await supabase
-      .from('companies')
-      .update({ free_credit_granted_at: new Date().toISOString() })
-      .eq('id', orgId)
-      .is('free_credit_granted_at', null);
-    if (flagErr) {
-      console.error('[onboarding/complete] free_credit_granted_at stamp failed:', flagErr.message);
-    }
-
-    // ── 10. Backfill users.company_id ───────────────────────────────────────
-    await supabase.from('users').update({ company_id: orgId, role: 'COMPANY_ADMIN' }).eq('id', userId);
-
+    // already_claimed for this same user (idempotent re-submit)
     return res.status(200).json({
       success:        true,
       credits:        initialCredits,
       expiresAt:      expiryAt,
-      alreadyClaimed: false,
+      alreadyClaimed: true,
     });
   } catch (err: any) {
     console.error('[onboarding/complete]', err);

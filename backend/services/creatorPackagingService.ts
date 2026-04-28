@@ -39,6 +39,7 @@ export async function generateCreatorMarketingPackaging(input: {
   summary?: string;
   targetAudience?: string;
   assetType: string;
+  companyId?: string | null;
   campaignContext?: Record<string, unknown>;
   blueprint?: Record<string, unknown>;
 }): Promise<CreatorPackaging> {
@@ -48,6 +49,7 @@ export async function generateCreatorMarketingPackaging(input: {
     summary,
     targetAudience,
     assetType,
+    companyId,
     campaignContext,
     blueprint,
   } = input;
@@ -79,6 +81,7 @@ Rules:
 
   try {
     const result = await runCompletionWithOperation({
+      companyId,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       operation: 'creator_marketing_packaging',
       temperature: 0.4,

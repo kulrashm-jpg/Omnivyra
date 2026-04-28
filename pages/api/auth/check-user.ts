@@ -43,7 +43,7 @@ export default async function handler(
     if (Array.isArray(publicUsers) && publicUsers.length > 0) {
       const row = publicUsers[0] as any;
       // Treat soft-deleted as non-existent — the login flow will surface
-      // ACCOUNT_DELETED at the appropriate point (sync-firebase-user / post-login-route).
+      // ACCOUNT_DELETED at the appropriate point (post-login-route).
       if (row.is_deleted) {
         return res.status(200).json({ exists: false });
       }

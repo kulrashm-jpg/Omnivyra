@@ -77,7 +77,7 @@ export default function BlogListingPage() {
   }, []);
 
   const siteUrl = typeof window !== 'undefined' ? window.location.origin : '';
-  const metaTitle = 'The Marketing Intelligence Journal | OmniVyra';
+  const metaTitle = 'The Marketing Intelligence Journal | Omnivyra';
   const metaDesc = 'Strategic insight on campaign architecture, execution intelligence, and momentum modeling.';
 
   return (

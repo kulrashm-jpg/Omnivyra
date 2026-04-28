@@ -1,0 +1,47 @@
+{
+  "files.watcherExclude": {
+    "**/.git/**": true,
+    "**/.next/**": true,
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/coverage/**": true,
+    "**/logs/**": true,
+    "**/tmp/**": true,
+    "**/tmp_*/*": true,
+    "**/artifacts/**": true,
+    "**/.vercel/**": true,
+    "**/tmp_chrome_profile/**": true,
+    "**/tmp_chrome_profile_strong/**": true,
+    "**/tmp_report_inspection/**": true
+  },
+  "search.exclude": {
+    "**/.git": true,
+    "**/.next": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/coverage": true,
+    "**/logs": true,
+    "**/tmp": true,
+    "**/artifacts": true,
+    "**/.vercel": true,
+    "**/tmp_chrome_profile": true,
+    "**/tmp_chrome_profile_strong": true,
+    "**/tmp_report_inspection": true
+  },
+  "files.exclude": {
+    "**/.next": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/coverage": true,
+    "**/logs": true,
+    "**/tmp": true,
+    "**/artifacts": true,
+    "**/.vercel": true,
+    "**/tmp_chrome_profile": true,
+    "**/tmp_chrome_profile_strong": true,
+    "**/tmp_report_inspection": true
+  },
+  "typescript.disableAutomaticTypeAcquisition": true
+}

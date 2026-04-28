@@ -66,9 +66,16 @@ export function buildTemplateVariables(payload: PdfReportPayload): Record<string
   const visual3 = safeText(visuals?.searchVisibilityFunnel.insightSentence, 1);
   const visual4 = safeText(visuals?.crawlHealthBreakdown.insightSentence, 1);
 
+  const rawLogoUrl = String(payload.companyContext?.logoUrl ?? '').trim();
+  const company_logo_url = /^https?:\/\//i.test(rawLogoUrl) ? rawLogoUrl : '';
+  const rawFaviconUrl = String(payload.companyContext?.faviconUrl ?? '').trim();
+  const company_favicon_url = /^https?:\/\//i.test(rawFaviconUrl) ? rawFaviconUrl : '';
+
   return {
     company_name: brandProfile?.companyName ?? brandName,
     website_url: brandProfile?.websiteUrl ?? safeText(payload.domain, 1),
+    company_logo_url,
+    company_favicon_url,
     report_date: safeText(payload.generatedDate, 1),
     primary_focus: brandProfile?.primaryFocus ?? safeText(
       payload.decisionSnapshot?.primaryFocusArea

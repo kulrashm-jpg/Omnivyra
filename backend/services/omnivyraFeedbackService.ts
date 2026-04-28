@@ -34,7 +34,7 @@ const getBaseUrl = () => {
   return baseUrl ? baseUrl.replace(/\/$/, '') : null;
 };
 
-const isOmniVyraEnabled = () => {
+const isOmnivyraEnabled = () => {
   const flag = process.env.USE_OMNIVYRA;
   return flag === 'true' || flag === '1' || flag === 'yes';
 };
@@ -53,7 +53,7 @@ const buildPreview = (snapshot: LearningSnapshot) => ({
 });
 
 export const sendLearningSnapshot = async (snapshot: LearningSnapshot): Promise<LearningSendResult> => {
-  if (!isOmniVyraEnabled()) {
+  if (!isOmnivyraEnabled()) {
     const result = { status: 'skipped', payload_preview: buildPreview(snapshot) } as LearningSendResult;
     if (snapshot.campaignId) {
       lastLearningStatus.set(snapshot.campaignId, result);

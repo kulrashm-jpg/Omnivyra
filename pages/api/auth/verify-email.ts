@@ -19,6 +19,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
+import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse   = { error: string; code?: string };
@@ -88,7 +89,7 @@ export default async function handler(
   // Try full select first; fall back to just 'name' if new columns don't exist yet
   let userRowResult = await supabase
     .from('users')
-    .select('name, onboarding_state, has_password')
+    .select('name, onboarding_state, has_password, last_sign_in_at')
     .eq('id', resolvedUserId)
     .single();
 
@@ -107,6 +108,8 @@ export default async function handler(
 
   const currentState = (userRow as any).onboarding_state;
   const nextState = currentState === 'pending_verification' ? 'verified' : currentState;
+  const priorLastSignInAt = (userRow as any).last_sign_in_at as string | null | undefined;
+  const isFirstVerifiedLogin = !priorLastSignInAt;
 
   // Build update payload — only include columns that exist
   const updatePayload: Record<string, unknown> = { is_email_verified: true, last_sign_in_at: now };
@@ -118,16 +121,28 @@ export default async function handler(
     .eq('id', resolvedUserId);
 
   // ── 3. Complete any pending signup_intent for this email ──────────────────
+  // sync-supabase-user's bootstrap already attempts to mark the intent
+  // completed; this is a backstop. Any failure here is logged and
+  // ignored — the intent state is informational and must NOT break auth.
   if (resolvedEmail) {
-    const { error: signupIntentError } = await supabase
-      .from('signup_intents')
-      .update({ status: 'completed', completed_at: now })
-      .eq('email', resolvedEmail.toLowerCase())
-      .eq('status', 'pending');
+    try {
+      const { error: signupIntentError } = await supabase
+        .from('signup_intents')
+        .update({ status: 'completed', completed_at: now })
+        .eq('email', resolvedEmail.toLowerCase())
+        .eq('status', 'pending');
 
-    if (signupIntentError) {
-      logger.error('auth_verify_email_signup_intent_failed', { email: resolvedEmail, message: signupIntentError.message });
-      return res.status(500).json({ error: 'Failed to finalize signup intent' });
+      if (signupIntentError) {
+        logger.warn('auth_verify_email_signup_intent_failed', {
+          email: resolvedEmail,
+          message: signupIntentError.message,
+        });
+      }
+    } catch (err) {
+      logger.warn('auth_verify_email_signup_intent_threw', {
+        email: resolvedEmail,
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -152,8 +167,11 @@ export default async function handler(
       .eq('status', 'active')
       .limit(1)
       .maybeSingle();
-
-    route = roleRow ? '/dashboard' : '/onboarding/company';
+    if (!roleRow) {
+      route = '/onboarding/company';
+    } else {
+      route = isFirstVerifiedLogin ? '/welcome' : await getUserPreferenceRoute(resolvedUserId);
+    }
   }
 
   return res.status(200).json({ success: true, route });

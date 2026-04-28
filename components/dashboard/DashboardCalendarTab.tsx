@@ -159,7 +159,7 @@ export default function DashboardCalendarTab({ d }: { d: DashboardState }) {
                     Today
                   </button>
                   <button
-                    onClick={() => window.location.href = '/content-calendar'}
+                    onClick={() => window.location.href = '/dashboard?tab=calendar'}
                     className="ml-1 px-3 py-2 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
                   >
                     Open Full Calendar

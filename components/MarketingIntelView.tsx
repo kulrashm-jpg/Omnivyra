@@ -3733,7 +3733,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
     return (
     <>
       <Head>
-        <title>Intelligence · OmniVyra</title>
+        <title>Intelligence · Omnivyra</title>
       </Head>
 
       <div className="min-h-screen bg-gray-50/60">

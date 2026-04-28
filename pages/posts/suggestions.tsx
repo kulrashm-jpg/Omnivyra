@@ -1,15 +1,16 @@
-import ManagedSuggestionsPage from '../../components/content/ManagedSuggestionsPage';
+import { useEffect } from 'react';
+import { useRouter } from 'next/router';
 
-export default function PostSuggestionsPage() {
-  return (
-    <ManagedSuggestionsPage
-      contentType="post"
-      title="Post Suggestions"
-      stepLabel="Step 4 of 5 - Refine the brief"
-      heading="Refine Your Post"
-      theme="blue"
-      generatePath="/posts/result"
-      backPath="/posts/template"
-    />
-  );
+export default function PostSuggestionsCompatibilityPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    void router.replace({
+      pathname: '/posts/intelligence',
+      query: router.query,
+    });
+  }, [router]);
+
+  return null;
 }

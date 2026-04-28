@@ -55,7 +55,7 @@ BEGIN
   ) THEN
     ALTER TABLE community_ai_actions
       ADD CONSTRAINT community_ai_actions_action_type_check
-      CHECK (action_type IN ('like', 'reply', 'share', 'follow', 'schedule'));
+      CHECK (action_type IN ('like', 'reply', 'share', 'follow', 'schedule', 'dm'));
   END IF;
 END $$;
 

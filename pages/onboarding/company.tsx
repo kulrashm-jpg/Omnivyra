@@ -8,10 +8,10 @@
  *
  * Flow:
  *  1. Check Supabase session (redirect → /login if absent)
- *  2. If user already has a company → redirect /dashboard
+ *  2. If user already has a company → redirect to the current workspace
  *  3. Step A: enter company website URL
  *  4. Step B: confirm/edit auto-filled details (name, industry, size)
- *  5. POST /api/onboarding/setup-company → redirect /dashboard
+ *  5. POST /api/onboarding/setup-company → redirect to welcome, then workspace
  */
 
 import { useState, useEffect } from 'react';
@@ -23,6 +23,7 @@ import { getAuthToken } from '../../utils/getAuthToken';
 import { useCompanyContext } from '../../components/CompanyContext';
 
 type Step = 'loading' | 'website' | 'details' | 'saving' | 'joined' | 'company-exists';
+const COMPANY_DRAFT_KEY = 'onboarding_company_draft_v1';
 
 const INDUSTRIES = [
   'Technology & Software',
@@ -76,7 +77,7 @@ export default function CompanySetupPage() {
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
   const [joinedCompanyName, setJoinedCompanyName] = useState<string | null>(null);
 
-  // Company-exists state — shown when this company is already on OmniVyra
+  // Company-exists state — shown when this company is already on Omnivyra
   const [existingCompanyId,   setExistingCompanyId]   = useState<string | null>(null);
   const [existingCompanyName, setExistingCompanyName] = useState<string | null>(null);
   /** Display name of the company's admin (name, or email local-part as fallback) */
@@ -92,14 +93,36 @@ export default function CompanySetupPage() {
       if (!token) { router.replace('/login'); return; }
       setSession({ access_token: token });
 
-      // If user already has a company, go straight to dashboard
+      try {
+        const draftRaw = localStorage.getItem(COMPANY_DRAFT_KEY);
+        if (draftRaw) {
+          const draft = JSON.parse(draftRaw) as {
+            websiteInput?: string;
+            companyName?: string;
+            industry?: string;
+            teamSize?: string;
+            step?: Step;
+          };
+          if (draft.websiteInput) setWebsite(draft.websiteInput);
+          if (draft.companyName) setCompanyName(draft.companyName);
+          if (draft.industry) setIndustry(draft.industry);
+          if (draft.teamSize) setTeamSize(draft.teamSize);
+          if (draft.step === 'details' && (draft.companyName || draft.websiteInput)) {
+            setStep('details');
+          }
+        }
+      } catch {
+        // Ignore unreadable draft state
+      }
+
+      // If user already has a company, go straight to the current workspace
       const listRes = await fetch('/api/company-profile?mode=list', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (listRes.ok) {
         const json = await listRes.json().catch(() => null);
         if (json?.companies?.length) {
-          router.replace('/dashboard');
+          router.replace('/welcome');
           return;
         }
       }
@@ -126,9 +149,21 @@ export default function CompanySetupPage() {
         // Non-fatal — fall through to company creation form
       }
 
-      setStep('website');
+      setStep((current) => (current === 'details' ? current : 'website'));
     });
   }, [router]);
+
+  useEffect(() => {
+    if (step === 'loading' || step === 'saving' || step === 'joined' || step === 'company-exists') return;
+    try {
+      localStorage.setItem(
+        COMPANY_DRAFT_KEY,
+        JSON.stringify({ websiteInput, companyName, industry, teamSize, step }),
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [websiteInput, companyName, industry, teamSize, step]);
 
   // ── Step A: website submitted ─────────────────────────────────────────────
   function handleWebsiteNext(e: React.FormEvent) {
@@ -193,6 +228,7 @@ export default function CompanySetupPage() {
 
       // Clear referral code after use
       try { localStorage.removeItem('ref_code'); } catch { /* ignore */ }
+      try { localStorage.removeItem(COMPANY_DRAFT_KEY); } catch { /* ignore */ }
 
       if (json.companyExists) {
         // Company already exists — show admin contact info, no self-registration
@@ -206,15 +242,15 @@ export default function CompanySetupPage() {
       if (json.selfJoined) {
         setJoinedCompanyName(json.matchedCompanyName ?? companyName.trim());
         setStep('joined');
-        // Pre-load company data so dashboard has context immediately
+        // Pre-load company data so the next workspace view has context immediately
         refreshCompanies().catch(() => {});
-        setTimeout(() => router.replace('/dashboard'), 4000);
+        setTimeout(() => router.replace('/welcome?context=company_joined'), 4000);
         return;
       }
 
-      // Pre-load company data so dashboard renders with full context
+      // Pre-load company data so the workspace renders with full context
       await refreshCompanies().catch(() => {});
-      router.replace('/dashboard');
+      router.replace('/welcome?context=company_created');
     } catch (err: any) {
       setErrorMsg(err.message ?? 'Something went wrong. Please try again.');
       setStep('details');
@@ -225,7 +261,7 @@ export default function CompanySetupPage() {
   return (
     <>
       <Head>
-        <title>Set up your company | OmniVyra</title>
+        <title>Set up your company | Omnivyra</title>
         <meta name="robots" content="noindex" />
       </Head>
 
@@ -235,7 +271,7 @@ export default function CompanySetupPage() {
         <header className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
           <div className="mx-auto flex h-14 max-w-lg items-center justify-between px-6">
             <Link href="/">
-              <img src="/logo.png" alt="OmniVyra" className="h-9 w-auto object-contain" />
+              <img src="/logo.png" alt="Omnivyra" className="h-9 w-auto object-contain" />
             </Link>
             {(step === 'website' || step === 'details') && (
               <span className="text-xs text-[#6B7C93]">
@@ -443,7 +479,7 @@ export default function CompanySetupPage() {
                         </svg>
                         Setting up your workspace…
                       </span>
-                    ) : 'Go to my dashboard →'}
+                    ) : 'Continue to my workspace →'}
                   </button>
 
                   {!websiteInput && (
@@ -483,7 +519,7 @@ export default function CompanySetupPage() {
                 </div>
 
                 <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
-                  Your company is already on OmniVyra
+                  Your company is already on Omnivyra
                 </h1>
                 <p className="mt-3 text-sm leading-relaxed text-[#6B7C93] max-w-sm mx-auto">
                   <strong className="text-[#0B1F33]">{existingCompanyName}</strong> already has a workspace.
@@ -534,7 +570,7 @@ export default function CompanySetupPage() {
                   You've been added to {joinedCompanyName}
                 </h1>
                 <p className="mt-3 text-sm leading-relaxed text-[#6B7C93] max-w-sm mx-auto">
-                  Your company is already on OmniVyra. You've been added as a <strong>Content Creator</strong>
+                  Your company is already on Omnivyra. You've been added as a <strong>Content Creator</strong>
                   {' '}and the company admin has been notified.
                 </p>
                 <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-left space-y-2">
@@ -548,7 +584,7 @@ export default function CompanySetupPage() {
                     The company admin can adjust your access level at any time from Team Settings.
                   </p>
                 </div>
-                <p className="mt-5 text-xs text-[#6B7C93]">Taking you to your dashboard…</p>
+                <p className="mt-5 text-xs text-[#6B7C93]">Taking you to your workspace…</p>
                 <div className="mt-2 flex justify-center">
                   <svg className="h-5 w-5 animate-spin text-[#0A66C2]" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />

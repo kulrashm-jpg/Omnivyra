@@ -59,6 +59,14 @@ export function extractCompanyNarrativeContext(params: {
   const marketContext = businessType && geography
     ? `${businessType} in ${geography}`
     : businessType || geography || null;
+  const logoUrl = firstNonEmpty(
+    (profile as { logo_url?: string | null } | null | undefined)?.logo_url,
+    (profile as { brand_logo_url?: string | null } | null | undefined)?.brand_logo_url,
+    (profile as { company_logo_url?: string | null } | null | undefined)?.company_logo_url,
+  );
+  const faviconUrl = firstNonEmpty(
+    (profile as { favicon_url?: string | null } | null | undefined)?.favicon_url,
+  );
   return {
     companyName,
     domain,
@@ -70,6 +78,8 @@ export function extractCompanyNarrativeContext(params: {
     marketFocus,
     productServices,
     geography,
+    logoUrl,
+    faviconUrl,
   };
 }
 
