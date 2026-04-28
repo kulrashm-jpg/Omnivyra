@@ -9,14 +9,6 @@ import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 import { TourProvider } from '../components/tour/TourContext';
 import AppLayout from '../components/layout/AppLayout';
-import {
-  WEBSITE_GA_HOSTNAME,
-  WEBSITE_GA_MEASUREMENT_ID,
-  canTrackWebsiteAnalytics,
-  isWebsiteAnalyticsHost,
-  trackWebsiteEvent,
-  trackWebsitePageView,
-} from '../lib/websiteAnalytics';
 
 // NOTE: clearSupabaseSession() was removed here.  It wiped sb-* localStorage
 // keys (including PKCE code-verifiers) on every page load, which broke magic-
@@ -27,58 +19,21 @@ import {
 const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
 
 const WebsiteAnalytics: React.FC = () => {
-  const router = useRouter();
-  const [enabled, setEnabled] = useState(false);
-
-  useEffect(() => {
-    setEnabled(isWebsiteAnalyticsHost() && canTrackWebsiteAnalytics(router.pathname));
-  }, [router.pathname]);
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const handleRouteChange = (url: string) => {
-      if (!canTrackWebsiteAnalytics(url)) return;
-      trackWebsitePageView(url);
-    };
-
-    const handleDocumentClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null;
-      const cta = target?.closest<HTMLElement>('[data-ga-primary-cta]');
-      if (!cta) return;
-
-      trackWebsiteEvent('cta_click', {
-        cta_label: cta.dataset.gaLabel || cta.textContent?.trim() || 'primary_cta',
-        cta_location: cta.dataset.gaLocation || router.pathname,
-      });
-    };
-
-    router.events.on('routeChangeComplete', handleRouteChange);
-    document.addEventListener('click', handleDocumentClick);
-
-    return () => {
-      router.events.off('routeChangeComplete', handleRouteChange);
-      document.removeEventListener('click', handleDocumentClick);
-    };
-  }, [enabled, router.events, router.pathname]);
-
-  if (!enabled) return null;
-
   return (
     <>
       <Script
         src="https://www.googletagmanager.com/gtag/js?id=G-LZVBC8FEHP"
         strategy="afterInteractive"
       />
-      <Script id="google-analytics" strategy="afterInteractive">
+      <Script id="ga-init" strategy="afterInteractive">
         {`
-          if (window.location.hostname === '${WEBSITE_GA_HOSTNAME}') {
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            window.gtag = gtag;
-            gtag('js', new Date());
-            gtag('config', '${WEBSITE_GA_MEASUREMENT_ID}');
-          }
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  window.gtag = gtag;
+  gtag('js', new Date());
+  gtag('config', 'G-LZVBC8FEHP', {
+    send_page_view: true
+  });
         `}
       </Script>
     </>
