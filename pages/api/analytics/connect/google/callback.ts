@@ -65,11 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.redirect(buildRedirectUrl(result.returnTo, { error: 'no_properties_found' }));
     }
 
-    return res.redirect(buildRedirectUrl(result.returnTo, {
-      ga4: 'connected',
-      companyId: result.companyId,
-      properties: String(result.properties.length),
-    }));
+    return res.redirect('/integrations?focus=data&success=true');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'ga4_callback_failed';
     const redirectError = /property/i.test(message) ? 'no_properties_found' : 'oauth_failed';
