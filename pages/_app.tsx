@@ -9,6 +9,7 @@ import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 import { TourProvider } from '../components/tour/TourContext';
 import AppLayout from '../components/layout/AppLayout';
+import { WEBSITE_GA_MEASUREMENT_ID } from '../lib/websiteAnalytics';
 
 // NOTE: clearSupabaseSession() was removed here.  It wiped sb-* localStorage
 // keys (including PKCE code-verifiers) on every page load, which broke magic-
@@ -22,7 +23,7 @@ const WebsiteAnalytics: React.FC = () => {
   return (
     <>
       <Script
-        src="https://www.googletagmanager.com/gtag/js?id=G-LZVBC8FEHP"
+        src={`https://www.googletagmanager.com/gtag/js?id=${WEBSITE_GA_MEASUREMENT_ID}`}
         strategy="afterInteractive"
       />
       <Script id="ga-init" strategy="afterInteractive">
@@ -31,7 +32,7 @@ const WebsiteAnalytics: React.FC = () => {
   function gtag(){dataLayer.push(arguments);}
   window.gtag = gtag;
   gtag('js', new Date());
-  gtag('config', 'G-LZVBC8FEHP', {
+  gtag('config', '${WEBSITE_GA_MEASUREMENT_ID}', {
     send_page_view: true
   });
         `}
@@ -193,6 +194,7 @@ function MyApp({ Component, pageProps }: AppProps) {
       <TourProvider>
         <Head>
           <link rel="icon" href="/favicon.jpg" />
+          <meta name="google-analytics-measurement-id" content={WEBSITE_GA_MEASUREMENT_ID} />
         </Head>
         <WebsiteAnalytics />
         <RouteProgressBar />

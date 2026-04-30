@@ -45,6 +45,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
 import { supabase } from '@/backend/db/supabaseClient';
+import {
+  isExtensionCommentPlatform,
+  normalizeExtensionPlatform,
+  normalizeScrapedMessageContent,
+} from '@/lib/engagement/extensionIngestion';
+import { derivePlatformThreadId, validateSyncRecord } from '@/lib/engagement/syncIngestion';
 
 type IncomingPost = {
   post_urn?: string;
@@ -57,12 +63,26 @@ type IncomingPost = {
 type IncomingComment = {
   post_urn?: string;
   comment_urn?: string;
+  platform_message_id?: string | null;
+  thread_id?: string | null;
+  parent_id?: string | null;
   author_name?: string | null;
   author_handle?: string | null;
+  actor_type?: string | null;
+  actor_id?: string | null;
   author_avatar_url?: string | null;
   author_self?: boolean;
   content?: string | null;
   created_at?: string | null;
+  raw_time?: string | null;
+  normalized_time?: string | null;
+  scraped_at?: string | null;
+  timestamp_confidence?: string | null;
+  parent_confidence?: string | null;
+  reaction_type?: string | null;
+  reaction_count?: number | null;
+  user_reaction?: string | null;
+  source?: string | null;
   like_count?: number | null;
   parent_comment_urn?: string | null;
 };
@@ -73,8 +93,6 @@ type Body = {
   comments?: IncomingComment[];
 };
 
-const SUPPORTED_PLATFORMS = new Set(['linkedin']);
-
 function normalizeIso(v: unknown): string | null {
   if (!v) return null;
   const s = String(v).trim();
@@ -82,6 +100,11 @@ function normalizeIso(v: unknown): string | null {
   const parsed = Date.parse(s);
   if (!Number.isFinite(parsed)) return null;
   return new Date(parsed).toISOString();
+}
+
+function isSyncValidationError(err: unknown): boolean {
+  const message = (err as Error)?.message || '';
+  return /\b(required|must be|parent_id not found)\b/i.test(message);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -96,8 +119,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const organizationId = session.orgId;
 
   const body = (req.body || {}) as Body;
-  const platform = (body.platform ?? '').toString().toLowerCase().trim();
-  if (!platform || !SUPPORTED_PLATFORMS.has(platform)) {
+  const platform = normalizeExtensionPlatform(body.platform);
+  if (!platform || !isExtensionCommentPlatform(platform)) {
     return res.status(400).json({ success: false, error: 'unsupported platform' });
   }
   const incomingPosts = Array.isArray(body.posts) ? body.posts : [];
@@ -189,11 +212,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── Messages (one per comment) ────────────────────────────────────────
     let messagesUpserted = 0;
-    for (const c of incomingComments) {
+    let duplicatesRejected = 0;
+    const insertedMessageIdByPlatformId = new Map<string, string>();
+    const sortedComments = [...incomingComments].sort((a, b) => {
+      const aParent = Boolean(a.parent_id ?? a.parent_comment_urn);
+      const bParent = Boolean(b.parent_id ?? b.parent_comment_urn);
+      return Number(aParent) - Number(bParent);
+    });
+
+    for (const c of sortedComments) {
       const postUrn = (c.post_urn || '').toString().trim();
-      const commentUrn = (c.comment_urn || '').toString().trim();
+      const commentUrn = (c.platform_message_id || c.comment_urn || '').toString().trim();
       const content = (c.content ?? '').toString();
-      if (!postUrn || !commentUrn) continue;
+      const parentId = (c.parent_id ?? c.parent_comment_urn ?? null) as string | null;
+      const syncRecord = validateSyncRecord({
+        platform_message_id: commentUrn,
+        thread_id: c.thread_id,
+        parent_id: parentId,
+        content,
+        actor_type: c.actor_type ?? (c.author_self ? 'company' : 'user'),
+        actor_id: c.actor_id ?? c.author_handle ?? c.author_name,
+        raw_time: c.raw_time,
+        normalized_time: c.normalized_time ?? c.created_at,
+        scraped_at: c.scraped_at,
+        timestamp_confidence: c.timestamp_confidence,
+        source: c.source ?? 'platform_sync',
+      });
+      if (!postUrn) throw new Error('post_urn required');
 
       let threadUuid = threadIdByPostUrn[postUrn];
       if (!threadUuid) {
@@ -224,33 +269,95 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       if (!threadUuid) continue;
 
+      const normalizedComment = normalizeScrapedMessageContent({
+        content: syncRecord.content,
+        author_self: c.author_self,
+      });
+
+      let parentMessageId: string | null = null;
+      if (syncRecord.parent_id) {
+        parentMessageId = insertedMessageIdByPlatformId.get(syncRecord.parent_id) ?? null;
+        if (!parentMessageId) {
+          const { data: parentRow } = await supabase
+            .from('engagement_messages')
+            .select('id')
+            .eq('platform', platform)
+            .eq('platform_message_id', syncRecord.parent_id)
+            .maybeSingle();
+          parentMessageId = parentRow?.id ?? null;
+        }
+        if (!parentMessageId) throw new Error(`parent_id not found: ${syncRecord.parent_id}`);
+      }
+
       const row = {
         thread_id: threadUuid,
         source_id: sourceId,
         platform,
-        platform_message_id: commentUrn,
+        platform_message_id: syncRecord.platform_message_id,
+        sync_thread_id: derivePlatformThreadId(syncRecord),
+        platform_parent_id: syncRecord.parent_id,
+        parent_message_id: parentMessageId,
+        post_comment_id: null,
         message_type: 'comment',
-        content,
-        platform_created_at: normalizeIso(c.created_at),
+        content: normalizedComment.content,
+        platform_created_at: syncRecord.normalized_time,
+        raw_time: syncRecord.raw_time,
+        normalized_time: syncRecord.normalized_time,
+        scraped_at: syncRecord.scraped_at,
+        sync_source: syncRecord.source,
+        actor_type: syncRecord.actor_type,
+        actor_external_id: syncRecord.actor_id,
         like_count: typeof c.like_count === 'number' ? c.like_count : null,
-        direction: c.author_self ? 'outgoing' : 'incoming',
+        direction: normalizedComment.isSelf ? 'outgoing' : 'incoming',
         raw_payload: {
           author_name: c.author_name ?? null,
           author_handle: c.author_handle ?? null,
           author_avatar_url: c.author_avatar_url ?? null,
-          author_self: Boolean(c.author_self),
-          parent_comment_urn: c.parent_comment_urn ?? null,
+          author_self: normalizedComment.isSelf,
+          you_prefix_detected: normalizedComment.prefixDetected,
+          parent_comment_urn: syncRecord.parent_id,
+          sync_thread_id: syncRecord.thread_id,
+          raw_time: syncRecord.raw_time,
+          normalized_time: syncRecord.normalized_time,
+          scraped_at: syncRecord.scraped_at,
+          timestamp_confidence: syncRecord.timestamp_confidence,
+          parent_confidence: c.parent_confidence ?? null,
+          reaction_type: c.reaction_type ?? null,
+          reaction_count: typeof c.reaction_count === 'number'
+            ? c.reaction_count
+            : typeof c.like_count === 'number'
+              ? c.like_count
+              : null,
+          user_reaction: c.user_reaction ?? null,
+          source: syncRecord.source,
+          ingested_via: 'platform_sync',
         },
       };
 
-      const { error: upsertErr } = await supabase
+      const { data: insertedMessage, error: insertErr } = await supabase
         .from('engagement_messages')
-        .upsert(row, { onConflict: 'thread_id,platform_message_id' });
-      if (upsertErr) {
-        if ((upsertErr as { code?: string }).code !== '23505') {
-          console.warn('[extension/events/comments] message upsert failed:', upsertErr.message);
+        .insert(row)
+        .select('id')
+        .single();
+      if (insertErr) {
+        if ((insertErr as { code?: string }).code === '23505') {
+          const { data: existingRow } = await supabase
+            .from('engagement_messages')
+            .select('id')
+            .eq('platform', platform)
+            .eq('platform_message_id', syncRecord.platform_message_id)
+            .maybeSingle();
+          if (existingRow?.id) {
+            insertedMessageIdByPlatformId.set(syncRecord.platform_message_id, existingRow.id as string);
+          }
+          duplicatesRejected += 1;
           continue;
         }
+        console.warn('[extension/events/comments] message insert failed:', insertErr.message);
+        continue;
+      }
+      if (insertedMessage?.id) {
+        insertedMessageIdByPlatformId.set(syncRecord.platform_message_id, insertedMessage.id as string);
       }
       messagesUpserted += 1;
     }
@@ -260,10 +367,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platform,
       threads_upserted: threadsUpserted,
       messages_upserted: messagesUpserted,
+      duplicates_rejected: duplicatesRejected,
     });
   } catch (err) {
     console.error('[extension/events/comments]', err);
-    return res.status(500).json({
+    return res.status(isSyncValidationError(err) ? 400 : 500).json({
       success: false,
       error: (err as Error)?.message || 'comment sync failed',
     });

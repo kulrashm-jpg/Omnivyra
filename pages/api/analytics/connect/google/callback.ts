@@ -18,6 +18,20 @@ function resolveCallbackError(error: string): string {
   return 'oauth_failed';
 }
 
+function buildSuccessParams(returnTo: string | null): Record<string, string> {
+  if (returnTo?.startsWith('/super-admin')) {
+    return {
+      ga4: 'connected',
+      analytics: 'ga',
+    };
+  }
+
+  return {
+    ga4: 'connected',
+    success: 'true',
+  };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
@@ -65,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.redirect(buildRedirectUrl(result.returnTo, { error: 'no_properties_found' }));
     }
 
-    return res.redirect('/integrations?focus=data&success=true');
+    return res.redirect(buildRedirectUrl(result.returnTo, buildSuccessParams(result.returnTo)));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'ga4_callback_failed';
     const redirectError = /property/i.test(message) ? 'no_properties_found' : 'oauth_failed';

@@ -480,22 +480,9 @@ const computeBudgetFit = (profile: any): number => {
 };
 
 const computeCompetitorGap = (trends: TrendSignalNormalized[], profile: any): number => {
-  const normalizeList = (value?: string | null): string[] =>
-    String(value || '')
-      .split(/[,;/|]+/g)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-
-  const competitors = Array.isArray(profile?.competitors_list)
-    ? profile.competitors_list.map((item: string) => String(item).trim()).filter(Boolean)
-    : normalizeList(profile?.competitors);
-  if (competitors.length === 0 || trends.length === 0) return 1;
-  const competitorTerms = competitors.map((entry) => entry.toLowerCase());
-  const overlap = trends.filter((trend) =>
-    competitorTerms.some((term) => trend.topic.toLowerCase().includes(term))
-  ).length;
-  const overlapRatio = overlap / Math.max(1, trends.length);
-  return overlapRatio > 0 ? 0.98 : 1.02;
+  void trends;
+  void profile;
+  return 1;
 };
 
 export const buildScoringAdjustments = (

@@ -164,27 +164,7 @@ export async function aggregateCompanyIntelligence(
   }
   trendClusters.sort((a, b) => b.signal_count - a.signal_count);
 
-  const competitorSignals = signals.filter((s) => s.signal_type === 'competitor_activity');
   const competitorActivity: CompetitorActivityItem[] = [];
-  const compByTopic = new Map<string, Array<{ signal_id: string; topic: string; relevance_score: number }>>();
-  for (const s of competitorSignals) {
-    const topic = (s.topic ?? '').trim();
-    if (!topic) continue;
-    const key = normalizeTopic(topic);
-    if (!key) continue;
-    const arr = compByTopic.get(key) ?? [];
-    arr.push({ signal_id: s.signal_id, topic, relevance_score: rel(s.relevance_score) });
-    compByTopic.set(key, arr);
-  }
-  for (const [, items] of compByTopic.entries()) {
-    const hint = items[0]?.topic ?? 'competitor';
-    competitorActivity.push({
-      competitor_hint: hint.slice(0, 80),
-      signal_count: items.length,
-      signals: items.sort((a, b) => b.relevance_score - a.relevance_score).slice(0, 5),
-    });
-  }
-  competitorActivity.sort((a, b) => b.signal_count - a.signal_count);
 
   const marketSignals = signals.filter(
     (s) => s.signal_type === 'market_shift' || s.signal_type === 'trend'

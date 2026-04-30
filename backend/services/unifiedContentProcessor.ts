@@ -102,23 +102,24 @@ function stripArtifacts(text: string): string {
 function sentenceAwareTruncate(text: string, limit: number): string {
   if (text.length <= limit) return text;
 
-  // Reserve 1 char for ellipsis
-  const budget = limit - 1;
-
-  // Try to break at last sentence boundary within budget
+  // Try to break at last sentence boundary within the full limit — when the cut
+  // lands on a clean ./!/? we keep all of it (no ellipsis) since the sentence
+  // already reads as finished.
   const sentenceEnd = /[.!?]\s/g;
   let lastSentencePos = -1;
   let match: RegExpExecArray | null;
   while ((match = sentenceEnd.exec(text)) !== null) {
-    if (match.index + 1 <= budget) lastSentencePos = match.index + 1;
+    if (match.index + 1 <= limit) lastSentencePos = match.index + 1;
     else break;
   }
 
-  if (lastSentencePos > budget * 0.6) {
-    return text.slice(0, lastSentencePos).trimEnd() + '…';
+  if (lastSentencePos > limit * 0.6) {
+    return text.slice(0, lastSentencePos).trimEnd();
   }
 
-  // Fallback: break at last word boundary
+  // Mid-word fallback: reserve 1 char for the ellipsis since we are cutting
+  // a sentence partway through.
+  const budget = limit - 1;
   const cut = text.slice(0, budget);
   const lastSpace = cut.lastIndexOf(' ');
   return (lastSpace > budget * 0.8 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';

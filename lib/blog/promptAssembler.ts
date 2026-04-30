@@ -1,6 +1,11 @@
 /**
  * promptAssembler.ts
  *
+ * DEPRECATED:
+ * No active long-form generation path should import this file. Prompt assembly
+ * now flows through lib/content/unifiedLongFormEngine.ts and the existing
+ * blogGenerationEngine.ts compatibility core.
+ *
  * Prompt-building functions for blog/content generation.
  * Extracted from blogGenerationEngine.ts.
  *

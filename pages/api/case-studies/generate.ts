@@ -8,8 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
-import { getProfile } from '../../../backend/services/companyProfileService';
-import { buildFormattedStyleInstructions } from '../../../lib/content/writingStyleEngine';
+import { buildContentContext } from '../../../lib/content/buildContentContext';
 import {
   runCaseStudyGeneration,
   type CaseStudyGenerationRequest,
@@ -60,15 +59,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   if (!roleGate) return;
 
-  let writingStyleInstructions: string | undefined;
-  let companyProfile: Record<string, unknown> | undefined;
+  let builtContext: Awaited<ReturnType<typeof buildContentContext>> | undefined;
 
   try {
-    const profile = await getProfile(company_id, { autoRefine: false, languageRefine: true });
-    if (profile) {
-      companyProfile = profile as Record<string, unknown>;
-      writingStyleInstructions = buildFormattedStyleInstructions(profile);
-    }
+    builtContext = await buildContentContext(company_id);
   } catch (err) {
     console.warn('[case-studies/generate] profile enrichment failed:', err);
   }
@@ -79,18 +73,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const profileAny = (companyProfile || {}) as Record<string, unknown>;
-    const str = (key: string): string | undefined => {
-      const value = profileAny[key];
-      return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-    };
-    const strArr = (key: string): string[] | undefined => {
-      const value = profileAny[key];
-      return Array.isArray(value) && value.length > 0
-        ? value.filter((entry: unknown) => typeof entry === 'string') as string[]
-        : undefined;
-    };
-
     const generationRequest: CaseStudyGenerationRequest = {
       company_id,
       mode: resolvedMode,
@@ -119,26 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       template_blocks: Array.isArray(template_blocks) ? template_blocks : undefined,
       template_name: typeof template_name === 'string' ? template_name : undefined,
       cache_version: typeof cache_version === 'string' ? cache_version : undefined,
-      companyContext: {
-        audience: str('target_audience') || str('audience'),
-        brand_voice: str('brand_voice') || str('writing_style'),
-        industry: str('industry'),
-        writingStyleInstructions,
-        companyName: str('name'),
-        uniqueValue: str('unique_value'),
-        competitiveAdvantages: str('competitive_advantages'),
-        productsServices: str('products_services'),
-        contentThemes: str('content_themes'),
-        campaignFocus: str('campaign_focus'),
-        growthPriorities: str('growth_priorities'),
-        coreProblemStatement: str('core_problem_statement'),
-        painSymptoms: strArr('pain_symptoms'),
-        authorityDomains: strArr('authority_domains'),
-        desiredTransformation: str('desired_transformation'),
-        keyMessages: str('key_messages'),
-        goals: str('goals'),
-        geography: str('geography'),
-      },
+      companyContext: builtContext?.companyContext,
     };
 
     const result = await runCaseStudyGeneration(generationRequest);

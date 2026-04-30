@@ -4,7 +4,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, Loader2, Sparkles } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronUp, Loader2, Sparkles } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
 import {
   getThreadExecutionDescription,
@@ -15,10 +15,14 @@ import { getThreadResultLink } from '../../lib/thread/threadLinks';
 import {
   buildThreadCompanySummary,
   buildThreadRecommendations,
+  getThreadAnchor,
   getThreadFormat,
   getThreadIntent,
   getThreadPlatformLabel,
+  isThreadAnchor,
+  THREAD_ANCHORS,
   THREAD_INTENTS,
+  type ThreadAnchorValue,
   type ThreadCompanyProfile,
   type ThreadIntentValue,
   type ThreadSessionPayload,
@@ -36,6 +40,9 @@ export default function ThreadIntelligenceView() {
   const prefillExecutionMode = typeof router.query.prefill_execution_mode === 'string'
     ? router.query.prefill_execution_mode.trim().toLowerCase()
     : '';
+  const prefillAnchor = typeof router.query.prefill_anchor === 'string'
+    ? router.query.prefill_anchor.trim().toLowerCase()
+    : '';
 
   const [profile, setProfile] = useState<ThreadCompanyProfile | null>(null);
   const [topic, setTopic] = useState(prefillTopic);
@@ -50,9 +57,13 @@ export default function ThreadIntelligenceView() {
   const [executionMode, setExecutionMode] = useState<ThreadExecutionMode>(
     prefillExecutionMode === 'auto' ? 'auto' : 'manual',
   );
+  const [anchor, setAnchor] = useState<ThreadAnchorValue>(
+    isThreadAnchor(prefillAnchor) ? prefillAnchor : 'market',
+  );
   const [extraInstruction, setExtraInstruction] = useState(prefillReason);
   const [loadingProfile, setLoadingProfile] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [contextExpanded, setContextExpanded] = useState(false);
 
   useEffect(() => {
     if (!selectedCompanyId) return;
@@ -79,10 +90,14 @@ export default function ThreadIntelligenceView() {
     if (prefillExecutionMode === 'auto' || prefillExecutionMode === 'manual') {
       setExecutionMode(prefillExecutionMode as ThreadExecutionMode);
     }
-  }, [prefillExecutionMode, prefillIntent, prefillPlatform, prefillReason, prefillTopic, router.isReady]);
+    if (isThreadAnchor(prefillAnchor)) {
+      setAnchor(prefillAnchor);
+    }
+  }, [prefillAnchor, prefillExecutionMode, prefillIntent, prefillPlatform, prefillReason, prefillTopic, router.isReady]);
 
   const companyName = selectedCompanyName || profile?.name?.trim() || 'Your company';
   const selectedIntent = getThreadIntent(intent);
+  const selectedAnchor = getThreadAnchor(anchor);
   const recommendations = useMemo(
     () => buildThreadRecommendations(companyName, format, profile),
     [companyName, format, profile],
@@ -136,6 +151,13 @@ export default function ThreadIntelligenceView() {
       cta: intent === 'launch' ? 'Invite readers to follow the launch and engage' : 'Invite readers to react, reply, or follow for the next step',
       extraInstruction: extraInstruction.trim(),
       companyName,
+      anchor: selectedAnchor.value,
+      anchorLabel: selectedAnchor.label,
+      anchorFocus: selectedAnchor.focusPrompt,
+      productsServices:
+        typeof profile?.products_services === 'string' ? profile.products_services.trim() : '',
+      brandVoice:
+        typeof profile?.brand_voice === 'string' ? profile.brand_voice.trim() : '',
     };
 
     const token = createThreadSessionToken();
@@ -173,8 +195,27 @@ export default function ThreadIntelligenceView() {
                   <p className="mt-1 text-sm font-semibold text-gray-900">{format.label}</p>
                 </div>
                 <div className="rounded-2xl border border-violet-100 bg-violet-50/70 px-4 py-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-500">Company Context</p>
-                  <p className="mt-1 text-sm text-gray-700">{loadingProfile ? 'Loading company context...' : contextSummary}</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-500">Company Context</p>
+                    {!loadingProfile && contextSummary ? (
+                      <button
+                        type="button"
+                        onClick={() => setContextExpanded((value) => !value)}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-600 transition hover:text-violet-700"
+                        aria-expanded={contextExpanded}
+                      >
+                        {contextExpanded ? 'Hide' : 'View'}
+                        {contextExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-sm text-gray-700">
+                    {loadingProfile
+                      ? 'Loading company context...'
+                      : contextExpanded
+                        ? contextSummary
+                        : 'Pulled from your company profile to ground the thread. View to see what we are using.'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -191,6 +232,33 @@ export default function ThreadIntelligenceView() {
                   placeholder="Describe the idea this thread should unfold. Keep it concrete and outcome-aware."
                   className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-800 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100"
                 />
+              </div>
+
+              <div className="mt-6">
+                <div className="mb-3 flex items-baseline justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-800">Thread anchor</p>
+                  <p className="text-xs text-slate-500">What this thread is grounded in</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  {THREAD_ANCHORS.map((option) => {
+                    const active = option.value === anchor;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setAnchor(option.value)}
+                        className={`rounded-2xl border px-4 py-4 text-left transition ${
+                          active
+                            ? 'border-violet-300 bg-violet-50 text-violet-900 shadow-sm'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50/60'
+                        }`}
+                      >
+                        <p className="text-sm font-semibold">{option.label}</p>
+                        <p className="mt-1 text-sm leading-6">{option.description}</p>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="mt-6">
@@ -314,21 +382,27 @@ export default function ThreadIntelligenceView() {
             <aside className="space-y-5">
               <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Suggested Angles</p>
+                <p className="mt-2 text-xs leading-5 text-slate-500">One per anchor. Picking an angle sets the anchor for you.</p>
                 <div className="mt-4 space-y-3">
-                  {recommendations.map((item) => (
-                    <button
-                      key={item.topic}
-                      type="button"
-                      onClick={() => {
-                        setTopic(item.topic);
-                        setIntent(item.intent);
-                      }}
-                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left transition hover:border-violet-200 hover:bg-violet-50/60"
-                    >
-                      <p className="text-sm font-semibold text-slate-900">{item.topic}</p>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">{item.reason}</p>
-                    </button>
-                  ))}
+                  {recommendations.map((item) => {
+                    const anchorOption = getThreadAnchor(item.anchor);
+                    return (
+                      <button
+                        key={item.topic}
+                        type="button"
+                        onClick={() => {
+                          setTopic(item.topic);
+                          setIntent(item.intent);
+                          setAnchor(item.anchor);
+                        }}
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left transition hover:border-violet-200 hover:bg-violet-50/60"
+                      >
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-500">{anchorOption.label} anchor</p>
+                        <p className="mt-1 text-sm font-semibold text-slate-900">{item.topic}</p>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">{item.reason}</p>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

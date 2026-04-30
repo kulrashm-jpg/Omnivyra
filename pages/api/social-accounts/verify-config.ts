@@ -13,9 +13,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { getOAuthCredentialsForPlatform } from '@/backend/auth/oauthCredentialResolver';
+import { refreshTwitterTokenIfNeeded } from '@/backend/auth/tokenRefresh';
 import { getToken } from '@/backend/auth/tokenStore';
 import { getPlatformAdapter } from '@/backend/services/platformAdapters';
-import { decryptCredential } from '@/backend/auth/credentialEncryption';
 
 type TokenTestResult = {
   ok: boolean | null;
@@ -30,19 +30,6 @@ function supportsLiveTokenCheck(platform: string): boolean {
 function getPlatformAliases(platform: string): string[] {
   if (platform === 'x' || platform === 'twitter') return ['x', 'twitter'];
   return [platform];
-}
-
-function decryptTokenOrLegacy(encrypted: string | null | undefined): string | null {
-  if (!encrypted || !encrypted.trim()) return null;
-  try {
-    const parts = encrypted.split(':');
-    if (parts.length === 3 && /^[0-9a-fA-F]+$/.test(parts[0]) && /^[0-9a-fA-F]+$/.test(parts[1])) {
-      return decryptCredential(encrypted);
-    }
-    return encrypted;
-  } catch {
-    return encrypted;
-  }
 }
 
 async function testToken(platform: string, accessToken: string): Promise<TokenTestResult> {
@@ -79,9 +66,16 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
             live_check_supported: true,
           };
         }
+        if (response.status === 401) {
+          return {
+            ok: false,
+            detail: 'Token invalid or revoked',
+            live_check_supported: true,
+          };
+        }
         return {
           ok: false,
-          detail: `Twitter returned ${response.status} - token invalid or expired`,
+          detail: 'Temporary error',
           live_check_supported: true,
         };
       }
@@ -149,7 +143,9 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
   } catch (error: any) {
     return {
       ok: false,
-      detail: `Network error: ${error?.message || 'Unknown error'}`,
+      detail: platform === 'x' || platform === 'twitter'
+        ? 'Temporary error'
+        : `Network error: ${error?.message || 'Unknown error'}`,
       live_check_supported: supportsLiveTokenCheck(platform),
     };
   }
@@ -192,7 +188,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const checked_at = new Date().toISOString();
-  const creds = await getOAuthCredentialsForPlatform(platform).catch(() => null);
+  const credentialPlatform = platform === 'threads' ? 'instagram' : platform;
+  const creds = await getOAuthCredentialsForPlatform(credentialPlatform).catch(() => null);
   const credentials_ok = !!(creds?.client_id && creds?.client_secret);
   const credentials_source = creds?.source ?? null;
 
@@ -223,6 +220,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       account_name = account.account_name || account.username || null;
     }
   } else if (user?.id) {
+    // Order by updated_at desc so a fresh reconnect (which bumps updated_at)
+    // wins over any legacy duplicate row — e.g. an old platform='twitter' row
+    // alongside the new platform='x' row. Without this, the unordered query
+    // could pick the stale row and test its expired token, making the badge
+    // read "Token invalid" indefinitely after a successful reconnect.
     const { data: account } = await supabase
       .from('social_accounts')
       .select('id, account_name, username')
@@ -230,6 +232,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .in('platform', platformAliases)
       .eq('is_active', true)
       .not('platform_user_id', 'like', 'planning_%')
+      .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
@@ -242,40 +245,84 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (accountId) {
     const tokenObj = await getToken(accountId).catch(() => null);
     if (tokenObj?.access_token) {
-      const result = await testToken(platform, tokenObj.access_token);
-      token_ok = result.ok;
-      token_detail = result.detail;
-      live_check_supported = result.live_check_supported;
+      if (platform === 'threads') {
+        return res.status(200).json({
+          platform,
+          credentials_ok,
+          credentials_source,
+          token_ok: true,
+          token_detail: account_name
+            ? `Threads token stored - ${account_name}`
+            : 'Threads token stored',
+          account_name,
+          live_check_supported: false,
+          checked_at,
+        });
+      }
+
+      let tokenForValidation = tokenObj;
+      if (platform === 'x' || platform === 'twitter') {
+        const refreshResult = await refreshTwitterTokenIfNeeded({
+          account_id: accountId,
+          access_token: tokenObj.access_token,
+          refresh_token: tokenObj.refresh_token ?? null,
+          token_expires_at: tokenObj.expires_at ?? null,
+        });
+
+        if (refreshResult.status === 'requires_reconnect') {
+          token_ok = false;
+          // Pull the persisted error reason so the admin sees the X error
+          // class (e.g. invalid_grant) instead of a generic message.
+          const { data: telemetryRow } = await supabase
+            .from('social_accounts')
+            .select('last_refresh_error')
+            .eq('id', accountId)
+            .maybeSingle();
+          const reason = telemetryRow?.last_refresh_error;
+          token_detail = reason ? `Reconnect required: ${reason}` : 'Reconnect required';
+          live_check_supported = true;
+        } else if (refreshResult.status === 'refresh_failed') {
+          token_ok = false;
+          const { data: telemetryRow } = await supabase
+            .from('social_accounts')
+            .select('last_refresh_error')
+            .eq('id', accountId)
+            .maybeSingle();
+          const reason = telemetryRow?.last_refresh_error;
+          token_detail = reason ? `refresh_failed: ${reason}` : 'refresh_failed';
+          live_check_supported = true;
+        } else if (refreshResult.access_token) {
+          tokenForValidation = {
+            ...tokenObj,
+            access_token: refreshResult.access_token,
+            refresh_token: refreshResult.refresh_token ?? tokenObj.refresh_token,
+            expires_at: refreshResult.token_expires_at ?? tokenObj.expires_at,
+          };
+        }
+      }
+
+      if (token_ok === false && (token_detail === 'Reconnect required' || token_detail === 'refresh_failed')) {
+        // Expired X tokens without a usable refresh token cannot be validated.
+      } else {
+        const result = await testToken(platform, tokenForValidation.access_token);
+        token_ok = result.ok;
+        token_detail = result.detail;
+        live_check_supported = result.live_check_supported;
+      }
     } else {
       token_ok = false;
       token_detail = 'No token stored - reconnect account';
     }
   } else {
-    // Fallback for connector-originated org tokens. This lets Super Admin verify
-    // the same underlying connection source company admins use.
-    const { data: connectorRow } = await supabase
-      .from('community_ai_platform_tokens')
-      .select('tenant_id, organization_id, platform, access_token, connected_by_user_id, updated_at')
-      .in('platform', platformAliases)
-      .not('access_token', 'is', null)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const connectorAccessToken = decryptTokenOrLegacy((connectorRow as any)?.access_token);
-    if (connectorAccessToken) {
-      const result = await testToken(platform, connectorAccessToken);
-      token_ok = result.ok;
-      token_detail = result.detail;
-      live_check_supported = result.live_check_supported;
-      account_name = account_name || `Org connector (${(connectorRow as any)?.organization_id || 'connected'})`;
-    } else {
-      token_detail = credentials_ok
-        ? live_check_supported
-          ? 'No connected account found - connect an account to test live'
-          : 'Live verification is not implemented for this platform yet'
-        : null;
-    }
+    // Note: the previous "connector-originated org token" fallback was removed
+    // when community_ai_platform_tokens stopped storing tokens. There is now
+    // only one token source — social_accounts — and if no row was found above,
+    // there is no token to verify.
+    token_detail = credentials_ok
+      ? live_check_supported
+        ? 'No connected account found - connect an account to test live'
+        : 'Live verification is not implemented for this platform yet'
+      : null;
   }
 
   return res.status(200).json({

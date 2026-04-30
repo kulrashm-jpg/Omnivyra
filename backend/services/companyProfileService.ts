@@ -93,6 +93,13 @@ import { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
 import { generateMarketingIntelligenceDraft } from './companyProfile/marketingIntelligence';
 import { buildSavePayload } from './companyProfile/savePayload';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
+import {
+  buildCandidatesFromNames,
+  extractCompetitiveContextFromProfile,
+  getFinalCompetitors,
+  getFinalCompetitorsSync,
+  type CompetitorSource,
+} from './competitorEngineService';
 
 const COMPANY_PROFILES_TABLE = 'company_profiles' as const;
 const COMPANY_PROFILE_FALLBACK_COLUMNS = [
@@ -331,6 +338,11 @@ function fillMissingList(current: string[] | null | undefined, fallback: string[
   return next.length > 0 ? Array.from(new Set(next)).slice(0, 8) : null;
 }
 
+function mapExtractionCompetitorSource(source?: string | null): CompetitorSource {
+  if (source === 'website' || source === 'social' || source === 'user') return source;
+  return 'profile_ai';
+}
+
 function inferBusinessModelLabel(input: {
   category?: string | null;
   industry?: string | null;
@@ -500,13 +512,6 @@ function buildAiMarketPulseSettings(
       ...splitToList(workingProfile.geography),
     ]),
   );
-  const competitors = Array.from(
-    new Set([
-      ...normalizeStringArray(workingProfile.competitors_list),
-      ...normalizeStringArray(extraction.competitors?.value),
-      ...splitToList(workingProfile.competitors),
-    ]),
-  );
   const productsServices = Array.from(
     new Set([
       ...normalizeStringArray(workingProfile.products_services_list),
@@ -533,7 +538,7 @@ function buildAiMarketPulseSettings(
   const next = {
     primary_operating_markets: withExistingList(existing?.primary_operating_markets, geography),
     target_expansion_markets: existing?.target_expansion_markets ?? null,
-    named_competitors: withExistingList(existing?.named_competitors, competitors),
+    named_competitors: null,
     business_model: withExistingText(existing?.business_model, businessModel),
     core_offerings: withExistingList(existing?.core_offerings, productsServices),
     growth_priorities: withExistingList(existing?.growth_priorities, goals),
@@ -569,7 +574,7 @@ function buildAiMarketPulseSettings(
         category: workingProfile.category ?? null,
         goals,
         productsServices,
-        competitors,
+        competitors: [],
       }),
     ),
     exclusions: existing?.exclusions ?? null,
@@ -728,6 +733,28 @@ export async function saveProfile(
   const confidenceScore = input.confidence_score ?? existing?.confidence_score ?? 0;
 
   const payload = buildSavePayload(input, existing, companyId, source, lastRefinedAt, nowIso, confidenceScore);
+  const rawCompetitorInputs = mergeStringArrays(
+    [],
+    [
+      ...(Array.isArray(input.competitors_list) ? input.competitors_list : []),
+      ...splitToList(typeof input.competitors === 'string' ? input.competitors : null),
+    ],
+  );
+  const finalCompetitors = await getFinalCompetitors({
+    candidates: buildCandidatesFromNames(
+      rawCompetitorInputs,
+      source === 'user' ? 'manual' : 'profile_ai',
+    ),
+    context: extractCompetitiveContextFromProfile({
+      ...(existing ?? {}),
+      ...input,
+      company_id: companyId,
+    } as CompanyProfile),
+    max: 8,
+    useNetwork: true,
+  });
+  payload.competitors_list = finalCompetitors.map((competitor) => competitor.name);
+  payload.competitors = payload.competitors_list.length > 0 ? payload.competitors_list.join(', ') : null;
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);
   let didLock = false;
@@ -884,7 +911,34 @@ export async function getProfile(
   if ((options?.languageRefine ?? false) && result) {
     result = await refineProfileForPrompts(result);
   }
-  return result;
+  return sanitizeStoredCompetitorsForRead(result);
+}
+
+function sanitizeStoredCompetitorsForRead(profile: CompanyProfile | null): CompanyProfile | null {
+  if (!profile) return null;
+  const reportSettings = profile.report_settings ?? null;
+  return {
+    ...profile,
+    competitors: null,
+    competitors_list: [],
+    report_settings: reportSettings
+      ? {
+          ...reportSettings,
+          default_inputs: reportSettings.default_inputs
+            ? {
+                ...reportSettings.default_inputs,
+                competitors: [],
+              }
+            : reportSettings.default_inputs,
+          market_pulse: reportSettings.market_pulse
+            ? {
+                ...reportSettings.market_pulse,
+                named_competitors: [],
+              }
+            : reportSettings.market_pulse,
+        }
+      : reportSettings,
+  };
 }
 
 // ─── Language refinement ──────────────────────────────────────────────────────
@@ -1065,19 +1119,14 @@ const runProfileRefinement = async (
       baseRefinedPayload.growth_priorities ?? workingProfile.growth_priorities ?? null,
       marketingIntelligenceDraft.growth_priorities,
     ),
-    competitors_list: fillMissingList(
-      (Array.isArray(baseRefinedPayload.competitors_list) ? baseRefinedPayload.competitors_list : null) ??
-        workingProfile.competitors_list ??
-        null,
-      marketingIntelligenceDraft.competitors,
-    ),
+    competitors_list: Array.isArray(baseRefinedPayload.competitors_list)
+      ? baseRefinedPayload.competitors_list
+      : [],
   };
 
-  refinedPayload.competitors =
-    fillMissingText(
-      refinedPayload.competitors ?? workingProfile.competitors ?? null,
-      Array.isArray(refinedPayload.competitors_list) ? refinedPayload.competitors_list.join(', ') : null,
-    ) ?? null;
+  refinedPayload.competitors = Array.isArray(refinedPayload.competitors_list) && refinedPayload.competitors_list.length > 0
+    ? refinedPayload.competitors_list.join(', ')
+    : null;
 
   const { data, error } = await supabase
     .from('company_profiles')
@@ -1135,6 +1184,27 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
   const locked = new Set<string>(Array.isArray(workingProfile.user_locked_fields) ? workingProfile.user_locked_fields : []);
   const pick = <T>(refinedVal: T, workingVal: T, field: string): T =>
     locked.has(field) ? workingVal : (refinedVal ?? workingVal ?? null) as T;
+  const contextForCompetitorFit = extractCompetitiveContextFromProfile({
+    ...workingProfile,
+    industry: industryUpdate.value.join(', ') || workingProfile.industry,
+    category: categoryUpdate.value.join(', ') || workingProfile.category,
+    geography: geographyUpdate.value.join(', ') || workingProfile.geography,
+    products_services: productsUpdate.value.join(', ') || workingProfile.products_services,
+    target_audience: audienceUpdate.value.join(', ') || workingProfile.target_audience,
+    industry_list: industryUpdate.value,
+    category_list: categoryUpdate.value,
+    geography_list: geographyUpdate.value,
+    products_services_list: productsUpdate.value,
+    target_audience_list: audienceUpdate.value,
+  });
+  const competitorSource = mapExtractionCompetitorSource(extraction.competitors?.source);
+  const rankedCompetitors = getFinalCompetitorsSync({
+    candidates: competitorsUpdate.value.map((name) => ({ name, source: competitorSource })),
+    context: contextForCompetitorFit,
+    max: 8,
+    minScore: 42,
+  });
+  const competitorValues = rankedCompetitors.length > 0 ? rankedCompetitors.map((item) => item.name) : [];
 
   const mergedSourceUrls = Array.from(
     new Set([...(workingProfile.source_urls || [])].map((url) => normalizeUrl(url)).filter((u): u is string => Boolean(u)))
@@ -1178,13 +1248,13 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
     geography: pick(geographyUpdate.value.join(', '), workingProfile.geography, 'geography'),
     brand_voice: pick(brandVoiceUpdate.value.join(', '), workingProfile.brand_voice, 'brand_voice'),
     goals: pick(goalsUpdate.value.join(', '), workingProfile.goals, 'goals'),
-    competitors: pick(competitorsUpdate.value.join(', '), workingProfile.competitors, 'competitors'),
+    competitors: competitorValues.length > 0 ? competitorValues.join(', ') : null,
     unique_value: pick(uniqueUpdate.value, workingProfile.unique_value, 'unique_value'),
     content_themes: pick(themesUpdate.value.join(', '), workingProfile.content_themes, 'content_themes'),
     industry_list: pick(industryUpdate.value, workingProfile.industry_list, 'industry_list'),
     category_list: pick(categoryUpdate.value, workingProfile.category_list, 'category_list'),
     geography_list: pick(geographyUpdate.value, workingProfile.geography_list, 'geography_list'),
-    competitors_list: pick(competitorsUpdate.value, workingProfile.competitors_list, 'competitors_list'),
+    competitors_list: competitorValues,
     content_themes_list: pick(themesUpdate.value, workingProfile.content_themes_list, 'content_themes_list'),
     products_services_list: pick(productsUpdate.value, workingProfile.products_services_list, 'products_services_list'),
     target_audience_list: pick(audienceUpdate.value, workingProfile.target_audience_list, 'target_audience_list'),

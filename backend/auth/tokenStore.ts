@@ -161,29 +161,26 @@ export function encryptTokenColumns(token: TokenObject): {
 }
 
 /**
- * Store encrypted token for a social account
+ * Store encrypted token for a social account.
+ *
+ * social_accounts is the SINGLE source of truth for OAuth tokens since the
+ * community_ai_platform_tokens consolidation. There is no longer any
+ * mirror write — connector reads route through this same function via
+ * tokenStore.getToken(socialAccountId).
  *
  * @param socialAccountId - UUID of social_account record
  * @param token - Token object to encrypt and store
  */
 export async function setToken(socialAccountId: string, token: TokenObject): Promise<void> {
-  // Encrypt tokens
   const encryptedAccessToken = encrypt(token.access_token);
   const encryptedRefreshToken = token.refresh_token ? encrypt(token.refresh_token) : null;
 
-  // Update social_accounts table
   const updateData: any = {
     access_token: encryptedAccessToken,
     updated_at: new Date().toISOString(),
   };
-
-  if (encryptedRefreshToken) {
-    updateData.refresh_token = encryptedRefreshToken;
-  }
-
-  if (token.expires_at) {
-    updateData.token_expires_at = token.expires_at;
-  }
+  if (encryptedRefreshToken) updateData.refresh_token = encryptedRefreshToken;
+  if (token.expires_at) updateData.token_expires_at = token.expires_at;
 
   const { error } = await supabase
     .from('social_accounts')

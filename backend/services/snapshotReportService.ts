@@ -11,6 +11,7 @@ import {
   buildCompetitorIntelligence,
   buildCompetitorIntelligenceActive,
   competitorGapsToDecisions,
+  enforceFinalCompetitorIntelligenceSync,
   type CompetitorIntelligenceResult,
 } from './reportCompetitorIntelligenceService';
 import { buildPublicDomainAuditDecisions, type PublicAuditResult } from './publicDomainAuditService';
@@ -72,9 +73,10 @@ import {
   SNAPSHOT_SECTION_DEFINITIONS,
 } from './snapshotReport/sectionAssemblyHelpers';
 import {
-  ensureSnapshotDecisionFloor,
+  ensureSnapshotDecisionFloor as ensureSnapshotDecisionFloorInternal,
   signalAvailabilityFromDecisions,
 } from './snapshotReport/floorHelpers';
+export { ensureSnapshotDecisionFloor } from './snapshotReport/floorHelpers';
 import {
   buildGeoAeoExecutiveSummary,
   buildGeoAeoVisuals,
@@ -143,8 +145,11 @@ export function composeSnapshotReportFromDecisions(params: {
 }): SnapshotReport {
   const supplementalGrowthDecisions = params.supplementalGrowthDecisions ?? [];
   const baseCombined = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
-  const competitorIntelligence = params.competitorIntelligenceOverride ?? buildCompetitorIntelligence({
-    decisions: baseCombined,
+  const competitorIntelligence = enforceFinalCompetitorIntelligenceSync({
+    result: params.competitorIntelligenceOverride ?? buildCompetitorIntelligence({
+      decisions: baseCombined,
+      resolvedInput: params.resolvedInput,
+    }),
     resolvedInput: params.resolvedInput,
   });
   const competitorDecisions = competitorGapsToDecisions({
@@ -153,7 +158,7 @@ export function composeSnapshotReportFromDecisions(params: {
     reportTier: 'snapshot',
   });
   const combined = uniqueById([...baseCombined, ...competitorDecisions]);
-  const floor = ensureSnapshotDecisionFloor({
+  const floor = ensureSnapshotDecisionFloorInternal({
     companyId: params.companyId,
     decisions: combined,
     resolvedInput: params.resolvedInput,
@@ -476,4 +481,3 @@ export function createSnapshotInsightsFromComposition(insights: ComposedDecision
     business_impact: insight.business_impact || '',
   }));
 }
-

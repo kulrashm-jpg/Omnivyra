@@ -24,9 +24,11 @@ const SERVICE_PREFIXES: Array<{ prefix: string; name: string }> = [
   { prefix: 'https://fcm.googleapis.com',              name: 'firebase'    },
   { prefix: 'https://hooks.slack.com',                 name: 'slack'       },
   { prefix: 'https://api.stripe.com',                  name: 'stripe'      },
-  // Resend prefix removed — outbound email is now Amazon SES via SMTP
-  // (nodemailer in backend/services/sesTransport.ts), not HTTP API. SES
-  // SMTP traffic doesn't go through fetch and isn't instrumented here.
+  // Outbound transactional email goes through the Supabase Edge Function
+  // `send-transactional-email`, which calls SES from inside Supabase's
+  // infrastructure — those calls don't traverse this app's fetch and so
+  // aren't instrumented here. The SES prefix is kept in case the Edge
+  // Function is ever inlined back into the Next.js runtime.
   { prefix: 'https://email.amazonaws.com',             name: 'ses'         },
   { prefix: 'https://api.sendgrid.com',                name: 'sendgrid'    },
   { prefix: 'https://upstash.io',                      name: 'upstash'     },

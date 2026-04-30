@@ -27,6 +27,7 @@ const PLATFORM_LABEL: Record<string, string> = {
   whatsapp:  'WhatsApp',
   reddit:    'Reddit',
   pinterest: 'Pinterest',
+  threads:   'Threads',
 };
 
 const DOT_CLASS: Record<PlatformHealth['overall'], string> = {

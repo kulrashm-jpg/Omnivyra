@@ -479,7 +479,6 @@ function extractCompanyKeywords(
   if (profile) {
     add([...toTokens(profile.industry), ...toTokens(profile.industry_list)], 3);
     add([...toTokens(profile.products_services), ...toTokens(profile.products_services_list)], 3);
-    add([...toTokens(profile.competitors), ...toTokens(profile.competitors_list)], 2);
     add([...toTokens(profile.content_themes), ...toTokens(profile.content_themes_list)], 1);
   }
   if (strategicPayload) {
@@ -749,9 +748,6 @@ export async function generateAdditionalStrategicThemes(
         profile.industry ? `Industry: ${profile.industry}` : '',
         profile.unique_value ? `Unique value: ${profile.unique_value}` : '',
         profile.target_audience ? `Target audience: ${profile.target_audience}` : '',
-        Array.isArray(profile.competitors_list) && profile.competitors_list.length > 0
-          ? `Competitors: ${profile.competitors_list.slice(0, 5).join(', ')}`
-          : profile.competitors ? `Competitors: ${profile.competitors}` : '',
         profile.key_messages ? `Key messages: ${profile.key_messages}` : '',
         strategicPayload?.strategic_text ? `Strategic direction: ${strategicPayload.strategic_text}` : '',
       ]

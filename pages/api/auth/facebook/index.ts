@@ -22,7 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const params = new URLSearchParams({
       client_id: credentials.client_id,
       redirect_uri: `${getBaseUrl(req)}/api/auth/facebook/callback`,
-      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,public_profile',
+      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish,public_profile',
       response_type: 'code',
       state,
     });

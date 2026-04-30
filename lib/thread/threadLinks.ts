@@ -1,6 +1,6 @@
 import { getThreadResultKey } from './threadStorage';
 import type { ThreadExecutionMode } from './threadExecution';
-import type { ThreadFormatValue, ThreadIntentValue } from './threadFlow';
+import type { ThreadAnchorValue, ThreadFormatValue, ThreadIntentValue } from './threadFlow';
 
 export function getThreadIntelligenceLink(input?: {
   format?: ThreadFormatValue | null;
@@ -9,6 +9,7 @@ export function getThreadIntelligenceLink(input?: {
   intent?: ThreadIntentValue | null;
   platform?: 'x' | 'linkedin' | null;
   executionMode?: ThreadExecutionMode | null;
+  anchor?: ThreadAnchorValue | null;
 }): string {
   const params = new URLSearchParams();
   if (input?.format) params.set('format', input.format);
@@ -17,6 +18,7 @@ export function getThreadIntelligenceLink(input?: {
   if (input?.intent) params.set('prefill_intent', input.intent);
   if (input?.platform) params.set('prefill_platform', input.platform);
   if (input?.executionMode) params.set('prefill_execution_mode', input.executionMode);
+  if (input?.anchor) params.set('prefill_anchor', input.anchor);
   const query = params.toString();
   return query ? `/threads/intelligence?${query}` : '/threads/intelligence';
 }
@@ -45,6 +47,7 @@ export function getThreadFollowUpLink(input: {
   intent: ThreadIntentValue;
   platform: 'x' | 'linkedin';
   executionMode: ThreadExecutionMode;
+  anchor?: ThreadAnchorValue | null;
 }): string {
   return getThreadIntelligenceLink({
     format: input.format,
@@ -53,6 +56,7 @@ export function getThreadFollowUpLink(input: {
     intent: input.intent,
     platform: input.platform,
     executionMode: input.executionMode,
+    anchor: input.anchor ?? null,
   });
 }
 

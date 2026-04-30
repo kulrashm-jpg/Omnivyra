@@ -1,13 +1,13 @@
 /**
  * Company Trend Relevance Engine
- * Scores how relevant each strategic theme is for a company (industry, keywords, competitors).
+ * Scores how relevant each strategic theme is for a company (industry and keywords).
  * Sits between signal_intelligence / strategic_themes and the UI. Does not modify the intelligence pipeline.
  */
 
 import { supabase } from '../db/supabaseClient';
 
 const WEIGHT_KEYWORD = 0.5;
-const WEIGHT_COMPETITOR = 0.3;
+const WEIGHT_COMPETITOR = 0;
 const WEIGHT_INDUSTRY = 0.2;
 
 type CompanyContext = {
@@ -63,7 +63,7 @@ async function loadCompanyContext(companyId: string): Promise<CompanyContext> {
 
   const { data: profile, error: profileError } = await supabase
     .from('company_profiles')
-    .select('industry, industry_list, competitors, competitors_list, content_themes, content_themes_list')
+    .select('industry, industry_list, content_themes, content_themes_list')
     .eq('company_id', companyId)
     .maybeSingle();
 
@@ -76,12 +76,6 @@ async function loadCompanyContext(companyId: string): Promise<CompanyContext> {
       industryTerms.push(
         ...(p.industry_list as string[]).map((s) => String(s).trim().toLowerCase()).filter(Boolean)
       );
-    }
-    if (Array.isArray(p.competitors_list)) {
-      competitors.push(...(p.competitors_list as string[]).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
-    }
-    if (typeof p.competitors === 'string') {
-      competitors.push(...(p.competitors as string).split(/[,;]/).map((s) => s.trim().toLowerCase()).filter(Boolean));
     }
     if (Array.isArray(p.content_themes_list)) {
       keywords.push(...(p.content_themes_list as string[]).map((s) => String(s).trim().toLowerCase()).filter(Boolean));
@@ -186,7 +180,7 @@ async function upsertRelevance(
   const matchedCompanies: string[] = [];
 
   const keyword_match_score = keywordMatchScore(theme.keywords, ctx.keywords, matchedKeywords);
-  const competitor_match_score = competitorMatchScore(theme.companies, ctx.competitors, matchedCompanies);
+  const competitor_match_score = 0;
   const industry_match_score = industryMatchScore(theme.topic, ctx.industryTerms);
 
   const relevance_score = Math.min(

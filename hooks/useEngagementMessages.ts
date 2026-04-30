@@ -154,7 +154,7 @@ export function useEngagementMessages(
   const mergedMessages = [...optimisticMessages, ...messages].sort((a, b) => {
     const ta = new Date(a.platform_created_at ?? a.created_at ?? 0).getTime();
     const tb = new Date(b.platform_created_at ?? b.created_at ?? 0).getTime();
-    return tb - ta;
+    return ta - tb;
   });
 
   // Public refresh is a *background* refresh — see useEngagementInbox for

@@ -11,9 +11,13 @@ import {
   FaPinterest,
   FaReddit,
   FaShareAlt,
+  FaWhatsapp,
+  FaGithub,
+  FaDiscord,
+  FaStackOverflow,
 } from 'react-icons/fa';
 import { FaXTwitter } from 'react-icons/fa6';
-import { SiTiktok, SiThreads } from 'react-icons/si';
+import { SiDevdotto, SiMedium, SiQuora, SiTiktok, SiThreads, SiYcombinator } from 'react-icons/si';
 import type { IconType } from 'react-icons';
 
 export const PLATFORM_ICONS: Record<string, IconType> = {
@@ -27,6 +31,14 @@ export const PLATFORM_ICONS: Record<string, IconType> = {
   pinterest: FaPinterest,
   reddit: FaReddit,
   threads: SiThreads,
+  whatsapp: FaWhatsapp,
+  github: FaGithub,
+  hackernews: SiYcombinator,
+  discord: FaDiscord,
+  devto: SiDevdotto,
+  medium: SiMedium,
+  stackoverflow: FaStackOverflow,
+  quora: SiQuora,
 };
 
 export const FALLBACK_ICON = FaShareAlt;
@@ -48,6 +60,18 @@ const ALIASES: Record<string, string> = {
   pinterest: 'pinterest',
   reddit: 'reddit',
   threads: 'threads',
+  whatsapp: 'whatsapp',
+  wa: 'whatsapp',
+  github: 'github',
+  hackernews: 'hackernews',
+  hn: 'hackernews',
+  discord: 'discord',
+  devto: 'devto',
+  'dev.to': 'devto',
+  medium: 'medium',
+  stackoverflow: 'stackoverflow',
+  'stack overflow': 'stackoverflow',
+  quora: 'quora',
 };
 
 /**
@@ -76,6 +100,14 @@ const PLATFORM_LABELS: Record<string, string> = {
   pinterest: 'Pinterest',
   reddit: 'Reddit',
   threads: 'Threads',
+  whatsapp: 'WhatsApp',
+  github: 'GitHub',
+  hackernews: 'Hacker News',
+  discord: 'Discord',
+  devto: 'Dev.to',
+  medium: 'Medium',
+  stackoverflow: 'Stack Overflow',
+  quora: 'Quora',
 };
 
 /**

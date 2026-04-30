@@ -14,8 +14,8 @@ export interface AIEngagementAssistantProps {
   recommendedThread?: InboxThread | null;
   onSelectThread?: (threadId: string) => void;
   onFilterByAuthor?: (authorName: string, platform: string) => void;
-  onUseSuggestedReply?: (replyText: string) => void;
-  onSendSuggestedReply?: (replyText: string) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
+  onUseSuggestedReply?: (replyText: string, messageId?: string | null) => void;
+  onSendSuggestedReply?: (replyText: string, messageId?: string | null) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
   /** When set, the assistant generates a suggested reply for THIS specific
    *  message instead of defaulting to the latest inbound. Drives the
    *  per-comment AI suggestion behaviour in People Reaction mode. */
@@ -278,7 +278,7 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
     setError(null);
     setSuggestedReplyStatus(null);
     try {
-      const result = await onSendSuggestedReply(displayedReply);
+      const result = await onSendSuggestedReply(displayedReply, targetMessageId);
       const resultMessage = result && typeof result === 'object' ? result.message : null;
       setSuggestedReplyStatus(
         resultMessage || 'Suggested reply submitted. It may take a few seconds to reflect on the platform.'
@@ -288,7 +288,7 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
     } finally {
       setSendingSuggestedReply(false);
     }
-  }, [displayedReply, onSendSuggestedReply, sendingSuggestedReply]);
+  }, [displayedReply, onSendSuggestedReply, sendingSuggestedReply, targetMessageId]);
 
   const nextAction = useMemo(() => {
     if (!thread) return 'Select a thread to see the next action.';
@@ -384,7 +384,7 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
                     <button
                       type="button"
                       onClick={() => {
-                        onUseSuggestedReply(displayedReply);
+                        onUseSuggestedReply(displayedReply, targetMessageId);
                         setSuggestedReplyStatus('Suggested reply inserted into the composer.');
                       }}
                       className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"

@@ -1,8 +1,11 @@
 {
+  "git": {
+    "deploymentEnabled": false
+  },
   "crons": [
     {
       "path": "/api/cron/process-scheduled-posts",
-      "schedule": "* * * * *"
+      "schedule": "0 3 * * *"
     },
     {
       "path": "/api/cron/analytics-ingestion",

@@ -1,6 +1,11 @@
 /**
  * CONTENT GENERATION PROMPTS V3
  *
+ * DEPRECATED FOR LONG-FORM CONTENT:
+ * Blog, article, guide, newsletter, story, whitepaper, and case-study prompts
+ * now flow through lib/content/unifiedLongFormEngine.ts. Keep this file only
+ * for short-form/legacy queue compatibility until those paths are retired.
+ *
  * Single source of truth for all system prompts across content types.
  * Consolidates prompts from:
  * - blogGenerationEngine.ts

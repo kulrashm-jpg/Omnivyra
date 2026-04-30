@@ -35,11 +35,56 @@ import {
   filterThreadsForQueue,
   getRecommendedThread,
   getThreadQueueCounts,
-  getThreadQueueGroup,
 } from './threadQueueModel';
 
 const RECOMMENDATION_TTL_MS = 12 * 60 * 1000;
 const RECOMMENDATION_FADE_WINDOW_MS = 2 * 60 * 1000;
+const NEEDS_RESPONSE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+const NEEDS_RESPONSE_VISIBLE_LIMIT = 10;
+const BROWSER_DELIVERY_POLL_ATTEMPTS = 8;
+const BROWSER_DELIVERY_POLL_INTERVAL_MS = 1500;
+const EXTENSION_SYNC_PLATFORM_SET = new Set([
+  'linkedin',
+  'facebook',
+  'instagram',
+  'x',
+  'twitter',
+]);
+const GENERIC_BROWSER_ASSIST_PLATFORM_SET = new Set([
+  'facebook',
+  'instagram',
+  'x',
+  'twitter',
+]);
+
+type EngagementActionStatus = {
+  success?: boolean;
+  status?: string;
+  confirmed?: boolean;
+  platform_id?: string | null;
+  error?: string | null;
+};
+
+async function waitForBrowserActionTerminalStatus(
+  organizationId: string,
+  actionId: string,
+): Promise<EngagementActionStatus | null> {
+  for (let attempt = 0; attempt < BROWSER_DELIVERY_POLL_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, BROWSER_DELIVERY_POLL_INTERVAL_MS));
+    }
+    const statusRes = await fetch(
+      `/api/engagement/action-status?organization_id=${encodeURIComponent(organizationId)}&action_id=${encodeURIComponent(actionId)}`,
+      { credentials: 'include' }
+    );
+    const statusJson = (await statusRes.json().catch(() => ({}))) as EngagementActionStatus;
+    if (!statusRes.ok || statusJson.success !== true) continue;
+    if (['executed', 'sent_unverified', 'failed', 'skipped', 'blocked'].includes(String(statusJson.status || ''))) {
+      return statusJson;
+    }
+  }
+  return null;
+}
 
 export interface InboxDashboardProps {
   organizationId: string;
@@ -87,6 +132,22 @@ export function InboxDashboard({
   const [linkedInSurfaceActionBusy, setLinkedInSurfaceActionBusy] = useState<'sales_navigator' | 'recruiter' | null>(null);
   const [linkedInSurfaceActionStatus, setLinkedInSurfaceActionStatus] = useState<string | null>(null);
   const attemptedExtensionAuthRef = useRef<string | null>(null);
+  // Clear the "already-attempted" lock whenever the user returns to the tab
+  // or refocuses the window. The lock prevents redundant retries during a
+  // single page session, but it also prevents recovery from a transient
+  // initial failure (e.g. SW cold start, content-script not yet injected).
+  // On focus/visibility we know the user is engaging — let the auto-bootstrap
+  // try again from a clean slate.
+  useEffect(() => {
+    const clearLock = () => { attemptedExtensionAuthRef.current = null; };
+    const onVisibility = () => { if (document.visibilityState === 'visible') clearLock(); };
+    window.addEventListener('focus', clearLock);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', clearLock);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   const filters = useMemo(
     () => ({
@@ -127,6 +188,8 @@ export function InboxDashboard({
     authenticating: extensionAuthenticating,
     setBrowserPlatformEnabled,
     authenticateExtensionSession,
+    authenticateExtensionViaClaimCode,
+    pollExtensionCommandsNow,
     triggerPlatformSync,
     executePlatformAction
   } = useExtensionBridge(integrations.map((integration) => integration.platform));
@@ -206,6 +269,8 @@ export function InboxDashboard({
   //   - postThreads:    activity on the user's posts (People Reaction domain)
   // Doing the split once here keeps the count badges consistent with what's
   // actually shown in each tab.
+  const isCommentThread = (t: typeof filteredItems[number]) =>
+    t.latest_message_type === 'comment';
   const isPostThread = (t: typeof filteredItems[number]) =>
     t.latest_message_type === 'comment' || t.latest_message_type === 'reaction';
   // "Needs response" rule: only DMs where the *other party* sent the last
@@ -221,8 +286,14 @@ export function InboxDashboard({
     if (t.has_pending_outbound_action === true) return false;
     return true;
   };
+  const withinNeedsResponseWindow = (t: typeof filteredItems[number]) => {
+    if (!t.latest_message_time) return true;
+    const ts = new Date(t.latest_message_time).getTime();
+    if (!Number.isFinite(ts)) return true;
+    return ts >= Date.now() - NEEDS_RESPONSE_LOOKBACK_MS;
+  };
   const dmThreads = useMemo(
-    () => filteredItems.filter((t) => !isPostThread(t) && otherPartyRepliedLast(t)),
+    () => filteredItems.filter((t) => !isPostThread(t) && otherPartyRepliedLast(t) && withinNeedsResponseWindow(t)),
     [filteredItems]
   );
   // People Reaction visibility rules (operator-defined):
@@ -241,20 +312,26 @@ export function InboxDashboard({
   const postThreads = useMemo(() => {
     const cutoff = Date.now() - POST_VISIBILITY_WINDOW_MS;
     return filteredItems.filter((t) => {
-      if (!isPostThread(t)) return false;
+      if (!isCommentThread(t)) return false;
       const ts = t.latest_message_time ? new Date(t.latest_message_time).getTime() : NaN;
       if (!Number.isFinite(ts)) return true; // missing timestamp — don't hide
       return ts >= cutoff;
     });
   }, [filteredItems]);
 
+  const needsResponseQueueItems = useMemo(
+    () => filterThreadsForQueue(dmThreads, 'Needs Response').slice(0, NEEDS_RESPONSE_VISIBLE_LIMIT),
+    [dmThreads]
+  );
   const visibleQueueItems = useMemo(() => {
     if (activeQueueFilter === 'People Reacted') return postThreads;
     // Needs Response / High Priority / Waiting / Done are DM-domain views;
     // run queue grouping only over DM threads so post threads never leak
     // into the priority queues.
-    return filterThreadsForQueue(dmThreads, activeQueueFilter);
-  }, [activeQueueFilter, dmThreads, postThreads]);
+    return activeQueueFilter === 'Needs Response'
+      ? needsResponseQueueItems
+      : filterThreadsForQueue(dmThreads, activeQueueFilter).slice(0, NEEDS_RESPONSE_VISIBLE_LIMIT);
+  }, [activeQueueFilter, dmThreads, needsResponseQueueItems, postThreads]);
 
   const peopleReactedCount = postThreads.length;
 
@@ -325,12 +402,17 @@ export function InboxDashboard({
     [replaceEngagementRoute]
   );
 
-  const handleRefresh = useCallback(() => {
+  const getBrowserActionPlatform = useCallback((platform: string) => {
+    const normalized = normalizePlatform(platform);
+    return normalized === 'twitter' ? 'x' : normalized;
+  }, []);
+
+  const handleRefresh = useCallback(async () => {
     setBrowserAssistError(null);
-    refresh();
-    refreshCounts();
-    refreshWorkQueue();
-    refreshLinkedInOverview();
+    void refresh();
+    void refreshCounts();
+    void refreshWorkQueue();
+    void refreshLinkedInOverview();
     setRecommendationSeed((current) => current + 1);
     // Clear the per-attempt auth lockout. The auto-auth useEffect (which
     // is declared later in the file but registered before user clicks)
@@ -339,13 +421,45 @@ export function InboxDashboard({
     // bootstrapExtensionAuth() directly here because it's declared below
     // and JS TDZ would reject it from inside this useCallback.
     attemptedExtensionAuthRef.current = null;
-  }, [refresh, refreshCounts, refreshWorkQueue, refreshLinkedInOverview]);
+
+    const connectedBrowserPlatforms = Array.from(
+      new Set(
+        integrations
+          .map((integration) => getBrowserActionPlatform(integration.platform))
+          .filter((platform) => EXTENSION_SYNC_PLATFORM_SET.has(platform))
+      )
+    );
+    const platformsToSync =
+      selectedPlatform && selectedPlatform !== 'all'
+        ? connectedBrowserPlatforms.filter((platform) => platform === getBrowserActionPlatform(selectedPlatform))
+        : connectedBrowserPlatforms;
+
+    if (platformsToSync.length > 0) {
+      await Promise.allSettled(platformsToSync.map((platform) => triggerPlatformSync(platform)));
+      for (const delay of [1500, 3500, 6500]) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        void refresh();
+        void refreshCounts();
+        void refreshWorkQueue();
+        void refreshLinkedInOverview();
+      }
+    }
+  }, [
+    getBrowserActionPlatform,
+    integrations,
+    refresh,
+    refreshCounts,
+    refreshLinkedInOverview,
+    refreshWorkQueue,
+    selectedPlatform,
+    triggerPlatformSync,
+  ]);
 
   // Counts must mirror what the user actually sees in the Needs Response
   // tab: DM threads where the other party replied last. Computing from
   // filteredItems would inflate the badge with post threads (now under
   // People Reaction) and self-replied DMs that we already filter out.
-  const queueCounts = useMemo(() => getThreadQueueCounts(dmThreads), [dmThreads]);
+  const queueCounts = useMemo(() => getThreadQueueCounts(needsResponseQueueItems), [needsResponseQueueItems]);
 
   // Per-platform counts for the platform tabs. These are derived client-side
   // from the same filtered universes the rest of the UI uses, so the tab
@@ -362,7 +476,7 @@ export function InboxDashboard({
     };
     const tierRank: Record<Tier, number> = { low: 0, medium: 1, high: 2 };
     const next: Record<string, { thread_count: number; unread_count: number; max_priority_tier: Tier }> = {};
-    const all = [...dmThreads, ...postThreads];
+    const all = [...needsResponseQueueItems, ...postThreads];
     for (const t of all) {
       const slug = (t.platform || '').toLowerCase().trim();
       if (!slug) continue;
@@ -374,7 +488,7 @@ export function InboxDashboard({
       next[slug] = cell;
     }
     return next;
-  }, [dmThreads, postThreads]);
+  }, [needsResponseQueueItems, postThreads]);
 
   // Client-side workQueue replaces the server's stale per-platform actionable
   // counts. Same filtered universe as platformCounts: actionable_threads =
@@ -382,7 +496,7 @@ export function InboxDashboard({
   // The orange badge on the platform tabs reads from this.
   const clientWorkQueue = useMemo(() => {
     const byPlatform: Record<string, { actionable_threads: number; high_priority_threads: number }> = {};
-    for (const t of dmThreads) {
+    for (const t of needsResponseQueueItems) {
       const slug = (t.platform || '').toLowerCase().trim();
       if (!slug) continue;
       const cell = byPlatform[slug] ?? { actionable_threads: 0, high_priority_threads: 0 };
@@ -405,7 +519,7 @@ export function InboxDashboard({
         high_priority_threads: v.high_priority_threads,
       })),
     };
-  }, [dmThreads, postThreads]);
+  }, [needsResponseQueueItems, postThreads]);
   const recommendedThreadInScope = useMemo(
     () => filteredItems.find((thread) => thread.thread_id === recommendedThreadId) ?? null,
     [filteredItems, recommendedThreadId]
@@ -415,8 +529,6 @@ export function InboxDashboard({
     [visibleQueueItems, recommendedThreadId]
   );
   const actionableThreads = queueCounts.needsResponse;
-  const highPriorityThreads = queueCounts.highPriority;
-  const waitingThreads = queueCounts.waiting;
   const connectedPlatformsCount = integrations.length;
   const extensionPanelPlatforms = useMemo(() => {
     const connectedPlatforms = integrations
@@ -445,14 +557,10 @@ export function InboxDashboard({
   const genericBrowserPlatforms = useMemo(
     () =>
       extensionPanelPlatforms.filter((platform) =>
-        ['facebook', 'instagram', 'x', 'twitter'].includes(platform.platform)
+        GENERIC_BROWSER_ASSIST_PLATFORM_SET.has(platform.platform)
       ),
     [extensionPanelPlatforms]
   );
-  const getBrowserActionPlatform = useCallback((platform: string) => {
-    const normalized = normalizePlatform(platform);
-    return normalized === 'twitter' ? 'x' : normalized;
-  }, []);
   const getBrowserPlatformState = useCallback(
     (platform: string) => {
       const browserPlatform = getBrowserActionPlatform(platform);
@@ -487,7 +595,7 @@ export function InboxDashboard({
     extensionAuth?.userId ||
     null;
   const hasAnyThreads = filteredItems.length > 0;
-  const hasActionRequired = actionableThreads + highPriorityThreads + waitingThreads > 0;
+  const hasActionRequired = actionableThreads > 0;
   const hasBlockingError = Boolean(error);
   const showNoActivityState = !loading && !hasBlockingError && !authorFilter && !hasAnyThreads;
   const showAllCaughtUpState = !loading && !hasBlockingError && !authorFilter && hasAnyThreads && !hasActionRequired;
@@ -614,9 +722,14 @@ export function InboxDashboard({
   useEffect(() => {
     if (!recommendedThreadInScope || recommendedThreadId == null) return;
 
+    // The thread leaving the upstream gate (otherPartyRepliedLast)
+    // already drops it out of recommendedThreadInScope, so the only
+    // remaining "stop highlighting" signal here is the unread badge
+    // having cleared. Was previously double-checked via
+    // getThreadQueueGroup() === 'Needs Response', now redundant since
+    // every dmThread is in that single bucket.
     const isMarkedRead = (recommendedThreadInScope.unread_count ?? 0) <= 0;
-    const isStillActionable = getThreadQueueGroup(recommendedThreadInScope) === 'Needs Response';
-    if (!isMarkedRead && isStillActionable) return;
+    if (!isMarkedRead) return;
 
     setRecommendedThreadId(null);
     setRecommendationSetAt(null);
@@ -807,6 +920,7 @@ export function InboxDashboard({
         platform_id?: string | null;
         success?: boolean;
         message?: string;
+        action_id?: string | null;
       };
       if (!res.ok && res.status !== 202) {
         throw new Error(json.error || res.statusText || 'Failed to send reply');
@@ -823,6 +937,55 @@ export function InboxDashboard({
 
       const niceLabel = platform === 'twitter' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
       if (isQueued) {
+        const browserPlatformState = getBrowserPlatformState(platform);
+        const browserSurfaceReady = Boolean(
+          isDm
+          && browserPlatformState?.browserEnabled
+          && (
+            platform === 'linkedin'
+              ? browserPlatformState.hasMessagingTab
+              : browserPlatformState.hasMessagingTab || browserPlatformState.hasOpenTab
+          )
+        );
+        if (browserSurfaceReady) {
+          try {
+            await pollExtensionCommandsNow();
+            await new Promise((resolve) => window.setTimeout(resolve, 1800));
+            await pollExtensionCommandsNow();
+            const actionStatus = json.action_id
+              ? await waitForBrowserActionTerminalStatus(organizationId, json.action_id)
+              : null;
+            await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
+            if (actionStatus?.status === 'executed' && actionStatus.confirmed) {
+              return {
+                mode: 'browser_dispatched',
+                platform,
+                message: `${isDm ? 'DM' : 'Reply'} confirmed on ${niceLabel}.`,
+              };
+            }
+            if (actionStatus?.status === 'failed' || actionStatus?.status === 'blocked' || actionStatus?.status === 'skipped') {
+              return {
+                mode: 'browser_failed',
+                platform,
+                message: `${isDm ? 'DM' : 'Reply'} was not delivered on ${niceLabel}: ${actionStatus.error || actionStatus.status}.`,
+              };
+            }
+            if (actionStatus?.status === 'sent_unverified') {
+              return {
+                mode: 'browser_unverified',
+                platform,
+                message: `${isDm ? 'DM' : 'Reply'} ran in the ${niceLabel} tab, but LinkedIn did not confirm delivery.`,
+              };
+            }
+            return {
+              mode: 'browser_queued',
+              platform,
+              message: `${isDm ? 'DM' : 'Reply'} delivery is still in progress in the open ${niceLabel} tab.`,
+            };
+          } catch (error) {
+            console.warn('[engagement] immediate browser dispatch failed:', error);
+          }
+        }
         return {
           mode: 'browser_queued',
           platform,
@@ -841,7 +1004,52 @@ export function InboxDashboard({
         message,
       };
     },
-    [organizationId, refresh, refreshCounts, refreshMessages, refreshWorkQueue]
+    [getBrowserPlatformState, organizationId, pollExtensionCommandsNow, refresh, refreshCounts, refreshMessages, refreshWorkQueue]
+  );
+
+  const handleRetryQueuedDelivery = useCallback(
+    async (actionId: string) => {
+      const pollResult = await pollExtensionCommandsNow() as {
+        success?: boolean;
+        commandCount?: number;
+        dispatchedCount?: number;
+        message?: string;
+        error?: string;
+      };
+      await new Promise((resolve) => window.setTimeout(resolve, 1800));
+      const actionStatus = await waitForBrowserActionTerminalStatus(organizationId, actionId);
+      await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
+
+      if (actionStatus?.status === 'executed' && actionStatus.confirmed) {
+        return { message: 'Queued reply delivered and confirmed on LinkedIn.' };
+      }
+      if (actionStatus?.status === 'failed' || actionStatus?.status === 'blocked' || actionStatus?.status === 'skipped') {
+        return { message: `Queued reply was not delivered: ${actionStatus.error || actionStatus.status}.` };
+      }
+      if (actionStatus?.status === 'sent_unverified') {
+        return { message: 'The extension ran the reply, but LinkedIn did not confirm delivery.' };
+      }
+
+      const commandCount = Number(pollResult?.commandCount ?? 0);
+      const dispatchedCount = Number(pollResult?.dispatchedCount ?? 0);
+      if (pollResult?.success === false || pollResult?.error) {
+        return { message: `Extension poll failed: ${pollResult.error || pollResult.message || 'unknown error'}.` };
+      }
+      if (commandCount > 0 && dispatchedCount === 0) {
+        return {
+          message: 'Omnivyra found the queued command, but no LinkedIn tab accepted it. Refresh the LinkedIn Messaging tab and try Retry delivery again.',
+        };
+      }
+      if (commandCount === 0) {
+        return {
+          message: 'The extension poll completed, but it did not receive any queued commands from the backend.',
+        };
+      }
+      return {
+        message: 'Delivery was triggered and is still in progress. Wait a moment, then refresh the LinkedIn thread.',
+      };
+    },
+    [organizationId, pollExtensionCommandsNow, refresh, refreshCounts, refreshMessages, refreshWorkQueue],
   );
 
   const handleSyncLinkedIn = useCallback(async () => {
@@ -852,7 +1060,7 @@ export function InboxDashboard({
   }, [refresh, refreshCounts, refreshWorkQueue, syncLinkedInNow]);
 
   const handleUseSuggestedReply = useCallback(
-    (replyText: string) => {
+    (replyText: string, messageId?: string | null) => {
       if (!selectedThread || typeof window === 'undefined') return;
 
       const token = `engagement-reply-${selectedThread.thread_id}-${Date.now()}`;
@@ -860,6 +1068,7 @@ export function InboxDashboard({
         token,
         JSON.stringify({
           threadId: selectedThread.thread_id,
+          messageId: messageId ?? null,
           text: replyText,
         })
       );
@@ -874,12 +1083,14 @@ export function InboxDashboard({
   );
 
   const handleSendSuggestedReply = useCallback(
-    async (replyText: string) => {
+    async (replyText: string, messageId?: string | null) => {
       if (!selectedThread) {
         throw new Error('Select a thread before sending a suggested reply');
       }
 
-      const targetMessage = getPreferredReplyMessage();
+      const targetMessage =
+        (messageId ? messages.find((message) => message.id === messageId) : null)
+        ?? getPreferredReplyMessage();
       if (!targetMessage) {
         throw new Error('No target message is available for this thread');
       }
@@ -893,7 +1104,7 @@ export function InboxDashboard({
         messageType: targetMessage.message_type ?? null,
       });
     },
-    [getPreferredReplyMessage, handleExecuteReply, selectedThread]
+    [getPreferredReplyMessage, handleExecuteReply, messages, selectedThread]
   );
 
   const handleRunLinkedInBrowserAssist = useCallback(async () => {
@@ -1156,14 +1367,30 @@ export function InboxDashboard({
   const handleIgnore = useCallback(
     async (threadId: string) => {
       if (!organizationId) return;
+      const threadToDrop =
+        selectedThread?.thread_id === threadId
+          ? selectedThread
+          : items.find((thread) => thread.thread_id === threadId) ?? null;
+      const threadIds = Array.from(
+        new Set([
+          threadId,
+          ...((threadToDrop?.sibling_thread_ids ?? []).filter(Boolean)),
+        ])
+      );
+      if (
+        typeof window !== 'undefined'
+        && !window.confirm('Drop this conversation from Omnivyra? It will no longer appear in Needs Response.')
+      ) {
+        return;
+      }
       try {
-        const res = await fetch('/api/engagement/thread/ignore', {
+        const res = await fetch('/api/engagement/thread/bulk-ignore', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
             organization_id: organizationId,
-            thread_id: threadId,
+            thread_ids: threadIds,
           }),
         });
         const json = await res.json();
@@ -1176,9 +1403,12 @@ export function InboxDashboard({
         setRecommendationSeed((current) => current + 1);
       } catch (err) {
         console.error('[engagement] ignore failed:', err);
+        if (typeof window !== 'undefined') {
+          window.alert(err instanceof Error ? err.message : 'Failed to drop conversation');
+        }
       }
     },
-    [organizationId, refresh, refreshCounts, refreshWorkQueue, replaceEngagementRoute]
+    [items, organizationId, refresh, refreshCounts, refreshWorkQueue, replaceEngagementRoute, selectedThread]
   );
 
   if (!organizationId) {
@@ -1238,24 +1468,6 @@ export function InboxDashboard({
               </button>
               <button
                 type="button"
-                onClick={() => setActiveQueueFilter('High Priority')}
-                aria-pressed={activeQueueFilter === 'High Priority'}
-                className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'High Priority' ? 'bg-amber-500 text-white' : 'bg-amber-50 text-amber-900'}`}
-              >
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">High priority</span>
-                <span className="text-base font-semibold text-slate-900">{highPriorityThreads}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveQueueFilter('Waiting')}
-                aria-pressed={activeQueueFilter === 'Waiting'}
-                className={`inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm ${activeQueueFilter === 'Waiting' ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-700'}`}
-              >
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Waiting</span>
-                <span className="text-base font-semibold text-slate-900">{waitingThreads}</span>
-              </button>
-              <button
-                type="button"
                 onClick={() => setActiveQueueFilter('all')}
                 aria-pressed={activeQueueFilter === 'all'}
                 className={`inline-flex items-center gap-2 rounded-full bg-white px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200 ${activeQueueFilter === 'all' ? 'ring-2 ring-indigo-200' : ''}`}
@@ -1292,8 +1504,13 @@ export function InboxDashboard({
                 version={extensionStatus?.version ?? null}
                 platforms={extensionPanelPlatforms}
                 updatingPlatform={updatingExtensionPlatform}
+                authenticating={extensionAuthenticating}
                 onRefresh={handleRefreshExtensionPanel}
                 onTogglePlatform={handleToggleExtensionPlatform}
+                onConnect={async () => {
+                  if (!organizationId) return;
+                  await authenticateExtensionViaClaimCode(organizationId);
+                }}
               />
 
               {hasLinkedInConnection ? (
@@ -1436,7 +1653,7 @@ export function InboxDashboard({
             </button>
           </div>
           <ThreadList
-            items={activeQueueFilter === 'People Reacted' ? postThreads : dmThreads}
+            items={visibleQueueItems}
             loading={loading}
             selectedThreadId={selectedThread?.thread_id}
             recommendedThreadId={recommendedThread?.thread_id ?? null}
@@ -1477,6 +1694,7 @@ export function InboxDashboard({
             onLike={handleLike}
             onIgnore={handleIgnore}
             onMarkResolved={handleMarkResolved}
+            onRetryQueuedDelivery={handleRetryQueuedDelivery}
             onReplyTargetChange={setReplyTargetMessageId}
           />
         </section>

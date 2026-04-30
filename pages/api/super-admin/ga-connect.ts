@@ -56,6 +56,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ status: 'ok', authorizationUrl });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: 'Failed to connect Google Analytics' });
+    const rawMessage = error instanceof Error ? error.message : 'Failed to connect Google Analytics';
+    const normalized = rawMessage.toLowerCase();
+
+    if (normalized.includes('google analytics is not enabled')) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'GA_PROVIDER_DISABLED',
+        message: 'Google Analytics provider is disabled in Super Admin APIs configuration.',
+      });
+    }
+
+    if (normalized.includes('oauth credentials are not configured')) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'GA_PROVIDER_NOT_CONFIGURED',
+        message: 'Google Analytics OAuth client ID and secret are not configured in Super Admin APIs configuration.',
+      });
+    }
+
+    if (normalized.includes('request base url is required')) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'GA_BASE_URL_MISSING',
+        message: 'App base URL is not available for Google Analytics OAuth.',
+      });
+    }
+
+    return res.status(500).json({
+      status: 'error',
+      code: 'GA_CONNECT_FAILED',
+      message: rawMessage || 'Failed to connect Google Analytics',
+    });
   }
 }

@@ -75,6 +75,8 @@ export type InboxThread = {
 // scrape data lands (DOM scraper throttle is 30 s) and the inbox cost is
 // just one DB read per refresh.
 const REFRESH_INTERVAL_MS = 30 * 1000; // 30 seconds
+const INBOX_LOOKBACK_DAYS = 30;
+const INBOX_FETCH_LIMIT = 500;
 
 export type InboxFilters = {
   platform?: string;
@@ -114,10 +116,12 @@ export function useEngagementInbox(
     if (!background) setLoading(true);
     setError(null);
 
+    const lookbackStart = new Date(Date.now() - INBOX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const params = new URLSearchParams({
       organization_id: organizationId,
       organizationId: organizationId,
-      limit: '50',
+      limit: String(INBOX_FETCH_LIMIT),
+      start_date: lookbackStart,
     });
     if (filters.platform) params.set('platform', filters.platform);
     if (filters.priority) params.set('priority', filters.priority);

@@ -112,7 +112,7 @@ function inferInboundDmFallback(input: {
 }
 
 export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSummary[]> {
-  const limit = Math.min(100, Math.max(1, filters.limit ?? 50));
+  const limit = Math.min(500, Math.max(1, filters.limit ?? 50));
   const orgAuthorIds = await getOrgAuthorIds(filters.organization_id);
 
   let query = supabase
@@ -120,7 +120,7 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
     .select('id, platform, platform_thread_id, source_id, organization_id, priority_score, unread_count, created_at, updated_at')
     .eq('organization_id', filters.organization_id)
     .order('updated_at', { ascending: false })
-    .limit(limit * 2);
+    .limit(Math.min(1000, Math.max(limit * 2, 300)));
 
   if (filters.platform) {
     query = query.eq('platform', filters.platform);
@@ -182,9 +182,16 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
 
   const { data: messages } = await supabase
     .from('engagement_messages')
-    .select('id, thread_id, content, platform_created_at, author_id, sentiment_score, message_type, raw_payload')
+    .select('id, thread_id, content, platform_created_at, created_at, author_id, sentiment_score, message_type, raw_payload')
     .in('thread_id', threadIds)
-    .order('platform_created_at', { ascending: false });
+    // Order by platform_created_at DESC NULLS LAST, then created_at DESC.
+    // Default Postgres DESC puts NULLs FIRST, which made any row with a
+    // missing platform_created_at (legacy ingest, scraper glitch) win the
+    // "latest message" slot — feeding incorrect direction/author_self into
+    // the Needs Response gate. nullsFirst:false + ingest-time tiebreaker
+    // restores chronological correctness.
+    .order('platform_created_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false, nullsFirst: false });
 
   const latestByThread = new Map<string, {
     id: string;

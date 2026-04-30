@@ -35,7 +35,7 @@ export type CompanySignalOutput = {
 const MIN_RELEVANCE_THRESHOLD = 0.2;
 const WEIGHT_BASE_RELEVANCE = 0.4;
 const WEIGHT_INDUSTRY = 0.2;
-const WEIGHT_COMPETITOR = 0.25;
+const WEIGHT_COMPETITOR = 0;
 const WEIGHT_KEYWORD = 0.2;
 const WEIGHT_REGION = 0.15;
 const WEIGHT_PRODUCT = 0.2;
@@ -61,16 +61,13 @@ function inferCompanySignalType(
   const topic = (signal.topic ?? '').toLowerCase();
   const cat = (signal.primary_category ?? 'TREND').toUpperCase();
 
-  if (context.competitors.some((c) => topic.includes(c))) return 'competitor_activity';
   if (context.productFocus.some((p) => topic.includes(p))) return 'product_signal';
   if (context.keywords.some((k) => topic.includes(k))) return 'keyword_trend';
   if (/complaint|issue|problem|feedback|sentiment/i.test(topic)) return 'customer_sentiment';
   if (/market|trend|growth|shift/i.test(topic)) return 'market_shift';
   if (/launch|product|release/i.test(topic)) return 'product_launch';
 
-  return cat === 'COMPETITOR'
-    ? 'competitor_activity'
-    : cat === 'CUSTOMER'
+  return cat === 'CUSTOMER'
       ? 'customer_sentiment'
       : cat === 'PRODUCT'
         ? 'product_signal'
@@ -99,10 +96,6 @@ export function computeCompanyRelevance(
     if (matchCount > 0) {
       companyScore += WEIGHT_INDUSTRY * Math.min(1, matchCount / Math.max(1, industrySet.size));
     }
-  }
-
-  if (context.competitors.length > 0 && context.competitors.some((c) => topic.includes(c.toLowerCase()))) {
-    companyScore += WEIGHT_COMPETITOR;
   }
 
   if (context.keywords.length > 0) {
@@ -177,7 +170,7 @@ export async function loadCompanyContextForIntelligence(
   const { data: profile } = await supabase
     .from('company_profiles')
     .select(
-      'industry, industry_list, competitors, competitors_list, content_themes, content_themes_list, geography, geography_list, products_services, products_services_list'
+      'industry, industry_list, content_themes, content_themes_list, geography, geography_list, products_services, products_services_list'
     )
     .eq('company_id', companyId)
     .maybeSingle();
@@ -192,16 +185,6 @@ export async function loadCompanyContextForIntelligence(
     if (Array.isArray(p.industry_list)) {
       industryTerms.push(
         ...(p.industry_list as string[]).map((s) => String(s).trim().toLowerCase()).filter(Boolean)
-      );
-    }
-    if (Array.isArray(p.competitors_list)) {
-      competitors.push(
-        ...(p.competitors_list as string[]).map((s) => String(s).trim().toLowerCase()).filter(Boolean)
-      );
-    }
-    if (typeof p.competitors === 'string') {
-      competitors.push(
-        ...(p.competitors as string).split(/[,;]/).map((s) => s.trim().toLowerCase()).filter(Boolean)
       );
     }
     if (Array.isArray(p.content_themes_list)) {

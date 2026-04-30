@@ -122,8 +122,27 @@ export default function AuthCallback() {
           throw new Error('verify_failed');
         }
 
-        const verifyJson = await verifyRes.json().catch(() => ({})) as { route?: string };
+        const verifyJson = await verifyRes.json().catch(() => ({})) as {
+          route?: string;
+          requiresLogin?: boolean;
+          email?: string | null;
+        };
         const verifyRoute = verifyJson.route;
+
+        // First-time email verification on a password signup: sign the user
+        // back out and bounce them to /login with a "verified" banner instead
+        // of silently dropping them into onboarding. Matches user expectation
+        // that clicking a verification link confirms the email and prompts a
+        // proper sign-in.
+        if (verifyJson.requiresLogin) {
+          setStatusMsg('Email verified! Redirecting to sign in…');
+          await supabase.auth.signOut();
+          const emailParam = verifyJson.email
+            ? `&email=${encodeURIComponent(verifyJson.email)}`
+            : '';
+          router.replace(`/login?verified=signup${emailParam}`);
+          return;
+        }
 
         if (verifyRoute && verifyRoute !== '/dashboard') {
           setStatusMsg('Redirecting…');

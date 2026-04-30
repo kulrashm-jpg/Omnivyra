@@ -52,7 +52,7 @@ export type RelevanceResult = {
 };
 
 const WEIGHT_TOPIC = 0.3;
-const WEIGHT_COMPETITOR = 0.25;
+const WEIGHT_COMPETITOR = 0;
 const WEIGHT_REGION = 0.15;
 const WEIGHT_COMPANY_FOCUS = 0.2;
 const WEIGHT_MOMENTUM = 0.1;
@@ -85,10 +85,8 @@ function inferCategory(
 ): TaxonomyValue | null {
   const topic = (signal.topic ?? '').toLowerCase();
   const qTopic = (queryContext.topic ?? '').toLowerCase();
-  const qCompetitor = (queryContext.competitor ?? '').toLowerCase();
   const qProduct = (queryContext.product ?? '').toLowerCase();
 
-  if (qCompetitor && topic.includes(qCompetitor)) return 'COMPETITOR';
   if (qProduct && topic.includes(qProduct)) return 'PRODUCT';
   if (/complaint|issue|problem|feedback/i.test(topic)) return 'CUSTOMER';
   if (/market|trend|growth/i.test(topic)) return 'TREND';
@@ -120,23 +118,6 @@ export function computeRelevance(
     const sim = jaccardSimilarity(topicTokens, queryTokens);
     score += WEIGHT_TOPIC * sim;
     if (sim > 0.3) tags.push('topic_match');
-  }
-
-  if (companyContext && companyContext.competitors.length > 0 && topic) {
-    const competitorMatch = companyContext.competitors.some((c) =>
-      topic.includes(c.toLowerCase())
-    );
-    if (competitorMatch) {
-      score += WEIGHT_COMPETITOR;
-      tags.push('competitor_match');
-    }
-  }
-
-  if (queryContext.competitor && topic) {
-    if (topic.includes(queryContext.competitor.toLowerCase())) {
-      score += WEIGHT_COMPETITOR;
-      tags.push('query_competitor_match');
-    }
   }
 
   const region = (signal.geo ?? queryContext.region ?? '').toLowerCase();
@@ -209,7 +190,7 @@ export async function loadCompanyContextForRelevance(
 
   const { data: profile } = await supabase
     .from('company_profiles')
-    .select('industry, industry_list, competitors, competitors_list, content_themes, content_themes_list')
+    .select('industry, industry_list, content_themes, content_themes_list')
     .eq('company_id', companyId)
     .maybeSingle();
 
@@ -223,16 +204,6 @@ export async function loadCompanyContextForRelevance(
     if (Array.isArray(p.industry_list)) {
       industryTerms.push(
         ...(p.industry_list as string[]).map((s) => String(s).trim().toLowerCase()).filter(Boolean)
-      );
-    }
-    if (Array.isArray(p.competitors_list)) {
-      competitors.push(
-        ...(p.competitors_list as string[]).map((s) => String(s).trim().toLowerCase()).filter(Boolean)
-      );
-    }
-    if (typeof p.competitors === 'string') {
-      competitors.push(
-        ...(p.competitors as string).split(/[,;]/).map((s) => s.trim().toLowerCase()).filter(Boolean)
       );
     }
     if (Array.isArray(p.content_themes_list)) {

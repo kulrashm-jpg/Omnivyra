@@ -47,7 +47,8 @@ const MARKETING_TERMS = /campaign|ads|advertising|brand|engagement|content|marke
 const PARTNERSHIP_TERMS = /partnership|alliance|collaboration|acquisition|merge|joint venture|deal/i;
 
 function hasCompetitorMatch(s: FetchedSignal): boolean {
-  return s.matched_competitors != null && s.matched_competitors.length > 0;
+  void s;
+  return false;
 }
 
 function hasTopicMatch(s: FetchedSignal): boolean {
@@ -121,7 +122,7 @@ export async function fetchCompanySignals(
     signal_score: r.signal_score ?? 0,
     priority_level: r.priority_level,
     matched_topics: r.matched_topics,
-    matched_competitors: r.matched_competitors,
+    matched_competitors: null,
     matched_regions: r.matched_regions,
     created_at: r.created_at,
   }));
@@ -189,7 +190,7 @@ function toDashboardSignal(s: FetchedSignal): DashboardSignal {
 async function refineSignal(s: FetchedSignal): Promise<DashboardSignal> {
   let topic = s.topic;
   let matched_topics = s.matched_topics;
-  let matched_competitors = s.matched_competitors;
+  const matched_competitors = null;
   let matched_regions = s.matched_regions;
 
   if (topic != null && typeof topic === 'string' && topic.trim()) {
@@ -199,10 +200,6 @@ async function refineSignal(s: FetchedSignal): Promise<DashboardSignal> {
   if (Array.isArray(matched_topics) && matched_topics.length > 0) {
     const r = await refineLanguageOutput({ content: matched_topics, card_type: 'general' });
     matched_topics = (Array.isArray(r.refined) ? r.refined : [r.refined as string]) || matched_topics;
-  }
-  if (Array.isArray(matched_competitors) && matched_competitors.length > 0) {
-    const r = await refineLanguageOutput({ content: matched_competitors, card_type: 'general' });
-    matched_competitors = (Array.isArray(r.refined) ? r.refined : [r.refined as string]) || matched_competitors;
   }
   if (Array.isArray(matched_regions) && matched_regions.length > 0) {
     const r = await refineLanguageOutput({ content: matched_regions, card_type: 'general' });

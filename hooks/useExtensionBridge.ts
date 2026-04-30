@@ -54,7 +54,12 @@ type ExtensionTokenPayload = {
   };
 };
 
-const RESPONSE_TIMEOUT_MS = 1500;
+// 1.5s was too tight: a freshly-spun SW (cold start, post-reload) often
+// can't reply that fast, the bridge timer fires, extensionError gets set,
+// and the auto-bootstrap useEffect on /engagement bails before retrying.
+// 5s gives the SW comfortable headroom while still failing fast when no
+// extension is installed at all.
+const RESPONSE_TIMEOUT_MS = 5000;
 const AUTH_RESPONSE_TIMEOUT_MS = 15000;
 const PLATFORM_SYNC_TIMEOUT_MS = 15000;
 const PLATFORM_ACTION_TIMEOUT_MS = 45000;
@@ -151,6 +156,15 @@ async function triggerPlatformSyncRequest(platform: string) {
     type: 'OMNIVYRA_TRIGGER_PLATFORM_SYNC',
     data: { platform }
   }, '*');
+  return await responsePromise;
+}
+
+async function pollExtensionCommandsNowRequest() {
+  const responsePromise = waitForWindowMessage<{ success?: boolean; message?: string }>(
+    'OMNIVYRA_POLL_COMMANDS_RESULT',
+    PLATFORM_ACTION_TIMEOUT_MS
+  );
+  window.postMessage({ type: 'OMNIVYRA_POLL_COMMANDS_NOW' }, window.location.origin);
   return await responsePromise;
 }
 
@@ -314,6 +328,15 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
     [],
   );
 
+  const pollExtensionCommandsNow = useCallback(async () => {
+    const result = await pollExtensionCommandsNowRequest();
+    if (!result?.success) {
+      throw new Error(result?.message || 'Unable to trigger extension command dispatch');
+    }
+    await refresh();
+    return result;
+  }, [refresh]);
+
   const mergedPlatforms = useMemo(() => {
     const configured = configuredPlatforms.map((platform) => normalizePlatform(platform));
     const extensionPlatforms = Object.keys(status?.platforms || {}).map((platform) => normalizePlatform(platform));
@@ -352,6 +375,7 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
     setBrowserPlatformEnabled,
     authenticateExtensionSession,
     authenticateExtensionViaClaimCode,
+    pollExtensionCommandsNow,
     triggerPlatformSync,
     executePlatformAction,
   };

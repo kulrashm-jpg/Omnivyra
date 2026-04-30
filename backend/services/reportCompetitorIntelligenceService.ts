@@ -6,6 +6,20 @@ import { supabase } from '../db/supabaseClient';
 import axios from 'axios';
 import { config } from '@/config';
 import {
+  listKnownCompetitorProfiles,
+  type CompetitorEnrichmentProfile,
+} from './competitorEnrichmentKnowledge';
+import type { CompetitorSecondaryTag } from './competitorTaxonomy';
+import {
+  getFinalCompetitors,
+  getFinalCompetitorsSync,
+  type CompetitorCandidate,
+  type CompetitorSource as EngineCompetitorSource,
+  type RankedCompetitor,
+  type CompetitorRevenueTier,
+  type CompetitorTier,
+} from './competitorEngineService';
+import {
   clamp,
   average,
   tokenize,
@@ -19,10 +33,7 @@ import {
   extractBusinessKeywords,
   toShortLabel,
   extractCompanyCompetitiveContext,
-  buildFitSignals,
   buildFitRationale,
-  extractDecisionCompetitors,
-  fetchSerpDomainsForKeyword,
   discoverCompetitorDomainsFromSerp,
   extractTitle,
   extractHeadings,
@@ -42,12 +53,7 @@ import {
 } from "./reportCompetitorIntelligenceServiceHelpers";
 
 type CompetitorClassification = 'direct_competitor' | 'seo_competitor' | 'authority_leader';
-type CompetitorSource =
-  | 'manual'
-  | 'decision_evidence'
-  | 'inferred_keyword_peer'
-  | 'serp_live'
-  | 'serp_unavailable_fallback';
+type CompetitorSource = EngineCompetitorSource;
 
 type ComparisonMetrics = {
   content_depth: number;
@@ -62,9 +68,20 @@ type ComparisonMetrics = {
 export type DetectedCompetitor = {
   name: string;
   domain: string | null;
+  category: string;
+  tags: CompetitorSecondaryTag[];
   classification: CompetitorClassification;
   source: CompetitorSource;
   relevance_score: number;
+  problem_overlap: number;
+  icp_overlap: number;
+  market_overlap: number;
+  revenue_tier: CompetitorRevenueTier;
+  product_depth: number;
+  final_score: number;
+  tier: CompetitorTier;
+  enrichment: CompetitorEnrichmentProfile | null;
+  enrichment_confidence_score: number;
   rationale: string;
   fit_signals?: {
     market_focus?: string | null;
@@ -73,6 +90,8 @@ export type DetectedCompetitor = {
     team_size?: string | null;
     founded_year?: string | null;
     revenue_range?: string | null;
+    target_customer?: string | null;
+    business_model?: string | null;
   };
 };
 
@@ -102,6 +121,11 @@ export type CompetitorGap = {
 export type CompetitorIntelligenceResult = {
   summary: string;
   detected_competitors: DetectedCompetitor[];
+  competitors_by_tier: {
+    tier_1: DetectedCompetitor[];
+    tier_2: DetectedCompetitor[];
+    tier_3: DetectedCompetitor[];
+  };
   comparison: {
     company: ComparisonMetrics;
     competitors: CompetitorComparisonEntry[];
@@ -125,6 +149,14 @@ export type CompetitorIntelligenceResult = {
   };
 };
 
+function groupCompetitorsByTier(competitors: DetectedCompetitor[]): CompetitorIntelligenceResult['competitors_by_tier'] {
+  return {
+    tier_1: competitors.filter((competitor) => competitor.tier === 'Tier 1'),
+    tier_2: competitors.filter((competitor) => competitor.tier === 'Tier 2'),
+    tier_3: competitors.filter((competitor) => competitor.tier === 'Tier 3'),
+  };
+}
+
 const MAX_COMPETITORS = 3;
 const MAX_DISCOVERY_KEYWORDS = 8;
 const MAX_KEYWORD_SOURCE_PAGES = 50;
@@ -147,89 +179,442 @@ const METRIC_KEYS: Array<keyof ComparisonMetrics> = [
   'aeo_readiness',
 ];
 
-function buildInferredCompetitors(params: {
-  domain: string | null;
+const EMPTY_COMPARISON_METRICS: ComparisonMetrics = {
+  content_depth: 0,
+  authority_score: 0,
+  publishing_frequency: 0,
+  engagement_score: 0,
+  seo_coverage: 0,
+  geo_presence: 0,
+  aeo_readiness: 0,
+};
+
+function toDetectedCompetitor(competitor: RankedCompetitor): DetectedCompetitor {
+  return {
+    ...competitor,
+    source: competitor.source,
+    classification: competitor.classification,
+  };
+}
+
+function detectedToCandidate(competitor: DetectedCompetitor): CompetitorCandidate {
+  return {
+    name: competitor.name,
+    domain: competitor.domain,
+    source: competitor.source,
+    classification: competitor.classification,
+    category: competitor.category,
+    tags: competitor.tags,
+    rationale: competitor.rationale,
+    geography: competitor.fit_signals?.geography ?? null,
+    businessModel: competitor.fit_signals?.business_model ?? null,
+    revenueRange: competitor.fit_signals?.revenue_range ?? null,
+    productSignals: competitor.fit_signals?.product_service ? [competitor.fit_signals.product_service] : null,
+    enrichment: competitor.enrichment,
+    confidenceScore: competitor.enrichment_confidence_score,
+  };
+}
+
+function competitorIdentityKey(value: { name?: string | null; domain?: string | null }): string {
+  return `${value.domain || value.name || ''}`.trim().toLowerCase();
+}
+
+export function enforceFinalCompetitorIntelligenceSync(params: {
+  result: CompetitorIntelligenceResult;
+  resolvedInput?: ResolvedReportInput | null;
+}): CompetitorIntelligenceResult {
+  const companyContext = extractCompanyCompetitiveContext(params.resolvedInput);
+  const finalCompetitors = getFinalCompetitorsSync({
+    candidates: (params.result.detected_competitors ?? []).map(detectedToCandidate),
+    context: companyContext,
+    max: MAX_COMPETITORS,
+  }).map(toDetectedCompetitor);
+  const finalByKey = new Map(finalCompetitors.map((competitor) => [competitorIdentityKey(competitor), competitor]));
+  const comparisonEntries = (params.result.comparison?.competitors ?? [])
+    .map((entry) => {
+      const competitor = finalByKey.get(competitorIdentityKey(entry.competitor));
+      return competitor
+        ? {
+            ...entry,
+            competitor,
+          }
+        : null;
+    })
+    .filter((entry): entry is CompetitorComparisonEntry => Boolean(entry));
+  const finalNames = new Set(finalCompetitors.flatMap((competitor) => [
+    competitor.name.trim().toLowerCase(),
+    competitor.domain?.trim().toLowerCase() ?? '',
+  ]).filter(Boolean));
+  const generatedGaps = (params.result.generated_gaps ?? [])
+    .map((gap) => ({
+      ...gap,
+      leading_competitors: (gap.leading_competitors ?? [])
+        .filter((competitor) => finalNames.has(String(competitor).trim().toLowerCase())),
+    }))
+    .filter((gap) => gap.leading_competitors.length > 0);
+
+  return {
+    ...params.result,
+    summary: finalCompetitors.length > 0
+      ? params.result.summary
+      : `No competitor comparison could be built for ${normalizeDomain(params.resolvedInput?.resolved.websiteDomain) ?? 'your-site.com'}.`,
+    detected_competitors: finalCompetitors,
+    competitors_by_tier: groupCompetitorsByTier(finalCompetitors),
+    comparison: {
+      company: params.result.comparison?.company ?? EMPTY_COMPARISON_METRICS,
+      competitors: comparisonEntries,
+    },
+    generated_gaps: generatedGaps,
+  };
+}
+
+function buildManualCompetitorCandidates(params: {
+  resolvedInput?: ResolvedReportInput | null;
   businessType: string | null;
   geography: string | null;
-  existing: DetectedCompetitor[];
   companyContext: CompanyCompetitiveContext;
-}): DetectedCompetitor[] {
-  const domainKeywords = extractDomainKeywords(params.domain);
-  const businessKeywords = extractBusinessKeywords(params.businessType);
-  const productKeywords = extractBusinessKeywords(params.companyContext.primaryService);
-  const personaKeywords = extractBusinessKeywords(params.companyContext.targetCustomer ?? params.companyContext.idealCustomerProfile);
-  const primaryKeyword = productKeywords[0] ?? businessKeywords[0] ?? domainKeywords[0] ?? 'market';
-  const contextLabel = titleCase(params.companyContext.marketFocus ?? params.businessType ?? primaryKeyword);
-  const productLabel = titleCase(params.companyContext.primaryService ?? primaryKeyword);
-  const personaLabel = titleCase(personaKeywords[0] ?? params.companyContext.targetCustomer ?? 'buyer');
-  const geography = params.geography ? ` in ${params.geography}` : '';
-  const candidates: Array<Omit<DetectedCompetitor, 'relevance_score'>> = [
-    {
-      name: `${productLabel} ${personaLabel} competitor${geography}`,
-      domain: null,
-      classification: 'direct_competitor',
-      source: 'inferred_keyword_peer',
-      rationale: buildFitRationale(
-        params.companyContext,
-        params.geography,
-        'Inferred as a direct peer from company market focus, product/service scope, and customer fit.',
-      ),
-      fit_signals: buildFitSignals(params.companyContext, params.geography, productLabel),
-    },
-    {
-      name: `${productLabel} search rival${geography}`,
-      domain: null,
-      classification: 'seo_competitor',
-      source: 'inferred_keyword_peer',
-      rationale: buildFitRationale(
-        params.companyContext,
-        params.geography,
-        'Inferred as a search competitor from demand themes tied to the company offer and market.',
-      ),
-      fit_signals: buildFitSignals(params.companyContext, params.geography, productLabel),
-    },
-    {
-      name: `${contextLabel} authority leader`,
-      domain: null,
-      classification: 'authority_leader',
-      source: 'inferred_keyword_peer',
-      rationale: buildFitRationale(
-        params.companyContext,
-        params.geography,
-        'Inferred as the authority benchmark for the same category and company-fit envelope.',
-      ),
-      fit_signals: buildFitSignals(params.companyContext, params.geography, productLabel),
-    },
-    {
-      name: `${productLabel} comparison-focused peer`,
-      domain: null,
-      classification: 'direct_competitor',
-      source: 'inferred_keyword_peer',
-      rationale: buildFitRationale(
-        params.companyContext,
-        params.geography,
-        'Inferred as a likely comparison-stage peer in the same buying journey.',
-      ),
-      fit_signals: buildFitSignals(params.companyContext, params.geography, productLabel),
-    },
-  ];
+}): CompetitorCandidate[] {
+  return (params.resolvedInput?.resolved.competitors ?? [])
+    .map((item) => normalizeDomain(item) ?? item.trim())
+    .filter(Boolean)
+    .slice(0, MAX_COMPETITORS)
+    .map((item, index) => {
+      const domainValue = normalizeDomain(item);
+      return {
+        name: domainValue ? domainToName(domainValue) : titleCase(String(item)),
+        domain: domainValue,
+        category: params.companyContext.marketFocus ?? params.businessType ?? 'Market peer',
+        classification:
+          index === 0
+            ? 'direct_competitor'
+            : index === 1
+              ? 'seo_competitor'
+              : 'authority_leader',
+        source: 'manual',
+        rationale: buildFitRationale(
+          params.companyContext,
+          params.geography,
+          'Provided through resolved report inputs and validated by the competitor engine.',
+        ),
+        geography: params.geography,
+        productSignals: params.companyContext.primaryService ? [params.companyContext.primaryService] : null,
+      } satisfies CompetitorCandidate;
+    });
+}
 
-  const existingKeys = new Set(params.existing.map((item) => `${item.name}|${item.domain ?? ''}`.toLowerCase()));
-  return candidates
-    .filter((item) => !existingKeys.has(`${item.name}|${item.domain ?? ''}`.toLowerCase()))
-    .slice(0, Math.max(0, MAX_COMPETITORS - params.existing.length))
-    .map((item, index) => ({
-      ...item,
-      relevance_score: clamp(
-        74 - index * 5 +
-          (params.companyContext.primaryService ? 4 : 0) +
-          (params.companyContext.targetCustomer ? 3 : 0) +
-          (params.companyContext.teamSize ? 2 : 0) +
-          (params.companyContext.revenueRange ? 2 : 0),
-        52,
-        92,
+type DiscoveryKeywordInput =
+  | ResolvedReportInput
+  | CompanyCompetitiveContext
+  | Record<string, unknown>
+  | null
+  | undefined;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function textValue(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function textList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(textValue).filter((item): item is string => Boolean(item));
+  }
+  const single = textValue(value);
+  return single ? [single] : [];
+}
+
+function pickText(records: Array<Record<string, unknown> | null | undefined>, keys: string[]): string | null {
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of keys) {
+      const direct = textValue(record[key]);
+      if (direct) return direct;
+      const firstListItem = textList(record[key])[0];
+      if (firstListItem) return firstListItem;
+    }
+  }
+  return null;
+}
+
+function normalizeQueryPart(value: string | null | undefined, maxTokens = 6): string | null {
+  const normalized = String(value ?? '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/www\.[^\s]+/gi, ' ')
+    .replace(/[^\w\s-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return null;
+  const tokens = normalized.split(/\s+/).filter((token) => token.length > 0);
+  return tokens.slice(0, maxTokens).join(' ');
+}
+
+function pushUniqueQuery(queries: string[], value: string | null | undefined): void {
+  const normalized = normalizeQueryPart(value, 8);
+  if (!normalized) return;
+  const key = normalized.toLowerCase();
+  if (!queries.some((query) => query.toLowerCase() === key)) {
+    queries.push(normalized);
+  }
+}
+
+function extractDiscoveryFields(companyProfile: DiscoveryKeywordInput): {
+  problem: string | null;
+  product: string | null;
+  category: string | null;
+  icp: string | null;
+  domain: string | null;
+  context: CompanyCompetitiveContext;
+} {
+  const inputRecord: Record<string, unknown> | null = isRecord(companyProfile)
+    ? companyProfile as Record<string, unknown>
+    : null;
+  const resolvedRecord = isRecord(inputRecord?.resolved) ? inputRecord.resolved : null;
+  const profileRecord = isRecord(inputRecord?.profile) ? inputRecord.profile : inputRecord;
+  const companyContextRecord = isRecord(resolvedRecord?.companyContext)
+    ? resolvedRecord.companyContext
+    : isRecord(inputRecord?.companyContext)
+      ? inputRecord.companyContext
+      : inputRecord;
+
+  const context = resolvedRecord
+    ? extractCompanyCompetitiveContext(companyProfile as ResolvedReportInput)
+    : {
+        marketFocus: pickText([companyContextRecord, profileRecord], ['marketFocus', 'market_focus', 'category', 'industry', 'businessType', 'business_type']),
+        primaryService: pickText([companyContextRecord, profileRecord], ['primaryService', 'primary_service', 'productServices', 'product_services', 'products_services', 'products_services_list']),
+        targetCustomer: pickText([companyContextRecord, profileRecord], ['targetCustomer', 'target_customer', 'targetCustomerSegment', 'target_customer_segment', 'target_audience']),
+        idealCustomerProfile: pickText([companyContextRecord, profileRecord], ['idealCustomerProfile', 'ideal_customer_profile', 'icp']),
+        brandPositioning: pickText([companyContextRecord, profileRecord], ['brandPositioning', 'brand_positioning', 'problem', 'pain_points', 'competitiveAdvantages', 'competitive_advantages']),
+        geography: pickText([companyContextRecord, profileRecord], ['geography', 'market', 'region']),
+        teamSize: pickText([companyContextRecord, profileRecord], ['teamSize', 'team_size']),
+        foundedYear: pickText([companyContextRecord, profileRecord], ['foundedYear', 'founded_year']),
+        revenueRange: pickText([companyContextRecord, profileRecord], ['revenueRange', 'revenue_range']),
+        businessModel: pickText([companyContextRecord, profileRecord], ['businessModel', 'business_model', 'pricing_model', 'sales_motion']),
+      } satisfies CompanyCompetitiveContext;
+
+  const domain = normalizeDomain(
+    pickText([resolvedRecord, profileRecord], ['websiteDomain', 'website_domain', 'website_url', 'url', 'domain']),
+  );
+
+  return {
+    problem: pickText([companyContextRecord, profileRecord], ['problem', 'pain_points', 'brandPositioning', 'brand_positioning', 'competitiveAdvantages', 'competitive_advantages']) ?? context.brandPositioning,
+    product: context.primaryService,
+    category: context.marketFocus,
+    icp: context.targetCustomer ?? context.idealCustomerProfile,
+    domain,
+    context,
+  };
+}
+
+export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput): string[] {
+  const fields = extractDiscoveryFields(companyProfile);
+  const category = normalizeQueryPart(fields.category, 5);
+  const product = normalizeQueryPart(fields.product, 5);
+  const problem = normalizeQueryPart(fields.problem, 5);
+  const icp = normalizeQueryPart(fields.icp, 5);
+  const domainTerms = extractDomainKeywords(fields.domain).join(' ');
+  const base = category ?? product ?? problem ?? domainTerms ?? 'business software';
+  const contextText = [
+    fields.category,
+    fields.product,
+    fields.problem,
+    fields.icp,
+    domainTerms,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  const queries: string[] = [];
+  pushUniqueQuery(queries, `${base} competitors`);
+  pushUniqueQuery(queries, `${base} alternatives`);
+  pushUniqueQuery(queries, `${base} software platforms`);
+  if (product) {
+    pushUniqueQuery(queries, `${product} competitors`);
+    pushUniqueQuery(queries, `${product} alternatives`);
+    pushUniqueQuery(queries, `${product} tools`);
+  }
+  if (problem) pushUniqueQuery(queries, `${problem} tools`);
+  if (icp && category) pushUniqueQuery(queries, `${icp} ${category} platforms`);
+
+  if (/\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|self reflection|self-reflection|clarity|emotional|mood|journaling|meditation|mindfulness|stress|anxiety)\b/.test(contextText)) {
+    [
+      'AI mental wellness apps',
+      'AI therapy chatbot competitors',
+      'self reflection AI tools',
+      'mental clarity apps',
+      'digital therapy platforms',
+      'guided journaling apps',
+      'emotional wellbeing AI apps',
+    ].forEach((query) => pushUniqueQuery(queries, query));
+  }
+
+  if (/\b(marketing|crm|sales|campaign|growth|seo|content|revenue|customer|automation|lead|pipeline|demand)\b/.test(contextText)) {
+    [
+      'marketing automation platforms',
+      'B2B marketing operating system competitors',
+      'campaign execution software',
+      'marketing readiness tools',
+      'growth workflow platforms',
+      'CRM marketing automation alternatives',
+      'customer growth software platforms',
+    ].forEach((query) => pushUniqueQuery(queries, query));
+  }
+
+  [
+    `${base} tools`,
+    `${base} apps`,
+    `${base} platforms`,
+    `${base} market leaders`,
+    `${base} category competitors`,
+  ].forEach((query) => pushUniqueQuery(queries, query));
+
+  return queries.slice(0, 10);
+}
+
+function discoveryTextFromContext(context: CompanyCompetitiveContext, keywords: string[] = []): string {
+  return [
+    context.marketFocus,
+    context.primaryService,
+    context.targetCustomer,
+    context.idealCustomerProfile,
+    context.brandPositioning,
+    context.businessModel,
+    context.geography,
+    ...keywords,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function profileSearchText(profile: CompetitorEnrichmentProfile): string {
+  return [
+    profile.name,
+    profile.domain,
+    profile.category,
+    profile.description,
+    profile.business_model,
+    profile.product_type,
+    profile.icp.age_group,
+    profile.icp.use_case,
+    profile.icp.user_intent,
+    profile.geography,
+    Object.values(profile.scale_signals).filter(Boolean).join(' '),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function discoveryTokens(value: string): string[] {
+  return value
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => (token.length >= 3 || token === 'ai') && !STOPWORDS.has(token));
+}
+
+function scoreKnownProfileForContext(
+  profile: CompetitorEnrichmentProfile,
+  context: CompanyCompetitiveContext,
+  keywords: string[],
+): number {
+  const contextText = discoveryTextFromContext(context, keywords);
+  const profileText = profileSearchText(profile);
+  const hasSpecificContext = discoveryTokens(contextText).length > 0;
+  const wellnessContext = /\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|self reflection|self-reflection|clarity|emotional|mood|journaling|meditation|mindfulness|stress|anxiety)\b/.test(contextText);
+  const wellnessProfile = /\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|journaling|meditation|mindfulness|emotional|mood|companion|cbt|anxiety|stress)\b/.test(profileText);
+  const marketingContext = /\b(marketing|crm|sales|campaign|growth|seo|content|revenue|customer|automation|lead|pipeline|demand)\b/.test(contextText);
+  const marketingProfile = /\b(marketing|crm|sales|campaign|growth|seo|content|customer|automation|lead|pipeline|revenue)\b/.test(profileText);
+  const sustainabilityContext = /\b(sustainability|esg|climate|impact analytics|carbon)\b/.test(contextText);
+  const sustainabilityProfile = /\b(sustainability|esg|climate|carbon|impact analytics)\b/.test(profileText);
+  const outsourcingProfile = /\b(outsourcing|staffing|virtual employee|offshore)\b/.test(profileText);
+
+  if (outsourcingProfile) return -100;
+  if (sustainabilityProfile && !sustainabilityContext) return -80;
+  if (wellnessContext && !wellnessProfile) return -40;
+  if (marketingContext && !marketingProfile) return -40;
+
+  let score = Math.round(profile.confidence_score * 20);
+  if (wellnessContext && wellnessProfile) score += 45;
+  if (marketingContext && marketingProfile) score += 45;
+  if (sustainabilityContext && sustainabilityProfile) score += 45;
+  if (!hasSpecificContext && marketingProfile) score += 20;
+
+  const profileTokenSet = new Set(discoveryTokens(profileText));
+  discoveryTokens(contextText).forEach((token) => {
+    if (profileTokenSet.has(token)) score += 4;
+  });
+
+  return score;
+}
+
+function buildKnownDatasetCandidates(params: {
+  companyContext: CompanyCompetitiveContext;
+  keywords: string[];
+  geography: string | null;
+  max?: number;
+}): CompetitorCandidate[] {
+  return listKnownCompetitorProfiles()
+    .map((profile) => ({
+      profile,
+      score: scoreKnownProfileForContext(profile, params.companyContext, params.keywords),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || right.profile.confidence_score - left.profile.confidence_score)
+    .slice(0, params.max ?? MAX_COMPETITORS + 3)
+    .map(({ profile }, index) => ({
+      name: profile.name,
+      domain: profile.domain,
+      category: profile.category,
+      tags: profile.tags,
+      classification: (
+        index === 0
+          ? 'direct_competitor'
+          : index === 1
+            ? 'seo_competitor'
+            : 'authority_leader'
+      ) as CompetitorClassification,
+      source: 'known_category_dataset' as const,
+      description: profile.description,
+      targetCustomer: profile.icp.age_group,
+      useCase: profile.icp.use_case ?? profile.icp.user_intent,
+      geography: params.geography ?? profile.geography,
+      businessModel: profile.business_model,
+      productType: profile.product_type,
+      scaleSignals: profile.scale_signals,
+      confidenceScore: profile.confidence_score,
+      productSignals: [profile.product_type, profile.category, ...profile.tags].filter(Boolean),
+      rationale: buildFitRationale(
+        params.companyContext,
+        params.geography,
+        'Selected from the known category competitor dataset after SERP discovery returned too few usable domains.',
       ),
     }));
+}
+
+function expandDiscoveryKeywords(
+  keywords: string[],
+  companyContext: CompanyCompetitiveContext,
+  businessContext: string,
+): string[] {
+  const generated = generateDiscoveryKeywords(companyContext);
+  const simplified = keywords
+    .map((keyword) => keyword
+      .toLowerCase()
+      .replace(/\b(best|top|leading|competitors?|alternatives?|platforms?|software|tools?|apps?|services?)\b/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim())
+    .filter((keyword) => keyword.length >= 3);
+  return [
+    ...keywords,
+    ...generated,
+    ...simplified,
+    `${businessContext} competitors`,
+    `${businessContext} alternatives`,
+    `${businessContext} software`,
+    `${businessContext} tools`,
+    `${businessContext} platforms`,
+  ].reduce<string[]>((merged, keyword) => {
+    const normalized = normalizeQueryPart(keyword, 8);
+    if (!normalized) return merged;
+    if (!merged.some((item) => item.toLowerCase() === normalized.toLowerCase())) merged.push(normalized);
+    return merged;
+  }, []).slice(0, 10);
 }
 
 async function extractTopKeywords(params: {
@@ -539,46 +924,32 @@ export function buildCompetitorIntelligence(params: {
   const companyContext = extractCompanyCompetitiveContext(params.resolvedInput);
   const businessContext = companyContext.marketFocus ? titleCase(companyContext.marketFocus) : businessType ? titleCase(businessType) : domainToName(domain);
 
-  const manualCompetitors = (params.resolvedInput?.resolved.competitors ?? [])
-    .map((item) => normalizeDomain(item) ?? item.trim())
-    .filter(Boolean)
-    .slice(0, MAX_COMPETITORS)
-    .map((item, index) => {
-      const domainValue = normalizeDomain(item);
-      return {
-        name: domainValue ? domainToName(domainValue) : titleCase(String(item)),
-        domain: domainValue,
-        classification:
-          index === 0
-            ? 'direct_competitor'
-            : index === 1
-              ? 'seo_competitor'
-              : 'authority_leader',
-        source: 'manual' as const,
-        relevance_score: clamp(88 - index * 6, 60, 92),
-        rationale: buildFitRationale(
-          companyContext,
-          geography,
-          'Provided directly through resolved report inputs or stored company defaults.',
-        ),
-        fit_signals: buildFitSignals(companyContext, geography, companyContext.primaryService),
-      } satisfies DetectedCompetitor;
-    });
-
-  const evidenceCompetitors = extractDecisionCompetitors(params.decisions);
-  const initialCompetitors = dedupeCompetitors([...manualCompetitors, ...evidenceCompetitors]);
+  const discoveryKeywords = generateDiscoveryKeywords(params.resolvedInput ?? companyContext);
+  const manualCandidates = buildManualCompetitorCandidates({
+    resolvedInput: params.resolvedInput,
+    businessType,
+    geography,
+    companyContext,
+  });
+  const knownDatasetCandidates = buildKnownDatasetCandidates({
+    companyContext,
+    keywords: discoveryKeywords,
+    geography,
+  });
+  const candidates = manualCandidates.length >= MIN_SERP_DOMAINS_PER_KEYWORD
+    ? manualCandidates
+    : [...manualCandidates, ...knownDatasetCandidates];
   const discovered = classifyCompetitors(
-    dedupeCompetitors([
-      ...initialCompetitors,
-      ...buildInferredCompetitors({
-        domain,
-        businessType,
-        geography,
-        existing: initialCompetitors,
-        companyContext,
-      }),
-    ]).slice(0, MAX_COMPETITORS),
+    getFinalCompetitorsSync({
+      candidates,
+      context: companyContext,
+      max: MAX_COMPETITORS,
+    }).map(toDetectedCompetitor),
   );
+
+  if (discovered.length === 0) {
+    throw new Error(`competitor_discovery_empty_after_final_gate:${domain}`);
+  }
 
   const companyMetrics = computeCompanyMetrics(params);
   const comparisonEntries = discovered.map((competitor, index) => {
@@ -597,13 +968,18 @@ export function buildCompetitorIntelligence(params: {
     companyMetrics,
   });
 
-  const summary = comparisonEntries.length > 0
-    ? `Benchmarked ${domain} against ${comparisonEntries.length} ${toShortLabel(companyContext.primaryService ?? companyContext.marketFocus, 'market')} peers and found the strongest pressure in ${generatedGaps[0]?.gap_type?.replace(/_/g, ' ') ?? 'competitive positioning'}.`
-    : `No competitor comparison could be built for ${domain}.`;
+  console.info('[competitor-discovery][summary]', {
+    keywords_generated: discoveryKeywords,
+    serp_domains_found: 0,
+    final_candidates_count: comparisonEntries.length,
+  });
+
+  const summary = `Benchmarked ${domain} against ${comparisonEntries.length} ${toShortLabel(companyContext.primaryService ?? companyContext.marketFocus, 'market')} peers and found the strongest pressure in ${generatedGaps[0]?.gap_type?.replace(/_/g, ' ') ?? 'competitive positioning'}.`;
 
   return {
     summary,
     detected_competitors: comparisonEntries.map((entry) => entry.competitor),
+    competitors_by_tier: groupCompetitorsByTier(comparisonEntries.map((entry) => entry.competitor)),
     comparison: {
       company: companyMetrics,
       competitors: comparisonEntries,
@@ -620,10 +996,10 @@ export function buildCompetitorIntelligence(params: {
       strong_answers: [],
     },
     discovery_metadata: {
-      keyword_count: 0,
+      keyword_count: discoveryKeywords.length,
       serp_domains_found: 0,
       serp_status: 'fallback',
-      is_fallback_used: true,
+      is_fallback_used: candidates.length > manualCandidates.length,
     },
   };
 }
@@ -633,75 +1009,126 @@ export async function buildCompetitorIntelligenceActive(params: {
   decisions: PersistedDecisionObject[];
   resolvedInput?: ResolvedReportInput | null;
 }): Promise<CompetitorIntelligenceResult> {
-  const baseline = buildCompetitorIntelligence({
-    decisions: params.decisions,
-    resolvedInput: params.resolvedInput,
-  });
-
   const domain = normalizeDomain(params.resolvedInput?.resolved.websiteDomain) ?? 'your-site.com';
   const businessType = params.resolvedInput?.resolved.businessType ?? null;
   const geography = params.resolvedInput?.resolved.geography ?? null;
   const companyContext = extractCompanyCompetitiveContext(params.resolvedInput);
   const businessContext = companyContext.marketFocus ? titleCase(companyContext.marketFocus) : businessType ? titleCase(businessType) : domainToName(domain);
 
-  const keywords = await extractTopKeywords({
+  const generatedKeywords = generateDiscoveryKeywords(params.resolvedInput ?? companyContext);
+  const extractedKeywords = await extractTopKeywords({
     companyId: params.companyId,
     domain,
     businessType,
+  }).catch((error) => {
+    console.warn('[competitor-discovery][keyword-extraction-failed]', {
+      company_id: params.companyId,
+      domain,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [] as string[];
   });
+  const keywords = [...extractedKeywords, ...generatedKeywords].reduce<string[]>((merged, keyword) => {
+    const normalized = normalizeQueryPart(keyword, 8);
+    if (!normalized) return merged;
+    if (!merged.some((item) => item.toLowerCase() === normalized.toLowerCase())) merged.push(normalized);
+    return merged;
+  }, []).slice(0, 10);
   const serpDiscovery = await discoverCompetitorDomainsFromSerp({
     keywords,
     ownDomain: domain,
     geography,
   });
-  const serpDomains = serpDiscovery.domains;
-  const serpStatus: 'live' | 'fallback' =
-    serpDomains.length >= MIN_SERP_DOMAINS_PER_KEYWORD || serpDiscovery.liveKeywordCount > 0 ? 'live' : 'fallback';
-
-  const manualAndEvidence = dedupeCompetitors(
-    baseline.detected_competitors.filter((item) => item.source === 'manual' || item.source === 'decision_evidence'),
-  );
-
-  const serpCompetitors: DetectedCompetitor[] = serpDomains.map((item, index) => ({
-    name: domainToName(item),
-    domain: item,
-    classification:
-      index === 0
-        ? 'direct_competitor'
-        : index === 1
-          ? 'seo_competitor'
-          : 'authority_leader',
-    source: 'serp_live',
-    relevance_score: clamp(90 - index * 6, 58, 94),
-    rationale: `Discovered from top SERP domains for high-priority keywords (${keywords.slice(0, 3).join(', ') || 'core demand terms'}).`,
-    fit_signals: buildFitSignals(companyContext, geography, companyContext.primaryService),
-  }));
-
-  let discovered = classifyCompetitors(
-    dedupeCompetitors(
-      serpStatus === 'live'
-        ? [...serpCompetitors, ...manualAndEvidence]
-        : [...manualAndEvidence, ...serpCompetitors],
-    ).slice(0, MAX_COMPETITORS),
-  );
-
-  if (discovered.length < MAX_COMPETITORS) {
-    const inferred = buildInferredCompetitors({
-      domain,
-      businessType,
+  let serpDomains = serpDiscovery.domains;
+  let liveKeywordCount = serpDiscovery.liveKeywordCount;
+  if (serpDomains.length < MIN_SERP_DOMAINS_PER_KEYWORD) {
+    const expandedKeywords = expandDiscoveryKeywords(keywords, companyContext, businessContext);
+    const expandedDiscovery = await discoverCompetitorDomainsFromSerp({
+      keywords: expandedKeywords,
+      ownDomain: domain,
       geography,
-      existing: discovered,
-      companyContext,
-    }).map((item) => ({
-      ...item,
-      source: serpStatus === 'fallback' ? 'serp_unavailable_fallback' : item.source,
-      rationale:
-        serpStatus === 'fallback'
-          ? buildFitRationale(companyContext, geography, 'Live SERP discovery unavailable; fallback competitor inferred from company-fit context.')
-          : item.rationale,
-    }));
-    discovered = classifyCompetitors(dedupeCompetitors([...discovered, ...inferred]).slice(0, MAX_COMPETITORS));
+    });
+    serpDomains = [...serpDomains, ...expandedDiscovery.domains].reduce<string[]>((merged, candidateDomain) => {
+      if (!merged.includes(candidateDomain)) merged.push(candidateDomain);
+      return merged;
+    }, []);
+    liveKeywordCount += expandedDiscovery.liveKeywordCount;
   }
+  const serpStatus: 'live' | 'fallback' =
+    serpDomains.length >= MIN_SERP_DOMAINS_PER_KEYWORD || liveKeywordCount > 0 ? 'live' : 'fallback';
+
+  const manualCandidates = buildManualCompetitorCandidates({
+    resolvedInput: params.resolvedInput,
+    businessType,
+    geography,
+    companyContext,
+  });
+
+  const serpCandidates: CompetitorCandidate[] = serpDomains.map((item, index) => ({
+      name: domainToName(item),
+      domain: item,
+      category: companyContext.marketFocus ?? businessType ?? 'Search competitor',
+      classification: (
+        index === 0
+          ? 'direct_competitor'
+          : index === 1
+            ? 'seo_competitor'
+            : 'authority_leader'
+      ) as CompetitorClassification,
+      source: 'serp_live' as const,
+      rationale: `Discovered from top SERP domains for high-priority keywords (${keywords.slice(0, 3).join(', ') || 'core demand terms'}).`,
+      geography,
+      productSignals: companyContext.primaryService ? [companyContext.primaryService] : null,
+    }));
+  const knownDatasetCandidates = buildKnownDatasetCandidates({
+    companyContext,
+    keywords,
+    geography,
+  });
+  const needsKnownDataset = serpDomains.length === 0 || serpCandidates.length + manualCandidates.length < MIN_SERP_DOMAINS_PER_KEYWORD;
+  const candidatePool = serpStatus === 'live'
+    ? [
+        ...serpCandidates,
+        ...manualCandidates,
+        ...(needsKnownDataset ? knownDatasetCandidates : []),
+      ]
+    : [
+        ...manualCandidates,
+        ...serpCandidates,
+        ...(needsKnownDataset ? knownDatasetCandidates : []),
+      ];
+  let ranked = await getFinalCompetitors({
+    candidates: candidatePool,
+    context: companyContext,
+    max: MAX_COMPETITORS,
+    useNetwork: true,
+  });
+  if (ranked.length === 0 && knownDatasetCandidates.length > 0) {
+    ranked = await getFinalCompetitors({
+      candidates: knownDatasetCandidates,
+      context: companyContext,
+      max: MAX_COMPETITORS,
+      useNetwork: false,
+      useStoredCache: false,
+    });
+  }
+  const discovered = classifyCompetitors(ranked.map(toDetectedCompetitor));
+
+  if (discovered.length === 0) {
+    console.error('[competitor-discovery][empty-after-final-gate]', {
+      keywords_generated: keywords,
+      serp_domains_found: serpDomains.length,
+      final_candidates_count: 0,
+      domain,
+    });
+    throw new Error(`competitor_discovery_empty_after_final_gate:${domain}`);
+  }
+
+  console.info('[competitor-discovery][summary]', {
+    keywords_generated: keywords,
+    serp_domains_found: serpDomains.length,
+    final_candidates_count: discovered.length,
+  });
 
   const companyMetrics = computeCompanyMetrics({
     decisions: params.decisions,
@@ -757,10 +1184,6 @@ export async function buildCompetitorIntelligenceActive(params: {
     });
   }
 
-  if (comparisonEntries.length === 0) {
-    return baseline;
-  }
-
   const generatedGaps = buildGapDefinitions({
     domain,
     businessContext,
@@ -785,6 +1208,7 @@ export async function buildCompetitorIntelligenceActive(params: {
   return {
     summary,
     detected_competitors: comparisonEntries.map((entry) => entry.competitor),
+    competitors_by_tier: groupCompetitorsByTier(comparisonEntries.map((entry) => entry.competitor)),
     comparison: {
       company: companyMetrics,
       competitors: comparisonEntries,
@@ -804,7 +1228,7 @@ export async function buildCompetitorIntelligenceActive(params: {
       keyword_count: keywords.length,
       serp_domains_found: serpDomains.length,
       serp_status: serpStatus,
-      is_fallback_used: serpStatus !== 'live',
+      is_fallback_used: needsKnownDataset || ranked.some((competitor) => competitor.source === 'known_category_dataset'),
     },
   };
 }

@@ -45,8 +45,9 @@ export interface TokenExchangeResult {
  * auth_client_id_ref can be: an env var name (e.g. "META_APP_ID")
  * or a direct encrypted value (detected by format).
  */
-function resolveClientRef(ref: string | null, envFallback: string): string | null {
-  if (!ref) return process.env[envFallback] ?? null;
+function resolveClientRef(ref: string | null, envFallback: string | string[]): string | null {
+  const fallbacks = Array.isArray(envFallback) ? envFallback : [envFallback];
+  if (!ref) return fallbacks.map((key) => process.env[key]).find(Boolean) ?? null;
   // If ref looks like an env var name (uppercase, underscores only) → resolve it
   if (/^[A-Z][A-Z0-9_]+$/.test(ref)) return process.env[ref] ?? null;
   // Otherwise treat as direct value (encrypted or plaintext)
@@ -74,8 +75,8 @@ export async function getSocialAccountAuthContext(
   const platform = data.platform as MetaPlatform;
 
   // Resolve client credentials from stored refs or env fallbacks
-  const envClientId     = platform === 'instagram' ? 'META_APP_ID' : platform === 'whatsapp' ? 'WHATSAPP_APP_ID' : platform === 'threads' ? 'THREADS_APP_ID' : 'META_APP_ID';
-  const envClientSecret = platform === 'instagram' ? 'META_APP_SECRET' : platform === 'whatsapp' ? 'WHATSAPP_APP_SECRET' : platform === 'threads' ? 'THREADS_APP_SECRET' : 'META_APP_SECRET';
+  const envClientId     = platform === 'whatsapp' ? ['WHATSAPP_APP_ID', 'META_APP_ID', 'META_CLIENT_ID'] : ['META_APP_ID', 'META_CLIENT_ID'];
+  const envClientSecret = platform === 'whatsapp' ? ['WHATSAPP_APP_SECRET', 'META_APP_SECRET', 'META_CLIENT_SECRET'] : ['META_APP_SECRET', 'META_CLIENT_SECRET'];
 
   const client_id     = resolveClientRef(data.auth_client_id_ref,     envClientId);
   const client_secret = resolveClientRef(data.auth_client_secret_ref, envClientSecret);
@@ -85,7 +86,7 @@ export async function getSocialAccountAuthContext(
   if (!data.is_system_user && (!client_id || !client_secret)) {
     throw new Error(
       `Invalid OAuth client reference for account ${socialAccountId} (platform: ${platform}). ` +
-      `Ensure auth_client_id_ref and auth_client_secret_ref are set, or set env vars ${envClientId}/${envClientSecret}.`
+      `Ensure auth_client_id_ref and auth_client_secret_ref are set, or set Meta OAuth env vars.`
     );
   }
 

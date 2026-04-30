@@ -3,9 +3,12 @@
 /**
  * /onboarding/profile
  *
- * First onboarding step after Supabase auth.
- * Collects name / job title / industry, then calls /api/onboarding/complete
- * which creates the company, grants 300 free credits, and sets up roles.
+ * First onboarding step after Supabase auth + email verification.
+ * Collects name / job title / industry, then calls /api/onboarding/profile
+ * which saves the profile and routes to /onboarding/company. The company
+ * + role + 300-credit grant happen later in /api/onboarding/setup-company
+ * (or, for self-serve work-email signups, already happened during email
+ * verification in /api/auth/sync-supabase-user).
  */
 
 import { useState, useEffect } from 'react';

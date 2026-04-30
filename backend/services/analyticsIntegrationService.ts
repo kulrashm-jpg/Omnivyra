@@ -44,6 +44,26 @@ export type GoogleAnalyticsPropertySummary = {
   accountName: string | null;
 };
 
+type GoogleAdminApiAccountSummary = {
+  account?: string | null;
+  displayName?: string | null;
+  propertySummaries?: Array<{
+    property?: string | null;
+    displayName?: string | null;
+  }> | null;
+};
+
+type GoogleAdminApiAccount = {
+  name?: string | null;
+  displayName?: string | null;
+};
+
+type GoogleAdminApiProperty = {
+  name?: string | null;
+  displayName?: string | null;
+  parent?: string | null;
+};
+
 export type GoogleAnalyticsConnectionStatus = {
   integration: AnalyticsIntegrationRecord | null;
   activeProperty: AnalyticsPropertyRecord | null;
@@ -331,10 +351,11 @@ async function exchangeAuthorizationCode(
   };
 }
 
-export async function fetchGAAccountsAndProperties(
+async function fetchGoogleAdminJson(
   accessToken: string,
-): Promise<GoogleAnalyticsPropertySummary[]> {
-  const response = await fetch('https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=200', {
+  url: string,
+): Promise<any> {
+  const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
@@ -342,16 +363,55 @@ export async function fetchGAAccountsAndProperties(
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(`Failed to load GA4 account summaries (${response.status}): ${body || 'unknown error'}`);
+    throw new Error(`Google Analytics Admin API request failed (${response.status}) for ${url}: ${body || 'unknown error'}`);
   }
 
-  const payload = await response.json();
-  const summaries = Array.isArray(payload.accountSummaries) ? payload.accountSummaries : [];
-  const properties: GoogleAnalyticsPropertySummary[] = [];
+  return response.json();
+}
+
+async function paginateGoogleAdminCollection<T>(
+  accessToken: string,
+  buildUrl: (pageToken?: string) => string,
+  collectionKey: string,
+): Promise<T[]> {
+  const rows: T[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const payload = await fetchGoogleAdminJson(accessToken, buildUrl(pageToken));
+    const nextRows = Array.isArray(payload?.[collectionKey]) ? payload[collectionKey] : [];
+    rows.push(...nextRows);
+    pageToken = typeof payload?.nextPageToken === 'string' && payload.nextPageToken.trim()
+      ? payload.nextPageToken.trim()
+      : undefined;
+  } while (pageToken);
+
+  return rows;
+}
+
+export async function fetchGAAccountsAndProperties(
+  accessToken: string,
+): Promise<GoogleAnalyticsPropertySummary[]> {
+  const dedupedProperties = new Map<string, GoogleAnalyticsPropertySummary>();
+  const accountNameById = new Map<string, string | null>();
+
+  const summaries = await paginateGoogleAdminCollection<GoogleAdminApiAccountSummary>(
+    accessToken,
+    (pageToken) => {
+      const url = new URL('https://analyticsadmin.googleapis.com/v1beta/accountSummaries');
+      url.searchParams.set('pageSize', '200');
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+      return url.toString();
+    },
+    'accountSummaries',
+  );
 
   for (const summary of summaries) {
     const accountId = parseGoogleResourceId(summary?.account);
     const accountName = typeof summary?.displayName === 'string' ? summary.displayName : null;
+    if (accountId) {
+      accountNameById.set(accountId, accountName);
+    }
     const propertySummaries = Array.isArray(summary?.propertySummaries) ? summary.propertySummaries : [];
 
     for (const property of propertySummaries) {
@@ -359,7 +419,7 @@ export async function fetchGAAccountsAndProperties(
       const propertyName = typeof property?.displayName === 'string' ? property.displayName : '';
       if (!propertyId || !propertyName) continue;
 
-      properties.push({
+      dedupedProperties.set(propertyId, {
         propertyId,
         propertyName,
         accountId,
@@ -368,7 +428,56 @@ export async function fetchGAAccountsAndProperties(
     }
   }
 
-  return properties;
+  if (dedupedProperties.size > 0) {
+    return Array.from(dedupedProperties.values()).sort((a, b) => a.propertyName.localeCompare(b.propertyName));
+  }
+
+  const accounts = await paginateGoogleAdminCollection<GoogleAdminApiAccount>(
+    accessToken,
+    (pageToken) => {
+      const url = new URL('https://analyticsadmin.googleapis.com/v1beta/accounts');
+      url.searchParams.set('pageSize', '200');
+      url.searchParams.set('showDeleted', 'false');
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
+      return url.toString();
+    },
+    'accounts',
+  );
+
+  for (const account of accounts) {
+    const accountId = parseGoogleResourceId(account?.name);
+    const accountName = typeof account?.displayName === 'string' ? account.displayName : null;
+    if (!accountId) continue;
+    accountNameById.set(accountId, accountName);
+
+    const properties = await paginateGoogleAdminCollection<GoogleAdminApiProperty>(
+      accessToken,
+      (pageToken) => {
+        const url = new URL('https://analyticsadmin.googleapis.com/v1beta/properties');
+        url.searchParams.set('pageSize', '200');
+        url.searchParams.set('showDeleted', 'false');
+        url.searchParams.set('filter', `parent:accounts/${accountId}`);
+        if (pageToken) url.searchParams.set('pageToken', pageToken);
+        return url.toString();
+      },
+      'properties',
+    );
+
+    for (const property of properties) {
+      const propertyId = parseGoogleResourceId(property?.name);
+      const propertyName = typeof property?.displayName === 'string' ? property.displayName : '';
+      if (!propertyId || !propertyName) continue;
+
+      dedupedProperties.set(propertyId, {
+        propertyId,
+        propertyName,
+        accountId,
+        accountName: accountNameById.get(accountId) ?? accountName,
+      });
+    }
+  }
+
+  return Array.from(dedupedProperties.values()).sort((a, b) => a.propertyName.localeCompare(b.propertyName));
 }
 
 export async function connectGoogleAnalytics(

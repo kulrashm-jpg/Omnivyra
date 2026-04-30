@@ -1,7 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { getProfile } from './companyProfileService';
 import { buildCompanyContext } from './companyContextService';
-import { splitToList } from '../../pages/company-profile.types';
 
 export const MARKET_PULSE_CATEGORIES = [
   'competitor_moves',
@@ -112,15 +111,15 @@ export async function getMarketPulseContext(companyId: string) {
       industry_list: profile?.industry_list ?? [],
       geography: profile?.geography ?? null,
       geography_list: profile?.geography_list ?? [],
-      competitors: profile?.competitors ?? null,
-      competitors_list: profile?.competitors_list ?? [],
+      competitors: null,
+      competitors_list: [],
       website_url: profile?.website_url ?? null,
     },
     companyContext,
     marketPulseProfile: {
       primary_operating_markets: operatingMarkets,
       target_expansion_markets: expansionMarkets,
-      named_competitors: normalizeStringArray(settings.named_competitors),
+      named_competitors: [],
       business_model: settings.business_model ?? '',
       core_offerings: normalizeStringArray(settings.core_offerings),
       growth_priorities: normalizeStringArray(settings.growth_priorities),
@@ -137,12 +136,7 @@ export async function getMarketPulseContext(companyId: string) {
           : profile?.geography
             ? [profile.geography]
             : [],
-      effective_competitors: normalizeStringArray(settings.named_competitors).length
-        ? normalizeStringArray(settings.named_competitors)
-        : uniqueStringArray([
-            ...(Array.isArray(profile?.competitors_list) ? profile.competitors_list : []),
-            ...splitToList(profile?.competitors),
-          ]),
+      effective_competitors: [],
       updated_at: settings.updated_at ?? null,
     },
   };

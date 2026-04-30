@@ -18,8 +18,41 @@ import {
   verifyExtensionSessionToken,
   verifyExtensionRequestSignature,
 } from '@/backend/services/extensionSessionService';
+import { supabase } from '@/backend/db/supabaseClient';
 
 function take(h: string | string[] | undefined) { return (Array.isArray(h) ? h[0] : h) || ''; }
+
+async function inferDevBypassOrgId(req: NextApiRequest): Promise<string | null> {
+  const path = (req.url || '').split('?')[0] || '';
+  const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+    commandId?: unknown;
+    command_id?: unknown;
+  };
+  const commandId = String(body.commandId ?? body.command_id ?? req.query.commandId ?? req.query.command_id ?? '').trim();
+
+  if (commandId) {
+    const { data } = await supabase
+      .from('community_ai_actions')
+      .select('organization_id')
+      .eq('id', commandId)
+      .maybeSingle();
+    return typeof data?.organization_id === 'string' ? data.organization_id : null;
+  }
+
+  if (req.method?.toUpperCase() === 'GET' && path === '/api/extension/commands') {
+    const { data } = await supabase
+      .from('community_ai_actions')
+      .select('organization_id')
+      .eq('status', 'pending')
+      .eq('execution_mode', 'browser')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return typeof data?.organization_id === 'string' ? data.organization_id : null;
+  }
+
+  return null;
+}
 
 export async function requireExtensionAuth(req: NextApiRequest, res: NextApiResponse) {
   // Dev bypass — short-circuit the entire HMAC/session chain when the
@@ -30,10 +63,18 @@ export async function requireExtensionAuth(req: NextApiRequest, res: NextApiResp
     && (process.env.DEV_EXTENSION_AUTH_BYPASS === '1'
         || process.env.DEV_EXTENSION_AUTH_BYPASS === 'true');
   if (bypassEnabled) {
-    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as { organization_id?: unknown; org_id?: unknown };
-    const orgFromBody = String(body.organization_id ?? body.org_id ?? '').trim();
-    const orgFromQuery = String(req.query.organization_id ?? req.query.org_id ?? '').trim();
-    const orgId = orgFromBody || orgFromQuery;
+    // Accept all three orgId casings — the codebase isn't consistent and
+    // refusing one shape silently breaks the dev-bypass redeem chain
+    // (authBridge sends `orgId` camelCase from the SW, while events/dms
+    // sends `organization_id` snake_case from the scraper).
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as {
+      organization_id?: unknown;
+      org_id?: unknown;
+      orgId?: unknown;
+    };
+    const orgFromBody = String(body.organization_id ?? body.org_id ?? body.orgId ?? '').trim();
+    const orgFromQuery = String(req.query.organization_id ?? req.query.org_id ?? req.query.orgId ?? '').trim();
+    const orgId = orgFromBody || orgFromQuery || await inferDevBypassOrgId(req);
     if (!orgId) {
       res.status(400).json({ success: false, error: 'BYPASS_REQUIRES_ORG_ID' });
       return null;

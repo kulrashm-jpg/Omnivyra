@@ -63,9 +63,15 @@ export async function getOAuthCredentialsForPlatform(
     const envCandidates = [envKeys.id];
     if (normalized === 'ga4') envCandidates.push('GOOGLE_CLIENT_ID');
     if (normalized === 'x') envCandidates.push('TWITTER_CLIENT_ID');
+    if (['facebook', 'meta', 'instagram', 'whatsapp'].includes(normalized)) {
+      envCandidates.push('META_CLIENT_ID', 'META_APP_ID', 'FACEBOOK_APP_ID');
+    }
     const secretCandidates = [envKeys.secret];
     if (normalized === 'ga4') secretCandidates.push('GOOGLE_CLIENT_SECRET');
     if (normalized === 'x') secretCandidates.push('TWITTER_CLIENT_SECRET');
+    if (['facebook', 'meta', 'instagram', 'whatsapp'].includes(normalized)) {
+      secretCandidates.push('META_CLIENT_SECRET', 'META_APP_SECRET', 'FACEBOOK_APP_SECRET');
+    }
 
     const client_id = envCandidates
       .flatMap((k) => [process.env[k], process.env[k.replace('_CLIENT_ID', '_APP_ID')]])

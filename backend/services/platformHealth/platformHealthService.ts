@@ -1,6 +1,8 @@
 import { supabase } from '../../db/supabaseClient';
-import { getPlatformsWithTokensForOrg } from '../platformTokenService';
-import { getCompanyConfiguredPlatformsForConnectors } from '../companyPlatformService';
+import {
+  getPlatformsWithActiveSocialAccountsForOrg,
+  getPlatformsWithTokensForOrg,
+} from '../platformTokenService';
 import { resolveEngagementCapability } from '../engagementCapabilityMap';
 
 /**
@@ -81,7 +83,7 @@ const WEBHOOK_INGEST_PLATFORMS = new Set<string>(['whatsapp']);
 // liveness check: an alive extension session marks ALL of these as
 // 'connected', so the badge flips to 'ok' as soon as the extension is
 // polling, not only after a successful end-to-end action.
-const BROWSER_CAPABLE_INBOX_PLATFORMS = ['linkedin', 'facebook', 'instagram'] as const;
+const BROWSER_CAPABLE_INBOX_PLATFORMS = ['linkedin', 'facebook', 'instagram', 'twitter'] as const;
 
 // Which (platform, action) pairs have a real RPA script. Derived from
 // the presence of a script in rpaPlatformScripts.ts.
@@ -319,30 +321,24 @@ function scoreOverall(
  * which renders as api=none + overall=red, a useful nudge.
  */
 export async function getPlatformHealth(organizationId: string): Promise<PlatformHealth[]> {
-  const [configured, connectedApi, rpaSessions, extLiveness] = await Promise.all([
-    getCompanyConfiguredPlatformsForConnectors(organizationId).catch(
-      () => [] as Array<{ platform: string; displayName: string }>,
-    ),
+  const [connectedApi, activeSocialPlatforms, rpaSessions, extLiveness] = await Promise.all([
     getPlatformsWithTokensForOrg(organizationId).catch(() => [] as string[]),
+    getPlatformsWithActiveSocialAccountsForOrg(organizationId).catch(() => [] as string[]),
     loadRpaSessionPlatforms(organizationId),
     loadExtensionLivenessPlatforms(organizationId),
   ]);
   const extVerified = extLiveness.verified;
   const extConnected = extLiveness.connected;
 
-  // Source of truth: company admin has configured this platform. If the
-  // admin list is empty for any reason, fall back to the union of
-  // detected connection sources so the screen isn't empty on legacy
-  // tenants that never wrote an external_api_sources row.
-  const configuredSet = new Set<string>(configured.map((c) => normalize(c.platform)));
   const connectedPlatforms = new Set<string>();
-  if (configuredSet.size > 0) {
-    for (const p of configuredSet) connectedPlatforms.add(p);
-  } else {
-    for (const p of connectedApi) connectedPlatforms.add(normalize(p));
-    for (const p of rpaSessions) connectedPlatforms.add(p);
-    for (const p of extVerified) connectedPlatforms.add(p);
+  for (const p of activeSocialPlatforms) {
+    const normalized = normalize(p);
+    connectedPlatforms.add(normalized);
+    if (normalized === 'instagram') connectedPlatforms.add('threads');
   }
+  for (const p of connectedApi) connectedPlatforms.add(normalize(p));
+  for (const p of rpaSessions) connectedPlatforms.add(p);
+  for (const p of extVerified) connectedPlatforms.add(p);
 
   const out: PlatformHealth[] = [];
   for (const platform of Array.from(connectedPlatforms).sort()) {
@@ -380,7 +376,7 @@ export async function getPlatformHealth(organizationId: string): Promise<Platfor
       extension_events: extOk ? 'active' : 'none',
     };
 
-    const adminConfigured = configuredSet.has(platform);
+    const adminConfigured = connectedPlatforms.has(platform);
     const hasLiveConnection = apiConnected || rpaOk || extOk;
 
     out.push({

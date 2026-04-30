@@ -13,6 +13,27 @@ async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise
   return user.id;
 }
 
+// The scheduled_posts.chk_content_type constraint was authored with the legacy
+// platform / content_type vocabulary (twitter/tweet, instagram/feed_post). The
+// rest of the app uses canonical names (x, post). Coerce here so the insert
+// satisfies the constraint without requiring a DB migration.
+const PLATFORM_DB_ALIAS: Record<string, string> = {
+  x: 'twitter',
+};
+
+const PLATFORM_DEFAULT_CONTENT_TYPE: Record<string, string> = {
+  twitter: 'tweet',
+  instagram: 'feed_post',
+};
+
+function canonicalizeForDb(rawPlatform: string, rawContentType: string): { platform: string; contentType: string } {
+  const platform = PLATFORM_DB_ALIAS[rawPlatform] ?? rawPlatform;
+  const contentType = rawContentType === 'post' && PLATFORM_DEFAULT_CONTENT_TYPE[platform]
+    ? PLATFORM_DEFAULT_CONTENT_TYPE[platform]
+    : rawContentType;
+  return { platform, contentType };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -41,10 +62,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? hashtags.split(/\s+/).filter((t: string) => t.startsWith('#'))
       : [];
 
+    const rawPlatform = String(platform || '').trim().toLowerCase();
+    const rawContentType = String(contentType || 'post').trim().toLowerCase() || 'post';
+    const { platform: dbPlatform, contentType: dbContentType } = canonicalizeForDb(rawPlatform, rawContentType);
+
     const insertPayload: Record<string, any> = {
       user_id: userId,
-      platform,
-      content_type: String(contentType || 'post').trim().toLowerCase() || 'post',
+      platform: dbPlatform,
+      content_type: dbContentType,
       content,
       title: title || null,
       hashtags: hashtagArray.length ? hashtagArray : null,

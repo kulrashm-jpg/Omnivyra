@@ -26,6 +26,7 @@ export interface ThreadViewProps {
   onLike?: (messageId: string, platform: string) => void;
   onIgnore?: (threadId: string) => void;
   onMarkResolved?: () => void;
+  onRetryQueuedDelivery?: (actionId: string) => Promise<{ message?: string } | void>;
   onReplyTargetChange?: (messageId: string | null) => void;
   className?: string;
 }
@@ -43,6 +44,7 @@ export const ThreadView = React.memo(function ThreadView({
   onLike,
   onIgnore,
   onMarkResolved,
+  onRetryQueuedDelivery,
   onReplyTargetChange,
   className = '',
 }: ThreadViewProps) {
@@ -60,6 +62,7 @@ export const ThreadView = React.memo(function ThreadView({
       onLike={onLike}
       onIgnore={onIgnore}
       onMarkResolved={onMarkResolved}
+      onRetryQueuedDelivery={onRetryQueuedDelivery}
       onReplyTargetChange={onReplyTargetChange}
       className={className}
     />

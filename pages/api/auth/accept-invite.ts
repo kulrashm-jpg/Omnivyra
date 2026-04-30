@@ -14,7 +14,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
-import { sendMagicLink } from '../../../backend/services/emailService';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
@@ -92,15 +91,29 @@ export default async function handler(
     return res.status(409).json({ error: 'This invitation link has already been used', code: 'ALREADY_USED' });
   }
 
+  // Send the magic link via Supabase Auth — Supabase delivers it through
+  // the SMTP configured at the project level (your SES sender). This used
+  // to wrap generateLink+SES SMTP in a custom transactional pipeline; that
+  // is now redundant since Supabase SMTP handles delivery directly.
   const origin = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
-  try {
-    await sendMagicLink((invitation as any).email, `${origin}/auth/callback`, `invite-accept:${(invitation as any).id}`);
-  } catch (error) {
+  const { error: otpError } = await supabase.auth.signInWithOtp({
+    email: (invitation as any).email,
+    options: {
+      shouldCreateUser: true,
+      emailRedirectTo: `${origin}/auth/callback`,
+    },
+  });
+
+  if (otpError) {
     await supabase
       .from('invitations')
       .update({ token_consumed_at: null })
       .eq('id', (invitation as any).id);
-    throw error;
+    logger.warn('accept_invite_otp_send_failed', {
+      invitationId: (invitation as any).id,
+      message: otpError.message,
+    });
+    return res.status(502).json({ error: 'Could not send sign-in link. Please try again.', code: 'OTP_SEND_FAILED' });
   }
 
   return res.status(200).json({ ok: true, email: (invitation as any).email });

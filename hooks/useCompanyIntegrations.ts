@@ -14,6 +14,17 @@ const PLATFORM_LABELS: Record<string, string> = {
   facebook: 'Facebook',
   youtube: 'YouTube',
   reddit: 'Reddit',
+  pinterest: 'Pinterest',
+  tiktok: 'TikTok',
+  threads: 'Threads',
+  whatsapp: 'WhatsApp',
+  github: 'GitHub',
+  hackernews: 'Hacker News',
+  discord: 'Discord',
+  devto: 'Dev.to',
+  medium: 'Medium',
+  stackoverflow: 'Stack Overflow',
+  quora: 'Quora',
 };
 
 export type CompanyIntegration = {

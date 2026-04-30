@@ -45,10 +45,14 @@ export default function MultiPlatformSchedulerPage() {
     platform,
     content,
     contentType,
+    companyId,
+    topic,
   }: {
     platform: string;
     content: string;
     contentType: string;
+    companyId: string | null;
+    topic: string | null;
   }) => {
     const response = await fetch('/api/content/quick-platform-adapt', {
       method: 'POST',
@@ -58,6 +62,8 @@ export default function MultiPlatformSchedulerPage() {
         platform,
         content,
         contentType,
+        companyId,
+        topic,
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -228,6 +234,8 @@ export default function MultiPlatformSchedulerPage() {
             platform: selectedOption.key,
             content: sourceContent,
             contentType: publishContentType,
+            companyId: selectedCompanyId,
+            topic: draft.topic || draft.title || null,
           });
           const variant = fallback?.variant;
           if (!variant?.generated_content) {
@@ -320,6 +328,8 @@ export default function MultiPlatformSchedulerPage() {
             platform: selectedOption.key,
             content: sourceContent,
             contentType: publishContentType,
+            companyId: selectedCompanyId,
+            topic: draft.topic || draft.title || null,
           });
           const variant = fallback?.variant;
           if (!variant?.generated_content) {
@@ -338,7 +348,6 @@ export default function MultiPlatformSchedulerPage() {
             status: 'idle',
           });
         } catch (fallbackError) {
-          if (!isAbort) delete adaptedPlatformKeysRef.current[selectedOption.key];
           updatePlatformState(selectedOption.key, {
             busy: false,
             status: isAbort ? 'idle' : 'error',
@@ -424,6 +433,12 @@ export default function MultiPlatformSchedulerPage() {
         const publishData = await publishRes.json().catch(() => ({}));
         if (!publishRes.ok) {
           throw new Error(publishData.error || 'Failed to publish post');
+        }
+        // The publish endpoint returns HTTP 200 even when the platform adapter
+        // reports FAILED (e.g. Instagram rejecting a post with no media). The
+        // truth is in the body's `status` field — only PUBLISHED counts.
+        if (publishData.status && publishData.status !== 'PUBLISHED') {
+          throw new Error(publishData.message || `${selectedOption.label} rejected the post.`);
         }
       persistThreadPublishLink(selectedPlatform, scheduledPostId);
       updatePlatformState(selectedPlatform, { busy: false, status: 'published', message: `${selectedOption.label} post published successfully.` });

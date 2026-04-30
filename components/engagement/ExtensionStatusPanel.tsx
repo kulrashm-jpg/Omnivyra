@@ -25,8 +25,10 @@ interface ExtensionStatusPanelProps {
   version?: string | null;
   platforms: PlatformRow[];
   updatingPlatform?: string | null;
+  authenticating?: boolean;
   onRefresh: () => void;
   onTogglePlatform: (platform: string, enabled: boolean) => Promise<void>;
+  onConnect?: () => Promise<void> | void;
 }
 
 function getPlatformStateMeta(platform: PlatformRow, authenticated: boolean) {
@@ -116,8 +118,10 @@ export function ExtensionStatusPanel({
   version,
   platforms,
   updatingPlatform,
+  authenticating,
   onRefresh,
-  onTogglePlatform
+  onTogglePlatform,
+  onConnect,
 }: ExtensionStatusPanelProps) {
   return (
     <div className="mt-4 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
@@ -145,13 +149,29 @@ export function ExtensionStatusPanel({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-        >
-          Refresh extension
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          {onConnect && (
+            <button
+              type="button"
+              onClick={() => void onConnect()}
+              disabled={Boolean(authenticating) || loading}
+              className="inline-flex items-center rounded-full border border-blue-600 bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {authenticating
+                ? 'Connecting…'
+                : authenticated
+                  ? 'Reconnect extension'
+                  : 'Connect extension'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="inline-flex items-center rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            Refresh extension
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">

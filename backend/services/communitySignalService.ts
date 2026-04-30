@@ -74,14 +74,8 @@ export function detectCompetitorMentions(
   content: string,
   competitorNames: string[] = []
 ): { detected: boolean; competitor?: string; confidence: number } {
-  const t = (content || '').toString().trim().toLowerCase();
-  if (!t) return { detected: false, confidence: 0 };
-  const names = competitorNames.length > 0 ? competitorNames : ['competitor', 'alternative', 'competition'];
-  for (const name of names) {
-    if (name && t.includes(name.toLowerCase())) {
-      return { detected: true, competitor: name, confidence: 0.8 };
-    }
-  }
+  void content;
+  void competitorNames;
   return { detected: false, confidence: 0 };
 }
 

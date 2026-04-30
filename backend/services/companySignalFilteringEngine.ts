@@ -6,7 +6,6 @@
 
 import {
   getCompanyTopics,
-  getCompanyCompetitors,
   getCompanyProducts,
   getCompanyRegions,
   getCompanyKeywords,
@@ -72,18 +71,14 @@ function hasTokenOverlap(text: string, values: string[]): boolean {
 export async function loadCompanyIntelligenceConfiguration(
   companyId: string
 ): Promise<CompanyIntelligenceConfiguration> {
-  const [topicsRes, competitorsRes, productsRes, regionsRes, keywordsRes] = await Promise.all([
+  const [topicsRes, productsRes, regionsRes, keywordsRes] = await Promise.all([
     getCompanyTopics(companyId),
-    getCompanyCompetitors(companyId),
     getCompanyProducts(companyId),
     getCompanyRegions(companyId),
     getCompanyKeywords(companyId),
   ]);
 
   const topics = topicsRes.filter((t) => t.enabled).map((t) => t.topic.trim().toLowerCase());
-  const competitors = competitorsRes
-    .filter((c) => c.enabled)
-    .map((c) => c.competitor_name.trim().toLowerCase());
   const products = productsRes
     .filter((p) => p.enabled)
     .map((p) => p.product_name.trim().toLowerCase());
@@ -96,7 +91,7 @@ export async function loadCompanyIntelligenceConfiguration(
 
   return {
     topics: [...new Set(topics)].filter(Boolean),
-    competitors: [...new Set(competitors)].filter(Boolean),
+    competitors: [],
     products: [...new Set(products)].filter(Boolean),
     regions: [...new Set(regions)].filter(Boolean),
     keywords: [...new Set(keywords)].filter(Boolean),
@@ -129,14 +124,7 @@ export function evaluateSignalAgainstCompany(
   const topic_match = matched_topics.length > 0;
 
   const matched_competitors: string[] = [];
-  if (companyConfig.competitors.length > 0) {
-    for (const c of companyConfig.competitors) {
-      if (c && topic.includes(c)) {
-        matched_competitors.push(c);
-      }
-    }
-  }
-  const competitor_match = matched_competitors.length > 0;
+  const competitor_match = false;
 
   const product_match = companyConfig.products.some((p) => p && topic.includes(p));
 

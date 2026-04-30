@@ -9,8 +9,7 @@
  * No external social scraping is performed. All intelligence is derived from
  * first-party community data and curated benchmark knowledge.
  *
- * Output is stored in `competitor_signals` and injected into planning input
- * as `PlanningInput.competitor_signals`.
+ * Competitor-name extraction is disabled; benchmark gaps remain name-free.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -23,7 +22,6 @@ import {
   replaceDecisionObjectsForSource,
   type PersistedDecisionObject,
 } from './decisionObjectService';
-import { loadNormalizedCompetitorSignals } from './normalizeCompetitorSignalsService';
 
 export type CompetitorSignal = {
   competitor_name: string;
@@ -67,39 +65,8 @@ const TRENDING_FORMATS: Record<string, string[]> = {
 
 /** Extract competitor names mentioned in community actions. */
 async function extractCompetitorMentions(companyId: string): Promise<CompetitorSignal[]> {
-  const { data } = await supabase
-    .from('community_ai_actions')
-    .select('content, platform, sentiment')
-    .eq('company_id', companyId)
-    .eq('signal_type', 'competitor_mention')
-    .order('created_at', { ascending: false })
-    .limit(100);
-
-  if (!data?.length) return [];
-
-  // Group by extracted competitor reference
-  const mentionMap: Record<string, { count: number; platforms: Set<string> }> = {};
-  for (const row of data as Array<{ content: string; platform: string; sentiment?: string }>) {
-    // Simple extraction: look for "vs [Name]", "compared to [Name]", "[Name] alternative"
-    const vsMatch = row.content.match(/(?:vs\.?|versus|compared to|alternative to|better than)\s+([A-Z][a-zA-Z0-9\s]{1,20})/i);
-    const name = vsMatch?.[1]?.trim();
-    if (!name || name.length < 3) continue;
-
-    const key = name.toLowerCase();
-    if (!mentionMap[key]) mentionMap[key] = { count: 0, platforms: new Set() };
-    mentionMap[key].count++;
-    if (row.platform) mentionMap[key].platforms.add(row.platform);
-  }
-
-  return Object.entries(mentionMap)
-    .filter(([, m]) => m.count >= 2)
-    .map(([name, m]) => ({
-      competitor_name: name,
-      signal_type:     'mention' as const,
-      platform:        [...m.platforms][0],
-      value:           { mention_count: m.count, platforms: [...m.platforms] },
-      confidence:      Math.min(1, m.count / 10),
-    }));
+  void companyId;
+  return [];
 }
 
 /** Compute benchmark gaps for the company's active platforms. */
@@ -146,11 +113,6 @@ function buildPromptContext(intel: Omit<CompetitorIntelligence, 'prompt_context'
     intel.trending_formats.slice(0, 5).forEach(f => lines.push(`  • ${f}`));
   }
 
-  if (intel.competitor_signals.length > 0) {
-    const competitors = [...new Set(intel.competitor_signals.map(s => s.competitor_name))].slice(0, 3);
-    lines.push(`\nCompetitors mentioned in community: ${competitors.join(', ')}`);
-  }
-
   return lines.join('\n');
 }
 
@@ -189,20 +151,6 @@ export async function fetchCompetitorSignals(
     .flatMap(p => (TRENDING_FORMATS[p] ?? []).slice(0, 2))
     .slice(0, 6);
 
-  // Persist competitor mentions to DB (non-blocking)
-  for (const signal of mentionSignals.slice(0, 10)) {
-    void supabase.from('competitor_signals').insert({
-      company_id:      companyId,
-      competitor_name: signal.competitor_name,
-      signal_type:     signal.signal_type,
-      platform:        signal.platform ?? null,
-      value:           signal.value,
-      confidence:      signal.confidence,
-      detected_at:     evaluatedAt,
-      created_at:      evaluatedAt,
-    });
-  }
-
   const base = {
     company_id:         companyId,
     competitor_signals: mentionSignals,
@@ -230,16 +178,11 @@ export async function generateCompetitorIntelligenceDecisionObjects(companyId: s
     changed_by: 'system',
   });
 
-  const [intel, normalized] = await Promise.all([
-    fetchCompetitorSignals(companyId),
-    loadNormalizedCompetitorSignals(companyId, 90),
-  ]);
+  const intel = await fetchCompetitorSignals(companyId);
 
-  const mentionCount = normalized.reduce((sum, signal) => sum + Number(signal.mention_count ?? 0), 0);
-  const negativeBenchmarkCount = normalized.filter(
-    (signal) => signal.signal_type === 'benchmark' && (signal.benchmark_gap < 0 || signal.benchmark_label === 'below')
-  ).length;
-  const competitorCount = new Set(normalized.map((signal) => signal.competitor_name).filter(Boolean)).size;
+  const mentionCount = 0;
+  const negativeBenchmarkCount = intel.benchmark_gaps.filter((gap) => gap.gap_label === 'below').length;
+  const competitorCount = 0;
 
   const drafts = [];
 

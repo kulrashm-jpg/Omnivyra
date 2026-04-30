@@ -140,7 +140,7 @@ export default function CampaignsSubPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 px-3 py-8 sm:px-4 lg:px-6">
-      <div className="mx-auto max-w-6xl">
+      <div className="mx-auto max-w-[1500px]">
         <button
           onClick={() => router.push('/command-center')}
           className="mb-8 flex items-center gap-2 text-sm text-gray-500 transition-colors hover:text-gray-800"
@@ -212,14 +212,14 @@ export default function CampaignsSubPage() {
           <p className="hidden text-sm text-gray-500 md:block">4 campaign paths</p>
         </div>
 
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {CAMPAIGN_CARDS.map((card) => (
             <div
               key={card.id}
               onClick={() => handleCardClick(card.route)}
-              className={`group flex min-h-[500px] cursor-pointer flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-6 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)]`}
+              className={`group flex min-h-[500px] cursor-pointer flex-col rounded-[24px] border bg-gradient-to-br ${card.accentFrom} via-white ${card.accentTo} ${card.borderColor} p-5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_42px_rgba(15,23,42,0.10)] xl:min-h-[540px] xl:p-4 2xl:p-5`}
             >
-              <div className="mb-5 flex items-start justify-between gap-3">
+              <div className="mb-5 flex items-start justify-between gap-3 xl:mb-4">
                 <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/80 bg-white/85 text-lg font-semibold text-gray-900 shadow-sm">
                   {card.icon}
                 </div>
@@ -231,17 +231,17 @@ export default function CampaignsSubPage() {
                 </div>
               </div>
 
-              <div className="flex h-[126px] flex-col">
-                <h2 className="h-[32px] text-xl font-semibold tracking-tight text-gray-900">{card.title}</h2>
-                <p className="mt-3 h-[84px] text-sm leading-relaxed text-gray-600">{card.description}</p>
+              <div className="flex flex-col">
+                <h2 className="text-xl font-semibold tracking-tight text-gray-900 xl:text-lg 2xl:text-xl">{card.title}</h2>
+                <p className="mt-3 min-h-[84px] text-sm leading-relaxed text-gray-600 xl:min-h-[112px] 2xl:min-h-[84px]">{card.description}</p>
               </div>
 
-              <div className="mt-5 flex h-[74px] flex-col rounded-2xl border border-white/80 bg-white/75 px-4 py-3">
+              <div className="mt-5 flex min-h-[74px] flex-col rounded-2xl border border-white/80 bg-white/75 px-4 py-3 xl:mt-4 xl:min-h-[94px] xl:px-3 2xl:min-h-[74px] 2xl:px-4">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Primary Outcome</p>
                 <p className="mt-1 text-sm font-medium leading-5 text-gray-800">{card.outcome}</p>
               </div>
 
-              <ul className="mt-5 flex h-[102px] flex-col justify-start space-y-2 text-sm">
+              <ul className="mt-5 flex min-h-[102px] flex-col justify-start space-y-2 text-sm xl:mt-4 xl:min-h-[132px]">
                 {card.bullets.map((bullet, index) => (
                   <li key={index} className="flex items-start gap-2 text-gray-700">
                     <span className="mt-1 h-1.5 w-1.5 rounded-full bg-gray-900/70" />
@@ -255,7 +255,7 @@ export default function CampaignsSubPage() {
                   event.stopPropagation();
                   handleCardClick(card.route);
                 }}
-                className={`mt-6 w-full rounded-xl py-3 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
+                className={`mt-auto w-full rounded-xl px-3 py-3 text-sm font-semibold text-white shadow-sm transition-colors ${card.ctaColor}`}
               >
                 {card.cta}
               </button>

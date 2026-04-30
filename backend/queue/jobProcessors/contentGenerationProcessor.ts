@@ -1,6 +1,11 @@
 /**
  * UNIFIED CONTENT GENERATION JOB PROCESSOR
  *
+ * DEPRECATED FOR LONG-FORM CONTENT:
+ * Long-form jobs are redirected to lib/content/unifiedLongFormEngine.ts.
+ * This processor remains active for short-form, bulk legacy, and engagement
+ * response workloads.
+ *
  * Handles all content generation jobs:
  * - Master content generation (all types)
  * - Platform variant generation
@@ -28,6 +33,9 @@ import {
 import { validateContentBlueprint } from '../../services/aiOutputValidationService';
 import { recordQuickToneFeedback } from '../../services/contentFeedbackLoop';
 import { estimateLlmCostUsd } from '../../services/pricingService';
+import { runUnifiedLongFormGeneration } from '../../../lib/content/unifiedLongFormEngine';
+import { buildContentContext } from '../../../lib/content/buildContentContext';
+import { isLongFormContentType } from '../../../lib/content/longFormContentTypeConfig';
 
 // Stubs for services not yet implemented
 const feedbackIntelligenceEngine = {
@@ -60,6 +68,10 @@ export async function processContentGenerationJob(job: Job): Promise<any> {
   void job.updateProgress(5);
 
   try {
+    if (!bulk_mode && typeof content_type === 'string' && isLongFormContentType(content_type)) {
+      return await processLongFormRedirectJob(job);
+    }
+
     // Handle engagement responses separately (faster pipeline)
     if (content_type === 'engagement_response') {
       return await processEngagementResponseJob(job);
@@ -96,6 +108,59 @@ export async function processContentGenerationJob(job: Job): Promise<any> {
 
     throw error;
   }
+}
+
+async function processLongFormRedirectJob(job: Job): Promise<any> {
+  const {
+    company_id,
+    content_type,
+    topic,
+    intent,
+    audience,
+    writing_style_instructions,
+    target_word_count,
+    context_payload,
+    company_profile,
+  } = job.data;
+
+  void job.updateProgress(10);
+
+  const builtContext = await buildContentContext(company_id).catch(() => null);
+  const companyContext = builtContext?.companyContext || {
+    audience,
+    writingStyleInstructions: writing_style_instructions,
+    companyName: typeof company_profile?.name === 'string' ? company_profile.name : undefined,
+    industry: typeof company_profile?.industry === 'string' ? company_profile.industry : undefined,
+  };
+
+  const answers: Record<string, string> = {};
+  if (target_word_count) answers.target_word_count = String(target_word_count);
+  if (context_payload && typeof context_payload === 'object') {
+    answers.company_context = JSON.stringify(context_payload);
+  }
+
+  void job.updateProgress(35);
+
+  const result = await runUnifiedLongFormGeneration({
+    company_id,
+    contentType: content_type,
+    mode: 'full',
+    topic,
+    intent,
+    answers: Object.keys(answers).length > 0 ? answers : undefined,
+    tone: typeof company_profile?.tone_preference === 'string' ? company_profile.tone_preference : undefined,
+    companyContext,
+    targetWordCount: typeof target_word_count === 'number' ? target_word_count : undefined,
+  });
+
+  void job.updateProgress(100);
+
+  return {
+    redirected: true,
+    deprecated_processor: 'contentGenerationProcessor',
+    unified_engine: 'unifiedLongFormEngine',
+    result,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

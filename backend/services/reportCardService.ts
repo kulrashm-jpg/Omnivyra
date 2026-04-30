@@ -23,6 +23,7 @@ import {
   persistSnapshotReportInputs,
   resolveSnapshotReportInput,
 } from './snapshotInputResolver';
+import { hasPassedFinalCompetitorGate } from './competitorEngineService';
 
 export type ReportStatus = 'generating' | 'completed' | 'failed';
 export type ReportType = 'content_readiness' | 'competitor_analysis' | 'gap_analysis' | 'performance_intelligence';
@@ -457,6 +458,11 @@ function enrichComposedReportWithInputContext(params: {
   const sections = Array.isArray(params.composedReport.sections)
     ? [...(params.composedReport.sections as Record<string, unknown>[])]
     : [];
+  const safeCompetitorNames = (((params.composedReport.competitor_intelligence as Record<string, unknown> | undefined)?.detected_competitors ?? []) as Array<Record<string, unknown>>)
+    .filter((item) => hasPassedFinalCompetitorGate(item as any))
+    .map((item) => String(item.name ?? item.domain ?? '').trim())
+    .filter(Boolean)
+    .slice(0, 5);
 
   sections.unshift({
     section_name: 'Request Context',
@@ -469,9 +475,7 @@ function enrichComposedReportWithInputContext(params: {
       },
       {
         title: `Data source: ${params.resolvedInput.resolved.source}`,
-        description: `Competitors: ${
-          params.resolvedInput.resolved.competitors.slice(0, 5).join(', ') || 'none provided'
-        } · Social links: ${params.resolvedInput.resolved.socialLinks.length}`,
+        description: `Validated competitors: ${safeCompetitorNames.join(', ') || 'none'} - Social links: ${params.resolvedInput.resolved.socialLinks.length}`,
         impact_score: 50,
         confidence_score: 1,
       },

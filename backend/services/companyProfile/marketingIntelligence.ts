@@ -1,4 +1,5 @@
 import { runCompletionWithOperation } from '../aiGateway';
+import { filterProfileCompetitorNames } from '../competitorEngineService';
 import type { CompanyProfile } from './types';
 
 export type MarketingIntelligenceDraft = {
@@ -91,6 +92,8 @@ export async function generateMarketingIntelligenceDraft(
 
     const parsed = JSON.parse(result.output?.trim() || '{}') as Record<string, unknown>;
 
+    const competitorSuggestions = normalizeCompetitorList(parsed.competitors);
+
     return {
       marketing_channels: cleanText(parsed.marketing_channels),
       content_strategy: cleanText(parsed.content_strategy),
@@ -99,7 +102,7 @@ export async function generateMarketingIntelligenceDraft(
       brand_positioning: cleanText(parsed.brand_positioning),
       competitive_advantages: cleanText(parsed.competitive_advantages),
       growth_priorities: cleanText(parsed.growth_priorities),
-      competitors: normalizeCompetitorList(parsed.competitors),
+      competitors: filterProfileCompetitorNames(profile, competitorSuggestions),
     };
   } catch {
     return EMPTY_DRAFT;

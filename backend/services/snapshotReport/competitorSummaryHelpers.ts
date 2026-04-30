@@ -1,5 +1,6 @@
 import type { PersistedDecisionObject } from '../decisionObjectService';
 import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligenceService';
+import { hasPassedFinalCompetitorGate } from '../competitorEngineService';
 import {
   average,
   clamp,
@@ -63,11 +64,9 @@ export function buildCompetitorVisuals(params: {
   geoAeoVisuals: SnapshotReport['geo_aeo_visuals'];
   decisions: PersistedDecisionObject[];
 }): SnapshotReport['competitor_visuals'] {
-  const realCompetitors = params.competitorIntelligence.detected_competitors.filter(
-    (item) => item.source !== 'inferred_keyword_peer' && item.source !== 'serp_unavailable_fallback',
+  const competitorsForRadar = params.competitorIntelligence.detected_competitors.filter((item) =>
+    hasPassedFinalCompetitorGate(item),
   );
-  const competitorsForRadar =
-    realCompetitors.length > 0 ? realCompetitors : params.competitorIntelligence.detected_competitors;
   const comparisonEntries = (params.competitorIntelligence.comparison?.competitors ?? []).filter((entry) => {
     const key = `${entry.competitor.domain ?? entry.competitor.name}`.toLowerCase();
     return competitorsForRadar.some(

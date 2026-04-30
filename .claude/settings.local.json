@@ -193,7 +193,9 @@
       "mcp__supabase__apply_migration",
       "Bash(netstat -ano -p tcp)",
       "Bash(npm run *)",
-      "Bash(echo \"EXIT=$?\")"
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(npx vercel *)",
+      "Bash(bash scripts/sync-vercel-env.sh)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

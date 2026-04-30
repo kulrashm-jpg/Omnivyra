@@ -37,7 +37,9 @@ interface PlatformStatus {
   auth_path: string | null;
   category: 'social' | 'community';
   oauth_configured: boolean;
+  available?: boolean;
   connected: boolean;
+  connection_status?: 'connected' | 'disconnected' | 'not_connected';
   expired: boolean;
   account_name: string | null;
   username: string | null;
@@ -64,6 +66,7 @@ const PLATFORM_META: Record<string, { icon: string; color: string }> = {
   linkedin:      { icon: '🔵', color: 'border-blue-200 bg-blue-50' },
   x:             { icon: '𝕏', color: 'border-gray-200 bg-gray-50' },
   youtube:       { icon: '▶️', color: 'border-red-200 bg-red-50' },
+  threads:       { icon: '@', color: 'border-gray-200 bg-gray-50' },
   instagram:     { icon: '📷', color: 'border-pink-200 bg-pink-50' },
   facebook:      { icon: '👤', color: 'border-indigo-200 bg-indigo-50' },
   whatsapp:      { icon: '💬', color: 'border-green-200 bg-green-50' },
@@ -217,6 +220,7 @@ export function useSocialPlatforms() {
     instagram:     ['post', 'reel', 'story', 'carousel'],
     facebook:      ['post', 'video', 'story', 'carousel', 'blog'],
     x:             ['post', 'thread', 'poll'],
+    threads:       ['post', 'thread'],
     youtube:       ['video', 'short'],
     tiktok:        ['video', 'short'],
     reddit:        ['post', 'thread'],
@@ -415,11 +419,30 @@ export function useSocialPlatforms() {
     setTimeout(runNext, 2000); // start after page settles
   }, [platforms]);
 
-  // Handle OAuth callback redirect (same-tab legacy flow)
+  // Handle OAuth callback redirect (same-tab legacy + community-ai connector flow)
   useEffect(() => {
-    const { connected, success, error } = router.query;
-    if (connected && success === 'true') {
-      notify('success', `${String(connected)} account connected successfully!`);
+    const { connected, success, status, error } = router.query;
+    const succeeded = success === 'true' || status === 'success';
+    if (connected && succeeded) {
+      const platformKey = String(connected);
+      // Evict the stale check verdict for this platform — the previous "Token
+      // invalid" was captured before the reconnect minted a fresh token. Both
+      // the in-memory map and the localStorage cache must be cleared, otherwise
+      // the badge keeps showing the old result until the 24h TTL expires.
+      setChecks((prev) => {
+        const next = { ...prev };
+        delete next[platformKey];
+        try {
+          const raw = localStorage.getItem(CACHE_KEY);
+          if (raw) {
+            const cached = JSON.parse(raw) as Record<string, CheckResult>;
+            delete cached[platformKey];
+            localStorage.setItem(CACHE_KEY, JSON.stringify(cached));
+          }
+        } catch { /* ignore */ }
+        return next;
+      });
+      notify('success', `${platformKey} account connected successfully!`);
       loadStatus();
       router.replace('/social-platforms', undefined, { shallow: true });
     } else if (error) {
@@ -442,7 +465,6 @@ export function useSocialPlatforms() {
   }, [loadStatus]);
 
   const handleConnect = async (p: PlatformStatus) => {
-    if (!p.auth_path) return;
     const params = new URLSearchParams({ returnTo: '/social-platforms' });
     try {
       const { supabase: sbClient } = await import('../utils/supabaseClient');
@@ -465,6 +487,8 @@ export function useSocialPlatforms() {
       window.location.href = `/api/community-ai/connectors/${connectorKey}/auth?${connectorParams.toString()}`;
       return;
     }
+
+    if (!p.auth_path) return;
 
     if (selectedCompanyId) {
       params.set('companyId', selectedCompanyId);
@@ -557,7 +581,7 @@ export function useSocialPlatforms() {
     );
     if (p.connected) return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
-        <CheckCircle2 className="h-3 w-3" /> Connected
+        <CheckCircle2 className="h-3 w-3" /> {p.platform_key === 'threads' ? 'Enabled' : 'Connected'}
       </span>
     );
     if (!p.oauth_configured) {
@@ -627,9 +651,11 @@ export function useSocialPlatforms() {
               {p.oauth_configured && !p.connected && p.auth_path && (
                 <div className="mt-0.5 text-xs text-gray-400">
                   Ready to connect
-                  {(p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp') && (
+                  {(p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp' || p.platform_key === 'threads') && (
                     <span className="ml-1 italic text-amber-600">
-                      — connects Facebook, Instagram & WhatsApp in one Meta consent
+                      {p.platform_key === 'threads'
+                        ? '- connect Instagram to enable Threads'
+                        : '- connects Facebook, Instagram & WhatsApp in one Meta consent'}
                     </span>
                   )}
                 </div>
@@ -709,11 +735,19 @@ export function useSocialPlatforms() {
                 title={
                   p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp'
                     ? 'Meta requires one consent for Facebook, Instagram, and WhatsApp — all three will be connected together.'
+                    : p.platform_key === 'threads'
+                      ? 'Connect Instagram to enable Threads.'
                     : `Connect ${p.platform_label}`
                 }
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
               >
-                <Link2 className="h-3.5 w-3.5" /> Connect
+                <Link2 className="h-3.5 w-3.5" /> {
+                  p.platform_key === 'threads' && p.connection_status === 'disconnected'
+                    ? 'Reconnect'
+                    : p.platform_key === 'threads'
+                      ? 'Connect Instagram (enables Threads)'
+                      : 'Connect'
+                }
               </button>
             ) : p.oauth_configured && !p.auth_path ? (
               <span className="text-xs text-gray-400">Coming soon</span>
@@ -935,11 +969,42 @@ export function useSocialPlatforms() {
   const imageApis        = catalogApis.filter((a) => a.is_active && getCatalogApiCategory(a) === 'image');
   const communityApiList = catalogApis.filter((a) => a.is_active && getCatalogApiCategory(a) === 'community');
 
-  // Social: split by connected / available / hidden
-  const connectedSocial   = visibleSocial.filter((p) => p.connected);
-  // OAuth-configured platforms are never hidden (they have a connect button the user needs)
-  const availableSocial   = visibleSocial.filter((p) => !p.connected && (!hiddenSocial.has(p.platform_key) || p.oauth_configured));
-  const hiddenSocialList  = visibleSocial.filter((p) => !p.connected && hiddenSocial.has(p.platform_key) && !p.oauth_configured);
+  // Writer vs Creator split is inclusive — a platform can appear in both buckets:
+  //   Writer  = supports text-only publishing (post can be sent without image/video).
+  //   Creator = accepts image/video content (whether or not text-only is also supported).
+  // LinkedIn / X / Facebook / Reddit / Threads accept both, so they show in both sections.
+  // Instagram / YouTube / TikTok / Pinterest only accept image/video → Creator only.
+  // WhatsApp is text-only in our pipeline → Writer only.
+  const WRITER_PLATFORM_KEYS  = new Set(['linkedin', 'x', 'facebook', 'reddit', 'threads', 'whatsapp']);
+  const CREATOR_PLATFORM_KEYS = new Set(['linkedin', 'x', 'facebook', 'reddit', 'threads', 'instagram', 'youtube', 'tiktok', 'pinterest']);
+
+  const writerSocial  = visibleSocial.filter((p) => WRITER_PLATFORM_KEYS.has(p.platform_key));
+  const creatorSocial = visibleSocial.filter((p) => CREATOR_PLATFORM_KEYS.has(p.platform_key));
+
+  // Social: split by connected / available / hidden — separately for writer & creator buckets.
+  // OAuth-configured platforms are never hidden (they have a connect button the user needs).
+  const partition = (list: typeof visibleSocial) => ({
+    connected: list.filter((p) => p.connected),
+    available: list.filter((p) => !p.connected && (!hiddenSocial.has(p.platform_key) || p.oauth_configured)),
+    hidden:    list.filter((p) => !p.connected && hiddenSocial.has(p.platform_key) && !p.oauth_configured),
+  });
+  const writerParts  = partition(writerSocial);
+  const creatorParts = partition(creatorSocial);
+
+  // Backward-compat aliases (combined writer+creator) so existing callers keep working.
+  // Computed from visibleSocial directly so platforms that appear in both buckets
+  // (e.g. LinkedIn) aren't double-counted.
+  const allParts = partition(visibleSocial);
+  const connectedSocial  = allParts.connected;
+  const availableSocial  = allParts.available;
+  const hiddenSocialList = allParts.hidden;
+
+  const connectedWriter   = writerParts.connected;
+  const availableWriter   = writerParts.available;
+  const hiddenWriterList  = writerParts.hidden;
+  const connectedCreator  = creatorParts.connected;
+  const availableCreator  = creatorParts.available;
+  const hiddenCreatorList = creatorParts.hidden;
 
   // Community OAuth — kept for backward compat with renderCommunityCard (archived restore)
 
@@ -1063,6 +1128,12 @@ export function useSocialPlatforms() {
     connectedCommunityOAuth,
     connectedCount,
     connectedSocial,
+    connectedWriter,
+    availableWriter,
+    hiddenWriterList,
+    connectedCreator,
+    availableCreator,
+    hiddenCreatorList,
     customTypeInputs,
     disconnecting,
     expandedContentTypes,

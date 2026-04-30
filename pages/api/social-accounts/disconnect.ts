@@ -23,13 +23,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ? ['x', 'twitter']
     : [normalizedPlatform];
 
-  const { error: dbErr } = await supabase
+  const updatePayload = {
+    is_active: false,
+    status: 'disconnected',
+    access_token: null,
+    refresh_token: null,
+    updated_at: new Date().toISOString(),
+  };
+
+  let { error: dbErr } = await supabase
     .from('social_accounts')
-    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .update(updatePayload)
     .eq('user_id', userId)
     .in('platform', platformAliases)
     .eq('is_active', true)
     .not('platform_user_id', 'like', 'planning_%');
+
+  if (dbErr && /column .* does not exist|Could not find .* column|schema cache/i.test(dbErr.message ?? '')) {
+    const fallback = await supabase
+      .from('social_accounts')
+      .update({
+        is_active: false,
+        access_token: null,
+        refresh_token: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .in('platform', platformAliases)
+      .eq('is_active', true)
+      .not('platform_user_id', 'like', 'planning_%');
+    dbErr = fallback.error;
+  }
 
   if (dbErr) {
     console.error('[social-accounts/disconnect]', dbErr);

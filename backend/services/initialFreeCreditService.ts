@@ -2,20 +2,23 @@
  * Initial Free Credit Service — single source of truth for the one-time
  * free-credit grant a brand-new organization receives at signup.
  *
- * Replaces the two inline implementations that previously lived in
- *   pages/api/onboarding/complete.ts        (category 'initial_free_credit', 300)
- *   pages/api/onboarding/setup-company.ts   (category 'initial', 300)
- * which had divergent categories, amounts, and side effects.
+ * Called from:
+ *   pages/api/auth/sync-supabase-user.ts   (work-email self-serve signup,
+ *                                           on first email verification)
+ *   pages/api/onboarding/setup-company.ts  (free-email + invited paths,
+ *                                           when the user creates/joins
+ *                                           the company explicitly)
  *
- * The new model:
- *   • Default amount: 50 credits, 14-day expiry. Overridable via the
- *     free_credit_config table (category = 'initial_free_credit').
+ * The model:
+ *   • Default amount: configurable via free_credit_config (category =
+ *     'initial_free_credit'). Falls back to 50 credits / 14-day expiry
+ *     if the config row is missing.
  *   • Category written to free_credit_claims: 'initial_free_credit'.
  *   • Idempotent at app + DB layers — the partial UNIQUE index on
  *     free_credit_claims(organization_id) WHERE category='initial_free_credit'
  *     enforces one grant per org regardless of how many code paths fire.
  *   • Earn-more credits (referral, feedback, setup, etc.) continue to flow
- *     through earnCreditsService.ts and are additive on top of the 50.
+ *     through earnCreditsService.ts and are additive on top of the initial grant.
  */
 
 import { supabase } from '../db/supabaseClient';

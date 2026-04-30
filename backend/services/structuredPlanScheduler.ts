@@ -2168,7 +2168,23 @@ export async function updateLegacyScheduledPost(input: {
     patch.scheduled_for = scheduledFor.toISOString();
   }
   if (typeof input.patch.contentType === 'string') {
-    patch.content_type = String(input.patch.contentType).toLowerCase().trim();
+    let normalizedContentType = String(input.patch.contentType).toLowerCase().trim();
+    // The chk_content_type constraint rejects {platform=twitter, content_type=post}
+    // and {platform=instagram, content_type=post}. The app surfaces 'post' as the
+    // generic source content type; remap it to the platform-native value before
+    // writing so the update doesn't blow up on the constraint.
+    if (normalizedContentType === 'post') {
+      const { data: existing } = await supabase
+        .from('scheduled_posts')
+        .select('platform')
+        .eq('id', input.id)
+        .eq('user_id', input.userId)
+        .maybeSingle();
+      const existingPlatform = String((existing as any)?.platform || '').toLowerCase().trim();
+      if (existingPlatform === 'twitter') normalizedContentType = 'tweet';
+      else if (existingPlatform === 'instagram') normalizedContentType = 'feed_post';
+    }
+    patch.content_type = normalizedContentType;
   }
   patch.updated_at = new Date().toISOString();
 

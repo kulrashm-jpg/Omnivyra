@@ -657,17 +657,24 @@ function buildDmCommandChain(action: CommunityAiAction): CommandChainStep[] | nu
     /facebook\.com\/messages\/t\//i,
     /instagram\.com\/direct\/t\//i,
     /linkedin\.com\/messaging\/thread\//i,
+    /x\.com\/messages\//i,
+    /twitter\.com\/messages\//i,
   ];
   const looksLikeThreadUrl = threadUrlPatterns.some((re) => re.test(target));
-  const looksLikeThreadId  = /^[a-zA-Z0-9:_\-]{6,}$/.test(target) && !target.includes('.');
+  const looksLikeThreadId  =
+    (/^[a-zA-Z0-9:_\-=]{6,}$/.test(target) && !target.includes('.'))
+    || (platform === 'linkedin' && /^2-[A-Za-z0-9_\-=]{12,}/.test(target));
 
   if (looksLikeThreadUrl || looksLikeThreadId) {
-    const openPayload = looksLikeThreadUrl
-      ? { threadUrl: target }
-      : { threadId: target };
     return [
-      { action_type: 'open_thread', payload: openPayload },
-      { action_type: 'continue_thread', payload: { text, autoSubmit: true, threadId: looksLikeThreadId ? target : undefined } },
+      {
+        action_type: 'continue_thread',
+        payload: {
+          text,
+          autoSubmit: true,
+          ...(looksLikeThreadUrl ? { threadUrl: target } : { threadId: target }),
+        },
+      },
     ];
   }
 

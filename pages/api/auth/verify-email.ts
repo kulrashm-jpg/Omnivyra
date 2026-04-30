@@ -21,7 +21,7 @@ import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 
-type SuccessResponse = { success: true; route: string };
+type SuccessResponse = { success: true; route: string; requiresLogin?: boolean; email?: string | null };
 type ErrorResponse   = { error: string; code?: string };
 
 export default async function handler(
@@ -174,5 +174,17 @@ export default async function handler(
     }
   }
 
-  return res.status(200).json({ success: true, route });
+  // For first-time email verifications on a password-based signup, send the
+  // user back to /login with an explicit "Email verified" banner instead of
+  // silently auto-signing them in. Magic-link / passwordless flows keep the
+  // auto-sign-in behavior — they have no password to log in with.
+  const requiresLogin =
+    isFirstVerifiedLogin && hasPassword && mode !== 'passwordless';
+
+  return res.status(200).json({
+    success: true,
+    route,
+    requiresLogin,
+    email: resolvedEmail,
+  });
 }

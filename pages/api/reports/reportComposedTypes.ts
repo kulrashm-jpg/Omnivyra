@@ -100,8 +100,38 @@ export type ComposedReportData = {
       classification?: string;
       source?: string;
       relevance_score?: number;
+      category?: string;
+      tags?: string[];
+      problem_overlap?: number;
+      icp_overlap?: number;
+      market_overlap?: number;
+      revenue_tier?: 'startup' | 'growth' | 'scale' | 'enterprise';
+      product_depth?: number;
+      final_score?: number;
+      tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
+      enrichment_confidence_score?: number;
+      enrichment?: {
+        category?: string | null;
+        description?: string | null;
+        icp?: {
+          age_group?: string | null;
+          use_case?: string | null;
+          user_intent?: string | null;
+        };
+        business_model?: string | null;
+        geography?: string | null;
+        product_type?: string | null;
+        scale_signals?: Record<string, unknown>;
+        confidence_score?: number;
+        sources?: string[];
+      } | null;
       rationale?: string;
     }>;
+    competitors_by_tier?: {
+      tier_1?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; rationale?: string }>;
+      tier_2?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; rationale?: string }>;
+      tier_3?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; rationale?: string }>;
+    };
     comparison?: {
       competitors?: Array<{
         competitor?: {

@@ -243,7 +243,14 @@ async function runAppOnly(children) {
   await cleanupStaleNextLockArtifacts();
   console.log('   App: http://localhost:3000');
   console.log('   To enable workers: start Redis and run npm run dev:full\n');
-  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack'], {
+  // Use Turbopack instead of webpack: webpack on Windows + Fast Refresh
+  // chronically corrupts .next/dev/server manifests (ENOENT on
+  // _document.js / webpack-api-runtime.js mid-session), forcing a full
+  // .next wipe + restart every few edits. Turbopack does not have this
+  // failure mode on this codebase. Set DEV_USE_WEBPACK=1 to opt back in.
+  const useWebpack = process.env.DEV_USE_WEBPACK === '1';
+  const bundlerFlag = useWebpack ? '--webpack' : '--turbopack';
+  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', bundlerFlag], {
     env: {
       ...process.env,
       ENABLE_AUTO_WORKERS: '0',

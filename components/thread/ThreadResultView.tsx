@@ -9,6 +9,7 @@ import { useCompanyContext } from '../CompanyContext';
 import { getThreadExecutionDescription, getThreadExecutionLabel } from '../../lib/thread/threadExecution';
 import ThreadSegmentsEditor from './ThreadSegmentsEditor';
 import {
+  getThreadAnchor,
   joinThreadSegments,
   splitThreadIntoSegments,
   type ThreadGenerationPayload,
@@ -75,6 +76,11 @@ function buildSessionFromPrefill(prefill: PrefillThreadPayload): ThreadSessionPa
     cta: 'Invite readers to react, reply, or follow for the next step',
     extraInstruction: '',
     companyName: 'Your company',
+    anchor: 'market',
+    anchorLabel: 'Market',
+    anchorFocus: getThreadAnchor('market').focusPrompt,
+    productsServices: '',
+    brandVoice: '',
   };
 }
 
@@ -164,6 +170,18 @@ export default function ThreadResultView() {
       setGenerating(true);
       setError(null);
       try {
+        const anchorObjective = `Anchor: ${session.anchorLabel}. ${session.anchorFocus}`;
+        const anchorContextLines: string[] = [];
+        if (session.anchor === 'product' && session.productsServices) {
+          anchorContextLines.push(`Products & services to ground the thread in: ${session.productsServices}.`);
+        }
+        if (session.anchor === 'identity' && session.brandVoice) {
+          anchorContextLines.push(`Brand voice and stance to enforce: ${session.brandVoice}.`);
+        }
+        anchorContextLines.push(
+          `Alignment check: every post must earn its place against the ${session.anchorLabel.toLowerCase()} anchor. If a post would read the same for any other company, rewrite it so it could only have been written by ${session.companyName}.`,
+        );
+
         const response = await fetch('/api/threads/generate', {
           method: 'POST',
           credentials: 'include',
@@ -172,13 +190,14 @@ export default function ThreadResultView() {
             company_id: selectedCompanyId,
             topic: session.topic,
             platform: session.platform,
-            objective: session.objective,
+            objective: [session.objective, anchorObjective].filter(Boolean).join(' '),
             target_audience: session.audience,
             tone: session.tone,
             cta: session.cta,
             template_name: session.formatLabel,
             extra_instruction: [
               session.extraInstruction,
+              ...anchorContextLines,
               `Structure this as a true thread with a strong opener, a logical sequence, and a closing post that resolves the thread.`,
               `Keep each post able to stand alone while clearly earning the next one.`,
             ].filter(Boolean).join('\n\n'),
@@ -320,6 +339,12 @@ export default function ThreadResultView() {
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   {session.formatLabel} on {session.platformLabel} with a {session.intentLabel.toLowerCase()} sequence.
                 </p>
+                {session.anchorLabel ? (
+                  <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-[11px] font-semibold text-violet-700">
+                    <span className="uppercase tracking-[0.14em] text-violet-500">Anchor</span>
+                    <span>{session.anchorLabel}</span>
+                  </div>
+                ) : null}
               </div>
 
               {segments.length > 0 && (
@@ -331,6 +356,15 @@ export default function ThreadResultView() {
               <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Sequence Notes</p>
                 <div className="mt-4 space-y-3 text-sm text-slate-600">
+                  {session.anchorLabel ? (
+                    <div>
+                      <p className="font-semibold text-slate-900">Anchor</p>
+                      <p className="mt-1">
+                        {session.anchorLabel}
+                        {session.anchorFocus ? ` — ${session.anchorFocus}` : ''}
+                      </p>
+                    </div>
+                  ) : null}
                   <div>
                     <p className="font-semibold text-slate-900">Objective</p>
                     <p className="mt-1">{decisionTrace?.objective || session.objective}</p>

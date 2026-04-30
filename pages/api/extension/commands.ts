@@ -20,7 +20,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomUUID } from 'crypto';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
 import { supabase } from '@/backend/db/supabaseClient';
 import { resolveEngagementCapability, CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
@@ -140,12 +140,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nowIso = new Date().toISOString();
     const { data, error } = await supabase
       .from('community_ai_actions')
-      .select('id, platform, action_type, target_id, suggested_text, execution_mode, metadata, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
+      .select('id, platform, action_type, target_id, suggested_text, execution_mode, created_at, dispatch_lease_expires_at, execution_correlation_id, command_chain, command_chain_index')
       .eq('organization_id', session.orgId)
       .eq('status', 'pending')
       .eq('execution_mode', 'browser')
       .or(`dispatch_lease_expires_at.is.null,dispatch_lease_expires_at.lt.${nowIso}`)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
       .limit(10);
 
     if (error) {
@@ -196,7 +196,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const tier = await resolveAccountTier({
           organization_id: session.orgId,
           platform: 'instagram',
-          action_metadata: (row as { metadata?: unknown }).metadata,
+          action_metadata: null,
         });
         if (tier !== 'business') {
           console.warn('[extension/commands] instagram DM rejected: tier=', tier, 'actionId=', row.id);
@@ -244,6 +244,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (validation.ok !== true) {
         const bad = validation as { code: string; message: string };
         console.warn('[extension/commands] payload validation failed:', platformSlug, extensionAction, bad.code, bad.message);
+        try {
+          const { persistExecutionResult } = await import('@/backend/services/communityAiActionExecutor');
+          await persistExecutionResult({
+            actionId: row.id,
+            organizationId: session.orgId,
+            correlationId: (row as any).execution_correlation_id ?? randomUUID(),
+            result: {
+              ok: false,
+              status: 'failed',
+              error: bad.code || 'INVALID_COMMAND_PAYLOAD',
+              response: {
+                source: 'extension_commands',
+                reason: 'payload_validation_failed',
+                message: bad.message,
+              },
+              execution_mode: 'browser',
+            },
+            rowHint: {
+              platform: row.platform ?? null,
+              action_type: row.action_type ?? null,
+              target_id: row.target_id ?? null,
+            },
+          });
+        } catch (persistErr: any) {
+          console.warn('[extension/commands] payload validation failure persist failed:', persistErr?.message || persistErr);
+        }
         continue;
       }
 
@@ -252,7 +278,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let update = supabase
         .from('community_ai_actions')
         .update({
-          status: 'dispatched',
           dispatch_lease_id: leaseId,
           dispatch_lease_expires_at: leaseExpiresAt,
           dispatch_lease_holder_id: holderId,
@@ -277,7 +302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         action: extensionAction,
         schema_version: COMMAND_SCHEMA_VERSION,
         payload: validation.payload,
-        metadata: row.metadata ?? null,
+        metadata: null,
         created_at: row.created_at,
         // Lifecycle correlation id — must be echoed back on /action-result
         // so the backend can verify the ack belongs to this lifecycle and
@@ -348,13 +373,16 @@ async function handleAck(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Idempotent: already acknowledged or already progressed past ack.
-    if (existing.status === 'acknowledged' && (existing as any).dispatch_acknowledged_at) {
-      return res.status(200).json({ success: true, idempotent: true, status: 'acknowledged' });
+    if ((existing as any).dispatch_acknowledged_at) {
+      return res.status(200).json({ success: true, idempotent: true, status: existing.status });
     }
     if (existing.status === 'executing' || existing.status === 'executed' || existing.status === 'sent_unverified' || existing.status === 'failed') {
       return res.status(200).json({ success: true, idempotent: true, status: existing.status });
     }
-    if (existing.status !== 'dispatched') {
+    // This deployment keeps leased browser commands as `pending` because the
+    // DB status constraint does not include dispatched/acknowledged. The lease
+    // fields, not the status value, prove ownership.
+    if (existing.status !== 'pending' && existing.status !== 'dispatched') {
       return res.status(409).json({ success: false, error: 'INVALID_STATE', current_status: existing.status });
     }
 
@@ -379,12 +407,11 @@ async function handleAck(req: NextApiRequest, res: NextApiResponse) {
     const { data: updated, error: updateError } = await supabase
       .from('community_ai_actions')
       .update({
-        status: 'acknowledged',
         dispatch_acknowledged_at: now,
         updated_at: now,
       })
       .eq('id', commandId)
-      .eq('status', 'dispatched')
+      .eq('status', existing.status)
       .eq('dispatch_lease_id', rowLeaseId)
       .eq('dispatch_lease_holder_id', rowHolderId)
       .select('id')

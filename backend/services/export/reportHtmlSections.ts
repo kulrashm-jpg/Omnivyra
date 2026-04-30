@@ -5,6 +5,7 @@ import { collectMasterActions, deriveDataSources, inferMasterActionTrack, render
 import { sectionHeaderBar } from './html/htmlHelpers';
 import { displayScore, formatSignedGap, getStateBadgeClass, getStateBarClass, getStateTone, renderBarSvg, renderBeforeAfter, renderCalloutBox, renderCompactBulletLine, renderComparisonBar, renderExecutiveInsights, renderFillQuote, renderInlineSummary, renderMetricGrid, renderMetricRowCard, renderMiniMetrics, renderNarrativeGroup, renderPagePrintHeader, renderPerformanceScoreRow, renderRadarSvg, renderReportBlock, renderScoreComparison, renderScoreDonut, renderTrendSvg, renderVisualMetricBlock, stripLeadingSectionHeader } from './reportHtmlVisualPrimitives';
 import { clampPercent, escapeHtml, getOverallScore, hasContent, hasNonEmptyList, hasRealAiVisibilityData, safeText, stripRepeatedSentences, stripTimelinePrefix } from './reportHtmlCoreUtils';
+import { hasPassedFinalCompetitorGate } from '../competitorEngineService';
 
 export type SnapshotSectionSpec = {
   id: string;
@@ -25,7 +26,6 @@ function renderSubsection(content: string, options?: { flow?: boolean; tight?: b
 }
 
 function getCompetitorBadgeLabel(classification: string, source: string): string {
-  if (source === 'inferred_keyword_peer') return 'Market benchmark';
   if (classification === 'authority_leader') return 'Authority';
   if (classification === 'seo_competitor') return 'SEO';
   return 'Direct';
@@ -84,6 +84,19 @@ function normalizeNameKey(value: string | null | undefined): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
+}
+
+function hasFinalCompetitorProof(item: any): boolean {
+  return hasPassedFinalCompetitorGate({
+    name: item?.name,
+    domain: item?.domain,
+    source: item?.source,
+    category: item?.category,
+    relevance_score: item?.relevanceScore,
+    final_score: item?.finalScore,
+    enrichment: item?.enrichment,
+    enrichment_confidence_score: item?.enrichmentConfidenceScore,
+  } as any);
 }
 
 type PerformanceMetricView = {
@@ -603,7 +616,7 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
   const competitor = payload.competitorIntelligenceSummary;
   const visuals = payload.competitorVisuals;
   const radar = visuals?.competitorPositioningRadar;
-  const contextCompetitors = competitorContext?.competitors ?? [];
+  const contextCompetitors = (competitorContext?.competitors ?? []).filter(hasFinalCompetitorProof);
   const strongestGap = competitorContext?.strongestGaps?.[0];
   const hasCompetitorContext = Boolean(
     safeText(competitorContext?.summary, 2)
@@ -611,7 +624,7 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
     || strongestGap,
   );
 
-  if (!hasCompetitorContext && (!radar || !competitorEligible || !visuals)) {
+  if (contextCompetitors.length === 0 || (!hasCompetitorContext && (!radar || !competitorEligible || !visuals))) {
     return `<div class="report-section" id="section-4">${sectionHeaderBar(vars.company_name, vars.report_date, { logoUrl: vars.company_logo_url, faviconUrl: vars.company_favicon_url })}<div class="label">Competitive Landscape</div><h2>Competitive Landscape</h2><div class="card-pending no-break">No competitor data available yet. Add competitor domains or competitor profile context to unlock this section.</div></div>`;
   }
 
@@ -632,6 +645,10 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
     classification: string;
     source: string;
     relevanceScore: number | null;
+    category?: string | null;
+    tags?: string[];
+    tier?: 'Tier 1' | 'Tier 2' | 'Tier 3' | null;
+    finalScore?: number | null;
     rationale: string;
     standing: 'Behind' | 'At Par' | 'Ahead';
     radarItem: typeof radar extends { competitors: Array<infer T> } ? T | null : null;
@@ -644,39 +661,22 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
       classification: item.classification,
       source: item.source,
       relevanceScore: Number.isFinite(item.relevanceScore) ? item.relevanceScore : null,
+      category: item.category ?? null,
+      tags: item.tags ?? [],
+      tier: item.tier ?? null,
+      finalScore: Number.isFinite(item.finalScore) ? item.finalScore : null,
       rationale: item.rationale,
       standing: item.standing,
       radarItem: radarByName.get(normalizeNameKey(item.name)) ?? null,
     });
   }
 
-  for (const item of radar?.competitors ?? []) {
-    const key = normalizeNameKey(item.name);
-    if (unifiedCompetitors.has(key)) continue;
-    const allScores = [
-      item.keyword_coverage_score,
-      item.content_score,
-      item.authority_score,
-      item.technical_score,
-      item.ai_answer_presence_score,
-    ].filter((value) => Number.isFinite(value));
-    const averageScore = allScores.length
-      ? Math.round(allScores.reduce((sum, value) => sum + Number(value), 0) / allScores.length)
-      : null;
-    unifiedCompetitors.set(key, {
-      name: item.name,
-      domain: null,
-      classification: 'seo_competitor',
-      source: 'radar',
-      relevanceScore: averageScore,
-      rationale: `${item.name} is appearing as a measurable market peer in the current benchmark data.`,
-      standing: averageScore != null && averageScore >= 67 ? 'Ahead' : averageScore != null && averageScore >= 34 ? 'At Par' : 'Behind',
-      radarItem: item,
-    });
-  }
-
   const competitorRows = [...unifiedCompetitors.values()]
     .sort((a, b) => {
+      const tierOrder = { 'Tier 1': 1, 'Tier 2': 2, 'Tier 3': 3 } as const;
+      const aTier = a.tier ? tierOrder[a.tier] : 4;
+      const bTier = b.tier ? tierOrder[b.tier] : 4;
+      if (aTier !== bTier) return aTier - bTier;
       const aScore = a.relevanceScore ?? -1;
       const bScore = b.relevanceScore ?? -1;
       if (bScore !== aScore) return bScore - aScore;
@@ -684,8 +684,21 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
     })
     .slice(0, 5);
 
+  const tierLabels = {
+    'Tier 1': 'Tier 1 · Direct competitors',
+    'Tier 2': 'Tier 2 · Functional competitors',
+    'Tier 3': 'Tier 3 · Substitute competitors',
+  } as const;
+  const groupedCompetitorCards = (['Tier 1', 'Tier 2', 'Tier 3'] as const)
+    .map((tier) => {
+      const rows = competitorRows.filter((item) => item.tier === tier);
+      if (!rows.length) return '';
+      return `<div class="card no-break" style="margin-top:12px;"><div class="label">${escapeHtml(tierLabels[tier])}</div><div class="grid-3" style="margin-top:10px;">${rows.map((item) => `<article class="card card-compact"><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><h3 style="margin:0;">${escapeHtml(item.name)}</h3><span class="badge badge-blue">${escapeHtml(item.category ?? getCompetitorBadgeLabel(item.classification, item.source))}</span><span class="badge badge-gray">${escapeHtml(item.tags?.join(', ') || 'untagged')}</span></div>${item.finalScore != null ? `<div class="label" style="margin-top:8px;">Final score ${escapeHtml(item.finalScore.toFixed(2))}</div>` : ''}<p style="margin-top:8px;">${escapeHtml(item.rationale)}</p></article>`).join('')}</div></div>`;
+    })
+    .join('');
+
   const contextCards = competitorRows.length
-    ? `<div class="grid-3" style="margin-top:12px;">${competitorRows.slice(0, 3).map((item) => `<article class="card no-break"><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><h3 style="margin:0;">${escapeHtml(item.name)}</h3><span class="badge badge-blue">${escapeHtml(getCompetitorBadgeLabel(item.classification, item.source))}</span><span class="badge ${getCompetitorStandingTone(item.standing)}">${escapeHtml(getCompetitorStandingLabel(item.standing))}</span></div>${item.domain ? `<div class="label" style="margin-top:8px;">${escapeHtml(item.domain)}</div>` : ''}<p style="margin-top:8px;">${escapeHtml(item.rationale)}</p></article>`).join('')}</div>`
+    ? groupedCompetitorCards
     : '';
 
   const competitorMatrix = competitorRows.length

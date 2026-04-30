@@ -45,11 +45,22 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
 import { supabase } from '@/backend/db/supabaseClient';
+import {
+  isExtensionDmPlatform,
+  normalizeExtensionPlatform,
+  normalizeScrapedMessageContent,
+  resolvePlatformUserId,
+} from '@/lib/engagement/extensionIngestion';
+import { validateSyncRecord } from '@/lib/engagement/syncIngestion';
 
 type IncomingThread = {
   platform_thread_id?: string;
   participant_name?: string | null;
   participant_username?: string | null;
+  /** LinkedIn profile URL (https://www.linkedin.com/in/<slug>/). Stable
+   *  per person — used as engagement_authors.platform_user_id so the
+   *  inbox dedup keys on real identity, not display name. */
+  participant_profile_url?: string | null;
   participant_avatar_url?: string | null;
   thread_url?: string | null;
   last_message_preview?: string | null;
@@ -65,11 +76,21 @@ type IncomingThread = {
 type IncomingMessage = {
   platform_thread_id?: string;
   platform_message_id?: string;
+  thread_id?: string | null;
+  parent_id?: string | null;
   sender_name?: string | null;
   sender_username?: string | null;
+  sender_profile_url?: string | null;
+  actor_type?: string | null;
+  actor_id?: string | null;
   sender_self?: boolean;
   content?: string | null;
   sent_at?: string | null;
+  raw_time?: string | null;
+  normalized_time?: string | null;
+  scraped_at?: string | null;
+  timestamp_confidence?: string | null;
+  source?: string | null;
 };
 
 type Body = {
@@ -78,8 +99,6 @@ type Body = {
   messages?: IncomingMessage[];
 };
 
-const SUPPORTED_PLATFORMS = new Set(['linkedin']);
-
 function normalizeIso(v: unknown): string | null {
   if (!v) return null;
   const s = String(v).trim();
@@ -87,6 +106,11 @@ function normalizeIso(v: unknown): string | null {
   const parsed = Date.parse(s);
   if (!Number.isFinite(parsed)) return null;
   return new Date(parsed).toISOString();
+}
+
+function isSyncValidationError(err: unknown): boolean {
+  const message = (err as Error)?.message || '';
+  return /\b(required|must be)\b/i.test(message);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -101,8 +125,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const organizationId = session.orgId;
 
   const body = (req.body || {}) as Body;
-  const platform = (body.platform ?? '').toString().toLowerCase().trim();
-  if (!platform || !SUPPORTED_PLATFORMS.has(platform)) {
+  const platform = normalizeExtensionPlatform(body.platform);
+  if (!platform || !isExtensionDmPlatform(platform)) {
     return res.status(400).json({ success: false, error: 'unsupported platform' });
   }
   const incomingThreads = Array.isArray(body.threads) ? body.threads : [];
@@ -135,6 +159,99 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       /* non-fatal — FK is nullable */
     }
 
+    // ── Authors upsert ──────────────────────────────────────────────────────
+    // The inbox dedup logic in /api/engagement/inbox keys on
+    // engagement_authors.id — a stable per-person uuid backed by
+    // (platform, platform_user_id=profile_url). Without these rows the
+    // dedup falls back to thread_id and never collapses, so two threads
+    // for the same external person stay split AND two real people sharing
+    // a display name collide. We populate authors here so both work.
+    //
+    // Build the unique set of (profile_url|username, display_name) pairs
+    // from this batch. Profile URL is preferred as the platform_user_id
+    // because it is the most stable identifier; fall back to slug if only
+    // a username was scraped, and skip rows that have neither (those
+    // can't be used for cross-thread identity anyway).
+    type AuthorKeyed = { platformUserId: string; profileUrl: string | null; username: string | null; displayName: string | null };
+    const authorByPlatformUserId = new Map<string, AuthorKeyed>();
+    const collectAuthor = (
+      profileUrl: string | null | undefined,
+      username: string | null | undefined,
+      displayName: string | null | undefined,
+    ) => {
+      const url = (profileUrl || '').trim();
+      const slug = (username || '').trim();
+      const platformUserId = resolvePlatformUserId(platform, url, slug) ?? '';
+      if (!platformUserId) return;
+      if (authorByPlatformUserId.has(platformUserId)) return;
+      authorByPlatformUserId.set(platformUserId, {
+        platformUserId,
+        profileUrl: url || platformUserId,
+        username: slug || null,
+        displayName: (displayName || '').trim() || null,
+      });
+    };
+    for (const t of incomingThreads) {
+      collectAuthor(t.participant_profile_url, t.participant_username, t.participant_name);
+    }
+    for (const m of incomingMessages) {
+      // Self messages don't need an author row — they're the user, not a
+      // counterparty. Skipping keeps the engagement_authors table tidy.
+      if (normalizeScrapedMessageContent({ content: m.content, sender_self: m.sender_self }).isSelf) continue;
+      collectAuthor(m.sender_profile_url, m.sender_username, m.sender_name);
+    }
+
+    // Resolve author ids: SELECT existing rows by (platform, platform_user_id),
+    // INSERT any missing ones. Map keyed by platformUserId → uuid so the
+    // message upsert below can stamp author_id without another round-trip.
+    //
+    // Wrapped in its own try/catch so a partial failure (e.g. a transient
+    // Supabase blip on insert) doesn't fail the entire DM sync. Author
+    // resolution is best-effort — without it, messages just keep
+    // author_id=null and dedup degrades to thread-level grouping, which
+    // is the same behaviour the system had before identity-anchoring.
+    const authorIdByPlatformUserId = new Map<string, string>();
+    try {
+      if (authorByPlatformUserId.size > 0) {
+        const platformUserIds = Array.from(authorByPlatformUserId.keys());
+        const { data: existingAuthors } = await supabase
+          .from('engagement_authors')
+          .select('id, platform_user_id')
+          .eq('platform', platform)
+          .in('platform_user_id', platformUserIds);
+        for (const row of existingAuthors ?? []) {
+          const r = row as { id: string; platform_user_id: string };
+          authorIdByPlatformUserId.set(r.platform_user_id, r.id);
+        }
+        const missing: AuthorKeyed[] = [];
+        for (const [pid, info] of authorByPlatformUserId) {
+          if (!authorIdByPlatformUserId.has(pid)) missing.push(info);
+        }
+        if (missing.length > 0) {
+          const insertRows = missing.map((a) => ({
+            platform,
+            platform_user_id: a.platformUserId,
+            username: a.username,
+            display_name: a.displayName,
+            profile_url: a.profileUrl ?? a.platformUserId,
+          }));
+          const { data: insertedAuthors, error: authorInsertErr } = await supabase
+            .from('engagement_authors')
+            .insert(insertRows)
+            .select('id, platform_user_id');
+          if (authorInsertErr) {
+            console.warn('[extension/events/dms] author insert failed (continuing with degraded dedup):', authorInsertErr.message);
+          }
+          for (const row of insertedAuthors ?? []) {
+            const r = row as { id: string; platform_user_id: string };
+            authorIdByPlatformUserId.set(r.platform_user_id, r.id);
+          }
+        }
+      }
+    } catch (authorPhaseErr) {
+      console.warn('[extension/events/dms] author phase failed (continuing with degraded dedup):', (authorPhaseErr as Error)?.message);
+    }
+
     // ── Threads upsert ─────────────────────────────────────────────────────
     // Map of incoming platform_thread_id → DB uuid so we can link messages.
     const threadIdByPlatformThread: Record<string, string> = {};
@@ -154,12 +271,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('organization_id', organizationId)
         .maybeSingle();
 
+      // Carry the scraped per-thread signals onto raw_payload so the
+      // inbox layer can read participant identity + last_message_self
+      // without re-scraping. last_message_self lets the inbox drop the
+      // thread from Needs Response when the user already replied
+      // outside Omnivyra (LinkedIn preview is "You: …").
+      const threadRawPayload: Record<string, unknown> = {
+        participant_name: t.participant_name ?? null,
+        participant_username: t.participant_username ?? null,
+        participant_profile_url: t.participant_profile_url ?? null,
+        participant_avatar_url: t.participant_avatar_url ?? null,
+        thread_url: t.thread_url ?? null,
+        last_message_preview: t.last_message_preview ?? null,
+        last_message_at: normalizeIso(t.last_message_at),
+        last_message_self: Boolean(t.last_message_self),
+        unread_count: typeof t.unread_count === 'number' ? t.unread_count : null,
+      };
+
       if (existing?.id) {
         threadIdByPlatformThread[platformThreadId] = existing.id as string;
         await supabase
           .from('engagement_threads')
           .update({
             source_id: sourceId,
+            raw_payload: threadRawPayload,
             updated_at: new Date().toISOString(),
           })
           .eq('id', existing.id);
@@ -174,6 +309,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           platform_thread_id: platformThreadId,
           source_id: sourceId,
           organization_id: organizationId,
+          raw_payload: threadRawPayload,
         })
         .select('id')
         .single();
@@ -189,11 +325,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── Messages upsert ────────────────────────────────────────────────────
     let messagesUpserted = 0;
+    let duplicatesRejected = 0;
     for (const m of incomingMessages) {
-      const platformThreadId = (m.platform_thread_id || '').toString().trim();
+      const platformThreadId = (m.platform_thread_id || m.thread_id || '').toString().trim();
       const platformMessageId = (m.platform_message_id || '').toString().trim();
       const content = (m.content ?? '').toString();
-      if (!platformThreadId || !platformMessageId) continue;
+      const syncRecord = validateSyncRecord({
+        platform_message_id: platformMessageId,
+        thread_id: m.thread_id ?? platformThreadId,
+        parent_id: m.parent_id ?? null,
+        content,
+        actor_type: m.actor_type ?? (m.sender_self ? 'company' : 'user'),
+        actor_id: m.actor_id ?? m.sender_profile_url ?? m.sender_username ?? m.sender_name,
+        raw_time: m.raw_time,
+        normalized_time: m.normalized_time ?? m.sent_at,
+        scraped_at: m.scraped_at,
+        timestamp_confidence: m.timestamp_confidence,
+        source: m.source ?? 'platform_sync',
+      });
+      if (!platformThreadId) throw new Error('thread_id required');
 
       let threadUuid = threadIdByPlatformThread[platformThreadId];
       if (!threadUuid) {
@@ -227,42 +377,69 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Upsert by (thread_id, platform_message_id). Unique index
       // idx_engagement_messages_platform_thread enforces dedup.
       //
-      // Sender detection — the scraper passes sender_self when LinkedIn
-      // marks the message with .--self. As a defence-in-depth fallback we
-      // also detect a "You: " content prefix (LinkedIn's preview format).
-      // Both signals feed direction so downstream filters (Needs Response)
-      // don't have to reinvent the heuristic.
-      const contentStartsWithYou = /^you\s*:/i.test((content || '').trim());
-      const isSelf = Boolean(m.sender_self) || contentStartsWithYou;
-      const cleanedContent = contentStartsWithYou
-        ? (content || '').replace(/^you\s*:\s*/i, '')
-        : content;
+      const normalizedMessage = normalizeScrapedMessageContent({
+        content: syncRecord.content,
+        sender_self: m.sender_self,
+      });
+      const isSelf = normalizedMessage.isSelf;
+
+      // Resolve author_id for the counterparty. Self messages keep
+      // author_id=null since "self" isn't a counterparty.
+      let authorId: string | null = null;
+      if (!isSelf) {
+        const senderProfileUrl = (m.sender_profile_url || '').trim();
+        const senderUsername = (m.sender_username || '').trim();
+        const senderPlatformUserId = resolvePlatformUserId(platform, senderProfileUrl, senderUsername);
+        if (senderPlatformUserId) {
+          authorId = authorIdByPlatformUserId.get(senderPlatformUserId) ?? null;
+        }
+      }
+
       const row = {
         thread_id: threadUuid,
         source_id: sourceId,
         platform,
-        platform_message_id: platformMessageId,
+        platform_message_id: syncRecord.platform_message_id,
+        sync_thread_id: syncRecord.thread_id,
+        platform_parent_id: syncRecord.parent_id,
+        parent_message_id: null,
         message_type: 'direct_message',
-        content: cleanedContent,
+        content: normalizedMessage.content,
         direction: isSelf ? 'outgoing' : 'incoming',
-        platform_created_at: normalizeIso(m.sent_at),
+        author_id: authorId,
+        platform_created_at: syncRecord.normalized_time,
+        raw_time: syncRecord.raw_time,
+        normalized_time: syncRecord.normalized_time,
+        scraped_at: syncRecord.scraped_at,
+        sync_source: syncRecord.source,
+        actor_type: syncRecord.actor_type,
+        actor_external_id: syncRecord.actor_id,
         raw_payload: {
           sender_name: m.sender_name ?? null,
           sender_username: m.sender_username ?? null,
+          sender_profile_url: m.sender_profile_url ?? null,
           sender_self: isSelf,
-          you_prefix_detected: contentStartsWithYou,
+          you_prefix_detected: normalizedMessage.prefixDetected,
+          sync_thread_id: syncRecord.thread_id,
+          raw_time: syncRecord.raw_time,
+          normalized_time: syncRecord.normalized_time,
+          scraped_at: syncRecord.scraped_at,
+          timestamp_confidence: syncRecord.timestamp_confidence,
+          source: syncRecord.source,
+          ingested_via: 'platform_sync',
         },
       };
 
-      const { error: upsertErr } = await supabase
+      const { error: insertErr } = await supabase
         .from('engagement_messages')
-        .upsert(row, { onConflict: 'thread_id,platform_message_id' });
-      if (upsertErr) {
-        // Unique-violation (23505) is a duplicate → fine. Anything else is a real error.
-        if ((upsertErr as { code?: string }).code !== '23505') {
-          console.warn('[extension/events/dms] message upsert failed:', upsertErr.message);
+        .insert(row);
+      if (insertErr) {
+        if ((insertErr as { code?: string }).code === '23505') {
+          duplicatesRejected += 1;
           continue;
         }
+        console.warn('[extension/events/dms] message insert failed:', insertErr.message);
+        continue;
       }
       messagesUpserted += 1;
     }
@@ -272,12 +449,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platform,
       threads_upserted: threadsUpserted,
       messages_upserted: messagesUpserted,
+      duplicates_rejected: duplicatesRejected,
     });
   } catch (err) {
-    console.error('[extension/events/dms]', err);
-    return res.status(500).json({
+    // Always return STRUCTURED JSON, never an HTML 500 page. The extension's
+    // SW relay reads .error → console.error → chrome://extensions error log,
+    // so a missing/empty error message is exactly what produced the
+    // "[APIClient] Failed: [object Object]" the user has been seeing.
+    const e = err as Error;
+    console.error('[extension/events/dms] unhandled:', e?.message, e?.stack);
+    return res.status(isSyncValidationError(err) ? 400 : 500).json({
       success: false,
-      error: (err as Error)?.message || 'dm sync failed',
+      error: e?.message || 'dm sync failed',
+      error_class: e?.name || 'Error',
+      stack: process.env.NODE_ENV !== 'production' ? e?.stack?.split('\n').slice(0, 6) : undefined,
     });
   }
 }

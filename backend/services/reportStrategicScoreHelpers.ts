@@ -108,11 +108,8 @@ export function buildStrategicScore(payload: any): any {
           : 'This means you are improving, but execution consistency is still required to establish durable competitiveness.')
         : 'This means you are currently below competitive thresholds in your market.';
 
-  const fallbackHeavyCompetitorSignals = (payload.competitorContext?.competitors ?? []).filter((item: any) =>
-    item.source === 'inferred_keyword_peer' || item.source === 'serp_unavailable_fallback',
-  ).length;
   const totalCompetitorSignals = (payload.competitorContext?.competitors ?? []).length;
-  const fallbackRatio = totalCompetitorSignals > 0 ? fallbackHeavyCompetitorSignals / totalCompetitorSignals : 1;
+  const fallbackRatio = totalCompetitorSignals > 0 ? 0 : 1;
   const dataStatusSignals = [
     payload.progressComparison?.data_status,
     payload.competitorMovementComparison?.data_status,

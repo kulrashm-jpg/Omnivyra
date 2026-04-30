@@ -65,6 +65,16 @@ function normalizePlatformAlias(p: string): string {
   return v === 'x' ? 'twitter' : v;
 }
 
+function isUsableLinkedInThreadId(value: string | null | undefined): value is string {
+  const candidate = (value || '').trim();
+  if (!candidate) return false;
+  if (/linkedin\.com\/messaging\/thread\//i.test(candidate)) return true;
+  if (/^urn:li:/i.test(candidate)) return true;
+  if (/=$/.test(candidate)) return true;
+  if (/^2-[A-Za-z0-9_-]{12,}/.test(candidate)) return true;
+  return false;
+}
+
 /**
  * Resolve a campaign engagement signal to the fields executeAction needs.
  * Signals carry their own platform + conversation_url + author and do not
@@ -378,11 +388,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // start_new_dm is more reliable than open_thread because it doesn't
     // require a real LinkedIn-side thread URL — the extension searches
     // the user list by handle/name and opens the conversation natively.
-    const dmRecipientTarget =
-      recipientProfileUrl
-      || (recipientDisplayName ? recipientDisplayName.trim() : null)
-      || threadPlatformUrn
-      || (messageId as string);
+    const linkedInThreadTarget = isUsableLinkedInThreadId(threadPlatformUrn) ? threadPlatformUrn : null;
+    const dmRecipientTarget = platform === 'twitter'
+      ? (threadPlatformUrn || recipientDisplayName?.trim() || recipientProfileUrl || (messageId as string))
+      : (linkedInThreadTarget
+          || recipientProfileUrl
+          || (recipientDisplayName ? recipientDisplayName.trim() : null)
+          || threadPlatformUrn
+          || (messageId as string));
     const targetId = isDm
       ? dmRecipientTarget
       : (resolvedTargetId
@@ -427,6 +440,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         source: 'manual',
         persist: true,
         auto_insert: true,
+        idempotency_key: `engagement-reply:${actionId}`,
         final_text: replyText,
         correlation_id: callerCorrelationId,
       }

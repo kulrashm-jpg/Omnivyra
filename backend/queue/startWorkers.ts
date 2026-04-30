@@ -9,12 +9,7 @@
 
 import os from 'os';
 import { getWorker, getUsageProtectionReady } from './bullmqClient';
-import { validateEmailEnv } from '../config/validateEnv';
 import { processPublishJob } from './jobProcessors/publishProcessor';
-
-// Fail fast at worker boot if SES SMTP env is missing — prevents the
-// inline email job processor from silently dropping queued jobs.
-validateEmailEnv();
 import { processEngagementPollingJob } from './jobProcessors/engagementPollingProcessor';
 import { processBoltJob } from './jobProcessors/boltProcessor';
 import { processContentGenerationJob } from './jobProcessors/contentGenerationProcessor';

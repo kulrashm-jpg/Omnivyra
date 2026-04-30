@@ -40,12 +40,12 @@ describe('engagementCapabilityMap', () => {
       }
     });
 
-    it('every verified row declares mode=api (no other modes are trustworthy today)', () => {
+    it('every verified row declares an execution mode', () => {
       for (const platform of ENGAGEMENT_PLATFORMS) {
         for (const action of ['reply', 'like', 'dm', 'post_create'] as const) {
           const cap = ENGAGEMENT_CAPABILITY_MATRIX[platform][action];
           if (cap.status === 'api_verified') {
-            expect(cap.mode).toBe('api');
+            expect(['api', 'browser']).toContain(cap.mode);
           }
         }
       }
@@ -68,9 +68,10 @@ describe('engagementCapabilityMap', () => {
     // These assertions encode the decisions we made during the hardening
     // pass. If any of them flip, someone should have to write a migration
     // and update this test, not silently widen the trust surface.
-    it('DM is unsupported on every platform in the current matrix', () => {
-      for (const platform of ENGAGEMENT_PLATFORMS) {
-        expect(ENGAGEMENT_CAPABILITY_MATRIX[platform].dm.status).toBe('unsupported');
+    it('DM browser dispatch is verified where extension handlers exist', () => {
+      for (const platform of ['linkedin', 'facebook', 'instagram', 'twitter'] as const) {
+        expect(ENGAGEMENT_CAPABILITY_MATRIX[platform].dm.status).toBe('api_verified');
+        expect(ENGAGEMENT_CAPABILITY_MATRIX[platform].dm.mode).toBe('browser');
       }
     });
 
@@ -184,8 +185,7 @@ describe('engagementCapabilityMap', () => {
     });
 
     it('rejects unsupported actions for known platforms without permissive fallback', () => {
-      // DM is unsupported on every verified platform — none should slip through.
-      for (const platform of ['linkedin', 'facebook', 'instagram', 'twitter', 'youtube', 'reddit']) {
+      for (const platform of ['youtube', 'reddit']) {
         const cap = resolveEngagementCapability(platform, 'dm');
         expect(cap.status).toBe('unsupported');
       }

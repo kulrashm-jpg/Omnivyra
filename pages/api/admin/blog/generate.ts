@@ -5,7 +5,7 @@
  *
  * This route is responsible for:
  *   1. Auth: SUPER_ADMIN role only
- *   2. Calling runBlogGeneration()
+ *   2. Calling runUnifiedLongFormGeneration()
  *   3. Returning the result
  *
  * ALL generation logic lives in lib/blog/runBlogGeneration.ts.
@@ -33,13 +33,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
-import {
-  runBlogGeneration,
-  type BlogGenerationRequest,
-} from '../../../../lib/blog/runBlogGeneration';
+import type { BlogGenerationRequest } from '../../../../lib/blog/runBlogGeneration';
+import { runUnifiedLongFormGeneration } from '../../../../lib/content/unifiedLongFormEngine';
 import type { BlogAngle } from '../../../../lib/blog/blogGenerationEngine';
-import { getProfile } from '../../../../backend/services/companyProfileService';
-import { buildFormattedStyleInstructions } from '../../../../lib/content/writingStyleEngine';
+import { buildContentContext } from '../../../../lib/content/buildContentContext';
 import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -99,46 +96,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   };
 
   try {
-    const profile = await getProfile(company_id, { autoRefine: false, languageRefine: true });
-    const profileAny = (profile || {}) as Record<string, unknown>;
-    const str = (key: string): string | undefined => {
-      const v = profileAny[key];
-      return typeof v === 'string' && v.trim() ? v.trim() : undefined;
-    };
-    const strArr = (key: string): string[] | undefined => {
-      const v = profileAny[key];
-      return Array.isArray(v) && v.length > 0 ? v.filter((s: unknown) => typeof s === 'string') as string[] : undefined;
-    };
-
-    // Build writing style instructions from the full company profile
-    const writingStyleInstructions = profile ? buildFormattedStyleInstructions(profile) : undefined;
-
-    generationRequest.companyContext = {
-      audience:                 str('target_audience') || str('audience'),
-      brand_voice:              str('brand_voice') || str('writing_style'),
-      industry:                 str('industry'),
-      writingStyleInstructions,
-      companyName:              str('name'),
-      uniqueValue:              str('unique_value'),
-      competitiveAdvantages:    str('competitive_advantages'),
-      productsServices:         str('products_services'),
-      contentThemes:            str('content_themes'),
-      campaignFocus:            str('campaign_focus'),
-      growthPriorities:         str('growth_priorities'),
-      coreProblemStatement:     str('core_problem_statement'),
-      painSymptoms:             strArr('pain_symptoms'),
-      authorityDomains:         strArr('authority_domains'),
-      desiredTransformation:    str('desired_transformation'),
-      keyMessages:              str('key_messages'),
-      goals:                    str('goals'),
-      geography:                str('geography'),
-    };
+    generationRequest.companyContext = (await buildContentContext(company_id)).companyContext;
   } catch {
     // Profile context enrichment is best-effort and must not block generation.
   }
 
   // ── 2. Generate ──────────────────────────────────────────────────────────────
-  const result = await runBlogGeneration(generationRequest);
+  const result = await runUnifiedLongFormGeneration({
+    ...generationRequest,
+    contentType: 'blog',
+    formatType: typeof generationRequest.formatType === 'string' ? generationRequest.formatType : undefined,
+    templateBlocks: generationRequest.template_blocks,
+    targetWordCount: generationRequest.answers?.target_word_count
+      ? Number.parseInt(String(generationRequest.answers.target_word_count), 10) || undefined
+      : generationRequest.target_words,
+  });
 
   return res.status(200).json(result);
 }

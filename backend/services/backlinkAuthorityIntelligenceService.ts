@@ -15,13 +15,6 @@ type BacklinkRow = {
   link_type: string | null;
 };
 
-type CompetitorSignalRow = {
-  competitor_name: string;
-  signal_type: string;
-  value: Record<string, unknown>;
-  confidence: number;
-};
-
 function recentSince(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -29,28 +22,16 @@ function recentSince(days: number): string {
 export async function generateBacklinkAuthorityDecisions(companyId: string): Promise<PersistedDecisionObject[]> {
   assertBackgroundJobContext('backlinkAuthorityIntelligenceService');
 
-  const [{ data: backlinks, error: backlinksError }, { data: competitorSignals, error: competitorError }] = await Promise.all([
-    supabase
-      .from('canonical_backlink_signals')
-      .select('target_url, referring_domain, anchor_text, domain_authority, link_type')
-      .eq('company_id', companyId)
-      .gte('last_seen_at', recentSince(180))
-      .order('last_seen_at', { ascending: false })
-      .limit(1200),
-    supabase
-      .from('competitor_signals')
-      .select('competitor_name, signal_type, value, confidence')
-      .eq('company_id', companyId)
-      .gte('detected_at', recentSince(90))
-      .order('detected_at', { ascending: false })
-      .limit(300),
-  ]);
+  const { data: backlinks, error: backlinksError } = await supabase
+    .from('canonical_backlink_signals')
+    .select('target_url, referring_domain, anchor_text, domain_authority, link_type')
+    .eq('company_id', companyId)
+    .gte('last_seen_at', recentSince(180))
+    .order('last_seen_at', { ascending: false })
+    .limit(1200);
 
   if (backlinksError) {
     throw new Error(`Failed to load backlink signals: ${backlinksError.message}`);
-  }
-  if (competitorError) {
-    throw new Error(`Failed to load competitor signals for authority engine: ${competitorError.message}`);
   }
 
   await archiveDecisionSourceEntityType({
@@ -62,8 +43,7 @@ export async function generateBacklinkAuthorityDecisions(companyId: string): Pro
   });
 
   const rows = (backlinks ?? []) as BacklinkRow[];
-  const compRows = (competitorSignals ?? []) as CompetitorSignalRow[];
-  if (rows.length === 0 && compRows.length === 0) return [];
+  if (rows.length === 0) return [];
 
   const domainSet = new Set<string>();
   const anchorSet = new Set<string>();
@@ -87,9 +67,6 @@ export async function generateBacklinkAuthorityDecisions(companyId: string): Pro
   const anchorDiversity = anchorSet.size;
   const dofollowRatio = rows.length > 0 ? dofollowCount / rows.length : 0;
   const avgAuthority = authorityCount > 0 ? totalAuthority / authorityCount : 0;
-  const competitorMentionPressure = compRows.filter((row) => row.signal_type === 'mention').length;
-  const competitorBenchmarkPressure = compRows.filter((row) => row.signal_type === 'benchmark').length;
-
   const decisions = [];
 
   if (rows.length > 0 && (uniqueRefDomains < 20 || avgAuthority < 30 || dofollowRatio < 0.55)) {
@@ -152,38 +129,6 @@ export async function generateBacklinkAuthorityDecisions(companyId: string): Pro
       action_payload: {
         optimization_focus: 'authority_gap',
         avg_domain_authority: roundNumber(avgAuthority, 2),
-      },
-      status: 'open' as const,
-      last_changed_by: 'system' as const,
-    });
-  }
-
-  if (competitorMentionPressure >= 8 || competitorBenchmarkPressure >= 5) {
-    decisions.push({
-      company_id: companyId,
-      report_tier: 'growth' as const,
-      source_service: 'backlinkAuthorityIntelligenceService',
-      entity_type: 'global' as const,
-      entity_id: null,
-      issue_type: 'competitor_backlink_advantage',
-      title: 'Competitors show external authority advantage',
-      description: 'Competitor signal volume indicates stronger external authority momentum than current profile.',
-      evidence: {
-        competitor_mention_pressure: competitorMentionPressure,
-        competitor_benchmark_pressure: competitorBenchmarkPressure,
-        own_avg_domain_authority: roundNumber(avgAuthority, 2),
-      },
-      impact_traffic: 44,
-      impact_conversion: 20,
-      impact_revenue: 49,
-      priority_score: clamp(60 + competitorBenchmarkPressure * 2 + Math.round(competitorMentionPressure / 2), 0, 100),
-      effort_score: 32,
-      confidence_score: 0.76,
-      recommendation: 'Counter competitor authority gains with targeted digital PR, backlinks to core conversion pages, and cluster support links.',
-      action_type: 'adjust_strategy',
-      action_payload: {
-        optimization_focus: 'competitor_backlink_advantage',
-        competitor_mention_pressure: competitorMentionPressure,
       },
       status: 'open' as const,
       last_changed_by: 'system' as const,

@@ -6,6 +6,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
+import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -146,6 +147,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await setToken(accountId, tokenObj);
 
+    let derivedThreadsCount = 0;
+    try {
+      const syncResult = await syncInstagramAndThreadsFromMeta({
+        userId,
+        companyId: companyId || null,
+        accessToken,
+        expiresAt,
+        permissions: String(tokenData.scope || longLivedData.scope || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean),
+      });
+      derivedThreadsCount = syncResult.threadsAccounts.length;
+      if (syncResult.instagramAccounts.length > 0) {
+        console.log('Instagram/Threads derived accounts synced from Facebook:', syncResult);
+      }
+    } catch (syncError: any) {
+      console.warn('[facebook/callback] Instagram/Threads derivation skipped:', syncError?.message);
+    }
+
     console.log('✅ Facebook account saved successfully:', { accountId, accountName });
 
     if (companyId && userId) {
@@ -155,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
-    return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
+    return res.redirect(`${successDest}${sep}connected=${platform}&threads=${derivedThreadsCount > 0 ? 'enabled' : 'disabled'}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('Facebook OAuth callback error:', error);

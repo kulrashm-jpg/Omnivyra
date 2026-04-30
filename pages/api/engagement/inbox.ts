@@ -12,6 +12,22 @@ import { getThreads } from '../../../backend/services/engagementThreadService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { isAuthorSelf, isDmMessageType } from '../../../lib/engagement/messageRoles';
 
+function normalizeActionTargetId(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function addActionTarget(
+  lookup: Map<string, Set<string>>,
+  targetId: unknown,
+  threadId: string,
+) {
+  const normalized = normalizeActionTargetId(targetId);
+  if (!normalized) return;
+  const existing = lookup.get(normalized) ?? new Set<string>();
+  existing.add(threadId);
+  lookup.set(normalized, existing);
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
@@ -24,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const priority = (req.query.priority ?? req.query.status) as 'high' | 'medium' | 'low' | undefined;
   const startDate = (req.query.start_date ?? req.query.dateFrom) as string | undefined;
   const endDate = (req.query.end_date ?? req.query.dateTo) as string | undefined;
-  const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
+  const limit = Math.min(500, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
 
   const companyId = organizationId?.trim();
   if (!companyId) {
@@ -129,9 +145,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ingested_via: string | null;
       }
     >();
-    // Build a lookup from platform_thread_id → engagement_threads.id so we
-    // can cross-reference community_ai_actions rows back to UI threads.
-    const threadIdByPlatformThreadId = new Map<string, string>();
+    // Build a lookup from possible community_ai_actions.target_id values
+    // back to UI threads.
+    const threadIdsByActionTarget = new Map<string, Set<string>>();
+    // Threads where the LinkedIn list preview was prefixed "You: …" — the
+    // DM scraper marks last_message_self=true on the thread row's raw_payload
+    // for these. The user already replied directly in LinkedIn (outside
+    // Omnivyra), so the thread should drop from Needs Response even though
+    // we don't have a corresponding outbound community_ai_actions row.
+    const threadLastMessageSelfByThread = new Map<string, boolean>();
     if (threadIds.length > 0) {
       const { data: threadMeta } = await supabase
         .from('engagement_threads')
@@ -152,10 +174,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ingested_via: typeof rp.ingested_via === 'string' ? rp.ingested_via : null,
           });
           if (row.platform_thread_id) {
-            threadIdByPlatformThreadId.set(row.platform_thread_id, row.id);
+            addActionTarget(threadIdsByActionTarget, row.platform_thread_id, row.id);
+          }
+          addActionTarget(threadIdsByActionTarget, rp.participant_profile_url, row.id);
+          addActionTarget(threadIdsByActionTarget, rp.participant_username, row.id);
+          addActionTarget(threadIdsByActionTarget, rp.participant_name, row.id);
+          if (rp.last_message_self === true) {
+            threadLastMessageSelfByThread.set(row.id, true);
           }
         }
       );
+    }
+
+    // The reply endpoint often queues LinkedIn/DM actions against the
+    // counterparty profile URL or display name because extension commands
+    // need a browser-resolvable target. Matching only platform_thread_id
+    // misses those actions, leaving already-replied conversations in Needs
+    // Response until the scraper mirrors the outbound message back.
+    const latestAuthorIds = Array.from(
+      new Set(
+        Array.from(messageAuthorIdByThread.values()).filter((id): id is string => Boolean(id))
+      )
+    );
+    if (latestAuthorIds.length > 0) {
+      const { data: authors } = await supabase
+        .from('engagement_authors')
+        .select('id, platform_user_id, username, display_name, profile_url')
+        .in('id', latestAuthorIds);
+      for (const author of authors ?? []) {
+        const a = author as {
+          id: string;
+          platform_user_id?: string | null;
+          username?: string | null;
+          display_name?: string | null;
+          profile_url?: string | null;
+        };
+        for (const [threadId, authorId] of messageAuthorIdByThread.entries()) {
+          if (authorId !== a.id) continue;
+          if (messageAuthorSelfByThread.get(threadId) === true) continue;
+          addActionTarget(threadIdsByActionTarget, a.platform_user_id, threadId);
+          addActionTarget(threadIdsByActionTarget, a.profile_url, threadId);
+          addActionTarget(threadIdsByActionTarget, a.username, threadId);
+          addActionTarget(threadIdsByActionTarget, a.display_name, threadId);
+        }
+      }
     }
 
     // Threads where the user's reply has actually reached the platform
@@ -175,23 +237,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // thread stays in Needs Response so the operator can see something is
     // actually pending.
     const respondedThreadIds = new Set<string>();
-    if (threadIdByPlatformThreadId.size > 0) {
-      const targetIds = Array.from(threadIdByPlatformThreadId.keys());
+    if (threadIdsByActionTarget.size > 0) {
+      const targetIds = Array.from(threadIdsByActionTarget.keys());
       const { data: actionRows } = await supabase
         .from('community_ai_actions')
-        .select('target_id, status, action_type, dispatch_lease_id')
+        .select('target_id, status, action_type')
         .eq('organization_id', companyId)
         .in('target_id', targetIds)
         .in('action_type', ['dm', 'reply'])
-        .in('status', ['pending', 'dispatched', 'executed', 'sent_unverified']);
+        .in('status', ['executed', 'sent_unverified']);
       for (const row of actionRows ?? []) {
-        const status = (row as { status: string }).status;
-        const lease = (row as { dispatch_lease_id?: string | null }).dispatch_lease_id ?? null;
-        // Pending without a claim = undelivered, ignore.
-        if (status === 'pending' && !lease) continue;
         const target = (row as { target_id: string }).target_id;
-        const matchedThreadId = threadIdByPlatformThreadId.get(target);
-        if (matchedThreadId) respondedThreadIds.add(matchedThreadId);
+        const matchedThreadIds = threadIdsByActionTarget.get(target);
+        for (const matchedThreadId of matchedThreadIds ?? []) {
+          respondedThreadIds.add(matchedThreadId);
+        }
       }
     }
 
@@ -217,11 +277,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sentiment: t.sentiment ?? null,
       latest_message_type: messageTypeByThread.get(t.thread_id) ?? null,
       latest_message_direction: messageDirectionByThread.get(t.thread_id) ?? null,
-      latest_message_author_self: messageAuthorSelfByThread.get(t.thread_id) ?? false,
-      // True when the user has already taken an action (queued/dispatched/
-      // executed reply or DM) targeting this thread via the engagement
-      // pipeline. Drives the "drop from Needs Response after Send" rule
-      // in the client-side dmThreads filter.
+      latest_message_author_self:
+        messageAuthorSelfByThread.get(t.thread_id)
+        || threadLastMessageSelfByThread.get(t.thread_id)
+        || false,
+      // True when a terminal outbound reply/DM exists for this thread.
+      // In-flight browser actions are intentionally not counted here because
+      // LinkedIn automation can stall before the message is delivered.
       has_pending_outbound_action: respondedThreadIds.has(t.thread_id),
       platform_thread_id: postMetaByThread.get(t.thread_id)?.platform_thread_id ?? null,
       post_url: postMetaByThread.get(t.thread_id)?.post_url ?? null,
@@ -257,6 +319,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const nonDmRows = allItems.filter((t) => !isDmKind(t));
 
     const dmGroups = new Map<string, typeof dmRows[number] & { sibling_thread_ids?: string[] }>();
+    // Canonical selection follows the newest sibling in the collapsed DM
+    // conversation. If the freshest sibling is the user's reply, the whole
+    // conversation should leave Needs Response until the other party replies.
+    const isBetter = (a: typeof dmRows[number], b: typeof dmRows[number]) => {
+      const ta = new Date(a.latest_message_time ?? 0).getTime();
+      const tb = new Date(b.latest_message_time ?? 0).getTime();
+      return ta > tb;
+    };
+
     for (const row of dmRows) {
       // Fall back to thread_id when there's no author_id — without an
       // identifier we can't safely collapse, so each row stays distinct.
@@ -268,21 +339,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         dmGroups.set(groupKey, { ...row, sibling_thread_ids: [] });
         continue;
       }
-      // Pick whichever has the most recent latest_message_time as the
-      // canonical row. Other thread ids ride along as siblings so the
-      // conversation pane can fetch the merged history.
-      const incomingTs = new Date(row.latest_message_time ?? 0).getTime();
-      const currentTs = new Date(existing.latest_message_time ?? 0).getTime();
-      if (incomingTs > currentTs) {
+      if (isBetter(row, existing)) {
         const carriedSiblings = [
           existing.thread_id,
           ...(existing.sibling_thread_ids ?? []),
         ];
-        dmGroups.set(groupKey, { ...row, sibling_thread_ids: carriedSiblings });
+        const hasPendingOutbound =
+          Boolean(existing.has_pending_outbound_action) || Boolean(row.has_pending_outbound_action);
+        dmGroups.set(groupKey, {
+          ...row,
+          sibling_thread_ids: carriedSiblings,
+          message_count: (existing.message_count ?? 0) + (row.message_count ?? 0),
+          has_pending_outbound_action: hasPendingOutbound,
+        });
       } else {
         existing.sibling_thread_ids = [...(existing.sibling_thread_ids ?? []), row.thread_id];
         existing.message_count = (existing.message_count ?? 0) + (row.message_count ?? 0);
-        // Stay with existing as canonical — drops the older row from the list.
+        existing.has_pending_outbound_action =
+          Boolean(existing.has_pending_outbound_action) || Boolean(row.has_pending_outbound_action);
       }
     }
 

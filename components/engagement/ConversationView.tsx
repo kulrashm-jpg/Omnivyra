@@ -70,6 +70,7 @@ export interface ConversationViewProps {
   onLike?: (messageId: string, platform: string) => void;
   onIgnore?: (threadId: string) => void;
   onMarkResolved?: () => void;
+  onRetryQueuedDelivery?: (actionId: string) => Promise<{ message?: string } | void>;
   /** Notify parent when the user picks a specific comment/message to reply
    *  to. Lets the AI assistant generate a suggestion for THAT message
    *  instead of the thread-level latest-inbound default. */
@@ -90,6 +91,7 @@ export const ConversationView = React.memo(function ConversationView({
   onLike,
   onIgnore,
   onMarkResolved,
+  onRetryQueuedDelivery,
   onReplyTargetChange,
   className = '',
 }: ConversationViewProps) {
@@ -177,10 +179,13 @@ export const ConversationView = React.memo(function ConversationView({
       return;
     }
     try {
-      const parsed = JSON.parse(raw) as { threadId?: string; text?: string };
+      const parsed = JSON.parse(raw) as { threadId?: string; messageId?: string | null; text?: string };
       if (parsed.threadId === thread.thread_id && typeof parsed.text === 'string' && parsed.text.trim()) {
         setReplyText(parsed.text.trim());
-        setReplyingTo(latestMessage);
+        const prefillTarget = parsed.messageId
+          ? messages.find((message) => message.id === parsed.messageId) ?? latestMessage
+          : latestMessage;
+        setReplyingTo(prefillTarget);
         setShowSuggestions(false);
         window.setTimeout(() => window.dispatchEvent(new CustomEvent('engagement:focus-reply')), 0);
       }
@@ -190,7 +195,7 @@ export const ConversationView = React.memo(function ConversationView({
       sessionStorage.removeItem(prefillReplyToken);
       setHydratedReplyToken(prefillReplyToken);
     }
-  }, [hydratedReplyToken, latestMessage, prefillReplyToken, thread?.thread_id]);
+  }, [hydratedReplyToken, latestMessage, messages, prefillReplyToken, thread?.thread_id]);
 
   const messageTree = useMemo(() => {
     // Filter out pure reaction-type rows — they're a count, not a
@@ -255,20 +260,22 @@ export const ConversationView = React.memo(function ConversationView({
         })
       : roots;
 
-    filteredRoots.sort(
-      (a, b) =>
-        new Date(b.platform_created_at ?? b.created_at ?? 0).getTime() -
-        new Date(a.platform_created_at ?? a.created_at ?? 0).getTime()
-    );
+    const getMessageTime = (message: EngagementMessage) =>
+      new Date(message.platform_created_at ?? message.created_at ?? 0).getTime();
 
     // DM convention: a thread surfaces in "Needs Response" only when the
     // other party sent the latest message (handled upstream in the
     // dmThreads filter). In the conversation pane we cap the display at
-    // the 3 most recent messages of the merged chain. More than that is
-    // archive territory and lives on LinkedIn itself.
-    if (!isPostContext && filteredRoots.length > 3) {
-      return filteredRoots.slice(0, 3);
+    // the 3 most recent messages of the merged chain, rendered in the
+    // same chronological order as LinkedIn: earlier at top, latest at
+    // bottom. More than that is archive territory and lives on LinkedIn
+    // itself.
+    if (!isPostContext) {
+      const chronological = [...filteredRoots].sort((a, b) => getMessageTime(a) - getMessageTime(b));
+      return chronological.length > 3 ? chronological.slice(-3) : chronological;
     }
+
+    filteredRoots.sort((a, b) => getMessageTime(b) - getMessageTime(a));
     return filteredRoots;
   }, [messages, thread?.latest_message_type]);
 
@@ -380,8 +387,24 @@ export const ConversationView = React.memo(function ConversationView({
               <span>⏳ Queued · not yet delivered</span>
             </div>
             <p className="mt-1 text-sm text-slate-800 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
-            <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-600">
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
               <span>Will be sent when the LinkedIn tab is open and the Omnivyra extension claims the action.</span>
+              {msg.pending_action_id && onRetryQueuedDelivery && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const result = await onRetryQueuedDelivery(msg.pending_action_id as string);
+                      if (result && 'message' in result && result.message) window.alert(result.message);
+                    } catch (e) {
+                      window.alert((e as Error)?.message ?? 'Failed to retry queued delivery');
+                    }
+                  }}
+                  className="font-medium text-blue-700 hover:text-blue-900 underline-offset-2 hover:underline"
+                >
+                  Retry delivery
+                </button>
+              )}
               <button
                 type="button"
                 onClick={async () => {
@@ -645,9 +668,10 @@ export const ConversationView = React.memo(function ConversationView({
             <button
               type="button"
               onClick={() => onIgnore(thread.thread_id)}
-              className="text-sm text-slate-500 hover:text-slate-700"
+              title="Remove this conversation from Omnivyra without sending a reply."
+              className="rounded-full border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
             >
-              Ignore
+              Drop
             </button>
           )}
         </div>
@@ -736,8 +760,7 @@ export const ConversationView = React.memo(function ConversationView({
             <div className="p-4 border-t border-slate-200">
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                 A reply is queued for this conversation and waiting on the LinkedIn tab to deliver it.
-                You can&apos;t send another reply until that one is delivered or you cancel it from the
-                queued message above.
+                Use Retry delivery on the queued message above, or cancel it before writing a new reply.
               </div>
             </div>
           );

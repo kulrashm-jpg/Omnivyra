@@ -11,7 +11,7 @@ import {
 
 const CONTEXT: CompanyIntelligenceContext = {
   industryTerms: ['saas', 'marketing'],
-  competitors: ['acme', 'competex'],
+  competitors: [],
   keywords: ['content', 'growth'],
   region: 'US',
   productFocus: ['analytics', 'dashboard'],
@@ -51,14 +51,14 @@ describe('companyIntelligenceEngine', () => {
       expect(result!.impact_score).toBeGreaterThanOrEqual(0);
     });
 
-    it('returns competitor_activity when topic mentions competitor', () => {
+    it('does not classify raw competitor-name substrings as competitor activity', () => {
       const result = computeCompanyRelevance(
         { id: 's2', topic: 'Acme product launch announced', relevance_score: 0.5 },
         'company-1',
         CONTEXT
       );
       expect(result).not.toBeNull();
-      expect(result!.company_signal_type).toBe('competitor_activity');
+      expect(result!.company_signal_type).toBe('product_launch');
     });
 
     it('returns customer_sentiment when topic has complaint keywords', () => {
@@ -81,12 +81,13 @@ describe('companyIntelligenceEngine', () => {
       const signals: GlobalSignalInput[] = [
         { id: 's1', topic: 'SaaS marketing growth', relevance_score: 0.7 },
         { id: 's2', topic: 'xyz abc unrelated', relevance_score: 0.1 },
-        { id: 's3', topic: 'Acme competitor launch', relevance_score: 0.6 },
+        { id: 's3', topic: 'Content analytics dashboard launch', relevance_score: 0.6 },
       ];
       const out = transformToCompanySignals(signals, 'c1', CONTEXT);
       expect(out.length).toBeGreaterThanOrEqual(1);
       expect(out.every((s) => s.company_id === 'c1')).toBe(true);
       expect(out.every((s) => s.company_relevance_score >= 0.2)).toBe(true);
+      expect(out.some((s) => s.company_signal_type === 'competitor_activity')).toBe(false);
     });
   });
 });

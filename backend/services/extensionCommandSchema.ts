@@ -12,7 +12,7 @@
  * extension/shared/commandPayloadSchema.js in lockstep.
  */
 
-export const COMMAND_SCHEMA_VERSION = '2026-04-21.1';
+export const COMMAND_SCHEMA_VERSION = '2026-04-29.1';
 
 /** Return shape for validators. */
 type Validation =
@@ -80,6 +80,14 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     const text = requireString(p, 'text', 1);
     if (text.ok !== true) return { ok: false, code: 'INVALID_PAYLOAD', message: (text as { message: string }).message };
     return { ok: true, payload: { ...p, autoSubmit: p.autoSubmit !== false } };
+  },
+  'twitter.open_thread': (p) => {
+    const unknown = allowOnly(p, ['threadId', 'threadUrl']);
+    if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
+    if (!p.threadId && !p.threadUrl) {
+      return { ok: false, code: 'INVALID_PAYLOAD', message: 'threadId or threadUrl required' };
+    }
+    return { ok: true, payload: p };
   },
   'twitter.create_post': (p) => {
     const unknown = allowOnly(p, ['text', 'content', 'autoSubmit']);
@@ -231,6 +239,19 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     return { ok: true, payload: { navigate: p.navigate === true } };
   },
 };
+
+for (const platform of ['linkedin', 'facebook', 'instagram', 'twitter', 'x']) {
+  const canonical = platform === 'x' ? 'twitter' : platform;
+  const aliases: Array<[string, string]> = [
+    ['reply', 'reply_comment'],
+    ['react', 'like_message'],
+    ['send_dm', 'continue_thread'],
+  ];
+  for (const [alias, target] of aliases) {
+    const validator = VALIDATORS[`${canonical}.${target}`];
+    if (validator) VALIDATORS[`${platform}.${alias}`] = validator;
+  }
+}
 
 export function validateCommandPayload(
   platform: string,

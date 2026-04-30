@@ -12,8 +12,10 @@ import {
   playbookStore,
   roleStore,
   scheduledPostStore,
+  seedConnectedAccount,
   seedPlaybook,
   setRole,
+  socialAccountStore,
   tokenStore,
   webhookStore,
 } from './communityAiTestHarness';
@@ -37,8 +39,37 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
 
+// Bypass real AES decryption — read plaintext from socialAccountStore.
+jest.mock('../../auth/tokenStore', () => {
+  const harness = jest.requireActual('./communityAiTestHarness');
+  return {
+    getToken: jest.fn(async (socialAccountId: string) => {
+      const row = harness.socialAccountStore.find((r: any) => r.id === socialAccountId);
+      if (!row) return null;
+      return {
+        access_token: row.access_token,
+        refresh_token: row.refresh_token ?? undefined,
+        expires_at: row.token_expires_at ?? undefined,
+        token_type: 'Bearer',
+      };
+    }),
+    isTokenExpiringSoon: jest.fn(() => false),
+    setToken: jest.fn(async () => {}),
+  };
+});
+
+jest.mock('../../auth/tokenRefresh', () => ({
+  refreshPlatformToken: jest.fn(async () => null),
+  refreshTwitterTokenIfNeeded: jest.fn(async (input: any) => ({
+    access_token: input.access_token,
+    refresh_token: input.refresh_token ?? null,
+    token_expires_at: input.token_expires_at ?? null,
+    status: 'still_valid',
+  })),
+}));
+
 jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
-  executeAction: jest.fn().mockResolvedValue({ ok: true, platform: 'linkedin' }),
+  executeAction: jest.fn().mockResolvedValue({ success: true, platform_id: 'linkedin-post-1', platform: 'linkedin' }),
 }));
 
 const { supabase } = jest.requireMock('../../db/supabaseClient');
@@ -53,6 +84,7 @@ describe('Community-AI RBAC', () => {
     analyticsStore.length = 0;
     scheduledPostStore.length = 0;
     tokenStore.length = 0;
+    socialAccountStore.length = 0;
     playbookStore.length = 0;
     webhookStore.length = 0;
     autoRuleStore.length = 0;
@@ -61,7 +93,7 @@ describe('Community-AI RBAC', () => {
 
   it('viewer cannot approve or execute', async () => {
     setRole('VIEW_ONLY');
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('rbac-1', {
       id: 'rbac-1',
       tenant_id: 'tenant-1',
@@ -76,6 +108,7 @@ describe('Community-AI RBAC', () => {
     });
     const approveReq = {
       method: 'POST',
+      headers: {},
       body: {
         tenant_id: 'tenant-1',
         organization_id: 'tenant-1',
@@ -91,6 +124,7 @@ describe('Community-AI RBAC', () => {
 
     const execReq = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-1', approved: true },
     } as NextApiRequest;
     const execRes = createMockRes();
@@ -100,7 +134,7 @@ describe('Community-AI RBAC', () => {
 
   it('approver cannot execute', async () => {
     setRole('CONTENT_REVIEWER');
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('rbac-2', {
       id: 'rbac-2',
       tenant_id: 'tenant-1',
@@ -115,6 +149,7 @@ describe('Community-AI RBAC', () => {
     });
     const execReq = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-2', approved: true },
     } as NextApiRequest;
     const execRes = createMockRes();
@@ -124,7 +159,7 @@ describe('Community-AI RBAC', () => {
 
   it('executor can execute', async () => {
     setRole('CONTENT_PUBLISHER');
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('rbac-3', {
       id: 'rbac-3',
       tenant_id: 'tenant-1',
@@ -139,6 +174,7 @@ describe('Community-AI RBAC', () => {
     });
     const execReq = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-3', approved: true },
     } as NextApiRequest;
     const execRes = createMockRes();
@@ -148,7 +184,12 @@ describe('Community-AI RBAC', () => {
 
   it('admin can approve and execute', async () => {
     setRole('COMPANY_ADMIN');
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
+    // Seed the action as already-approved with an approved_at timestamp:
+    // the executor's approval-integrity gate (execute.ts:101) requires
+    // approved_at to be set when requires_human_approval is true. The test's
+    // intent is to verify the admin's ability to schedule + execute, not the
+    // approval handler itself, so we pre-stage the approval state.
     actionStore.set('rbac-4', {
       id: 'rbac-4',
       tenant_id: 'tenant-1',
@@ -158,11 +199,13 @@ describe('Community-AI RBAC', () => {
       target_id: 'post-4',
       suggested_text: 'Thanks!',
       playbook_id: 'playbook-1',
-      status: 'pending',
+      status: 'approved',
+      approved_at: new Date().toISOString(),
       requires_human_approval: true,
     });
     const approveReq = {
       method: 'POST',
+      headers: {},
       body: {
         tenant_id: 'tenant-1',
         organization_id: 'tenant-1',
@@ -178,6 +221,7 @@ describe('Community-AI RBAC', () => {
 
     const execReq = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'rbac-4', approved: true },
     } as NextApiRequest;
     const execRes = createMockRes();
@@ -209,7 +253,7 @@ describe('Community-AI RBAC', () => {
         requires_human_approval: true,
         risk_level: 'low',
       });
-      const req = { method: 'GET', query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' } } as NextApiRequest;
+      const req = { method: 'GET', headers: {}, query: { tenant_id: 'tenant-1', organization_id: 'tenant-1' } } as NextApiRequest;
       const res = createMockRes();
       await actionsHandler(req, res);
       expect(res.status).toHaveBeenCalledWith(200);
@@ -219,7 +263,7 @@ describe('Community-AI RBAC', () => {
 
   it('role mismatch rejected with 403', async () => {
     setRole('VIEW_ONLY', 'tenant-2');
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('rbac-5', {
       id: 'rbac-5',
       tenant_id: 'tenant-1',
@@ -234,6 +278,7 @@ describe('Community-AI RBAC', () => {
     });
     const req = {
       method: 'POST',
+      headers: {},
       body: {
         tenant_id: 'tenant-1',
         organization_id: 'tenant-1',

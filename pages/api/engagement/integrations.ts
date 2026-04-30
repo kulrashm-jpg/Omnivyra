@@ -2,13 +2,17 @@
 /**
  * GET /api/engagement/integrations
  * Returns connected social platforms for the company.
- * Source of truth is token-backed platform connections, not generic platform capability.
+ * Source of truth is connected accounts only, matching Company Admin's
+ * "Connected" state. Configured-but-not-connected platforms stay hidden.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { normalizePlatform } from '../../../utils/platformIcons';
-import { getPlatformsWithTokensForOrg } from '../../../backend/services/platformTokenService';
+import {
+  getPlatformsWithActiveSocialAccountsForOrg,
+  getPlatformsWithTokensForOrg,
+} from '../../../backend/services/platformTokenService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -31,9 +35,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!access) return;
 
-    const platforms = (await getPlatformsWithTokensForOrg(companyId))
-      .map((platform) => normalizePlatform(platform))
-      .filter(Boolean);
+    const [tokenPlatforms, activeSocialPlatforms] = await Promise.all([
+      getPlatformsWithTokensForOrg(companyId).catch(() => [] as string[]),
+      getPlatformsWithActiveSocialAccountsForOrg(companyId).catch(() => [] as string[]),
+    ]);
+
+    const platforms = Array.from(
+      new Set(
+        [
+          ...activeSocialPlatforms,
+          ...tokenPlatforms,
+        ]
+          .flatMap((platform) => {
+            const normalized = normalizePlatform(platform);
+            if (normalized === 'meta') return ['facebook', 'instagram', 'threads', 'whatsapp'];
+            return normalized ? [normalized] : [];
+          })
+          .flatMap((platform) => platform === 'instagram' ? ['instagram', 'threads'] : [platform])
+          .filter(Boolean)
+      )
+    ).sort();
 
     return res.status(200).json({ platforms });
   } catch (err) {

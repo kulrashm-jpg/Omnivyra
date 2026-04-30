@@ -18,8 +18,8 @@
  */
 
 import { supabase } from '../db/supabaseClient';
-import { getToken, setToken, isTokenExpiringSoon } from '../auth/tokenStore';
-import { refreshPlatformToken } from '../auth/tokenRefresh';
+import { getToken, isTokenExpiringSoon } from '../auth/tokenStore';
+import { refreshPlatformToken, refreshTwitterTokenIfNeeded } from '../auth/tokenRefresh';
 import { getScheduledPost, getSocialAccount } from '../db/queries';
 import { publishToLinkedIn } from './linkedinAdapter';
 import { publishToX } from './xAdapter';
@@ -89,8 +89,33 @@ export async function publishToPlatform(
       );
     }
 
+    const platform = socialAccount.platform.toLowerCase();
+
     // Step 4: Refresh token if needed
-    if (isTokenExpiringSoon(token, 5)) {
+    if (platform === 'x' || platform === 'twitter') {
+      const refreshResult = await refreshTwitterTokenIfNeeded({
+        account_id: socialAccountId,
+        access_token: token.access_token,
+        refresh_token: token.refresh_token ?? null,
+        token_expires_at: token.expires_at ?? null,
+      });
+
+      if (refreshResult.status === 'requires_reconnect' || refreshResult.status === 'refresh_failed') {
+        throw new Error(
+          `Your ${socialAccount.platform} session has expired. ` +
+          `Please reconnect your account in Settings â†’ Social Accounts.`
+        );
+      }
+
+      if (refreshResult.access_token) {
+        token = {
+          ...token,
+          access_token: refreshResult.access_token,
+          refresh_token: refreshResult.refresh_token ?? token.refresh_token,
+          expires_at: refreshResult.token_expires_at ?? token.expires_at,
+        };
+      }
+    } else if (isTokenExpiringSoon(token, 5)) {
       console.log(`🔄 Token expiring soon, refreshing...`);
       const refreshedToken = await refreshPlatformToken(socialAccount.platform, socialAccountId, token);
       if (!refreshedToken) {
@@ -103,7 +128,6 @@ export async function publishToPlatform(
     }
 
     // Step 5: Route to platform-specific adapter
-    const platform = socialAccount.platform.toLowerCase();
     let result: PublishResult;
 
     switch (platform) {
@@ -158,4 +182,3 @@ export async function publishToPlatform(
 }
 
 // Token refresh is now handled by refreshPlatformToken() from '../auth/tokenRefresh'
-

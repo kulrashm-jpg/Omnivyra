@@ -28,7 +28,7 @@
  * Bump whenever ENGAGEMENT_CAPABILITY_MATRIX changes. The extension copy
  * MUST be bumped in the same PR.
  */
-export const CAPABILITY_MAP_VERSION = '2026-04-22.1';
+export const CAPABILITY_MAP_VERSION = '2026-04-29.1';
 
 export type EngagementActionKey = 'reply' | 'like' | 'dm' | 'post_create';
 
@@ -111,7 +111,7 @@ export const ENGAGEMENT_CAPABILITY_MATRIX: Record<
   twitter: {
     reply: { status: 'api_verified', mode: 'api', account_type: 'any' },
     like: { status: 'api_verified', mode: 'api', account_type: 'any' },
-    dm: { status: 'unsupported', reason: 'X (Twitter) DM send is not yet API-verified.' },
+    dm: { status: 'api_verified', mode: 'browser', account_type: 'any' },
     post_create: { status: 'api_verified', mode: 'api', account_type: 'any' },
   },
   youtube: {
@@ -167,8 +167,8 @@ export function resolveEngagementCapability(
 const INBOX_ACTION_KEYS: EngagementActionKey[] = ['reply', 'like', 'dm'];
 
 /** Platforms that have at least one verified inbox-surface action
- *  (reply / like / dm). Used to filter PlatformTabs. Excludes platforms that
- *  only have a verified post_create (e.g. TikTok, Pinterest). */
+ *  (reply / like / dm). Used for capability gating; connected platform
+ *  visibility is handled by company integrations. */
 export const VERIFIED_ENGAGEMENT_PLATFORMS: readonly string[] = ENGAGEMENT_PLATFORMS.filter(
   (platform) =>
     INBOX_ACTION_KEYS.some(

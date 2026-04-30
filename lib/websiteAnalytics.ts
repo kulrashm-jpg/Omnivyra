@@ -52,16 +52,6 @@ export function canTrackWebsiteAnalytics(path: string): boolean {
   return isWebsiteAnalyticsHost() && isWebsiteAnalyticsRoute(path);
 }
 
-export function trackWebsitePageView(url: string): void {
-  if (typeof window === 'undefined' || typeof window.gtag !== 'function') return;
-  const pagePath = url || window.location.pathname;
-
-  window.gtag('config', WEBSITE_GA_MEASUREMENT_ID, {
-    page_path: pagePath,
-    page_location: `${window.location.origin}${pagePath}`,
-  });
-}
-
 export function trackWebsiteEvent(
   name: 'lead_created' | 'signup_completed' | 'cta_click',
   params: Record<string, string | number | boolean | null | undefined> = {},

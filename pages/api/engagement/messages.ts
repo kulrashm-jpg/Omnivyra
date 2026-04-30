@@ -61,8 +61,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let query = supabase
       .from('engagement_messages')
-      .select('id, thread_id, source_id, author_id, platform, platform_message_id, message_type, direction, parent_message_id, content, like_count, reply_count, sentiment_score, created_at, platform_created_at, raw_payload')
-      .order('platform_created_at', { ascending: false, nullsFirst: false })
+      .select('id, thread_id, source_id, author_id, platform, platform_message_id, message_type, direction, parent_message_id, content, like_count, reply_count, sentiment_score, created_at, platform_created_at, normalized_time, raw_payload')
+      .order('normalized_time', { ascending: true, nullsFirst: false })
+      .order('platform_created_at', { ascending: true, nullsFirst: false })
       .limit(limit);
 
     if (threadId) {
@@ -153,7 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         reply_count: r.reply_count ?? 0,
         sentiment_score: r.sentiment_score,
         created_at: r.created_at,
-        platform_created_at: r.platform_created_at,
+        platform_created_at: r.normalized_time ?? r.platform_created_at,
         author_display_name: finalAuthorDisplayName,
         author_handle: authorHandle,
         author_self: finalAuthorSelf,

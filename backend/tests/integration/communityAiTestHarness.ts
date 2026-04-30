@@ -6,7 +6,19 @@ export const roleStore: Array<any> = [];
 export const notificationStore: Array<any> = [];
 export const analyticsStore: Array<any> = [];
 export const scheduledPostStore: Array<any> = [];
+/**
+ * Connector metadata store (community_ai_platform_tokens, post-consolidation).
+ * Holds rows like { tenant_id, organization_id, platform, connected_by_user_id }
+ * — NO access_token / refresh_token / expires_at. Tokens live in
+ * socialAccountStore (social_accounts).
+ */
 export const tokenStore: Array<any> = [];
+/**
+ * social_accounts mock — the canonical token store. Tests that previously
+ * pushed { tenant_id, organization_id, platform, access_token } to tokenStore
+ * should now use seedConnectedAccount to populate this store and roleStore.
+ */
+export const socialAccountStore: Array<any> = [];
 export const playbookStore: Array<any> = [];
 export const webhookStore: Array<any> = [];
 export const autoRuleStore: Array<any> = [];
@@ -59,10 +71,62 @@ export const resetCommunityAiStores = () => {
   analyticsStore.length = 0;
   scheduledPostStore.length = 0;
   tokenStore.length = 0;
+  socialAccountStore.length = 0;
   playbookStore.length = 0;
   webhookStore.length = 0;
   autoRuleStore.length = 0;
   networkIntelligenceStore.length = 0;
+};
+
+/**
+ * Seed a connected platform account in the post-consolidation shape.
+ *
+ * Creates a row in socialAccountStore (the canonical token store) and an
+ * active membership row in roleStore so resolveSocialAccountIdForOrg can find
+ * the account via (org → users → social_accounts). Optionally seeds a metadata
+ * row in tokenStore (community_ai_platform_tokens) for tests that exercise
+ * connector-disconnect or connected_by_user_id.
+ */
+export const seedConnectedAccount = (opts: {
+  platform: string;
+  accessToken: string;
+  tenantId?: string;
+  userId?: string;
+  refreshToken?: string;
+  tokenExpiresAt?: string;
+  withMetadata?: boolean;
+}) => {
+  const tenantId = opts.tenantId ?? 'tenant-1';
+  const userId = opts.userId ?? 'user-1';
+  const platform = opts.platform.toLowerCase();
+  const id = `sa-${platform}-${tenantId}`;
+
+  if (!roleStore.some((r) => r.user_id === userId && r.company_id === tenantId)) {
+    roleStore.push({ user_id: userId, company_id: tenantId, role: 'CONTENT_PUBLISHER', status: 'active' });
+  }
+
+  socialAccountStore.push({
+    id,
+    user_id: userId,
+    company_id: tenantId,
+    platform,
+    is_active: true,
+    access_token: opts.accessToken,
+    refresh_token: opts.refreshToken ?? null,
+    token_expires_at: opts.tokenExpiresAt ?? null,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (opts.withMetadata !== false) {
+    tokenStore.push({
+      tenant_id: tenantId,
+      organization_id: tenantId,
+      platform,
+      connected_by_user_id: userId,
+    });
+  }
+
+  return id;
 };
 
 const resolveSelect = (table: string, state: any) => {
@@ -149,10 +213,34 @@ const resolveSelect = (table: string, state: any) => {
     return { data: rows, error: null };
   }
   if (table === 'community_ai_platform_tokens') {
+    // Post-consolidation: this table holds METADATA only (tenant_id,
+    // organization_id, platform, connected_by_user_id). No token columns.
     let rows = [...tokenStore];
     if (state.filters.tenant_id) rows = rows.filter((row) => row.tenant_id === state.filters.tenant_id);
     if (state.filters.organization_id) rows = rows.filter((row) => row.organization_id === state.filters.organization_id);
     if (state.filters.platform) rows = rows.filter((row) => row.platform === state.filters.platform);
+    if (typeof state.limitValue === 'number') rows = rows.slice(0, state.limitValue);
+    if (state.single) return rows.length > 0 ? { data: rows[0], error: null } : { data: null, error: { message: 'not found' } };
+    return { data: rows, error: null };
+  }
+  if (table === 'social_accounts') {
+    // Post-consolidation single source of truth for tokens. Production reads
+    // route here via platformTokenService.resolveSocialAccountIdForOrg followed
+    // by auth/tokenStore.getToken (mocked at the test file level so the plain
+    // access_token in fixtures is returned without decrypt).
+    let rows = [...socialAccountStore];
+    if (state.filters.id) rows = rows.filter((row) => row.id === state.filters.id);
+    if (state.filters.user_id) rows = rows.filter((row) => row.user_id === state.filters.user_id);
+    if (state.filters.company_id) rows = rows.filter((row) => row.company_id === state.filters.company_id);
+    if (state.filters.platform) rows = rows.filter((row) => row.platform === state.filters.platform);
+    if (state.filters.is_active !== undefined) rows = rows.filter((row) => row.is_active === state.filters.is_active);
+    if (state.inFilter?.field === 'user_id') rows = rows.filter((row) => state.inFilter.values.includes(row.user_id));
+    if (state.inFilter?.field === 'platform') rows = rows.filter((row) => state.inFilter.values.includes(row.platform));
+    if (state.order?.field === 'updated_at') {
+      rows.sort((a, b) => state.order?.ascending
+        ? String(a.updated_at).localeCompare(String(b.updated_at))
+        : String(b.updated_at).localeCompare(String(a.updated_at)));
+    }
     if (typeof state.limitValue === 'number') rows = rows.slice(0, state.limitValue);
     if (state.single) return rows.length > 0 ? { data: rows[0], error: null } : { data: null, error: { message: 'not found' } };
     return { data: rows, error: null };
@@ -209,6 +297,40 @@ const resolveUpdate = (table: string, state: any, _field: string, value: any) =>
   }
   if (table === 'community_ai_auto_rules') {
     const index = autoRuleStore.findIndex((row) => row.id === value);
+    if (index >= 0) {
+      autoRuleStore[index] = { ...autoRuleStore[index], ...(state.update || {}) };
+      return { data: autoRuleStore[index], error: null };
+    }
+  }
+  return { data: null, error: null };
+};
+
+/**
+ * Resolve an update that has been built up via the chainable update API
+ * (.update(values).eq(...).in(...).select(...).maybeSingle()). Reads filters
+ * from `state` rather than the legacy positional (field, value) signature.
+ *
+ * Production code in pages/api/community-ai/actions/execute.ts uses this
+ * shape for the conditional state-transition: UPDATE ... WHERE id = ? AND
+ * status IN (...). Without an inFilter check the mock would silently allow
+ * transitions from disallowed source states, masking the guard.
+ */
+const resolveUpdateWithFilters = (table: string, state: any) => {
+  if (table === 'community_ai_actions') {
+    const id = state.filters.id;
+    if (!id) return { data: null, error: null };
+    const row = actionStore.get(id);
+    if (!row) return { data: null, error: null };
+    if (state.inFilter?.field === 'status' && !state.inFilter.values.includes(row.status)) {
+      return { data: null, error: null };
+    }
+    actionStore.set(id, { ...row, ...(state.update || {}) });
+    return { data: actionStore.get(id), error: null };
+  }
+  if (table === 'community_ai_auto_rules') {
+    const id = state.filters.id;
+    if (!id) return { data: null, error: null };
+    const index = autoRuleStore.findIndex((r) => r.id === id);
     if (index >= 0) {
       autoRuleStore[index] = { ...autoRuleStore[index], ...(state.update || {}) };
       return { data: autoRuleStore[index], error: null };
@@ -276,10 +398,29 @@ export const buildQuery = (table: string) => {
     single: jest.fn(async () => { state.single = true; return resolveSelect(table, state); }),
     maybeSingle: jest.fn(async () => { state.single = true; return resolveSelect(table, state); }),
     not: jest.fn(() => query),
+    or: jest.fn(() => query),
     then: (resolve: any, reject: any) => Promise.resolve(resolveSelect(table, state)).then(resolve, reject),
     update: jest.fn((values: any) => {
       state.update = values;
-      return { eq: jest.fn(async (field: string, value: any) => resolveUpdate(table, state, field, value)) };
+      // Chainable update — supports .eq().in().select().maybeSingle() / .single()
+      // / direct await. Backward-compatible with the old `.update().eq()` await
+      // pattern via the thenable on the chain.
+      const updateChain: any = {
+        eq: jest.fn((field: string, value: any) => {
+          state.filters[field] = value;
+          return updateChain;
+        }),
+        in: jest.fn((field: string, values: any[]) => {
+          state.inFilter = { field, values };
+          return updateChain;
+        }),
+        select: jest.fn(() => updateChain),
+        single: jest.fn(async () => resolveUpdateWithFilters(table, state)),
+        maybeSingle: jest.fn(async () => resolveUpdateWithFilters(table, state)),
+        then: (resolve: any, reject: any) =>
+          Promise.resolve(resolveUpdateWithFilters(table, state)).then(resolve, reject),
+      };
+      return updateChain;
     }),
     insert: jest.fn((rows: any) => {
       state.insertRows = Array.isArray(rows) ? rows : [rows];

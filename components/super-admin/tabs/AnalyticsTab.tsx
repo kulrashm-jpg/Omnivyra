@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/router';
 import {
   type AnalyticsSummary,
   type CampaignHealthSummary,
@@ -50,6 +51,7 @@ export default function AnalyticsTab({
   companies,
   onNavigateToApis,
 }: AnalyticsTabProps) {
+  const router = useRouter();
   const [analyticsSubTab, setAnalyticsSubTab] = useState<'overview' | 'ga-analytics' | 'campaign-health'>('overview');
   const [gaSummary, setGaSummary] = useState<GoogleAnalyticsCompanySummary | null>(null);
   const [isLoadingGaAnalytics, setIsLoadingGaAnalytics] = useState(false);
@@ -91,6 +93,33 @@ export default function AnalyticsTab({
       signal.cancelled = true;
     };
   }, [loadGaAnalytics]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+
+    const callbackError = typeof router.query.error === 'string' ? router.query.error : '';
+    const gaConnected = typeof router.query.ga4 === 'string' ? router.query.ga4 : '';
+    const analyticsTarget = typeof router.query.analytics === 'string' ? router.query.analytics : '';
+
+    if (analyticsTarget === 'ga' || callbackError || gaConnected) {
+      setAnalyticsSubTab('ga-analytics');
+    }
+
+    if (callbackError === 'oauth_failed') {
+      setGaNotice(null);
+      setGaAnalyticsError('Failed to connect Google Analytics');
+    } else if (callbackError === 'no_properties_found') {
+      setGaNotice(null);
+      setGaAnalyticsError('Google Analytics connected, but no GA4 properties were found for this Google account.');
+    } else if (callbackError === 'unauthorized' || callbackError === 'invalid_oauth_state') {
+      setGaNotice(null);
+      setGaAnalyticsError('Google Analytics connect session expired. Please start the connection again from Super Admin.');
+    } else if (gaConnected === 'connected') {
+      setGaAnalyticsError(null);
+      setGaNotice('Google Analytics connected. Select a property if prompted below.');
+      void loadGaAnalytics();
+    }
+  }, [router.isReady, router.query.analytics, router.query.error, router.query.ga4, loadGaAnalytics]);
 
   const handleConnectGoogleAnalytics = async () => {
     setGaConnecting(true);

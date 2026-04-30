@@ -10,6 +10,8 @@ export type ThreadIntentValue =
   | 'story'
   | 'lessons';
 
+export type ThreadAnchorValue = 'market' | 'product' | 'identity';
+
 export type ThreadCompanyProfile = {
   name?: string | null;
   industry?: string | null;
@@ -37,10 +39,18 @@ export type ThreadIntentOption = {
   objective: string;
 };
 
+export type ThreadAnchorOption = {
+  value: ThreadAnchorValue;
+  label: string;
+  description: string;
+  focusPrompt: string;
+};
+
 export type ThreadRecommendation = {
   topic: string;
   reason: string;
   intent: ThreadIntentValue;
+  anchor: ThreadAnchorValue;
 };
 
 export type ThreadSessionPayload = {
@@ -59,6 +69,11 @@ export type ThreadSessionPayload = {
   cta: string;
   extraInstruction: string;
   companyName: string;
+  anchor: ThreadAnchorValue;
+  anchorLabel: string;
+  anchorFocus: string;
+  productsServices: string;
+  brandVoice: string;
 };
 
 export type ThreadGenerationPayload = {
@@ -115,6 +130,30 @@ export const THREAD_FORMATS: readonly ThreadFormatOption[] = [
   },
 ] as const;
 
+export const THREAD_ANCHORS: readonly ThreadAnchorOption[] = [
+  {
+    value: 'market',
+    label: 'Market',
+    description: 'Anchor the thread to a shift, problem, or trend in the market the company plays in.',
+    focusPrompt:
+      'Anchor every post to the company market and industry context. The thread must read as a credible market point of view, not generic advice. Reference the shift, problem, or trend that makes this thread timely for that market.',
+  },
+  {
+    value: 'product',
+    label: 'Product & Services',
+    description: 'Anchor the thread to what the company actually offers and the outcome it creates.',
+    focusPrompt:
+      'Anchor every post to the company products and services and the concrete outcome they create for the audience. Avoid generic claims; show why this offering changes the reader\'s situation. Do not turn the thread into an ad, but the offering must be the through-line.',
+  },
+  {
+    value: 'identity',
+    label: 'Identity & POV',
+    description: 'Anchor the thread to the organization\'s stance, beliefs, or founding intent.',
+    focusPrompt:
+      'Anchor every post to the company identity, brand voice, and point of view. The thread should read as a thought-leadership statement from this specific organization, with conviction and a recognizable stance, not a neutral explainer.',
+  },
+] as const;
+
 export const THREAD_INTENTS: readonly ThreadIntentOption[] = [
   {
     value: 'educate',
@@ -156,12 +195,29 @@ export function getThreadIntent(value?: string): ThreadIntentOption {
   return THREAD_INTENTS.find((entry) => entry.value === value) ?? THREAD_INTENTS[0];
 }
 
+export function getThreadAnchor(value?: string): ThreadAnchorOption {
+  return THREAD_ANCHORS.find((entry) => entry.value === value) ?? THREAD_ANCHORS[0];
+}
+
+export function isThreadAnchor(value: unknown): value is ThreadAnchorValue {
+  return typeof value === 'string' && THREAD_ANCHORS.some((entry) => entry.value === value);
+}
+
 export function getThreadPlatformLabel(platform: 'x' | 'linkedin'): string {
   return platform === 'x' ? 'X' : 'LinkedIn';
 }
 
 function pickProfileText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function shortenAnchorPhrase(value: string, maxChars = 48): string {
+  if (!value) return '';
+  const firstSegment = value.split(/[,;|·]| - /)[0]?.trim() ?? '';
+  const candidate = firstSegment || value.trim();
+  if (candidate.length <= maxChars) return candidate;
+  const truncated = candidate.slice(0, maxChars).replace(/\s+\S*$/, '').trim();
+  return truncated || candidate.slice(0, maxChars).trim();
 }
 
 export function buildThreadCompanySummary(
@@ -174,11 +230,15 @@ export function buildThreadCompanySummary(
   const audience = pickProfileText(profile?.target_audience);
   const themes = pickProfileText(profile?.content_themes);
   const goals = pickProfileText(profile?.goals);
+  const products = pickProfileText(profile?.products_services);
+  const voice = pickProfileText(profile?.brand_voice);
 
   const parts = [
     industry ? `${name} operates in ${industry}` : `${name} needs company-aware thread content`,
     category ? `category: ${category}` : '',
     audience ? `audience: ${audience}` : '',
+    products ? `products & services: ${products}` : '',
+    voice ? `brand voice: ${voice}` : '',
     themes ? `themes: ${themes}` : '',
     goals ? `goals: ${goals}` : '',
   ].filter(Boolean);
@@ -191,30 +251,37 @@ export function buildThreadRecommendations(
   format: ThreadFormatOption,
   profile: ThreadCompanyProfile | null,
 ): ThreadRecommendation[] {
-  const industry = pickProfileText(profile?.industry);
-  const audience = pickProfileText(profile?.target_audience);
-  const themes = pickProfileText(profile?.content_themes);
+  const industry = shortenAnchorPhrase(pickProfileText(profile?.industry));
+  const audience = shortenAnchorPhrase(pickProfileText(profile?.target_audience));
+  const themes = shortenAnchorPhrase(pickProfileText(profile?.content_themes));
+  const products = shortenAnchorPhrase(pickProfileText(profile?.products_services));
+  const voice = shortenAnchorPhrase(pickProfileText(profile?.brand_voice), 32);
 
   const marketAnchor = industry || 'your market';
   const audienceAnchor = audience || 'the people you want to reach';
   const themeAnchor = themes || 'the signal your brand should own';
+  const productAnchor = products || `what ${companyName} actually offers`;
+  const identityAnchor = voice || `how ${companyName} sees the work`;
 
   if (format.value === 'narrative-thread') {
     return [
       {
-        topic: `Why ${companyName} is building now, not later`,
-        reason: `A narrative thread should create momentum. This gives you a clear turning-point story tied to ${marketAnchor}.`,
-        intent: 'launch',
-      },
-      {
-        topic: `The lesson that changed how we think about ${themeAnchor}`,
-        reason: 'This lets you move from tension to payoff without sounding like a generic announcement.',
+        topic: `The shift in ${marketAnchor} we keep seeing play out`,
+        reason: `Anchors the narrative to a real movement in ${marketAnchor}, so the thread reads as a credible market point of view.`,
         intent: 'story',
+        anchor: 'market',
       },
       {
-        topic: `What most teams miss before they try to solve this problem`,
-        reason: `This sets up a strong sequence with tension first, then a clearer lesson for ${audienceAnchor}.`,
+        topic: `Why ${companyName} built ${productAnchor} the way we did`,
+        reason: 'Anchors the narrative to the product decisions, so the sequence carries momentum and purpose without becoming an ad.',
+        intent: 'launch',
+        anchor: 'product',
+      },
+      {
+        topic: `The belief behind ${identityAnchor} — and why we will not move off it`,
+        reason: `Anchors the narrative to ${companyName}'s stance, so the thread lands as a thought-leadership statement, not generic storytelling.`,
         intent: 'lessons',
+        anchor: 'identity',
       },
     ];
   }
@@ -223,37 +290,43 @@ export function buildThreadRecommendations(
     return [
       {
         topic: `The operating shift happening in ${marketAnchor} right now`,
-        reason: 'A breakdown thread works best when it dissects one timely change and gives readers a clean mental model.',
+        reason: `Anchors the breakdown to a timely change in ${marketAnchor} and gives ${audienceAnchor} a clean mental model.`,
         intent: 'breakdown',
+        anchor: 'market',
       },
       {
-        topic: `A step-by-step breakdown of how to approach ${themeAnchor}`,
-        reason: 'This keeps the structure concrete and makes each post carry one clear job in the sequence.',
+        topic: `A breakdown of how ${productAnchor} actually changes the workflow`,
+        reason: 'Anchors the breakdown to product mechanics, so each post earns the next while staying tied to a real outcome.',
         intent: 'educate',
+        anchor: 'product',
       },
       {
-        topic: `Why most teams still get this wrong and what to do instead`,
-        reason: 'This creates stronger authority because it contrasts the common view against a clearer operating path.',
+        topic: `What most teams get wrong about ${themeAnchor} — and how we think about it`,
+        reason: `Anchors the breakdown to ${companyName}'s point of view, contrasting the common take with the company's operating belief.`,
         intent: 'lessons',
+        anchor: 'identity',
       },
     ];
   }
 
   return [
     {
-      topic: `The clearest way to explain ${themeAnchor}`,
-      reason: 'An explainer thread should reduce confusion fast and make the full sequence easy to follow.',
-      intent: 'educate',
-    },
-    {
-      topic: `What ${audienceAnchor} should understand before acting`,
-      reason: 'This gives the thread a strong educational arc without needing a heavy briefing flow first.',
-      intent: 'breakdown',
-    },
-    {
-      topic: `What makes this shift in ${marketAnchor} matter right now`,
-      reason: 'This keeps the thread timely and lets the opener earn the rest of the sequence.',
+      topic: `What is actually shifting in ${marketAnchor} right now`,
+      reason: `Anchors the explainer to ${marketAnchor}, so the thread reads as timely market intelligence rather than generic education.`,
       intent: 'launch',
+      anchor: 'market',
+    },
+    {
+      topic: `The clearest way to explain how ${productAnchor} works`,
+      reason: `Anchors the explainer to the product, so ${audienceAnchor} understands the offering without needing a sales call.`,
+      intent: 'educate',
+      anchor: 'product',
+    },
+    {
+      topic: `How ${companyName} thinks about ${themeAnchor}`,
+      reason: `Anchors the explainer to ${companyName}'s stance, so the thread carries voice and conviction.`,
+      intent: 'breakdown',
+      anchor: 'identity',
     },
   ];
 }

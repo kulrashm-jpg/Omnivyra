@@ -197,16 +197,14 @@ export const ThreadList = React.memo(function ThreadList({
   const isPeopleReactionMode = activeFilter === 'People Reacted';
   const peopleReactionItems = useMemo(() => {
     if (!isPeopleReactionMode) return [];
-    return items.filter(
-      (t) => t.latest_message_type === 'comment' || t.latest_message_type === 'reaction'
-    );
+    return items.filter((t) => t.latest_message_type === 'comment');
   }, [items, isPeopleReactionMode]);
 
   if (loading) {
     return (
       <div className={`flex flex-col h-full ${className}`}>
         <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 p-3 font-medium text-slate-800 backdrop-blur-sm">
-          {isPeopleReactionMode ? 'Posts with reactions' : 'Triage Queue'}
+          {isPeopleReactionMode ? 'Posts with comments' : 'Triage Queue'}
         </div>
         <div className="flex-1 overflow-y-auto space-y-2 p-2 animate-pulse">
           {[1, 2, 3, 4, 5].map((i) => (
@@ -222,10 +220,10 @@ export const ThreadList = React.memo(function ThreadList({
       return (
         <div className={`flex flex-col h-full ${className}`}>
           <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 p-3 font-medium text-slate-800 backdrop-blur-sm">
-            Posts with reactions
+            Posts with comments
           </div>
           <div className="flex-1 flex items-center justify-center p-4 text-sm text-slate-500">
-            {emptyState ?? 'No posts with reactions yet. Visit your LinkedIn feed and the extension will sync them automatically.'}
+            {emptyState ?? 'No posts with comments yet. Visit your LinkedIn feed and the extension will sync them automatically.'}
           </div>
         </div>
       );
@@ -233,7 +231,7 @@ export const ThreadList = React.memo(function ThreadList({
     return (
       <div className={`flex flex-col h-full ${className}`}>
         <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 p-3 font-medium text-slate-800 backdrop-blur-sm">
-          Posts with reactions
+          Posts with comments
           <span className="ml-2 text-xs font-normal text-slate-500">
             {peopleReactionItems.length} {peopleReactionItems.length === 1 ? 'post' : 'posts'}
           </span>
@@ -292,7 +290,13 @@ export const ThreadList = React.memo(function ThreadList({
             </button>
             {expandedGroups[group] ? threads.map((thread) => {
               const isSelected = thread.thread_id === selectedThreadId;
-              const isRecommended = thread.thread_id === recommendedThreadId;
+              // Recommended highlight is suppressed when the user already
+              // has the recommended thread open — the right pane already
+              // shows it, so an "R" badge on the same row reads as a
+              // duplicate of what they're looking at.
+              const isRecommended =
+                thread.thread_id === recommendedThreadId
+                && thread.thread_id !== selectedThreadId;
               const isExitingRecommendation =
                 !isRecommended && thread.thread_id === exitingRecommendedThreadId;
               const priority = getPriorityBadge(thread.priority_score ?? 0);
@@ -346,9 +350,6 @@ export const ThreadList = React.memo(function ThreadList({
                           </span>
                           {(thread.unread_count ?? 0) > 0 && (
                             <span className="shrink-0 inline-flex h-2 w-2 rounded-full bg-blue-500" title="Needs reply" />
-                          )}
-                          {group === 'Waiting' && (
-                            <span className="shrink-0 inline-flex h-2 w-2 rounded-full bg-amber-500" title="Waiting" />
                           )}
                           {isLead && (
                             <span className="shrink-0 inline-flex h-2 w-2 rounded-full bg-emerald-500" title="Lead-flagged" />

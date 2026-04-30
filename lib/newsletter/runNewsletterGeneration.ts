@@ -1,16 +1,8 @@
-import {
-  runSharedGeneration,
-  type SharedGenerationRequest,
-  type SharedGenerationResult,
+import type {
+  SharedGenerationRequest,
+  SharedGenerationResult,
 } from '../content/sharedGenerationRunner';
-import { runInsightLetterGeneration } from './runInsightLetterGeneration';
-import { runSplitScreenInsightGeneration } from './runSplitScreenInsightGeneration';
-import { runWeeklyRadarGeneration } from './runWeeklyRadarGeneration';
-import { runWeeklyBoardGeneration } from './runWeeklyBoardGeneration';
-import { runMarketMapGeneration } from './runMarketMapGeneration';
-import { runStrategyMemoGeneration } from './runStrategyMemoGeneration';
-import { runOperatorPlaybookGeneration } from './runOperatorPlaybookGeneration';
-import { runSprintSheetGeneration } from './runSprintSheetGeneration';
+import { runUnifiedLongFormGeneration } from '../content/unifiedLongFormEngine';
 
 export type NewsletterGenerationRequest =
   Omit<SharedGenerationRequest, 'contentType'> & {
@@ -19,68 +11,19 @@ export type NewsletterGenerationRequest =
 
 export type NewsletterGenerationResult = SharedGenerationResult;
 
-function isMinimalThesisRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'minimal thesis';
-}
-
-function isSignalRadarRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'signal radar';
-}
-
-function isAnalystBoardRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'analyst board';
-}
-
-function isSplitScreenInsightRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'split-screen insight';
-}
-
-function isMarketMapRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'market map';
-}
-
-function isStrategyMemoRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'strategy memo';
-}
-
-function isOperatorPlaybookRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'operator playbook';
-}
-
-function isSprintSheetRequest(input: NewsletterGenerationRequest): boolean {
-  return typeof input.template_name === 'string' && input.template_name.trim().toLowerCase() === 'sprint sheet';
-}
-
 export async function runNewsletterGeneration(
   input: NewsletterGenerationRequest,
 ): Promise<NewsletterGenerationResult> {
-  if (isMinimalThesisRequest(input)) {
-    return runInsightLetterGeneration(input);
-  }
-  if (isSplitScreenInsightRequest(input)) {
-    return runSplitScreenInsightGeneration(input);
-  }
-  if (isSignalRadarRequest(input)) {
-    return runWeeklyRadarGeneration(input);
-  }
-  if (isAnalystBoardRequest(input)) {
-    return runWeeklyBoardGeneration(input);
-  }
-  if (isStrategyMemoRequest(input)) {
-    return runStrategyMemoGeneration(input);
-  }
-  if (isMarketMapRequest(input)) {
-    return runMarketMapGeneration(input);
-  }
-  if (isOperatorPlaybookRequest(input)) {
-    return runOperatorPlaybookGeneration(input);
-  }
-  if (isSprintSheetRequest(input)) {
-    return runSprintSheetGeneration(input);
-  }
-
-  return runSharedGeneration({
+  // Dedicated newsletter runners are deprecated as generation engines. The
+  // dispatcher remains as the owned module boundary, but all newsletter drafts
+  // now enter the single long-form engine; templates are structure/render specs.
+  return runUnifiedLongFormGeneration({
     ...input,
     contentType: 'newsletter',
+    formatType: typeof input.formatType === 'string' ? input.formatType : undefined,
+    templateBlocks: input.template_blocks,
+    targetWordCount: input.answers?.target_word_count
+      ? Number.parseInt(String(input.answers.target_word_count), 10) || undefined
+      : input.target_words,
   });
 }

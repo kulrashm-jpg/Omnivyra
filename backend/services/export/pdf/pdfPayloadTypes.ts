@@ -335,6 +335,31 @@ export type PdfReportPayload = {
       classification: string;
       source: string;
       relevanceScore: number;
+      category?: string | null;
+      tags?: string[];
+      problemOverlap?: number;
+      icpOverlap?: number;
+      marketOverlap?: number;
+      revenueTier?: 'startup' | 'growth' | 'scale' | 'enterprise' | null;
+      productDepth?: number;
+      finalScore?: number;
+      tier?: 'Tier 1' | 'Tier 2' | 'Tier 3' | null;
+      enrichmentConfidenceScore?: number;
+      enrichment?: {
+        category?: string | null;
+        description?: string | null;
+        icp?: {
+          age_group?: string | null;
+          use_case?: string | null;
+          user_intent?: string | null;
+        };
+        business_model?: string | null;
+        geography?: string | null;
+        product_type?: string | null;
+        scale_signals?: Record<string, unknown>;
+        confidence_score?: number;
+        sources?: string[];
+      } | null;
       rationale: string;
       standing: 'Behind' | 'At Par' | 'Ahead';
     }>;

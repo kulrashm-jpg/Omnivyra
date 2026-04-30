@@ -15,8 +15,10 @@ import {
   playbookStore,
   roleStore,
   scheduledPostStore,
+  seedConnectedAccount,
   seedPlaybook,
   setRole,
+  socialAccountStore,
   tokenStore,
   webhookStore,
 } from './communityAiTestHarness';
@@ -40,8 +42,47 @@ jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },
 }));
 
+// Mock the canonical token reader so the test bypasses real AES decryption.
+// In production, getToken decrypts the access_token column from
+// social_accounts; here we route the lookup through the in-memory
+// socialAccountStore and return the plaintext that fixtures pushed.
+jest.mock('../../auth/tokenStore', () => {
+  const harness = jest.requireActual('./communityAiTestHarness');
+  return {
+    getToken: jest.fn(async (socialAccountId: string) => {
+      const row = harness.socialAccountStore.find((r: any) => r.id === socialAccountId);
+      if (!row) return null;
+      return {
+        access_token: row.access_token,
+        refresh_token: row.refresh_token ?? undefined,
+        expires_at: row.token_expires_at ?? undefined,
+        token_type: 'Bearer',
+      };
+    }),
+    isTokenExpiringSoon: jest.fn(() => false),
+    setToken: jest.fn(async () => {}),
+  };
+});
+
+// platformTokenService.getToken may invoke refreshPlatformToken if a token
+// is "expiring soon" (which our isTokenExpiringSoon mock above forces to false,
+// so this is defence-in-depth — never actually called by tests today).
+jest.mock('../../auth/tokenRefresh', () => ({
+  refreshPlatformToken: jest.fn(async () => null),
+  refreshTwitterTokenIfNeeded: jest.fn(async (input: any) => ({
+    access_token: input.access_token,
+    refresh_token: input.refresh_token ?? null,
+    token_expires_at: input.token_expires_at ?? null,
+    status: 'still_valid',
+  })),
+}));
+
 jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
-  executeAction: jest.fn().mockResolvedValue({ ok: true, platform: 'linkedin' }),
+  // Verified-success connector contract: response.success === true is the
+  // signal that maps to status='executed' (vs 'sent_unverified' for the
+  // permissive shape). See normalizeConnectorResponse in
+  // backend/services/communityAiActionExecutor.ts.
+  executeAction: jest.fn().mockResolvedValue({ success: true, platform_id: 'linkedin-post-1', platform: 'linkedin' }),
 }));
 
 const { supabase } = jest.requireMock('../../db/supabaseClient');
@@ -56,6 +97,7 @@ describe('Community-AI Action Execution', () => {
     analyticsStore.length = 0;
     scheduledPostStore.length = 0;
     tokenStore.length = 0;
+    socialAccountStore.length = 0;
     playbookStore.length = 0;
     webhookStore.length = 0;
     autoRuleStore.length = 0;
@@ -65,7 +107,7 @@ describe('Community-AI Action Execution', () => {
 
   it('cannot execute without approval', async () => {
     setRole('CONTENT_PUBLISHER');
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('action-1', {
       id: 'action-1',
       tenant_id: 'tenant-1',
@@ -78,6 +120,7 @@ describe('Community-AI Action Execution', () => {
     });
     const req = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'action-1', approved: false },
     } as NextApiRequest;
     const res = createMockRes();
@@ -88,7 +131,7 @@ describe('Community-AI Action Execution', () => {
 
   it('rejects tenant mismatch', async () => {
     setRole('CONTENT_PUBLISHER');
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('action-2', {
       id: 'action-2',
       tenant_id: 'tenant-2',
@@ -101,6 +144,7 @@ describe('Community-AI Action Execution', () => {
     });
     const req = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'action-2', approved: true },
     } as NextApiRequest;
     const res = createMockRes();
@@ -119,11 +163,14 @@ describe('Community-AI Action Execution', () => {
       target_id: 'post-3',
       suggested_text: 'Great post!',
       playbook_id: 'playbook-1',
+      execution_mode: 'api',
       requires_human_approval: false,
       status: 'pending',
     });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     const req = {
       method: 'POST',
+      headers: {},
       body: { tenant_id: 'tenant-1', organization_id: 'tenant-1', action_id: 'action-3', approved: true },
     } as NextApiRequest;
     const res = createMockRes();
@@ -145,6 +192,7 @@ describe('Community-AI Connectors', () => {
     analyticsStore.length = 0;
     scheduledPostStore.length = 0;
     tokenStore.length = 0;
+    socialAccountStore.length = 0;
     playbookStore.length = 0;
     webhookStore.length = 0;
     autoRuleStore.length = 0;
@@ -156,7 +204,13 @@ describe('Community-AI Connectors', () => {
     (global as any).fetch = undefined;
   });
 
-  it('fails when no platform token', async () => {
+  it('falls back to browser when no platform token', async () => {
+    // Post-API→Browser-fallback semantics: when execution_mode='api' fails
+    // because no token is connected, the executor automatically queues a
+    // browser dispatch via the extension. The result is `ok: true` with
+    // `status: 'dispatched'`, `execution_mode: 'browser'`, and a
+    // `response.fallback_from === 'api'` marker that records the original
+    // API failure for audit (response.api_error).
     actionStore.set('token-1', {
       id: 'token-1',
       tenant_id: 'tenant-1',
@@ -171,12 +225,15 @@ describe('Community-AI Connectors', () => {
       requires_human_approval: false,
     });
     const result = await executeCommunityAction(actionStore.get('token-1'), true);
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe('Platform not connected');
+    expect(result.ok).toBe(true);
+    expect(result.execution_mode).toBe('browser');
+    expect(result.status).toBe('dispatched');
+    expect((result.response as any)?.fallback_from).toBe('api');
+    expect((result.response as any)?.api_error).toBe('PLATFORM_NOT_CONNECTED');
   });
 
   it('passes auth token to connector', async () => {
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'linkedin', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('token-2', {
       id: 'token-2',
       tenant_id: 'tenant-1',
@@ -192,11 +249,18 @@ describe('Community-AI Connectors', () => {
     });
     await executeCommunityAction(actionStore.get('token-2'), true);
     expect(executeLinkedinAction).toHaveBeenCalledWith(expect.objectContaining({ id: 'token-2' }), 'token-1');
-    expect((supabase.from as jest.Mock).mock.calls.map((call) => call[0])).toContain('community_ai_platform_tokens');
+    // Post-consolidation: tokens are read from social_accounts, not from
+    // community_ai_platform_tokens (which now holds metadata only).
+    expect((supabase.from as jest.Mock).mock.calls.map((call) => call[0])).toContain('social_accounts');
   });
 
-  it('rejects tenant mismatch token', async () => {
-    tokenStore.push({ tenant_id: 'tenant-2', organization_id: 'tenant-2', platform: 'linkedin', access_token: 'token-2' });
+  it('cross-tenant token does not satisfy resolution; falls back to browser', async () => {
+    // tenant-2 has a connected account, but the action belongs to tenant-1.
+    // resolveSocialAccountIdForOrg('tenant-1') finds no roles for that org →
+    // returns null → API execution fails with PLATFORM_NOT_CONNECTED →
+    // executor falls back to browser dispatch. The fallback marker is
+    // sufficient to assert tenant isolation worked.
+    seedConnectedAccount({ tenantId: 'tenant-2', platform: 'linkedin', accessToken: 'token-2' });
     actionStore.set('token-3', {
       id: 'token-3',
       tenant_id: 'tenant-1',
@@ -211,11 +275,13 @@ describe('Community-AI Connectors', () => {
       requires_human_approval: false,
     });
     const result = await executeCommunityAction(actionStore.get('token-3'), true);
-    expect(result.error).toBe('Platform not connected');
+    expect(result.execution_mode).toBe('browser');
+    expect((result.response as any)?.fallback_from).toBe('api');
+    expect((result.response as any)?.api_error).toBe('PLATFORM_NOT_CONNECTED');
   });
 
   it('executes facebook connector with valid token', async () => {
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'facebook', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'facebook', accessToken: 'token-1' });
     (global as any).fetch = jest.fn().mockResolvedValue(mockJsonResponse({ id: 'c1' }));
     const result = await executeCommunityAction({
       id: 'fb-1',
@@ -233,7 +299,7 @@ describe('Community-AI Connectors', () => {
   });
 
   it('executes instagram connector with valid token', async () => {
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'instagram', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'instagram', accessToken: 'token-1' });
     (global as any).fetch = jest.fn().mockResolvedValue(mockJsonResponse({ id: 'r1' }));
     const result = await executeCommunityAction({
       id: 'ig-1',
@@ -251,7 +317,7 @@ describe('Community-AI Connectors', () => {
   });
 
   it('executes twitter connector with valid token', async () => {
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'twitter', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'twitter', accessToken: 'token-1' });
     (global as any).fetch = jest.fn(async (url: string) => {
       if (url.includes('/users/me')) {
         return mockJsonResponse({ data: { id: 'user-1' } });
@@ -274,7 +340,7 @@ describe('Community-AI Connectors', () => {
   });
 
   it('executes reddit connector with valid token', async () => {
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'reddit', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'reddit', accessToken: 'token-1' });
     (global as any).fetch = jest.fn().mockResolvedValue(mockJsonResponse({ json: { data: {} } }));
     const result = await executeCommunityAction({
       id: 'rd-1',
@@ -297,7 +363,7 @@ describe('Community-AI Connectors', () => {
       id: 'playbook-block',
       action_rules: { ...defaultPlaybook.action_rules, allow_reply: false },
     });
-    tokenStore.push({ tenant_id: 'tenant-1', organization_id: 'tenant-1', platform: 'facebook', access_token: 'token-1' });
+    seedConnectedAccount({ platform: 'facebook', accessToken: 'token-1' });
     const result = await executeCommunityAction({
       id: 'fb-3',
       tenant_id: 'tenant-1',

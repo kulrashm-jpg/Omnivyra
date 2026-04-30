@@ -1,12 +1,27 @@
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 
-export const THREAD_QUEUE_ORDER = [
-  'Needs Response',
-  'High Priority',
-  'Waiting',
-  'Lead-flagged Threads',
-  'Done',
-] as const;
+/**
+ * Queue model for the engagement inbox.
+ *
+ * Single bucket: "Needs Response". A thread is in this bucket iff it has
+ * already passed the upstream gate in InboxDashboard (`otherPartyRepliedLast`
+ * — direction is not 'outgoing', latest_message_author_self is not true,
+ * and there is no in-flight outbound community_ai_actions row).
+ *
+ * Earlier versions of this file split the bucket into Needs Response /
+ * High Priority / Waiting / Lead-flagged Threads / Done with conditions
+ * (`unread_count > 0 OR customer_question OR opportunity_indicator`). That
+ * silently dropped legitimate "the other party replied last" threads
+ * out of Needs Response when the unread badge was stale or the AI
+ * classifier hadn't tagged the message — directly contradicting the
+ * gate that was already applied upstream. The product rule is simple:
+ * if the gate let it through, it needs a response.
+ *
+ * Urgency (triage_priority, priority_score, unread_count) is preserved
+ * as a SORT signal via compareThreadsForAction, not as a visibility gate.
+ */
+
+export const THREAD_QUEUE_ORDER = ['Needs Response'] as const;
 
 export type ThreadQueueGroup = (typeof THREAD_QUEUE_ORDER)[number];
 
@@ -24,72 +39,30 @@ function compareThreadsForAction(a: InboxThread, b: InboxThread): number {
   return recencyB - recencyA;
 }
 
-export function getThreadQueueGroup(thread: InboxThread): ThreadQueueGroup {
-  const isHighPriority = (thread.triage_priority ?? 0) >= 7 || (thread.priority_score ?? 0) >= 60;
-  const needsResponse =
-    (thread.unread_count ?? 0) > 0 || thread.customer_question === true || thread.opportunity_indicator === true;
-  const isWaiting =
-    !needsResponse &&
-    ((thread.triage_priority ?? 0) >= 4 ||
-      (thread.priority_score ?? 0) >= 30 ||
-      (thread.sentiment ?? '').toLowerCase() === 'negative');
-  const isLeadFlagged = thread.lead_detected === true || (thread.lead_score ?? 0) > 0;
+export function sortThreadsForAction(items: InboxThread[]): InboxThread[] {
+  return [...items].sort(compareThreadsForAction);
+}
 
-  if (needsResponse) return 'Needs Response';
-  if (isHighPriority) return 'High Priority';
-  if (isWaiting) return 'Waiting';
-  if (isLeadFlagged) return 'Lead-flagged Threads';
-  return 'Done';
+export function getThreadQueueGroup(_thread: InboxThread): ThreadQueueGroup {
+  return 'Needs Response';
 }
 
 export function groupThreadsByQueue(items: InboxThread[]): Array<{ group: ThreadQueueGroup; threads: InboxThread[] }> {
-  const byGroup = new Map<ThreadQueueGroup, InboxThread[]>();
-  for (const group of THREAD_QUEUE_ORDER) {
-    byGroup.set(group, []);
-  }
-
-  for (const thread of items) {
-    byGroup.get(getThreadQueueGroup(thread))?.push(thread);
-  }
-
-  for (const threads of byGroup.values()) {
-    threads.sort(compareThreadsForAction);
-  }
-
-  return THREAD_QUEUE_ORDER
-    .map((group) => ({ group, threads: byGroup.get(group) ?? [] }))
-    .filter((section) => section.threads.length > 0);
+  if (items.length === 0) return [];
+  const sorted = [...items].sort(compareThreadsForAction);
+  return [{ group: 'Needs Response', threads: sorted }];
 }
 
 export function filterThreadsForQueue(items: InboxThread[], activeFilter: ThreadQueueGroup | 'all'): InboxThread[] {
-  if (activeFilter === 'all') return items;
-  return items.filter((thread) => getThreadQueueGroup(thread) === activeFilter);
+  if (activeFilter === 'all' || activeFilter === 'Needs Response') return sortThreadsForAction(items);
+  return [];
 }
 
 export function getRecommendedThread(items: InboxThread[]): InboxThread | null {
-  const groups = groupThreadsByQueue(items);
-  const needsResponse = groups.find((section) => section.group === 'Needs Response')?.threads[0] ?? null;
-  if (needsResponse) return needsResponse;
-  return groups.find((section) => section.group === 'High Priority')?.threads[0] ?? null;
+  if (items.length === 0) return null;
+  return [...items].sort(compareThreadsForAction)[0] ?? null;
 }
 
 export function getThreadQueueCounts(items: InboxThread[]) {
-  const counts = {
-    needsResponse: 0,
-    highPriority: 0,
-    waiting: 0,
-    leadFlagged: 0,
-    done: 0,
-  };
-
-  for (const thread of items) {
-    const group = getThreadQueueGroup(thread);
-    if (group === 'Needs Response') counts.needsResponse += 1;
-    if (group === 'High Priority') counts.highPriority += 1;
-    if (group === 'Waiting') counts.waiting += 1;
-    if (group === 'Lead-flagged Threads') counts.leadFlagged += 1;
-    if (group === 'Done') counts.done += 1;
-  }
-
-  return counts;
+  return { needsResponse: items.length };
 }

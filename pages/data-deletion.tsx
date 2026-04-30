@@ -34,8 +34,8 @@ export default function DataDeletion() {
               <ol className="mt-4 list-decimal space-y-3 pl-5 text-base text-[#6B7C93]">
                 <li>
                   <strong className="text-[#0B1F33]">Email request:</strong> Send an email to{' '}
-                  <a href="mailto:privacy@omnivyra.com" className="text-[#0A66C2] hover:underline">
-                    privacy@omnivyra.com
+                  <a href="mailto:support@omnivyra.com" className="text-[#0A66C2] hover:underline">
+                    support@omnivyra.com
                   </a>{' '}
                   with the subject line <em>&ldquo;Data Deletion Request&rdquo;</em> and include the email address associated with your account.
                 </li>
@@ -101,8 +101,8 @@ export default function DataDeletion() {
               <h2 className="text-xl font-semibold">Questions and related policies</h2>
               <p className="mt-3 text-base leading-relaxed text-[#6B7C93]">
                 If you have any questions about data deletion or your privacy rights, contact us at{' '}
-                <a href="mailto:privacy@omnivyra.com" className="text-[#0A66C2] hover:underline">
-                  privacy@omnivyra.com
+                <a href="mailto:support@omnivyra.com" className="text-[#0A66C2] hover:underline">
+                  support@omnivyra.com
                 </a>.
               </p>
               <div className="mt-4 flex flex-wrap gap-4 text-sm">

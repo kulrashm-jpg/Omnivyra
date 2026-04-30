@@ -31,12 +31,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { generateBlogContent } from '../../../backend/adapters/commandCenter/blogContentAdapter';
-import { getProfile } from '../../../backend/services/companyProfileService';
-import { buildFormattedStyleInstructions } from '../../../lib/content/writingStyleEngine';
+import { buildContentContext } from '../../../lib/content/buildContentContext';
 import {
-  runBlogGeneration,
   type BlogGenerationRequest,
 } from '../../../lib/blog/runBlogGeneration';
+import { runUnifiedLongFormGeneration } from '../../../lib/content/unifiedLongFormEngine';
 import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
 import { isValidBlogFormat } from '../../../lib/blog/blogStructureTemplates';
 
@@ -79,15 +78,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!roleGate) return;
 
   // ── 2. Enrich with company context ──────────────────────────────────────────
-  let writingStyleInstructions: string | undefined;
-  let companyProfile: Record<string, unknown> | undefined;
+  let builtContext: Awaited<ReturnType<typeof buildContentContext>> | undefined;
 
   try {
-    const profile = await getProfile(company_id, { autoRefine: false, languageRefine: true });
-    if (profile) {
-      companyProfile = profile as Record<string, unknown>;
-      writingStyleInstructions = buildFormattedStyleInstructions(profile);
-    }
+    builtContext = await buildContentContext(company_id);
   } catch (err) {
     // Profile enrichment is best-effort and shouldn't block generation
     console.warn('[blogs/generate] profile enrichment failed:', err);
@@ -100,16 +94,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // BlogGenerateModal 4-step flow with clarification + angle picker)
   if (resolvedMode) {
     try {
-      const profileAny = (companyProfile || {}) as Record<string, unknown>;
-      const str = (key: string): string | undefined => {
-        const v = profileAny[key];
-        return typeof v === 'string' && v.trim() ? v.trim() : undefined;
-      };
-      const strArr = (key: string): string[] | undefined => {
-        const v = profileAny[key];
-        return Array.isArray(v) && v.length > 0 ? v.filter((s: unknown) => typeof s === 'string') as string[] : undefined;
-      };
-
       const generationRequest: BlogGenerationRequest = {
         company_id,
         mode:             resolvedMode,
@@ -134,29 +118,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         template_blocks:  Array.isArray(template_blocks) ? template_blocks : undefined,
         template_name:    typeof template_name === 'string' ? template_name : undefined,
         cache_version:    typeof cache_version === 'string' ? cache_version : undefined,
-        companyContext: {
-          audience:                 str('target_audience') || str('audience'),
-          brand_voice:              str('brand_voice') || str('writing_style'),
-          industry:                 str('industry'),
-          writingStyleInstructions,
-          companyName:              str('name'),
-          uniqueValue:              str('unique_value'),
-          competitiveAdvantages:    str('competitive_advantages'),
-          productsServices:         str('products_services'),
-          contentThemes:            str('content_themes'),
-          campaignFocus:            str('campaign_focus'),
-          growthPriorities:         str('growth_priorities'),
-          coreProblemStatement:     str('core_problem_statement'),
-          painSymptoms:             strArr('pain_symptoms'),
-          authorityDomains:         strArr('authority_domains'),
-          desiredTransformation:    str('desired_transformation'),
-          keyMessages:              str('key_messages'),
-          goals:                    str('goals'),
-          geography:                str('geography'),
-        },
+        companyContext: builtContext?.companyContext,
       };
 
-      const result = await runBlogGeneration(generationRequest);
+      const result = await runUnifiedLongFormGeneration({
+        ...generationRequest,
+        contentType: 'blog',
+        formatType: typeof generationRequest.formatType === 'string' ? generationRequest.formatType : undefined,
+        templateBlocks: generationRequest.template_blocks,
+        targetWordCount: generationRequest.answers?.target_word_count
+          ? Number.parseInt(String(generationRequest.answers.target_word_count), 10) || undefined
+          : generationRequest.target_words,
+      });
       return res.status(200).json(result);
     } catch (error) {
       console.error('[blogs/generate] runBlogGeneration error:', error);
@@ -177,8 +150,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       angle_preference: typeof angle_preference === 'string' && angle_preference ?
         angle_preference as 'analytical' | 'contrarian' | 'strategic' : null,
     }, {
-      writing_style_instructions: writingStyleInstructions,
-      company_profile: companyProfile,
+      writing_style_instructions: builtContext?.writingStyleInstructions,
+      company_profile: builtContext?.companyProfile,
     });
 
     return res.status(200).json(result);

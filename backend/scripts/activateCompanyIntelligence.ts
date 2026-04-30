@@ -13,7 +13,7 @@ import { distributeSignalsToCompanies } from '../services/companySignalDistribut
 
 const DEFAULT_TOPICS = ['AI', 'marketing automation', 'SaaS tools'];
 const DEFAULT_KEYWORDS = ['artificial intelligence', 'automation software'];
-const DEFAULT_COMPETITORS = ['OpenAI', 'HubSpot'];
+const DEFAULT_COMPETITORS: string[] = [];
 
 async function main() {
   const report: string[] = [];

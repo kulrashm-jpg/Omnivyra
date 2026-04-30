@@ -25,6 +25,7 @@ import {
 import type { ReportViewPayload } from './reportViewPayloadTypes';
 import type { ReportViewInsight, ReportViewNextStep, ReportViewOpportunity, ReportViewTopPriority } from './reportViewTypes';
 import type { ComposedReportData } from './reportComposedTypes';
+import { hasPassedFinalCompetitorGate } from '../../../backend/services/competitorEngineService';
 
 export function mapComposedReport(
   report: ComposedReportData,
@@ -131,16 +132,40 @@ export function mapComposedReport(
       })).slice(0, 3)
     : [];
 
+  const finalDetectedCompetitors = Array.isArray(report.competitor_intelligence?.detected_competitors)
+    ? report.competitor_intelligence.detected_competitors.filter((item) =>
+        hasPassedFinalCompetitorGate(item as any),
+      )
+    : [];
+
+  const finalCompetitorKeys = new Set(finalDetectedCompetitors.flatMap((item) => [
+    String(item.name ?? '').trim().toLowerCase(),
+    String(item.domain ?? '').trim().toLowerCase(),
+  ]).filter(Boolean));
+
   const competitorContext = report.competitor_intelligence
     ? {
-        summary: report.competitor_intelligence.summary || 'Competitor benchmarking is shaping this snapshot.',
-        competitors: Array.isArray(report.competitor_intelligence.detected_competitors)
-          ? report.competitor_intelligence.detected_competitors.slice(0, 3).map((item) => ({
+        summary: finalDetectedCompetitors.length > 0
+          ? (report.competitor_intelligence.summary || 'Competitor benchmarking is shaping this snapshot.')
+          : 'No final-gated competitor data is available for this report.',
+        competitors: finalDetectedCompetitors.length > 0
+          ? finalDetectedCompetitors.slice(0, 3).map((item) => ({
               name: item.name || item.domain || 'Market peer',
               domain: item.domain ?? null,
               classification: item.classification || 'direct_competitor',
-              source: item.source || 'inferred_keyword_peer',
+              source: item.source,
               relevanceScore: Number(item.relevance_score ?? 0),
+              category: item.category || null,
+              tags: Array.isArray(item.tags) ? item.tags : [],
+              problemOverlap: Number(item.problem_overlap ?? 0),
+              icpOverlap: Number(item.icp_overlap ?? 0),
+              marketOverlap: Number(item.market_overlap ?? 0),
+              revenueTier: item.revenue_tier || null,
+              productDepth: Number(item.product_depth ?? 0),
+              finalScore: Number(item.final_score ?? 0),
+              tier: item.tier || null,
+              enrichmentConfidenceScore: Number(item.enrichment_confidence_score ?? item.enrichment?.confidence_score ?? 0.15),
+              enrichment: item.enrichment ?? null,
               rationale: item.rationale || 'Included as part of the competitor benchmark set.',
               standing: buildCompetitorStanding(
                 (Array.isArray(report.competitor_intelligence.comparison?.competitors)
@@ -154,17 +179,69 @@ export function mapComposedReport(
             }))
           : [],
         strongestGaps: Array.isArray(report.competitor_intelligence.generated_gaps)
-          ? report.competitor_intelligence.generated_gaps.slice(0, 3).map((gap) => ({
+          ? report.competitor_intelligence.generated_gaps
+              .map((gap) => ({
+                ...gap,
+                leading_competitors: Array.isArray(gap.leading_competitors)
+                  ? gap.leading_competitors.filter((item) => finalCompetitorKeys.has(String(item).trim().toLowerCase()))
+                  : [],
+              }))
+              .filter((gap) => gap.leading_competitors.length > 0)
+              .slice(0, 3)
+              .map((gap) => ({
               gapType: gap.gap_type || 'competitor_gap',
               title: gap.title || 'Competitor gap detected',
               whyItMatters: gap.why_it_matters || 'This gap is affecting how the business compares to competitors.',
               confidenceScore: Number(gap.confidence_score ?? 0),
               impactScore: Number(gap.impact_score ?? 0),
-              leadingCompetitors: Array.isArray(gap.leading_competitors) ? gap.leading_competitors : [],
+              leadingCompetitors: gap.leading_competitors,
             }))
           : [],
       }
     : undefined;
+
+  const sanitizedReport = report.competitor_intelligence
+    ? {
+        ...report,
+        competitor_intelligence: {
+          ...report.competitor_intelligence,
+          detected_competitors: finalDetectedCompetitors,
+          comparison: {
+            ...report.competitor_intelligence.comparison,
+            competitors: Array.isArray(report.competitor_intelligence.comparison?.competitors)
+              ? report.competitor_intelligence.comparison.competitors.filter((entry) =>
+                  finalCompetitorKeys.has(String(entry.competitor?.name ?? '').trim().toLowerCase()) ||
+                  finalCompetitorKeys.has(String(entry.competitor?.domain ?? '').trim().toLowerCase()),
+                )
+              : [],
+          },
+          generated_gaps: Array.isArray(report.competitor_intelligence.generated_gaps)
+            ? report.competitor_intelligence.generated_gaps
+                .map((gap) => ({
+                  ...gap,
+                  leading_competitors: Array.isArray(gap.leading_competitors)
+                    ? gap.leading_competitors.filter((item) => finalCompetitorKeys.has(String(item).trim().toLowerCase()))
+                    : [],
+                }))
+                .filter((gap) => gap.leading_competitors.length > 0)
+            : [],
+        },
+        competitor_visuals: report.competitor_visuals
+          ? {
+              ...report.competitor_visuals,
+              competitor_positioning_radar: {
+                ...report.competitor_visuals.competitor_positioning_radar,
+                competitors: Array.isArray(report.competitor_visuals.competitor_positioning_radar?.competitors)
+                  ? report.competitor_visuals.competitor_positioning_radar.competitors.filter((item) =>
+                      finalCompetitorKeys.has(String(item.name ?? '').trim().toLowerCase()) ||
+                      finalCompetitorKeys.has(String(item.domain ?? '').trim().toLowerCase()),
+                    )
+                  : [],
+              },
+            }
+          : report.competitor_visuals,
+      }
+    : report;
 
   const sectionNames = sections.map((section) => section.section_name).filter((value): value is string => Boolean(value));
   const title = reportType === 'performance'
@@ -291,8 +368,8 @@ export function mapComposedReport(
     geoAeoVisuals: reportType === 'snapshot' ? buildGeoAeoVisuals(report) : undefined,
     geoAeoExecutiveSummary: reportType === 'snapshot' ? buildGeoAeoExecutiveSummary(report) : undefined,
     unifiedIntelligenceSummary: reportType === 'snapshot' ? buildUnifiedIntelligenceSummary(report) : undefined,
-    competitorVisuals: reportType === 'snapshot' ? buildCompetitorVisuals(report) : undefined,
-    competitorIntelligenceSummary: reportType === 'snapshot' ? buildCompetitorIntelligenceSummary(report) : undefined,
+    competitorVisuals: reportType === 'snapshot' ? buildCompetitorVisuals(sanitizedReport) : undefined,
+    competitorIntelligenceSummary: reportType === 'snapshot' ? buildCompetitorIntelligenceSummary(sanitizedReport) : undefined,
     decisionSnapshot,
     topPriorities,
     nextSteps,

@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
+import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 
@@ -113,11 +114,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn('[linkedin/connector/callback] userinfo fetch failed:', userinfoRes.status);
     }
 
+    // saveToken now writes ONLY metadata (connected_by_user_id, scopes, etc.)
+    // — see backend/services/platformTokenService.ts. The actual access /
+    // refresh tokens land in social_accounts via dualWriteSocialAccount, which
+    // is the single source of truth post-consolidation.
     await saveToken(tenantId, organizationId, 'linkedin', {
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token || null,
-      expires_at: expiresAt,
       connected_by_user_id: access!.userId,
+    });
+
+    await dualWriteSocialAccount({
+      userId: access!.userId,
+      companyId: organizationId,
+      platform: 'linkedin',
+      platformUserId: linkedinSub,
+      accountName: linkedinName,
+      token: {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token || undefined,
+        expires_at: expiresAt || undefined,
+        token_type: tokenData.token_type || 'Bearer',
+      },
     });
 
     // G5.5: Audit log

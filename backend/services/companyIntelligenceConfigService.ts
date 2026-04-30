@@ -8,6 +8,12 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+import {
+  buildCandidatesFromNames,
+  extractCompetitiveContextFromProfile,
+  getFinalCompetitors,
+} from './competitorEngineService';
+import type { CompanyProfile } from './companyProfile/types';
 
 export const PLAN_LIMIT_EXCEEDED = 'PLAN_LIMIT_EXCEEDED';
 
@@ -86,6 +92,47 @@ async function checkPlanLimit(
   }
 }
 
+async function loadCompetitiveContext(companyId: string) {
+  const { data } = await supabase
+    .from('company_profiles')
+    .select('*')
+    .eq('company_id', companyId)
+    .maybeSingle();
+  return extractCompetitiveContextFromProfile((data ?? null) as CompanyProfile | null);
+}
+
+async function getValidatedCompetitors(companyId: string, names: string[]) {
+  const context = await loadCompetitiveContext(companyId);
+  return getFinalCompetitors({
+    candidates: buildCandidatesFromNames(names, 'manual'),
+    context,
+    max: Math.max(1, names.length),
+    useNetwork: true,
+  });
+}
+
+async function getValidatedCompetitorNames(companyId: string, names: string[]): Promise<string[]> {
+  const finalCompetitors = await getValidatedCompetitors(companyId, names);
+  return finalCompetitors.map((competitor) => competitor.name);
+}
+
+async function requireValidatedCompetitorName(companyId: string, name: string): Promise<string> {
+  const [validatedName] = await getValidatedCompetitorNames(companyId, [name]);
+  if (!validatedName) {
+    throw new Error('INVALID_COMPETITOR');
+  }
+  return validatedName;
+}
+
+function competitorLookupKey(value: string | null | undefined): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '');
+}
+
 // --- Topics ---
 
 export async function getCompanyTopics(companyId: string): Promise<TopicItem[]> {
@@ -140,14 +187,32 @@ export async function getCompanyCompetitors(companyId: string): Promise<Competit
     .eq('company_id', companyId)
     .order('competitor_name');
   if (error) throw new Error(`getCompanyCompetitors failed: ${error.message}`);
-  return (data ?? []) as CompetitorItem[];
+  const rows = (data ?? []) as CompetitorItem[];
+  const validatedCompetitors = await getValidatedCompetitors(
+    companyId,
+    rows.map((row) => row.competitor_name),
+  );
+  const validatedSet = new Set(validatedCompetitors.flatMap((competitor) => [
+    competitorLookupKey(competitor.name),
+    competitorLookupKey(competitor.domain),
+  ]).filter(Boolean));
+  return rows
+    .filter((row) => validatedSet.has(competitorLookupKey(row.competitor_name)))
+    .map((row) => {
+      const canonical = validatedCompetitors.find((competitor) =>
+        competitorLookupKey(competitor.name) === competitorLookupKey(row.competitor_name) ||
+        competitorLookupKey(competitor.domain) === competitorLookupKey(row.competitor_name),
+      )?.name;
+      return canonical ? { ...row, competitor_name: canonical } : row;
+    });
 }
 
 export async function createCompetitor(companyId: string, competitorName: string): Promise<CompetitorItem> {
   await checkPlanLimit(companyId, 'competitors', 'company_intelligence_competitors');
+  const validatedName = await requireValidatedCompetitorName(companyId, competitorName);
   const { data, error } = await supabase
     .from('company_intelligence_competitors')
-    .insert({ company_id: companyId, competitor_name: competitorName.trim(), enabled: true })
+    .insert({ company_id: companyId, competitor_name: validatedName, enabled: true })
     .select('id, company_id, competitor_name, enabled, created_at, updated_at')
     .single();
   if (error) throw new Error(`createCompetitor failed: ${error.message}`);
@@ -155,9 +220,16 @@ export async function createCompetitor(companyId: string, competitorName: string
 }
 
 export async function updateCompetitor(id: string, name: string): Promise<CompetitorItem> {
+  const { data: existing, error: lookupError } = await supabase
+    .from('company_intelligence_competitors')
+    .select('company_id')
+    .eq('id', id)
+    .maybeSingle();
+  if (lookupError || !existing?.company_id) throw new Error(`updateCompetitor failed: ${lookupError?.message ?? 'missing competitor row'}`);
+  const validatedName = await requireValidatedCompetitorName(String(existing.company_id), name);
   const { data, error } = await supabase
     .from('company_intelligence_competitors')
-    .update({ competitor_name: name.trim() })
+    .update({ competitor_name: validatedName })
     .eq('id', id)
     .select('id, company_id, competitor_name, enabled, created_at, updated_at')
     .single();

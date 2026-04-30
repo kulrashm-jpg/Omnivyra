@@ -67,6 +67,13 @@ export const buildInsightsKey = (companyId: string): string =>
 export const buildClustersKey = (companyId: string): string =>
   `${PREFIX}:intelligence:clusters:${companyId}`;
 
+function sanitizeCachedInsights(value: CompanyIntelligenceInsights): CompanyIntelligenceInsights {
+  return {
+    ...value,
+    competitor_activity: [],
+  };
+}
+
 export async function getCachedInsights(
   companyId: string
 ): Promise<CompanyIntelligenceInsights | null> {
@@ -77,7 +84,7 @@ export async function getCachedInsights(
       const client = getRedisClient()!;
       const raw = await client.get(key);
       if (!raw) return null;
-      return JSON.parse(raw) as CompanyIntelligenceInsights;
+      return sanitizeCachedInsights(JSON.parse(raw) as CompanyIntelligenceInsights);
     } catch {
       // fall through
     }
@@ -87,7 +94,7 @@ export async function getCachedInsights(
     if (entry) inMemoryCache.delete(key);
     return null;
   }
-  return entry.value as CompanyIntelligenceInsights;
+  return sanitizeCachedInsights(entry.value as CompanyIntelligenceInsights);
 }
 
 export async function setCachedInsights(
@@ -95,18 +102,19 @@ export async function setCachedInsights(
   value: CompanyIntelligenceInsights
 ): Promise<void> {
   const key = buildInsightsKey(companyId);
+  const sanitizedValue = sanitizeCachedInsights(value);
   const ok = await isRedisOk();
   if (ok) {
     try {
       const client = getRedisClient()!;
-      await client.setex(key, TTL_SEC, JSON.stringify(value));
+      await client.setex(key, TTL_SEC, JSON.stringify(sanitizedValue));
       return;
     } catch {
       // fall through
     }
   }
   inMemoryCache.set(key, {
-    value,
+    value: sanitizedValue,
     expires_at: Date.now() + TTL_SEC * 1000,
   });
 }

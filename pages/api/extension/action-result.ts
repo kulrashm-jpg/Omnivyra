@@ -128,10 +128,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ success: true, idempotent: true, status: existing.status });
     }
 
-    // Only `dispatched` and `acknowledged` rows may legally receive a result.
-    // Anything else (pending/approved/executing/scheduled) is a protocol
-    // violation and is rejected to prevent out-of-order state writes.
-    if (existing.status !== 'dispatched' && existing.status !== 'acknowledged') {
+    // This deployment stores leased browser commands as `pending` because
+    // the DB status constraint does not include the newer dispatched /
+    // acknowledged intermediate states. The active lease is the claim signal.
+    if (existing.status !== 'pending' && existing.status !== 'dispatched' && existing.status !== 'acknowledged') {
       return res.status(409).json({ success: false, error: 'INVALID_STATE', current_status: existing.status });
     }
 

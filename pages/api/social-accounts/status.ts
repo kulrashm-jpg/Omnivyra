@@ -8,6 +8,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { getUserRole } from '@/backend/services/rbacService';
+import { refreshExpiringSocialAccountsForCompany } from '@/backend/auth/tokenRefresh';
+import { getOAuthCredentialsForPlatform } from '@/backend/auth/oauthCredentialResolver';
 
 const SUPPORTED_PLATFORMS = [
   // Social media platforms
@@ -19,8 +21,8 @@ const SUPPORTED_PLATFORMS = [
   { key: 'whatsapp',       label: 'WhatsApp',       authPath: null,                  category: 'social' },
   { key: 'tiktok',         label: 'TikTok',         authPath: '/api/auth/tiktok',    category: 'social' },
   { key: 'pinterest',      label: 'Pinterest',      authPath: '/api/auth/pinterest', category: 'social' },
-  { key: 'threads',        label: 'Threads',        authPath: '/api/auth/threads',   category: 'social' },
-  { key: 'reddit',         label: 'Reddit',         authPath: null,                  category: 'social' },
+  { key: 'threads',        label: 'Threads',        authPath: '/api/auth/instagram', category: 'social' },
+  { key: 'reddit',         label: 'Reddit',         authPath: '/api/community-ai/connectors/reddit/auth', category: 'social' },
   // Community platforms
   { key: 'github',         label: 'GitHub',         authPath: null,                  category: 'community' },
   { key: 'hackernews',     label: 'Hacker News',    authPath: null,                  category: 'community' },
@@ -56,11 +58,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
+  // Pre-flight: refresh any expiring/expired social_accounts tokens for this company
+  // through the centralized token refresh service.
+  // BEFORE we load and report status. Short-lived tokens (e.g. X — 2h expiry) would
+  // otherwise show "Token Expired" on every dashboard load between sessions.
+  if (userId && companyId && isValidUuid(companyId)) {
+    try {
+      await refreshExpiringSocialAccountsForCompany(companyId);
+    } catch (e: any) {
+      // Non-fatal — fall through and report stale state if refresh fails.
+      console.warn('[social-accounts/status] proactive refresh failed:', e?.message);
+    }
+  }
+
   // Load user's connected accounts (only if authenticated)
   const accountMap: Record<string, any> = {};
+  const inactiveAccountMap: Record<string, any> = {};
 
   if (userId) {
-    const baseSelect = 'id, platform, account_name, username, is_active, token_expires_at, platform_user_id, company_id';
+    const baseSelect = 'id, platform, account_name, username, is_active, token_expires_at, platform_user_id, company_id, access_token';
 
     if (companyId && isValidUuid(companyId)) {
       // Company-scoped accounts — two typed queries to avoid text=uuid cast error
@@ -76,6 +92,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const normalizedPlatform = acc.platform === 'twitter' ? 'x' : acc.platform;
         if (!accountMap[normalizedPlatform]) accountMap[normalizedPlatform] = acc;
       }
+
+      const [{ data: inactiveScoped }, { data: inactiveLegacy }] = await Promise.all([
+        supabase.from('social_accounts').select(baseSelect)
+          .eq('user_id', userId).eq('is_active', false).eq('company_id', companyId)
+          .eq('platform', 'threads')
+          .not('platform_user_id', 'like', 'planning_%'),
+        supabase.from('social_accounts').select(baseSelect)
+          .eq('user_id', userId).eq('is_active', false).is('company_id', null)
+          .eq('platform', 'threads')
+          .not('platform_user_id', 'like', 'planning_%'),
+      ]);
+      for (const acc of [...(inactiveScoped || []), ...(inactiveLegacy || [])]) {
+        if (!inactiveAccountMap.threads) inactiveAccountMap.threads = acc;
+      }
     } else {
       const { data: accounts } = await supabase.from('social_accounts').select(baseSelect)
         .eq('user_id', userId).eq('is_active', true)
@@ -83,6 +113,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const acc of accounts || []) {
         const normalizedPlatform = acc.platform === 'twitter' ? 'x' : acc.platform;
         if (!accountMap[normalizedPlatform]) accountMap[normalizedPlatform] = acc;
+      }
+
+      const { data: inactiveAccounts } = await supabase.from('social_accounts').select(baseSelect)
+        .eq('user_id', userId).eq('is_active', false)
+        .eq('platform', 'threads')
+        .not('platform_user_id', 'like', 'planning_%');
+      for (const acc of inactiveAccounts || []) {
+        if (!inactiveAccountMap.threads) inactiveAccountMap.threads = acc;
       }
     }
   }
@@ -96,6 +134,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .not('oauth_client_id_encrypted', 'is', null);
 
   const configuredSet = new Set((configs || []).map((r: any) => r.platform));
+  if (configuredSet.has('facebook') || configuredSet.has('meta')) {
+    configuredSet.add('facebook');
+    configuredSet.add('instagram');
+    configuredSet.add('whatsapp');
+    configuredSet.add('threads');
+  }
+  configuredSet.add('threads');
 
   // Env-var fallback for backward compatibility
   const hasEnv = (key: string) => {
@@ -106,16 +151,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (hasEnv('TWITTER_CLIENT_ID') || hasEnv('X_CLIENT_ID')) configuredSet.add('x');
   if (hasEnv('YOUTUBE_CLIENT_ID') || hasEnv('GOOGLE_CLIENT_ID')) configuredSet.add('youtube');
   // Facebook App covers facebook, instagram, whatsapp
-  if (hasEnv('FACEBOOK_CLIENT_ID')) {
+  if (
+    hasEnv('FACEBOOK_CLIENT_ID') ||
+    hasEnv('FACEBOOK_APP_ID') ||
+    hasEnv('META_CLIENT_ID') ||
+    hasEnv('META_APP_ID')
+  ) {
     configuredSet.add('facebook');
     configuredSet.add('instagram');
     configuredSet.add('whatsapp');
+    configuredSet.add('threads');
   }
+  if (hasEnv('TIKTOK_CLIENT_ID')) configuredSet.add('tiktok');
+  if (hasEnv('PINTEREST_CLIENT_ID') || hasEnv('PINTEREST_APP_ID')) configuredSet.add('pinterest');
+  if (hasEnv('REDDIT_CLIENT_ID')) configuredSet.add('reddit');
+
+  // Final fallback: use the same resolver as /api/social-accounts/verify-config.
+  // This keeps the Connect button in sync with credential verification, including
+  // per-platform aliases and env names.
+  await Promise.all(
+    SUPPORTED_PLATFORMS
+      .filter((p) => p.category === 'social' && !configuredSet.has(p.key))
+      .map(async (p) => {
+        const credentialKey = p.key === 'threads' ? 'instagram' : p.key;
+        const creds = await getOAuthCredentialsForPlatform(credentialKey).catch(() => null);
+        if (creds?.client_id && creds?.client_secret) configuredSet.add(p.key);
+      })
+  );
 
   const now = new Date().toISOString();
 
   const result = SUPPORTED_PLATFORMS.map((p) => {
-    const acc = accountMap[p.key];
+    const acc = accountMap[p.key] ?? null;
+    const inactiveAcc = inactiveAccountMap[p.key] ?? null;
+    const connected = !!acc?.access_token;
     const isExpired = acc?.token_expires_at && acc.token_expires_at < now;
     return {
       platform_key: p.key,
@@ -123,12 +192,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       auth_path: p.authPath,
       category: p.category,
       oauth_configured: configuredSet.has(p.key),
-      connected: !!acc,
+      available: p.key === 'threads' ? true : configuredSet.has(p.key),
+      connected,
+      connection_status: connected ? 'connected' : inactiveAcc ? 'disconnected' : 'not_connected',
       expired: !!isExpired,
-      account_name: acc?.account_name ?? null,
-      username: acc?.username ?? null,
-      token_expires_at: acc?.token_expires_at ?? null,
-      social_account_id: acc?.id ?? null,
+      account_name: acc?.account_name ?? inactiveAcc?.account_name ?? null,
+      username: acc?.username ?? inactiveAcc?.username ?? null,
+      token_expires_at: acc?.token_expires_at ?? inactiveAcc?.token_expires_at ?? null,
+      social_account_id: acc?.id ?? inactiveAcc?.id ?? null,
     };
   });
 

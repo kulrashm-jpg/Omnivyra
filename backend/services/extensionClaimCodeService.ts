@@ -27,7 +27,16 @@ type ClaimCode = {
   redeemedAt: number | null;
 };
 
-const store = new Map<string, ClaimCode>();
+// In dev, Next.js hot-reload tears down and re-evaluates this module
+// when ANY file in its dependency graph changes — which wipes the in-memory
+// Map between bootstrap (creates code) and redeem (looks it up). The user
+// experiences this as "INVALID_OR_EXPIRED_CLAIM_CODE" on every redeem.
+// Pin the Map onto globalThis so it survives module re-evaluation. In
+// production this is a no-op (no hot-reload, single Map either way).
+const GLOBAL_KEY = '__omnivyra_claim_code_store__';
+const globalAny = globalThis as unknown as Record<string, Map<string, ClaimCode> | undefined>;
+const store: Map<string, ClaimCode> = globalAny[GLOBAL_KEY] ?? new Map<string, ClaimCode>();
+globalAny[GLOBAL_KEY] = store;
 const CLAIM_CODE_TTL_MS = 60 * 1000; // 60 seconds
 
 function getCodeSecret() {

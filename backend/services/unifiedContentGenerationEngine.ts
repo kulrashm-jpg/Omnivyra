@@ -1,6 +1,12 @@
 /**
  * UNIFIED CONTENT GENERATION ENGINE
  *
+ * DEPRECATED FOR LONG-FORM CONTENT:
+ * Do not use this module for blog, article, guide, newsletter, story,
+ * whitepaper, or case-study generation. Long-form generation is owned by
+ * lib/content/unifiedLongFormEngine.ts. This module remains for short-form,
+ * engagement response orchestration, and backwards-compatible queue jobs.
+ *
  * Single source of truth for all content generation across:
  * - Command Center (Blog, Post, WhitePaper, Story, Newsletter creation)
  * - Campaign Flow (Master content generation → repurposing)

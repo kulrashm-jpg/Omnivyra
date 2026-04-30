@@ -214,6 +214,7 @@ export default function ThreadContinuationView() {
       intent: session.intent,
       platform: session.platform,
       executionMode: session.executionMode,
+      anchor: session.anchor,
     });
   }, [contextNote, followUp.description, session, sessionToken]);
   const schedulerLink = useMemo(() => {

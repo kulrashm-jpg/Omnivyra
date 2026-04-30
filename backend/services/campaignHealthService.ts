@@ -344,15 +344,6 @@ export function validateCampaignHealth(input: {
     recommendations.push('Add geography to improve targeting.');
   }
 
-  if (!hasList(input.companyProfile.competitors_list) && !hasValue(input.companyProfile.competitors)) {
-    issues.push({
-      level: 'warning',
-      field: 'competitors',
-      message: 'Competitors are missing',
-    });
-    recommendations.push('Add competitor landscape for stronger differentiation.');
-  }
-
   if (trendCoverage < 50) {
     issues.push({
       level: 'warning',

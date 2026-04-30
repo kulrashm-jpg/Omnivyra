@@ -63,7 +63,7 @@ import { runEngagementOpportunityScanner } from '../jobs/engagementOpportunitySc
 import { runDailyIntelligence } from '../schedulers/intelligenceScheduler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
-import { runConnectorTokenRefreshJob } from '../jobs/connectorTokenRefreshJob';
+import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
 import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
@@ -122,7 +122,9 @@ const ENGAGEMENT_DIGEST_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const ENGAGEMENT_SIGNAL_SCHEDULER_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
 const ENGAGEMENT_SIGNAL_ARCHIVE_INTERVAL_MS = 24 * 60 * 60 * 1000; // nightly
 const ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS = 4 * 60 * 60 * 1000; // every 4 hours
-const CONNECTOR_TOKEN_REFRESH_INTERVAL_MS      = 6 * 60 * 60 * 1000;  // every 6 hours
+// community_ai_platform_tokens no longer stores tokens — only metadata.
+// All token refresh runs through SOCIAL_ACCOUNT_TOKEN_REFRESH below.
+const SOCIAL_ACCOUNT_TOKEN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;      // every 10 minutes (X tokens expire in 2h)
 const GA4_INGESTION_INTERVAL_MS                = 6 * 60 * 60 * 1000;  // every 6 hours
 const CONFIDENCE_CALIBRATION_INTERVAL_MS       = 7 * 24 * 60 * 60 * 1000; // weekly
 const COMMUNITY_AI_LEASE_REAP_INTERVAL_MS      = 30 * 1000;               // every 30 seconds
@@ -242,7 +244,7 @@ let lastEngagementDigestRun = 0;
 let lastEngagementSignalSchedulerRun = 0;
 let lastEngagementSignalArchiveRun = 0;
 let lastEngagementOpportunityScannerRun = 0;
-let lastConnectorTokenRefreshRun = 0;
+let lastSocialAccountTokenRefreshRun = 0;
 let lastGa4IngestionRun = 0;
 let lastLeadThreadQueueCleanupRun = 0;
 let lastConfidenceCalibrationRun = 0;
@@ -335,7 +337,7 @@ async function startCron() {
     lastEngagementSignalSchedulerRun    = saved.engagementSignalScheduler   ?? 0;
     lastEngagementSignalArchiveRun      = saved.engagementSignalArchive     ?? 0;
     lastEngagementOpportunityScannerRun = saved.engagementOpportunityScanner ?? 0;
-    lastConnectorTokenRefreshRun        = saved.connectorTokenRefresh       ?? 0;
+    lastSocialAccountTokenRefreshRun    = saved.socialAccountTokenRefresh   ?? 0;
     lastGa4IngestionRun                 = saved.ga4Ingestion                ?? 0;
     lastLeadThreadQueueCleanupRun       = saved.leadThreadQueueCleanup      ?? 0;
     console.info('[cron-guard] last-run timestamps restored — tasks will respect their intervals on startup');
@@ -693,7 +695,7 @@ async function runSchedulerCycle() {
     engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
-    connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    socialAccountTokenRefresh:    lastSocialAccountTokenRefreshRun,
     ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
@@ -1151,18 +1153,22 @@ async function runSchedulerCycle() {
     }
   }
 
-  // Run connector token refresh every 6 hours (G5.4 - community_ai_platform_tokens)
-  if (shouldRunCronJob("connectorTokenRefresh", CONNECTOR_TOKEN_REFRESH_INTERVAL_MS, lastConnectorTokenRefreshRun)) {
-    lastConnectorTokenRefreshRun = Date.now();
+  // Run social_accounts token refresh every 10 minutes — refreshes any X
+  // (and other) tokens within REFRESH_BUFFER_MS of expiry. Without this,
+  // X 2-hour access tokens silently expire between dashboard loads.
+  // social_accounts is the single source of truth for tokens since the
+  // community_ai_platform_tokens consolidation (it no longer stores tokens).
+  if (shouldRunCronJob("socialAccountTokenRefresh", SOCIAL_ACCOUNT_TOKEN_REFRESH_INTERVAL_MS, lastSocialAccountTokenRefreshRun)) {
+    lastSocialAccountTokenRefreshRun = Date.now();
     try {
-      const result = await runConnectorTokenRefreshJob();
+      const result = await runSocialAccountTokenRefreshJob();
       if (result.refreshed > 0 || result.errors > 0) {
         console.log(
-          `✅ Connector token refresh: ${result.refreshed} refreshed, ${result.skipped} skipped, ${result.errors} errors`
+          `✅ Social account token refresh: companies=${result.companies} refreshed=${result.refreshed} skipped=${result.skipped} errors=${result.errors}`
         );
       }
     } catch (error: any) {
-      console.error('❌ Connector token refresh error:', error.message);
+      console.error('❌ Social account token refresh error:', error.message);
     }
   }
 
@@ -1247,7 +1253,7 @@ async function runSchedulerCycle() {
     engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
-    connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    socialAccountTokenRefresh:    lastSocialAccountTokenRefreshRun,
     ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
@@ -1284,7 +1290,7 @@ async function runSchedulerCycle() {
     engagementSignalScheduler:    lastEngagementSignalSchedulerRun,
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
-    connectorTokenRefresh:        lastConnectorTokenRefreshRun,
+    socialAccountTokenRefresh:    lastSocialAccountTokenRefreshRun,
     ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,

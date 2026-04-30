@@ -14,7 +14,17 @@ import type { PlatformWorkItem } from '@/hooks/useWorkQueue';
 import { VERIFIED_ENGAGEMENT_PLATFORMS } from '@/lib/engagementCapabilities';
 
 /** Canonical order for known platforms when displayed dynamically. */
-const PLATFORM_ORDER = ['linkedin', 'twitter', 'instagram', 'facebook', 'youtube', 'reddit'] as const;
+const PLATFORM_ORDER = [
+  'linkedin',
+  'twitter',
+  'instagram',
+  'facebook',
+  'youtube',
+  'reddit',
+  'pinterest',
+  'tiktok',
+  'threads',
+] as const;
 
 function normalizeToCanonicalSlug(p: string): string {
   const lower = (p || '').toLowerCase().trim();
@@ -30,7 +40,6 @@ function buildTabItems(integratedPlatforms: string[]): Array<{ slug: string; lab
       integratedPlatforms
         .map(normalizeToCanonicalSlug)
         .filter((s) => s !== 'unknown')
-        .filter((s) => VERIFIED_ENGAGEMENT_PLATFORMS.includes(s)),
     ),
   ];
   const ordered = normalized.sort((a, b) => {

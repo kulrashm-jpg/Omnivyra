@@ -1,11 +1,39 @@
+jest.mock('../../db/supabaseClient', () => {
+  const buildQuery = () => {
+    const query: Record<string, jest.Mock> = {};
+    query.select = jest.fn(() => query);
+    query.eq = jest.fn(() => query);
+    query.order = jest.fn(() => query);
+    query.limit = jest.fn(() => Promise.resolve({ data: [], error: null }));
+    query.maybeSingle = jest.fn(() => Promise.resolve({ data: null, error: null }));
+    query.upsert = jest.fn(() => Promise.resolve({ data: null, error: null }));
+    return query;
+  };
+
+  return {
+    supabase: {
+      from: jest.fn(() => buildQuery()),
+    },
+  };
+});
+
+jest.mock('axios', () => ({
+  get: jest.fn(() => Promise.resolve({ data: { organic_results: [] } })),
+}));
+
 import type { PersistedDecisionObject } from '../../services/decisionObjectService';
 import type { ResolvedReportInput } from '../../services/reportInputResolver';
 import {
   buildCompetitorIntelligence,
   buildCompetitorIntelligenceActive,
   competitorGapsToDecisions,
+  generateDiscoveryKeywords,
 } from '../../services/reportCompetitorIntelligenceService';
 import { composeSnapshotReportFromDecisions } from '../../services/snapshotReportService';
+import {
+  assertSortedByScoreDesc,
+  assertValidCompetitorList,
+} from '../helpers/assertValidCompetitor';
 
 function makeResolvedInput(overrides?: Partial<ResolvedReportInput['resolved']>): ResolvedReportInput {
   return {
@@ -13,16 +41,16 @@ function makeResolvedInput(overrides?: Partial<ResolvedReportInput['resolved']>)
     reportCategory: 'snapshot',
     profile: {
       company_id: 'company-1',
-      name: 'Omnivyra',
-      category: 'SaaS / Software',
-      industry: 'Technology & Software',
-      website_url: 'https://omnivyra.com',
-      products_services: 'AI-driven marketing operating system',
-      products_services_list: ['AI-driven marketing operating system', 'readiness analysis'],
-      target_customer_segment: 'B2B marketing teams',
-      ideal_customer_profile: 'lean growth teams',
-      brand_positioning: 'Unified AI-driven platform for marketing readiness',
-      competitive_advantages: 'clarity, execution sequencing, operating-system workflow',
+      name: 'Drishik',
+      category: 'AI clarity platform',
+      industry: 'AI wellness and decision intelligence',
+      website_url: 'https://drishik.com',
+      products_services: 'AI clarity engine for self-reflection, emotional wellbeing, and life decisions',
+      products_services_list: ['AI clarity engine', 'self-reflection guidance', 'emotional wellbeing decision support'],
+      target_audience: 'individuals seeking personal clarity and guided self-reflection',
+      ideal_customer_profile: 'adults seeking private emotional support and structured wellbeing guidance',
+      brand_positioning: 'AI-guided personal clarity and self-reflection support',
+      competitive_advantages: 'private reflection, decision clarity, emotionally aware guidance',
     },
     requestPayload: {},
     defaults: {
@@ -35,24 +63,24 @@ function makeResolvedInput(overrides?: Partial<ResolvedReportInput['resolved']>)
     },
     resolved: {
       companyName: null,
-      websiteDomain: 'example.com',
-      businessType: 'B2B Services',
-      geography: 'United States',
-      socialLinks: ['https://linkedin.com/company/example'],
+      websiteDomain: 'drishik.com',
+      businessType: 'AI wellness and decision intelligence',
+      geography: 'Global',
+      socialLinks: ['https://linkedin.com/company/drishik'],
       competitors: [],
       source: 'manual-entry',
       uploadedFileName: null,
       manualData: null,
       companyContext: {
-        marketFocus: 'SaaS / Software',
-        productServices: ['AI-driven marketing operating system', 'readiness analysis'],
-        targetCustomer: 'B2B marketing teams',
-        idealCustomerProfile: 'lean growth teams',
-        brandPositioning: 'Unified AI-driven platform for marketing readiness',
-        competitiveAdvantages: 'clarity, execution sequencing',
-        teamSize: '11-50',
-        foundedYear: '2022',
-        revenueRange: '$1M-$5M',
+        marketFocus: 'AI wellness and decision intelligence',
+        productServices: ['AI clarity engine', 'self-reflection guidance'],
+        targetCustomer: 'individuals seeking personal clarity and guided self-reflection',
+        idealCustomerProfile: 'adults seeking private emotional support and structured wellbeing guidance',
+        brandPositioning: 'AI-guided personal clarity and self-reflection support',
+        competitiveAdvantages: 'private reflection, decision clarity',
+        teamSize: '1-10',
+        foundedYear: '2024',
+        revenueRange: 'Pre-revenue',
       },
       ...overrides,
     },
@@ -86,6 +114,7 @@ function makeDecision(params: {
   impactConversion?: number;
   impactRevenue?: number;
   actionType?: PersistedDecisionObject['action_type'];
+  actionPayload?: Record<string, unknown>;
 }): PersistedDecisionObject {
   const now = new Date('2026-03-31T00:00:00.000Z').toISOString();
   return {
@@ -108,7 +137,7 @@ function makeDecision(params: {
     confidence_score: params.confidenceScore ?? 0.78,
     recommendation: params.recommendation,
     action_type: params.actionType ?? 'improve_content',
-    action_payload: {},
+    action_payload: params.actionPayload ?? {},
     status: 'open',
     last_changed_by: 'system',
     created_at: now,
@@ -119,45 +148,76 @@ function makeDecision(params: {
 }
 
 describe('reportCompetitorIntelligenceService', () => {
-  it('caps competitors to three and preserves source labeling', () => {
+  it('generates non-empty discovery keywords from product, problem, category, and ICP', () => {
+    const keywords = generateDiscoveryKeywords(makeResolvedInput({ competitors: [] }));
+
+    expect(keywords.length).toBeGreaterThanOrEqual(5);
+    expect(keywords.length).toBeLessThanOrEqual(10);
+    expect(keywords).toEqual(expect.arrayContaining([
+      'AI mental wellness apps',
+      'AI therapy chatbot competitors',
+    ]));
+    expect(keywords.every((keyword) => keyword.trim().length > 0)).toBe(true);
+  });
+
+  it('filters mixed source inputs down to engine-approved competitors only', () => {
     const resolvedInput = makeResolvedInput({
-      competitors: ['alpha.com', 'beta.com', 'gamma.com', 'delta.com'],
+      competitors: ['Wysa', 'Headspace', 'Optimal Virtual Employee'],
     });
 
     const intelligence = buildCompetitorIntelligence({
       decisions: [
         makeDecision({
-          id: 'seo-1',
-          issueType: 'seo_gap',
-          title: 'Search visibility is thin',
-          description: 'Core search demand is not covered strongly enough.',
-          recommendation: 'Expand core service-page coverage.',
+          id: 'legacy-evidence-1',
+          issueType: 'competitor_content_gap',
+          title: 'Legacy competitor evidence should not inject output competitors',
+          description: 'A raw decision payload names an irrelevant staffing business.',
+          recommendation: 'Validate all competitor mentions through the engine.',
+          actionPayload: {
+            competitor_name: 'Optimal Virtual Employee',
+            leading_competitors: ['optimalvirtualemployee.com'],
+          },
         }),
       ],
       resolvedInput,
     });
 
-    expect(intelligence.detected_competitors).toHaveLength(3);
+    const names = intelligence.detected_competitors.map((item) => item.name);
+    expect(names).toEqual(expect.arrayContaining(['Wysa', 'Headspace']));
+    expect(names).not.toContain('Optimal Virtual Employee');
     expect(intelligence.detected_competitors.every((item) => item.source === 'manual')).toBe(true);
+    assertValidCompetitorList(intelligence.detected_competitors as any[]);
+    assertSortedByScoreDesc(intelligence.detected_competitors as any[]);
     expect(intelligence.generated_gaps.length).toBeGreaterThanOrEqual(1);
+    const finalKeys = new Set(intelligence.detected_competitors.flatMap((item) => [item.name.toLowerCase(), item.domain?.toLowerCase() ?? '']));
+    expect(intelligence.generated_gaps.every((gap) =>
+      gap.leading_competitors.every((competitor) => finalKeys.has(competitor.toLowerCase())),
+    )).toBe(true);
   });
 
-  it('marks inferred peers clearly when explicit competitors are unavailable', () => {
+  it('enriches, scores, and filters manual competitor input before output', () => {
     const intelligence = buildCompetitorIntelligence({
-      decisions: [],
-      resolvedInput: makeResolvedInput({ competitors: [] }),
+      decisions: [
+        makeDecision({
+          id: 'content-1',
+          issueType: 'content_gap',
+          title: 'Buying-stage content is thin',
+          description: 'Comparison and proof content is under-covered.',
+          recommendation: 'Publish comparison and case-study content.',
+        }),
+      ],
+      resolvedInput: makeResolvedInput({ competitors: ['Wysa', 'Woebot Health', 'Replika'] }),
     });
 
     expect(intelligence.detected_competitors).toHaveLength(3);
-    expect(intelligence.detected_competitors.every((item) => item.source === 'inferred_keyword_peer')).toBe(true);
-    expect(intelligence.detected_competitors[0]?.name.toLowerCase()).toContain('marketing');
-    expect(intelligence.detected_competitors[0]?.fit_signals?.team_size).toBe('11-50');
-    expect(intelligence.detected_competitors[0]?.fit_signals?.revenue_range).toBe('$1M-$5M');
-    expect(intelligence.generated_gaps.some((gap) => gap.gap_type === 'visibility_gap' || gap.gap_type === 'content_gap')).toBe(true);
+    expect(intelligence.detected_competitors.every((item) => item.source === 'manual')).toBe(true);
+    assertValidCompetitorList(intelligence.detected_competitors as any[]);
+    expect(intelligence.detected_competitors.every((item) => item.enrichment?.sources.includes('known_category_dataset'))).toBe(true);
+    expect(intelligence.detected_competitors.every((item) => item.enrichment_confidence_score >= 0.8)).toBe(true);
   });
 
   it('converts strongest gaps into snapshot decision objects and exposes them in the report payload', () => {
-    const resolvedInput = makeResolvedInput({ competitors: ['alpha.com', 'beta.com', 'gamma.com'] });
+    const resolvedInput = makeResolvedInput({ competitors: ['Wysa', 'Headspace', 'Calm'] });
     const intelligence = buildCompetitorIntelligence({
       decisions: [
         makeDecision({
@@ -183,20 +243,34 @@ describe('reportCompetitorIntelligenceService', () => {
 
     expect(decisions.length).toBeGreaterThanOrEqual(1);
     expect(decisions[0]?.source_service).toBe('reportCompetitorIntelligenceService');
-    expect(report.competitor_intelligence.detected_competitors).toHaveLength(3);
+    expect(report.competitor_intelligence.detected_competitors.length).toBeGreaterThanOrEqual(1);
+    assertValidCompetitorList(report.competitor_intelligence.detected_competitors as any[]);
+    assertSortedByScoreDesc(report.competitor_intelligence.detected_competitors as any[]);
     expect(report.pipeline_audit.competitor_gap_decisions_added).toBeGreaterThanOrEqual(1);
     expect(report.summary.toLowerCase()).toContain('content coverage');
   });
 
-  it('active discovery falls back gracefully and still returns non-empty competitors', async () => {
+  it('uses known category competitors when discovery has no manual input or live SERP domains', async () => {
+    const baseline = buildCompetitorIntelligence({
+      decisions: [],
+      resolvedInput: makeResolvedInput({ competitors: [] }),
+    });
     const intelligence = await buildCompetitorIntelligenceActive({
       companyId: 'company-1',
       decisions: [],
       resolvedInput: makeResolvedInput({ competitors: [] }),
     });
 
+    expect(baseline.detected_competitors.length).toBeGreaterThanOrEqual(3);
     expect(intelligence.detected_competitors.length).toBeGreaterThanOrEqual(3);
+    expect(baseline.detected_competitors.every((item) => item.source === 'known_category_dataset')).toBe(true);
+    expect(intelligence.detected_competitors.every((item) => item.source === 'known_category_dataset')).toBe(true);
+    assertValidCompetitorList(baseline.detected_competitors as any[]);
+    assertValidCompetitorList(intelligence.detected_competitors as any[]);
+    assertSortedByScoreDesc(baseline.detected_competitors as any[]);
+    assertSortedByScoreDesc(intelligence.detected_competitors as any[]);
+    expect(baseline.generated_gaps.length).toBeGreaterThanOrEqual(1);
     expect(intelligence.discovery_metadata?.serp_status).toBe('fallback');
-    expect(intelligence.generated_gaps.length).toBeGreaterThanOrEqual(1);
+    expect(intelligence.discovery_metadata?.is_fallback_used).toBe(true);
   });
 });

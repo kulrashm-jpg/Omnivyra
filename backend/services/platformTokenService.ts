@@ -1,64 +1,100 @@
 /**
  * Platform Token Service
  *
- * Primary: community_ai_platform_tokens (tenant/org scoped, for Community AI actions).
- * Fallback: social_accounts (user-level OAuth from Connect Accounts) — extends the same
- * credentials to Engagement module and Community AI so one connection works for both.
+ * After the consolidation: `social_accounts` is the SINGLE source of truth for
+ * OAuth tokens. `community_ai_platform_tokens` stores ONLY metadata
+ * (tenant_id, organization_id, connected_by_user_id, platform, scopes,
+ * timestamps) so we can answer "did this org connect platform X via the
+ * community-AI flow, and who clicked the button?" without the dual-table
+ * drift that previously corrupted X refresh_tokens.
  *
- * G3.3: Tokens stored encrypted at rest (AES-256-GCM via credentialEncryption).
+ * All token reads in this module fan out to `tokenStore.getToken(socialAccountId)`
+ * after resolving (organization_id, platform) → social_accounts.id. Refresh
+ * is handled in tokenStore/tokenRefresh; this module no longer mints,
+ * rotates, or persists access tokens.
  */
 
 import { supabase } from '../db/supabaseClient';
 import { getToken as getTokenFromStore, isTokenExpiringSoon } from '../auth/tokenStore';
 import { refreshPlatformToken } from '../auth/tokenRefresh';
-import { encryptCredential, decryptCredential } from '../auth/credentialEncryption';
 import { normalizePlatform } from '../constants/platforms';
-import { getOAuthCredentialsForPlatform } from '../auth/oauthCredentialResolver';
 
 type TokenInput = {
-  access_token: string;
+  /** Accepted for back-compat with OAuth callbacks but no longer persisted
+   *  in this table. The canonical store is social_accounts via setToken. */
+  access_token?: string;
   refresh_token?: string | null;
   expires_at?: string | null;
-  /** G2.4: User who connected; allows owner to disconnect own. */
+  /** Owner of the connection — drives community-AI disconnect authority. */
   connected_by_user_id?: string | null;
+  /** OAuth scopes granted, if the callback knows them. Stored verbatim. */
+  scopes?: string[] | null;
 };
 
-function encryptToken(plain: string): string {
-  if (!plain || !plain.trim()) return '';
-  return encryptCredential(plain);
+const PLATFORM_ALIASES: Record<string, string[]> = {
+  x: ['x', 'twitter'],
+  twitter: ['twitter', 'x'],
+};
+
+/**
+ * Resolve the canonical social_accounts row id for an (organization, platform)
+ * pair. Returns the most recently updated active row (handles legacy
+ * duplicates). Used by every token-read entry point in this module.
+ */
+async function resolveSocialAccountIdForOrg(
+  organizationId: string,
+  platform: string,
+): Promise<string | null> {
+  const platformsToMatch = PLATFORM_ALIASES[platform] ?? [platform];
+
+  const { data: roleRows } = await supabase
+    .from('user_company_roles')
+    .select('user_id')
+    .eq('company_id', organizationId)
+    .eq('status', 'active');
+  const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
+  if (userIds.length === 0) return null;
+
+  const { data: rows } = await supabase
+    .from('social_accounts')
+    .select('id')
+    .in('user_id', userIds)
+    .eq('is_active', true)
+    .in('platform', platformsToMatch)
+    .or(`company_id.eq.${organizationId},company_id.is.null`)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+
+  return (rows ?? [])[0]?.id ?? null;
 }
 
-function decryptTokenOrLegacy(encrypted: string | null): string | null {
-  if (!encrypted || !encrypted.trim()) return null;
-  try {
-    const parts = encrypted.split(':');
-    if (parts.length === 3 && /^[0-9a-fA-F]+$/.test(parts[0]) && /^[0-9a-fA-F]+$/.test(parts[1])) {
-      return decryptCredential(encrypted);
-    }
-    return encrypted; // legacy plaintext
-  } catch {
-    return encrypted; // legacy plaintext on decrypt failure
-  }
-}
-
+/**
+ * Persist or update connector metadata for an organization+platform.
+ *
+ * IMPORTANT: this function NO LONGER stores access_token / refresh_token /
+ * expires_at. Those columns have been dropped from community_ai_platform_tokens
+ * and tokens live exclusively in social_accounts (written by tokenStore.setToken
+ * during the OAuth callback). Token fields on the input are accepted for
+ * back-compat with existing callers but ignored.
+ */
 export const saveToken = async (
   tenant_id: string,
   organization_id: string,
   platform: string,
-  tokenData: TokenInput
+  tokenData: TokenInput,
 ) => {
   const normalized = normalizePlatform(platform);
   const payload: Record<string, unknown> = {
     tenant_id,
     organization_id,
     platform: normalized,
-    access_token: encryptToken(tokenData.access_token),
-    refresh_token: tokenData.refresh_token ? encryptToken(tokenData.refresh_token) : null,
-    expires_at: tokenData.expires_at ?? null,
     updated_at: new Date().toISOString(),
   };
   if (tokenData.connected_by_user_id != null) {
     payload.connected_by_user_id = tokenData.connected_by_user_id;
+  }
+  if (tokenData.scopes != null) {
+    payload.scopes = tokenData.scopes;
   }
 
   const { data: existing, error: lookupError } = await supabase
@@ -70,7 +106,7 @@ export const saveToken = async (
     .limit(1);
 
   if (lookupError) {
-    throw new Error(`Failed to lookup token: ${lookupError.message}`);
+    throw new Error(`Failed to lookup connector metadata: ${lookupError.message}`);
   }
 
   if (existing && existing.length > 0) {
@@ -83,7 +119,7 @@ export const saveToken = async (
       .select('*')
       .limit(1);
     if (error) {
-      throw new Error(`Failed to update token: ${error.message}`);
+      throw new Error(`Failed to update connector metadata: ${error.message}`);
     }
     return data?.[0] || null;
   }
@@ -94,284 +130,122 @@ export const saveToken = async (
     .select('*')
     .limit(1);
   if (error) {
-    throw new Error(`Failed to save token: ${error.message}`);
+    throw new Error(`Failed to insert connector metadata: ${error.message}`);
   }
   return data?.[0] || null;
 };
 
-const PLATFORM_ALIASES: Record<string, string[]> = {
-  x: ['x', 'twitter'],
-  twitter: ['twitter', 'x'],
-};
-
-async function resolveTokenFromSocialAccounts(
+/**
+ * Read tokens for an (org, platform) connection. Sources tokens from
+ * social_accounts via tokenStore; refreshes in-flight if near expiry. Returns
+ * the same shape callers expected from the old dual-table getToken so this
+ * change is transparent to communityAiActionExecutor / communityAiScheduler
+ * etc.
+ */
+export const getToken = async (
+  tenant_id: string,
   organization_id: string,
-  platform: string
-): Promise<{ access_token: string; refresh_token?: string; expires_at?: string } | null> {
-  const platformsToMatch = PLATFORM_ALIASES[platform] ?? [platform];
-  const { data: roleRows } = await supabase
-    .from('user_company_roles')
-    .select('user_id')
-    .eq('company_id', organization_id)
-    .eq('status', 'active');
-  const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
-  if (userIds.length === 0) return null;
+  platform: string,
+) => {
+  const normalized = normalizePlatform(platform);
 
-  // G2.3: Filter by company_id when available for tenant isolation
-  const { data: saRows } = await supabase
-    .from('social_accounts')
-    .select('id, platform')
-    .in('user_id', userIds)
-    .eq('is_active', true)
-    .in('platform', platformsToMatch)
-    .or(`company_id.eq.${organization_id},company_id.is.null`)
-    .order('updated_at', { ascending: false })
-    .limit(1);
-  const account = (saRows ?? [])[0] as { id: string } | undefined;
-  if (!account?.id) return null;
+  const accountId = await resolveSocialAccountIdForOrg(organization_id, normalized);
+  if (!accountId) return null;
 
-  let tokenObj = await getTokenFromStore(account.id);
+  let tokenObj = await getTokenFromStore(accountId);
   if (!tokenObj?.access_token) return null;
+
   if (isTokenExpiringSoon(tokenObj, 5)) {
-    const refreshed = await refreshPlatformToken(platform, account.id, tokenObj);
+    const refreshed = await refreshPlatformToken(normalized, accountId, tokenObj);
     if (refreshed?.access_token) {
       tokenObj = refreshed;
     }
   }
+
   return {
     access_token: tokenObj.access_token,
-    refresh_token: tokenObj.refresh_token,
-    expires_at: tokenObj.expires_at,
+    refresh_token: tokenObj.refresh_token ?? null,
+    expires_at: tokenObj.expires_at ?? null,
+    tenant_id,
+    organization_id,
+    platform: normalized,
   };
-}
-
-async function refreshCommunityYouTubeTokenIfNeeded(row: {
-  tenant_id: string;
-  organization_id: string;
-  refresh_token?: string | null;
-  expires_at?: string | null;
-  access_token?: string | null;
-}): Promise<{ access_token: string; refresh_token?: string | null; expires_at?: string | null } | null> {
-  if (!row.access_token) return null;
-  if (!row.refresh_token || !row.expires_at || !isTokenExpiringSoon({ access_token: row.access_token, refresh_token: row.refresh_token, expires_at: row.expires_at }, 5)) {
-    return {
-      access_token: row.access_token,
-      refresh_token: row.refresh_token ?? null,
-      expires_at: row.expires_at ?? null,
-    };
-  }
-
-  const credentials = await getOAuthCredentialsForPlatform('youtube');
-  const clientId = credentials?.client_id || process.env.YOUTUBE_CLIENT_ID;
-  const clientSecret = credentials?.client_secret || process.env.YOUTUBE_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    return {
-      access_token: row.access_token,
-      refresh_token: row.refresh_token ?? null,
-      expires_at: row.expires_at ?? null,
-    };
-  }
-
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: row.refresh_token,
-      grant_type: 'refresh_token',
-    }),
-  });
-
-  if (!response.ok) {
-    return {
-      access_token: row.access_token,
-      refresh_token: row.refresh_token ?? null,
-      expires_at: row.expires_at ?? null,
-    };
-  }
-
-  const data = await response.json();
-  if (!data?.access_token) {
-    return {
-      access_token: row.access_token,
-      refresh_token: row.refresh_token ?? null,
-      expires_at: row.expires_at ?? null,
-    };
-  }
-
-  const refreshed = {
-    access_token: data.access_token as string,
-    refresh_token: (data.refresh_token as string | undefined) || row.refresh_token,
-    expires_at: new Date(Date.now() + ((data.expires_in || 3600) * 1000)).toISOString(),
-  };
-
-  await saveToken(row.tenant_id, row.organization_id, 'youtube', refreshed);
-  return refreshed;
-}
-
-async function refreshCommunityXTokenIfNeeded(row: {
-  tenant_id: string;
-  organization_id: string;
-  refresh_token?: string | null;
-  expires_at?: string | null;
-  access_token?: string | null;
-}): Promise<{ access_token: string; refresh_token?: string | null; expires_at?: string | null } | null> {
-  if (!row.access_token) return null;
-  const passthrough = {
-    access_token: row.access_token,
-    refresh_token: row.refresh_token ?? null,
-    expires_at: row.expires_at ?? null,
-  };
-  if (!row.refresh_token || !row.expires_at || !isTokenExpiringSoon({ access_token: row.access_token, refresh_token: row.refresh_token, expires_at: row.expires_at }, 5)) {
-    return passthrough;
-  }
-
-  const credentials = await getOAuthCredentialsForPlatform('x');
-  const clientId = credentials?.client_id || process.env.X_CLIENT_ID || process.env.TWITTER_CLIENT_ID;
-  const clientSecret = credentials?.client_secret || process.env.X_CLIENT_SECRET || process.env.TWITTER_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return passthrough;
-
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const response = await fetch('https://api.twitter.com/2/oauth2/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Authorization: `Basic ${basic}`,
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: row.refresh_token,
-    }),
-  });
-
-  if (!response.ok) {
-    console.warn('[platformTokenService] X refresh failed:', response.status);
-    return passthrough;
-  }
-
-  const data = await response.json();
-  if (!data?.access_token) return passthrough;
-
-  const refreshed = {
-    access_token: data.access_token as string,
-    refresh_token: (data.refresh_token as string | undefined) || row.refresh_token,
-    expires_at: new Date(Date.now() + ((data.expires_in || 7200) * 1000)).toISOString(),
-  };
-
-  await saveToken(row.tenant_id, row.organization_id, 'x', refreshed);
-  return refreshed;
-}
-
-export const getToken = async (tenant_id: string, organization_id: string, platform: string) => {
-  const normalized = normalizePlatform(platform);
-
-  // 1. Try community_ai_platform_tokens first
-  const { data: catRow, error } = await supabase
-    .from('community_ai_platform_tokens')
-    .select('*')
-    .eq('tenant_id', tenant_id)
-    .eq('organization_id', organization_id)
-    .eq('platform', normalized)
-    .maybeSingle();
-
-  if (catRow?.access_token) {
-    const accessToken = decryptTokenOrLegacy(catRow.access_token);
-    const refreshToken = catRow.refresh_token ? decryptTokenOrLegacy(catRow.refresh_token) : null;
-    if (!accessToken) return null;
-    const refreshArgs = {
-      tenant_id: tenant_id,
-      organization_id,
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      expires_at: catRow.expires_at ?? null,
-    };
-    const maybeRefreshed =
-      normalized === 'youtube' ? await refreshCommunityYouTubeTokenIfNeeded(refreshArgs) :
-      normalized === 'x' ? await refreshCommunityXTokenIfNeeded(refreshArgs) :
-      {
-        access_token: accessToken,
-        refresh_token: refreshToken ?? null,
-        expires_at: catRow.expires_at ?? null,
-      };
-    if (!maybeRefreshed?.access_token) return null;
-    return {
-      ...catRow,
-      access_token: maybeRefreshed.access_token,
-      refresh_token: maybeRefreshed.refresh_token ?? null,
-      expires_at: maybeRefreshed.expires_at ?? catRow.expires_at ?? null,
-    };
-  }
-
-  // 2. Fallback: social_accounts (users in org with connected accounts)
-  const fallback = await resolveTokenFromSocialAccounts(organization_id, normalized);
-  if (fallback) {
-    return {
-      access_token: fallback.access_token,
-      refresh_token: fallback.refresh_token ?? null,
-      expires_at: fallback.expires_at ?? null,
-      tenant_id,
-      organization_id,
-      platform: normalized,
-    };
-  }
-
-  if (error) {
-    throw new Error(`Failed to load token: ${error.message}`);
-  }
-  return null;
 };
 
 /**
- * Get platforms that have tokens for an org (community_ai_platform_tokens OR social_accounts fallback).
- * Used by connectors status API to show connected platforms.
+ * List platforms an org has connected. Sources from social_accounts only —
+ * the connector metadata table no longer holds tokens, so an authoritative
+ * "connected" check has to look where the tokens actually live.
  */
-export async function getPlatformsWithTokensForOrg(organization_id: string): Promise<string[]> {
+export async function getPlatformsWithTokensForOrg(
+  organization_id: string,
+): Promise<string[]> {
   const platforms = new Set<string>();
 
-  // 1. From community_ai_platform_tokens (any tenant)
-  const { data: catRows } = await supabase
-    .from('community_ai_platform_tokens')
-    .select('platform')
-    .eq('organization_id', organization_id)
-    .not('access_token', 'is', null);
-  for (const r of catRows ?? []) {
-    if (r.platform) platforms.add(normalizePlatform(r.platform));
-  }
-
-  // 2. From social_accounts (users in org with active accounts)
   const { data: roleRows } = await supabase
     .from('user_company_roles')
     .select('user_id')
     .eq('company_id', organization_id)
     .eq('status', 'active');
   const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
-  if (userIds.length > 0) {
-    // G2.1: Filter by company_id for tenant isolation; include legacy (null) for backward compat
-    const { data: saRows } = await supabase
-      .from('social_accounts')
-      .select('platform')
-      .in('user_id', userIds)
-      .eq('is_active', true)
-      .or(`company_id.eq.${organization_id},company_id.is.null`)
-      .not('access_token', 'is', null);
-    for (const r of saRows ?? []) {
-      if (r.platform) platforms.add(normalizePlatform(r.platform));
-    }
+  if (userIds.length === 0) return [];
+
+  const { data: saRows } = await supabase
+    .from('social_accounts')
+    .select('platform')
+    .in('user_id', userIds)
+    .eq('is_active', true)
+    .or(`company_id.eq.${organization_id},company_id.is.null`)
+    .not('access_token', 'is', null);
+  for (const r of saRows ?? []) {
+    if (r.platform) platforms.add(normalizePlatform(r.platform));
   }
 
   return Array.from(platforms).sort();
 }
 
 /**
- * G2.4: Get connected_by_user_id for a connector (owner-based disconnect).
+ * List platforms that have an active social_accounts row for users in the org.
+ * This intentionally does not require access_token to be present: Company Admin
+ * can surface browser-extension or cookie/session backed platforms that do not
+ * have a first-party API token available to the engagement center.
+ */
+export async function getPlatformsWithActiveSocialAccountsForOrg(
+  organization_id: string,
+): Promise<string[]> {
+  const platforms = new Set<string>();
+
+  const { data: roleRows } = await supabase
+    .from('user_company_roles')
+    .select('user_id')
+    .eq('company_id', organization_id)
+    .eq('status', 'active');
+  const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
+  if (userIds.length === 0) return [];
+
+  const { data: saRows } = await supabase
+    .from('social_accounts')
+    .select('platform')
+    .in('user_id', userIds)
+    .eq('is_active', true)
+    .or(`company_id.eq.${organization_id},company_id.is.null`)
+    .not('platform_user_id', 'like', 'planning_%');
+
+  for (const r of saRows ?? []) {
+    if (r.platform) platforms.add(normalizePlatform(r.platform));
+  }
+
+  return Array.from(platforms).sort();
+}
+
+/**
+ * Owner-based disconnect authority — preserved as metadata column on
+ * community_ai_platform_tokens.
  */
 export async function getConnectorConnectedByUserId(
   tenant_id: string,
   organization_id: string,
-  platform: string
+  platform: string,
 ): Promise<string | null> {
   const normalized = normalizePlatform(platform);
   const { data, error } = await supabase
@@ -385,27 +259,28 @@ export async function getConnectorConnectedByUserId(
   return (data as { connected_by_user_id?: string | null }).connected_by_user_id ?? null;
 }
 
+/**
+ * Disconnect a community-AI connector. Tokens themselves live in
+ * social_accounts and are revoked through the standard social-platforms
+ * disconnect flow; here we delete the metadata row that records "this org
+ * connected this platform via the community-AI flow."
+ */
 export const revokeToken = async (
   tenant_id: string,
   organization_id: string,
-  platform: string
+  platform: string,
 ) => {
   const normalized = normalizePlatform(platform);
   const { data, error } = await supabase
     .from('community_ai_platform_tokens')
-    .update({
-      access_token: null,
-      refresh_token: null,
-      expires_at: null,
-      updated_at: new Date().toISOString(),
-    })
+    .delete()
     .eq('tenant_id', tenant_id)
     .eq('organization_id', organization_id)
     .eq('platform', normalized)
     .select('*')
     .limit(1);
   if (error) {
-    throw new Error(`Failed to revoke token: ${error.message}`);
+    throw new Error(`Failed to delete connector metadata: ${error.message}`);
   }
   return data?.[0] || null;
 };

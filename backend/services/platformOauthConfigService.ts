@@ -29,10 +29,10 @@ export async function getPlatformOAuthConfig(
   platform: string
 ): Promise<PlatformOAuthConfig | null> {
   const raw = platform.toLowerCase();
-  // Meta (facebook app) covers facebook + instagram + whatsapp; twitter aliases x
+  // Meta (facebook app) covers facebook + instagram + whatsapp; Threads is derived from Instagram.
   const dbPlatform =
     raw === 'twitter' ? 'x' :
-    raw === 'meta' || raw === 'whatsapp' || raw === 'instagram' ? 'facebook' :
+    raw === 'meta' || raw === 'whatsapp' || raw === 'instagram' || raw === 'threads' ? 'facebook' :
     raw;
 
   const { data, error } = await supabase

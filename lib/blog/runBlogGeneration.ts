@@ -1,6 +1,11 @@
 /**
  * runBlogGeneration
  *
+ * COMPATIBILITY CORE:
+ * Public long-form callers should use lib/content/unifiedLongFormEngine.ts.
+ * This module remains as the existing generation core while architecture is
+ * consolidated behind the unified facade.
+ *
  * Single source of truth for all blog generation logic.
  * Called by:
  *   - /api/admin/blog/generate  (Super Admin — public_blogs)

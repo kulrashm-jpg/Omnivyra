@@ -1,5 +1,10 @@
 import { supabase } from '../db/supabaseClient';
 import { getProfile, saveProfile, type CompanyProfile } from './companyProfileService';
+import {
+  buildCandidatesFromNames,
+  extractCompetitiveContextFromResolvedInput,
+  getFinalCompetitors,
+} from './competitorEngineService';
 
 export type ReportRequestPayload = {
   formData?: Record<string, unknown> | null;
@@ -289,11 +294,7 @@ function getDefaultInputs(profile: CompanyProfile | null): ReportDefaultInputs {
         ? profile.other_social_links.flatMap((entry) => splitLines(entry?.url))
         : []),
     ]),
-    competitors: dedupe([
-      ...splitLines(storedDefaults.competitors),
-      ...splitLines(profile?.competitors),
-      ...(Array.isArray(profile?.competitors_list) ? profile.competitors_list : []),
-    ]),
+    competitors: [],
   };
 }
 
@@ -450,7 +451,7 @@ export async function resolveReportInput(params: {
     normalizeDomain(defaults.website_domain) ??
     normalizeDomain(profile?.website_url);
 
-  return {
+  const resolvedInput: ResolvedReportInput = {
     companyId: params.companyId,
     reportCategory: params.reportCategory,
     profile,
@@ -478,6 +479,19 @@ export async function resolveReportInput(params: {
     },
     integrations,
   };
+
+  const finalCompetitors = await getFinalCompetitors({
+    candidates: buildCandidatesFromNames(
+      resolveCompetitors(defaults, requestPayload),
+      'manual',
+    ),
+    context: extractCompetitiveContextFromResolvedInput(resolvedInput),
+    max: 5,
+    useNetwork: true,
+  });
+  resolvedInput.resolved.competitors = finalCompetitors.map((competitor) => competitor.name);
+
+  return resolvedInput;
 }
 
 export async function persistResolvedReportInputs(input: ResolvedReportInput): Promise<void> {
@@ -523,8 +537,8 @@ export async function persistResolvedReportInputs(input: ResolvedReportInput): P
       category: input.resolved.businessType ?? input.profile?.category ?? undefined,
       geography: input.resolved.geography ?? input.profile?.geography ?? undefined,
       geography_list: input.resolved.geography ? [input.resolved.geography] : input.profile?.geography_list ?? undefined,
-      competitors: input.resolved.competitors.length > 0 ? input.resolved.competitors.join(', ') : input.profile?.competitors ?? undefined,
-      competitors_list: input.resolved.competitors.length > 0 ? input.resolved.competitors : input.profile?.competitors_list ?? undefined,
+      competitors: input.resolved.competitors.length > 0 ? input.resolved.competitors.join(', ') : null,
+      competitors_list: input.resolved.competitors,
       social_profiles: socialProfiles.length > 0 ? socialProfiles : input.profile?.social_profiles ?? undefined,
       other_social_links:
         input.resolved.socialLinks.length > 0

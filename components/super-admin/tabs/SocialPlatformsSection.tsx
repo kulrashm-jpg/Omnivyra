@@ -684,7 +684,7 @@ export default function SocialPlatformsSection() {
                         };
 
                         if (isMeta) {
-                          // One Meta app covers all three; register every callback URL.
+                          // One Meta app covers Facebook, Instagram, and WhatsApp; register every callback URL.
                           pushBoth('Facebook publishing', '/api/auth/facebook/callback');
                           pushBoth('Instagram publishing', '/api/auth/instagram/callback');
                         } else {

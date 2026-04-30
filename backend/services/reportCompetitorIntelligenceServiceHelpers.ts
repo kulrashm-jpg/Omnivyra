@@ -5,14 +5,22 @@ import { impactScore } from './reportDecisionUtils';
 import { supabase } from '../db/supabaseClient';
 import axios from 'axios';
 import { config } from '@/config';
+import {
+  buildCompetitorFitRationale,
+  buildCompetitorFitSignals,
+  evaluateCompetitorCandidate,
+  extractCompetitiveContextFromResolvedInput,
+  scoreCompetitorCandidate,
+  type CompanyCompetitiveContext as EngineCompanyCompetitiveContext,
+  type CompetitorSource as EngineCompetitorSource,
+  type CompetitorRevenueTier,
+  type CompetitorTier,
+} from './competitorEngineService';
+import type { CompetitorEnrichmentProfile } from './competitorEnrichmentKnowledge';
+import type { CompetitorSecondaryTag } from './competitorTaxonomy';
 
 type CompetitorClassification = 'direct_competitor' | 'seo_competitor' | 'authority_leader';
-type CompetitorSource =
-  | 'manual'
-  | 'decision_evidence'
-  | 'inferred_keyword_peer'
-  | 'serp_live'
-  | 'serp_unavailable_fallback';
+type CompetitorSource = EngineCompetitorSource;
 
 type ComparisonMetrics = {
   content_depth: number;
@@ -27,9 +35,20 @@ type ComparisonMetrics = {
 export type DetectedCompetitor = {
   name: string;
   domain: string | null;
+  category: string;
+  tags: CompetitorSecondaryTag[];
   classification: CompetitorClassification;
   source: CompetitorSource;
   relevance_score: number;
+  problem_overlap: number;
+  icp_overlap: number;
+  market_overlap: number;
+  revenue_tier: CompetitorRevenueTier;
+  product_depth: number;
+  final_score: number;
+  tier: CompetitorTier;
+  enrichment: CompetitorEnrichmentProfile | null;
+  enrichment_confidence_score: number;
   rationale: string;
   fit_signals?: {
     market_focus?: string | null;
@@ -38,6 +57,8 @@ export type DetectedCompetitor = {
     team_size?: string | null;
     founded_year?: string | null;
     revenue_range?: string | null;
+    target_customer?: string | null;
+    business_model?: string | null;
   };
 };
 
@@ -67,6 +88,11 @@ export type CompetitorGap = {
 export type CompetitorIntelligenceResult = {
   summary: string;
   detected_competitors: DetectedCompetitor[];
+  competitors_by_tier: {
+    tier_1: DetectedCompetitor[];
+    tier_2: DetectedCompetitor[];
+    tier_3: DetectedCompetitor[];
+  };
   comparison: {
     company: ComparisonMetrics;
     competitors: CompetitorComparisonEntry[];
@@ -111,6 +137,39 @@ const METRIC_KEYS: Array<keyof ComparisonMetrics> = [
   'geo_presence',
   'aeo_readiness',
 ];
+
+const BLOCKED_SERP_HOSTS = new Set([
+  'amazon.com',
+  'apple.com',
+  'facebook.com',
+  'github.com',
+  'google.com',
+  'instagram.com',
+  'linkedin.com',
+  'microsoft.com',
+  'reddit.com',
+  'tiktok.com',
+  'twitter.com',
+  'wikipedia.org',
+  'x.com',
+  'youtube.com',
+]);
+
+const GENERIC_SERVICE_DOMAIN_TOKENS = new Set([
+  'agency',
+  'agencies',
+  'consulting',
+  'consultants',
+  'developer',
+  'developers',
+  'development',
+  'employee',
+  'employees',
+  'outsourcing',
+  'staffing',
+  'virtual',
+  'webdesign',
+]);
 
 
 export function clamp(value: number, min: number, max: number): number {
@@ -182,6 +241,33 @@ export function normalizeDomain(value: string | null | undefined): string | null
   return raw.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
 }
 
+function rootDomainTokenText(domain: string): string {
+  const root = domain.split('.')[0] ?? domain;
+  return root.replace(/[^a-z0-9]+/gi, ' ').toLowerCase();
+}
+
+function isBlockedSerpDomain(domain: string, ownDomain: string): boolean {
+  const normalized = normalizeDomain(domain);
+  const own = normalizeDomain(ownDomain);
+  if (!normalized || normalized === own) return true;
+  if (BLOCKED_SERP_HOSTS.has(normalized)) return true;
+  if ([...BLOCKED_SERP_HOSTS].some((host) => normalized.endsWith(`.${host}`))) return true;
+  const rootTokens = new Set(rootDomainTokenText(normalized).split(/\s+/).filter(Boolean));
+  const genericServiceHit = [...rootTokens].some((token) => GENERIC_SERVICE_DOMAIN_TOKENS.has(token));
+  const marketSpecificHit = [...rootTokens].some((token) =>
+    ['ai', 'crm', 'growth', 'marketing', 'mental', 'therapy', 'wellness', 'sales', 'seo'].includes(token),
+  );
+  return genericServiceHit && !marketSpecificHit;
+}
+
+function simplifyKeyword(keyword: string): string {
+  return keyword
+    .toLowerCase()
+    .replace(/\b(best|top|leading|competitors?|alternatives?|platforms?|software|tools?|apps?|services?)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 
 export function titleCase(value: string): string {
   return value
@@ -222,16 +308,7 @@ export function extractBusinessKeywords(value: string | null | undefined): strin
   )];
 }
 
-export type CompanyCompetitiveContext = {
-  marketFocus: string | null;
-  primaryService: string | null;
-  targetCustomer: string | null;
-  idealCustomerProfile: string | null;
-  brandPositioning: string | null;
-  teamSize: string | null;
-  foundedYear: string | null;
-  revenueRange: string | null;
-};
+export type CompanyCompetitiveContext = EngineCompanyCompetitiveContext;
 
 
 export function toShortLabel(value: string | null | undefined, fallback: string): string {
@@ -242,30 +319,7 @@ export function toShortLabel(value: string | null | undefined, fallback: string)
 
 
 export function extractCompanyCompetitiveContext(resolvedInput?: ResolvedReportInput | null): CompanyCompetitiveContext {
-  const context = resolvedInput?.resolved.companyContext;
-  const profile = resolvedInput?.profile;
-  const primaryService =
-    context?.productServices?.[0] ??
-    (Array.isArray(profile?.products_services_list) ? profile.products_services_list[0] : null) ??
-    profile?.products_services ??
-    null;
-
-  return {
-    marketFocus:
-      context?.marketFocus ??
-      resolvedInput?.resolved.businessType ??
-      profile?.campaign_focus ??
-      profile?.category ??
-      profile?.industry ??
-      null,
-    primaryService,
-    targetCustomer: context?.targetCustomer ?? profile?.target_customer_segment ?? profile?.target_audience ?? null,
-    idealCustomerProfile: context?.idealCustomerProfile ?? profile?.ideal_customer_profile ?? null,
-    brandPositioning: context?.brandPositioning ?? profile?.brand_positioning ?? profile?.unique_value ?? null,
-    teamSize: context?.teamSize ?? null,
-    foundedYear: context?.foundedYear ?? null,
-    revenueRange: context?.revenueRange ?? null,
-  };
+  return extractCompetitiveContextFromResolvedInput(resolvedInput);
 }
 
 
@@ -274,61 +328,22 @@ export function buildFitSignals(
   geography: string | null,
   productService: string | null,
 ): DetectedCompetitor['fit_signals'] {
-  return {
-    market_focus: context.marketFocus,
-    product_service: productService ?? context.primaryService,
-    geography,
-    team_size: context.teamSize,
-    founded_year: context.foundedYear,
-    revenue_range: context.revenueRange,
-  };
+  return buildCompetitorFitSignals(context, geography, productService);
 }
 
 
 export function buildFitRationale(context: CompanyCompetitiveContext, geography: string | null, fallback: string): string {
-  const parts: string[] = [];
-  if (context.marketFocus) parts.push(`market focus: ${context.marketFocus}`);
-  if (context.primaryService) parts.push(`product/service: ${context.primaryService}`);
-  if (context.targetCustomer) parts.push(`buyer fit: ${context.targetCustomer}`);
-  if (geography) parts.push(`region: ${geography}`);
-  if (context.teamSize) parts.push(`team size: ${context.teamSize}`);
-  if (context.foundedYear) parts.push(`founded: ${context.foundedYear}`);
-  if (context.revenueRange) parts.push(`revenue: ${context.revenueRange}`);
-  return parts.length > 0
-    ? `${fallback} Fit signals used: ${parts.slice(0, 4).join('; ')}.`
-    : fallback;
+  return buildCompetitorFitRationale(context, geography, fallback);
 }
 
 
-export function extractDecisionCompetitors(decisions: PersistedDecisionObject[]): DetectedCompetitor[] {
-  const seen = new Set<string>();
-  const competitors: DetectedCompetitor[] = [];
-
-  decisions.forEach((decision) => {
-    const payload = (decision.action_payload ?? {}) as Record<string, unknown>;
-    const evidence = (decision.evidence ?? {}) as Record<string, unknown>;
-    const rawCandidate = [
-      typeof payload.competitor_name === 'string' ? payload.competitor_name : null,
-      typeof payload.competitor_domain === 'string' ? payload.competitor_domain : null,
-      typeof evidence.competitor_name === 'string' ? evidence.competitor_name : null,
-    ].find(Boolean);
-
-    if (!rawCandidate) return;
-    const normalizedDomain = normalizeDomain(rawCandidate);
-    const key = normalizedDomain ?? String(rawCandidate).trim().toLowerCase();
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    competitors.push({
-      name: normalizedDomain ? domainToName(normalizedDomain) : titleCase(String(rawCandidate)),
-      domain: normalizedDomain,
-      classification: 'seo_competitor',
-      source: 'decision_evidence',
-      relevance_score: clamp((impactScore(decision) + Number(decision.confidence_score ?? 0) * 100) / 2, 40, 92),
-      rationale: 'Surfaced from existing decision evidence already linked to competitor pressure.',
-    });
-  });
-
-  return competitors;
+export function extractDecisionCompetitors(
+  decisions: PersistedDecisionObject[],
+  companyContext: CompanyCompetitiveContext,
+): DetectedCompetitor[] {
+  void decisions;
+  void companyContext;
+  return [];
 }
 
 
@@ -353,7 +368,12 @@ export async function fetchSerpDomainsForKeyword(keyword: string, geography: str
       .map((item: { link?: string }) => normalizeDomain(item.link))
       .filter((domain): domain is string => Boolean(domain));
     return Array.from(new Set<string>(domains));
-  } catch {
+  } catch (error) {
+    console.warn('[competitor-discovery][serp-keyword-failed]', {
+      keyword,
+      geography,
+      error: error instanceof Error ? error.message : String(error),
+    });
     return [];
   }
 }
@@ -366,16 +386,39 @@ export async function discoverCompetitorDomainsFromSerp(params: {
 }): Promise<{ domains: string[]; liveKeywordCount: number }> {
   const ranked = new Map<string, number>();
   let liveKeywordCount = 0;
-  for (const keyword of params.keywords.slice(0, MAX_DISCOVERY_KEYWORDS)) {
-    const domains = (await fetchSerpDomainsForKeyword(keyword, params.geography))
-      .filter((domain) => domain !== params.ownDomain);
-    if (domains.length >= MIN_SERP_DOMAINS_PER_KEYWORD) {
-      liveKeywordCount += 1;
-    }
-    domains.forEach((domain, index) => {
-      const weight = 6 - Math.min(index + 1, 5);
-      ranked.set(domain, (ranked.get(domain) ?? 0) + weight);
+  const serpApiKey = config.SERPAPI_API_KEY || config.SERP_API_KEY || config.SERPAPI_KEY || '';
+  if (!serpApiKey) {
+    console.warn('[competitor-discovery][serp-disabled]', {
+      reason: 'missing_serp_api_key',
+      keywords: params.keywords.slice(0, MAX_DISCOVERY_KEYWORDS),
     });
+  }
+
+  const runKeywordBatch = async (keywords: string[], retry: boolean): Promise<void> => {
+    for (const keyword of keywords.slice(0, MAX_DISCOVERY_KEYWORDS)) {
+      const domains = (await fetchSerpDomainsForKeyword(keyword, params.geography))
+        .filter((domain) => !isBlockedSerpDomain(domain, params.ownDomain));
+      if (domains.length >= MIN_SERP_DOMAINS_PER_KEYWORD) {
+        liveKeywordCount += 1;
+      }
+      domains.forEach((domain, index) => {
+        const weight = 6 - Math.min(index + 1, 5);
+        ranked.set(domain, (ranked.get(domain) ?? 0) + weight + (retry ? 1 : 0));
+      });
+    }
+  };
+
+  await runKeywordBatch(params.keywords, false);
+
+  if (ranked.size === 0 && params.keywords.length > 0) {
+    const simplifiedKeywords = [...new Set(params.keywords.map(simplifyKeyword).filter((keyword) => keyword.length >= 3))];
+    if (simplifiedKeywords.length > 0) {
+      console.warn('[competitor-discovery][serp-retry-simplified]', {
+        original_keywords: params.keywords.slice(0, MAX_DISCOVERY_KEYWORDS),
+        retry_keywords: simplifiedKeywords.slice(0, MAX_DISCOVERY_KEYWORDS),
+      });
+      await runKeywordBatch(simplifiedKeywords, true);
+    }
   }
 
   return {
@@ -575,4 +618,3 @@ export function averageCompetitorMetrics(entries: CompetitorComparisonEntry[]): 
     aeo_readiness: average(entries.map((entry) => entry.metrics.aeo_readiness)),
   };
 }
-

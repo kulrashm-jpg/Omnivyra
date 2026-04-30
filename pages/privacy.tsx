@@ -50,8 +50,8 @@ export default function PrivacyPolicy() {
               <h2 className="text-xl font-semibold">5. Your rights</h2>
               <p className="mt-3 text-base leading-relaxed text-[#6B7C93]">
                 You have the right to access, correct, export, or delete your personal data. To exercise any of these rights, contact us at{' '}
-                <a href="mailto:privacy@omnivyra.com" className="text-[#0A66C2] hover:underline">
-                  privacy@omnivyra.com
+                <a href="mailto:support@omnivyra.com" className="text-[#0A66C2] hover:underline">
+                  support@omnivyra.com
                 </a>.
               </p>
             </section>
@@ -60,8 +60,8 @@ export default function PrivacyPolicy() {
               <h2 className="text-xl font-semibold">6. Contact</h2>
               <p className="mt-3 text-base leading-relaxed text-[#6B7C93]">
                 For privacy-related questions, contact us at{' '}
-                <a href="mailto:privacy@omnivyra.com" className="text-[#0A66C2] hover:underline">
-                  privacy@omnivyra.com
+                <a href="mailto:support@omnivyra.com" className="text-[#0A66C2] hover:underline">
+                  support@omnivyra.com
                 </a>.
               </p>
             </section>

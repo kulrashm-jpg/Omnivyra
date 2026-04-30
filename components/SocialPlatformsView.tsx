@@ -134,6 +134,12 @@ export default function SocialPlatformsView({ d }: { d: S }) {
     archivedCommunity,
     archivedCommunityList,
     availableSocial,
+    connectedWriter,
+    availableWriter,
+    hiddenWriterList,
+    connectedCreator,
+    availableCreator,
+    hiddenCreatorList,
     catalogApis,
     checking,
     checks,
@@ -305,49 +311,95 @@ export default function SocialPlatformsView({ d }: { d: S }) {
 
               {/* ── Social tab ── */}
               {activeTab === 'social' && (
-                <div className="space-y-6">
-                  {/* Connected = In Use — shown first */}
-                  {connectedSocial.length > 0 && (
+                <div className="space-y-8">
+                  {/* ── Writer Content ── text-first platforms (no image/video required) */}
+                  <section className="space-y-6">
                     <div>
-                      <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">In Use</p>
-                      <div className="space-y-3">{connectedSocial.map(renderPlatformCard)}</div>
+                      <h2 className="text-sm font-semibold text-gray-900">Writer Content</h2>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Text-first platforms used for AI-automated writer-content publishing — no image or video required.
+                      </p>
                     </div>
-                  )}
-                  {/* Available to connect */}
-                  {availableSocial.length > 0 && (
-                    <div>
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available — choose which to connect</p>
-                      <div className="space-y-3">{availableSocial.map(renderPlatformCard)}</div>
-                    </div>
-                  )}
-                  {connectedSocial.length === 0 && availableSocial.length === 0 && (
-                    <p className="text-sm text-gray-400">No social platforms configured yet.</p>
-                  )}
-                  {/* Hidden */}
-                  {hiddenSocialList.length > 0 && (
-                    <div>
-                      <button onClick={() => setShowHiddenSocial((v) => !v)} className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors">
-                        <Archive className="h-4 w-4" />
-                        <span className="font-medium">Hidden ({hiddenSocialList.length})</span>
-                        {showHiddenSocial ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                      </button>
-                      {showHiddenSocial && (
-                        <div className="mt-3 space-y-3">
-                          {hiddenSocialList.map((p) => (
-                            <div key={p.platform_key} className="bg-white rounded-xl border border-dashed border-gray-200 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 opacity-60">
-                              <div className="flex items-center gap-3 min-w-0">
-                                <span className="text-2xl shrink-0">{PLATFORM_META[p.platform_key]?.icon ?? '🌐'}</span>
-                                <span className="font-semibold text-gray-700 truncate">{p.platform_label}</span>
+                    {connectedWriter.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">In Use</p>
+                        <div className="space-y-3">{connectedWriter.map(renderPlatformCard)}</div>
+                      </div>
+                    )}
+                    {availableWriter.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available — choose which to connect</p>
+                        <div className="space-y-3">{availableWriter.map(renderPlatformCard)}</div>
+                      </div>
+                    )}
+                    {connectedWriter.length === 0 && availableWriter.length === 0 && (
+                      <p className="text-sm text-gray-400">No writer-content platforms configured yet.</p>
+                    )}
+                    {hiddenWriterList.length > 0 && (
+                      <div>
+                        <button onClick={() => setShowHiddenSocial((v) => !v)} className="flex items-center gap-2 text-sm text-gray-400 hover:text-gray-600 transition-colors">
+                          <Archive className="h-4 w-4" />
+                          <span className="font-medium">Hidden ({hiddenWriterList.length})</span>
+                          {showHiddenSocial ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        </button>
+                        {showHiddenSocial && (
+                          <div className="mt-3 space-y-3">
+                            {hiddenWriterList.map((p) => (
+                              <div key={p.platform_key} className="bg-white rounded-xl border border-dashed border-gray-200 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 opacity-60">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span className="text-2xl shrink-0">{PLATFORM_META[p.platform_key]?.icon ?? '🌐'}</span>
+                                  <span className="font-semibold text-gray-700 truncate">{p.platform_label}</span>
+                                </div>
+                                <button onClick={() => socialHiders.unhide(p.platform_key)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors">
+                                  <RotateCcw className="h-3.5 w-3.5" /> Unhide
+                                </button>
                               </div>
-                              <button onClick={() => socialHiders.unhide(p.platform_key)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors">
-                                <RotateCcw className="h-3.5 w-3.5" /> Unhide
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+
+                  {/* ── Creator Content ── platforms that require image or video */}
+                  <section className="space-y-6 pt-2 border-t border-gray-200">
+                    <div className="pt-6">
+                      <h2 className="text-sm font-semibold text-gray-900">Creator Content</h2>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        Platforms that require an image or video — used by the creator-content workflow, not the AI-automated writer flow.
+                      </p>
                     </div>
-                  )}
+                    {connectedCreator.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-indigo-600 uppercase tracking-wide mb-3">In Use</p>
+                        <div className="space-y-3">{connectedCreator.map(renderPlatformCard)}</div>
+                      </div>
+                    )}
+                    {availableCreator.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available — choose which to connect</p>
+                        <div className="space-y-3">{availableCreator.map(renderPlatformCard)}</div>
+                      </div>
+                    )}
+                    {connectedCreator.length === 0 && availableCreator.length === 0 && hiddenCreatorList.length === 0 && (
+                      <p className="text-sm text-gray-400">No creator-content platforms configured yet.</p>
+                    )}
+                    {hiddenCreatorList.length > 0 && (
+                      <div className="mt-3 space-y-3">
+                        {hiddenCreatorList.map((p) => (
+                          <div key={p.platform_key} className="bg-white rounded-xl border border-dashed border-gray-200 p-4 sm:p-5 flex flex-wrap items-center justify-between gap-3 opacity-60">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <span className="text-2xl shrink-0">{PLATFORM_META[p.platform_key]?.icon ?? '🌐'}</span>
+                              <span className="font-semibold text-gray-700 truncate">{p.platform_label}</span>
+                            </div>
+                            <button onClick={() => socialHiders.unhide(p.platform_key)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors">
+                              <RotateCcw className="h-3.5 w-3.5" /> Unhide
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
                 </div>
               )}
 

@@ -101,6 +101,13 @@ export const ReplyComposer = React.memo(function ReplyComposer({
           replyText: trimmed,
           messageType,
         });
+        if (
+          executionResult
+          && typeof executionResult === 'object'
+          && ['browser_failed', 'browser_unverified'].includes(String(executionResult.mode || ''))
+        ) {
+          throw new Error(executionResult.message || 'Browser delivery was not confirmed.');
+        }
         if (executionResult && typeof executionResult === 'object' && executionResult.message) {
           executionMessage = executionResult.message;
         }
