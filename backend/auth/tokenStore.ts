@@ -206,8 +206,15 @@ export async function dualWriteSocialAccount(opts: {
   platformUserId: string | null;
   accountName: string | null;
   token: TokenObject;
+  permissions?: string[];
 }): Promise<void> {
-  const { userId, companyId, platform, platformUserId, accountName, token } = opts;
+  const { userId, companyId, platform, platformUserId, accountName, token, permissions } = opts;
+  // Persist scopes when caller supplies them. Without this, the row's
+  // permissions column ends up null and verify-config / publish-time scope
+  // checks have nothing to compare against.
+  const scopeList = permissions && permissions.length > 0
+    ? permissions
+    : (token.scope ? token.scope.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean) : null);
   try {
     // Find existing row
     const query = supabase
@@ -220,17 +227,19 @@ export async function dualWriteSocialAccount(opts: {
     const { data: existing } = await query.maybeSingle();
 
     if (existing?.id) {
-      await supabase.from('social_accounts').update({
+      const updatePayload: Record<string, unknown> = {
         is_active: true,
         account_name: accountName || undefined,
         token_expires_at: token.expires_at || undefined,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      }).eq('id', existing.id);
+      };
+      if (scopeList) updatePayload.permissions = scopeList;
+      await supabase.from('social_accounts').update(updatePayload).eq('id', existing.id);
       await setToken(existing.id, token);
     } else {
       const encrypted = encryptTokenColumns(token);
-      const { data: inserted } = await supabase.from('social_accounts').insert({
+      const insertPayload: Record<string, unknown> = {
         user_id: userId,
         company_id: companyId,
         platform,
@@ -241,7 +250,9 @@ export async function dualWriteSocialAccount(opts: {
         last_sync_at: new Date().toISOString(),
         access_token: encrypted.access_token,
         refresh_token: encrypted.refresh_token,
-      }).select('id').single();
+      };
+      if (scopeList) insertPayload.permissions = scopeList;
+      const { data: inserted } = await supabase.from('social_accounts').insert(insertPayload).select('id').single();
       if (inserted?.id) await setToken(inserted.id, token);
     }
   } catch (err: any) {

@@ -37,6 +37,8 @@ const META_SCOPES = [
   'instagram_manage_comments',
   'instagram_manage_insights',
   'instagram_content_publish',
+  // Required for Pages owned by a Business Portfolio
+  'business_management',
   // Base
   'public_profile',
 ].join(',');
@@ -76,5 +78,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     state,
   });
 
-  return res.redirect(`https://www.facebook.com/v20.0/dialog/oauth?${params.toString()}`);
+  return res.redirect(`https://www.facebook.com/v22.0/dialog/oauth?${params.toString()}`);
 }

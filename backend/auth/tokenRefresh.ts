@@ -321,7 +321,7 @@ export async function refreshFacebookToken(
     // To refresh, exchange short-lived token for long-lived token
     // Or refresh existing long-lived token
 
-    const response = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+    const response = await axios.get('https://graph.facebook.com/v22.0/oauth/access_token', {
       params: {
         grant_type: 'fb_exchange_token',
         client_id: appId,
@@ -378,7 +378,7 @@ async function refreshFacebookTokenWithRefreshToken(
   appSecret: string
 ): Promise<TokenObject | null> {
   try {
-    const response = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+    const response = await axios.get('https://graph.facebook.com/v22.0/oauth/access_token', {
       params: {
         grant_type: 'fb_exchange_token',
         client_id: appId,

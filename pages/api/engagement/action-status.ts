@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data, error } = await supabase
       .from('community_ai_actions')
-      .select('id, organization_id, status, platform, action_type, execution_mode, execution_result, updated_at')
+      .select('id, organization_id, status, platform, action_type, execution_mode, execution_result, dispatch_lease_id, dispatch_lease_expires_at, dispatch_acknowledged_at, updated_at')
       .eq('id', actionId)
       .eq('organization_id', organizationId)
       .maybeSingle();
@@ -53,8 +53,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : typeof response.error_message === 'string'
           ? response.error_message
           : typeof response.error_code === 'string'
-            ? response.error_code
+          ? response.error_code
             : null;
+    const leaseExpiresAt = typeof data.dispatch_lease_expires_at === 'string'
+      ? data.dispatch_lease_expires_at
+      : null;
+    const leaseExpiresMs = leaseExpiresAt ? Date.parse(leaseExpiresAt) : null;
+    const leaseExpired = leaseExpiresMs !== null && Number.isFinite(leaseExpiresMs) && leaseExpiresMs < Date.now();
 
     return res.status(200).json({
       success: true,
@@ -66,6 +71,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       confirmed,
       platform_id: platformId,
       error: errorMessage,
+      dispatch_lease_id: data.dispatch_lease_id ?? null,
+      dispatch_lease_expires_at: leaseExpiresAt,
+      dispatch_acknowledged_at: data.dispatch_acknowledged_at ?? null,
+      claimed: Boolean(data.dispatch_lease_id),
+      lease_expired: leaseExpired,
+      acknowledged: Boolean(data.dispatch_acknowledged_at),
       updated_at: data.updated_at,
     });
   } catch (error) {

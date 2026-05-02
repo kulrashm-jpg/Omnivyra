@@ -29,9 +29,16 @@ import {
   competitorGapsToDecisions,
   generateDiscoveryKeywords,
 } from '../../services/reportCompetitorIntelligenceService';
+import {
+  buildCompetitivePressureAnalysis,
+  buildCompetitiveSnapshotReport,
+  buildCompetitiveStrategyMap,
+} from '../../services/reportCompetitorStrategyService';
 import { composeSnapshotReportFromDecisions } from '../../services/snapshotReportService';
 import {
-  assertSortedByScoreDesc,
+  assertNoMarketSubstituteCompetitors,
+  assertOnlyMarketSubstituteAlternatives,
+  assertSortedByTierThenScore,
   assertValidCompetitorList,
 } from '../helpers/assertValidCompetitor';
 
@@ -162,7 +169,7 @@ describe('reportCompetitorIntelligenceService', () => {
 
   it('filters mixed source inputs down to engine-approved competitors only', () => {
     const resolvedInput = makeResolvedInput({
-      competitors: ['Wysa', 'Headspace', 'Optimal Virtual Employee'],
+      competitors: ['Wysa', 'Woebot Health', 'Reflectly', 'Headspace', 'Optimal Virtual Employee'],
     });
 
     const intelligence = buildCompetitorIntelligence({
@@ -183,11 +190,21 @@ describe('reportCompetitorIntelligenceService', () => {
     });
 
     const names = intelligence.detected_competitors.map((item) => item.name);
-    expect(names).toEqual(expect.arrayContaining(['Wysa', 'Headspace']));
+    expect(names).toEqual(expect.arrayContaining(['Wysa', 'Woebot Health', 'Reflectly']));
     expect(names).not.toContain('Optimal Virtual Employee');
+    expect(names).not.toContain('Headspace');
     expect(intelligence.detected_competitors.every((item) => item.source === 'manual')).toBe(true);
+    assertNoMarketSubstituteCompetitors(intelligence.detected_competitors as any[]);
+    expect(intelligence.market_alternatives ?? []).toHaveLength(3);
+    assertOnlyMarketSubstituteAlternatives((intelligence.market_alternatives ?? []) as any[]);
+    expect((intelligence.market_alternatives ?? []).map((item) => item.name)).toEqual(expect.arrayContaining([
+      'Life coaches and clarity consultants',
+    ]));
     assertValidCompetitorList(intelligence.detected_competitors as any[]);
-    assertSortedByScoreDesc(intelligence.detected_competitors as any[]);
+    assertSortedByTierThenScore(intelligence.detected_competitors as any[]);
+    expect(intelligence.competitive_summary.top_threats.length).toBeGreaterThanOrEqual(1);
+    expect(intelligence.competitive_summary.key_advantage).toContain('Drishik');
+    expect(intelligence.competitive_summary.positioning_statement).toContain('Wysa');
     expect(intelligence.generated_gaps.length).toBeGreaterThanOrEqual(1);
     const finalKeys = new Set(intelligence.detected_competitors.flatMap((item) => [item.name.toLowerCase(), item.domain?.toLowerCase() ?? '']));
     expect(intelligence.generated_gaps.every((gap) =>
@@ -206,7 +223,7 @@ describe('reportCompetitorIntelligenceService', () => {
           recommendation: 'Publish comparison and case-study content.',
         }),
       ],
-      resolvedInput: makeResolvedInput({ competitors: ['Wysa', 'Woebot Health', 'Replika'] }),
+      resolvedInput: makeResolvedInput({ competitors: ['Wysa', 'Woebot Health', 'Reflectly'] }),
     });
 
     expect(intelligence.detected_competitors).toHaveLength(3);
@@ -214,6 +231,8 @@ describe('reportCompetitorIntelligenceService', () => {
     assertValidCompetitorList(intelligence.detected_competitors as any[]);
     expect(intelligence.detected_competitors.every((item) => item.enrichment?.sources.includes('known_category_dataset'))).toBe(true);
     expect(intelligence.detected_competitors.every((item) => item.enrichment_confidence_score >= 0.8)).toBe(true);
+    expect(intelligence.detected_competitors.every((item) => item.positioning.differentiation.length > 20)).toBe(true);
+    expect(intelligence.competitive_summary.key_risk.length).toBeGreaterThan(20);
   });
 
   it('converts strongest gaps into snapshot decision objects and exposes them in the report payload', () => {
@@ -245,7 +264,8 @@ describe('reportCompetitorIntelligenceService', () => {
     expect(decisions[0]?.source_service).toBe('reportCompetitorIntelligenceService');
     expect(report.competitor_intelligence.detected_competitors.length).toBeGreaterThanOrEqual(1);
     assertValidCompetitorList(report.competitor_intelligence.detected_competitors as any[]);
-    assertSortedByScoreDesc(report.competitor_intelligence.detected_competitors as any[]);
+    assertSortedByTierThenScore(report.competitor_intelligence.detected_competitors as any[]);
+    expect(report.competitor_intelligence.competitive_summary.top_threats.length).toBeGreaterThanOrEqual(1);
     expect(report.pipeline_audit.competitor_gap_decisions_added).toBeGreaterThanOrEqual(1);
     expect(report.summary.toLowerCase()).toContain('content coverage');
   });
@@ -267,10 +287,60 @@ describe('reportCompetitorIntelligenceService', () => {
     expect(intelligence.detected_competitors.every((item) => item.source === 'known_category_dataset')).toBe(true);
     assertValidCompetitorList(baseline.detected_competitors as any[]);
     assertValidCompetitorList(intelligence.detected_competitors as any[]);
-    assertSortedByScoreDesc(baseline.detected_competitors as any[]);
-    assertSortedByScoreDesc(intelligence.detected_competitors as any[]);
+    assertSortedByTierThenScore(baseline.detected_competitors as any[]);
+    assertSortedByTierThenScore(intelligence.detected_competitors as any[]);
+    expect(baseline.competitive_summary.top_threats.length).toBeGreaterThanOrEqual(2);
+    expect(intelligence.competitive_summary.positioning_statement.length).toBeGreaterThan(20);
     expect(baseline.generated_gaps.length).toBeGreaterThanOrEqual(1);
     expect(intelligence.discovery_metadata?.serp_status).toBe('fallback');
     expect(intelligence.discovery_metadata?.is_fallback_used).toBe(true);
+  });
+
+  it('derives report-specific competitor strategy layers from final-gated competitors', () => {
+    const drishiq = buildCompetitorIntelligence({
+      decisions: [],
+      resolvedInput: makeResolvedInput({ competitors: [] }),
+    });
+    const omnivyra = buildCompetitorIntelligence({
+      decisions: [],
+      resolvedInput: makeResolvedInput({
+        companyName: 'Omnivyra',
+        websiteDomain: 'omnivyra.com',
+        businessType: 'AI marketing automation and growth intelligence',
+        competitors: [],
+        companyContext: {
+          marketFocus: 'AI marketing automation and growth intelligence',
+          productServices: ['AI campaign planning', 'marketing automation', 'SEO intelligence'],
+          targetCustomer: 'B2B founders, marketers, and lean growth teams',
+          idealCustomerProfile: 'lean B2B teams managing campaigns and revenue growth',
+          brandPositioning: 'AI-powered marketing operations and growth intelligence platform',
+          competitiveAdvantages: 'unified campaign planning and competitor intelligence',
+          teamSize: '1-10',
+          foundedYear: '2025',
+          revenueRange: 'Pre-revenue',
+        },
+      }),
+    });
+
+    const snapshot = buildCompetitiveSnapshotReport(drishiq);
+    expect(snapshot.competitors.length).toBeLessThanOrEqual(3);
+    expect(snapshot.competitive_snapshot_summary.top_threat).toBe('Wysa');
+    expect(snapshot.competitors[0]).toMatchObject({
+      name: 'Wysa',
+      tier: 'Tier 1',
+      threat_level: 'high',
+    });
+
+    const pressure = buildCompetitivePressureAnalysis(omnivyra);
+    const hubSpot = pressure.competitors.find((competitor) => competitor.name === 'HubSpot');
+    expect(hubSpot?.threat_level).toBe('high');
+    expect(hubSpot?.pressure_on).toEqual(expect.arrayContaining(['SEO', 'Brand authority', 'Content', 'Conversion']));
+    expect(pressure.summary.next_action.length).toBeGreaterThan(20);
+
+    const strategy = buildCompetitiveStrategyMap(omnivyra);
+    expect(strategy.competitive_strategy_map.tier_breakdown.tier_1.map((item) => item.name)).toEqual(expect.arrayContaining(['HubSpot', 'Salesforce']));
+    expect(strategy.competitive_strategy_map.opportunity_map.whitespace_opportunities.length).toBeGreaterThan(0);
+    expect(strategy.competitive_strategy_map.strategic_actions.how_to_beat_tier_1).toContain('Beat');
+    expect(strategy.strategic_position.primary_battlefield).toContain('crm marketing automation');
   });
 });

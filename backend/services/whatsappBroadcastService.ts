@@ -19,7 +19,7 @@ import { getActiveTemplate } from './whatsappTemplateService';
 import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimiter';
 import { getValidAccessToken } from '../auth/metaAuthService';
 
-const META_GRAPH = 'https://graph.facebook.com/v18.0';
+const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
 const PHONE_SALT = process.env.PHONE_HASH_SALT ?? '';
 

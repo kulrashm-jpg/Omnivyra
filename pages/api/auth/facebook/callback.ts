@@ -35,7 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Exchange code for access token
-    const tokenResponse = await fetch('https://graph.facebook.com/v18.0/oauth/access_token', {
+    const tokenResponse = await fetch('https://graph.facebook.com/v22.0/oauth/access_token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -55,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Exchange short-lived token for long-lived (60 days)
     const longLivedResponse = await fetch(
-      `https://graph.facebook.com/v18.0/oauth/access_token?` +
+      `https://graph.facebook.com/v22.0/oauth/access_token?` +
       new URLSearchParams({
         grant_type: 'fb_exchange_token',
         client_id: oauthCredentials.client_id,
@@ -74,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Get Facebook user profile
     const profileResponse = await fetch(
-      `https://graph.facebook.com/v18.0/me?fields=id,name&access_token=${accessToken}`
+      `https://graph.facebook.com/v22.0/me?fields=id,name&access_token=${accessToken}`
     );
     const profile = await profileResponse.json();
 

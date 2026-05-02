@@ -82,7 +82,7 @@ const FALLBACK_REGISTRY: PlatformRegistryEntry[] = [
   {
     platform_key: 'facebook',
     platform_label: 'Facebook',
-    api_base_url: 'https://graph.facebook.com/v18.0',
+    api_base_url: 'https://graph.facebook.com/v22.0',
     auth_type: 'oauth',
     supports_publishing: true,
     supports_replies: true,
@@ -121,7 +121,7 @@ const FALLBACK_REGISTRY: PlatformRegistryEntry[] = [
   {
     platform_key: 'whatsapp',
     platform_label: 'WhatsApp Business',
-    api_base_url: 'https://graph.facebook.com/v18.0',
+    api_base_url: 'https://graph.facebook.com/v22.0',
     auth_type: 'oauth',
     supports_publishing: true,
     supports_replies: true,

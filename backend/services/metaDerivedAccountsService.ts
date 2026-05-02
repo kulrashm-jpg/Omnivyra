@@ -51,15 +51,27 @@ async function fetchThreadsAccount(
     fields: 'threads_account',
     access_token: accessToken,
   });
-  const response = await fetch(`https://graph.facebook.com/v18.0/${encodeURIComponent(instagramUserId)}?${params}`);
+  const response = await fetch(`https://graph.facebook.com/v22.0/${encodeURIComponent(instagramUserId)}?${params}`);
+  const body = await response.json().catch(() => null);
+  console.log('THREADS_ACCOUNT_RESPONSE', body);
+
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    console.warn('[metaDerivedAccounts] Threads derivation skipped:', body?.error?.message ?? response.statusText);
+    throw new Error(body?.error?.message ?? 'THREADS_FETCH_FAILED');
+  }
+
+  if (!body || body.threads_account === undefined) {
+    throw new Error('THREADS_FETCH_FAILED');
+  }
+
+  if (body.threads_account === null) {
     return null;
   }
 
-  const body = await response.json().catch(() => ({}));
-  const threadsId = body?.threads_account?.id;
+  const threadsId = body.threads_account?.id;
+  if (typeof threadsId !== 'string' || !threadsId.trim()) {
+    throw new Error('THREADS_FETCH_FAILED');
+  }
+
   return typeof threadsId === 'string' && threadsId.trim()
     ? { id: threadsId.trim() }
     : null;
@@ -114,6 +126,7 @@ async function upsertSocialAccount(input: {
   accountName: string;
   username: string | null;
   token: TokenObject;
+  status?: string;
   extraColumns: Record<string, unknown>;
   fallbackMetrics: Record<string, unknown>;
 }) {
@@ -147,7 +160,7 @@ async function upsertSocialAccount(input: {
 
   const withExtra = {
     ...common,
-    status: 'connected',
+    status: input.status ?? 'connected',
     ...input.extraColumns,
     account_metrics: {
       ...input.fallbackMetrics,
@@ -243,16 +256,17 @@ async function upsertInstagramAndThreads(input: DerivedAccountInput): Promise<{
   });
 
   const threadsAccount = await fetchThreadsAccount(input.instagram.id, input.pageAccessToken);
+  if (!threadsAccount?.id) {
+    return { instagramId: input.instagram.id, threadsId: null };
+  }
+
   await deactivateLegacyThreadsRows({
     userId: input.userId,
     companyId: input.companyId,
     instagramUserId: input.instagram.id,
   });
-  if (!threadsAccount?.id) {
-    return { instagramId: input.instagram.id, threadsId: null };
-  }
 
-  await upsertSocialAccount({
+  const threadsRowId = await upsertSocialAccount({
     userId: input.userId,
     companyId: input.companyId,
     platform: 'threads',
@@ -260,6 +274,7 @@ async function upsertInstagramAndThreads(input: DerivedAccountInput): Promise<{
     accountName: `Threads via ${accountName}`,
     username: input.instagram.username ?? null,
     token,
+    status: 'active',
     extraColumns: {
       provider: 'threads',
       auth_source: 'meta_instagram',
@@ -275,6 +290,18 @@ async function upsertInstagramAndThreads(input: DerivedAccountInput): Promise<{
     },
   });
 
+  let verificationQuery = supabase
+    .from('social_accounts')
+    .select('*')
+    .eq('platform', 'threads')
+    .eq('platform_user_id', threadsAccount.id)
+    .eq('user_id', input.userId);
+  verificationQuery = input.companyId ? verificationQuery.eq('company_id', input.companyId) : verificationQuery.is('company_id', null);
+  const { data: verifiedThreadsRow, error: verifyError } = await verificationQuery.maybeSingle();
+  if (verifyError || !verifiedThreadsRow || (threadsRowId && verifiedThreadsRow.id !== threadsRowId)) {
+    throw new Error('THREADS_INSERT_VERIFY_FAILED');
+  }
+
   return { instagramId: input.instagram.id, threadsId: threadsAccount.id };
 }
 
@@ -286,7 +313,7 @@ export async function syncInstagramAndThreadsFromMeta(input: UpsertDerivedAccoun
     fields: 'id,name,access_token,instagram_business_account{id,username,name,profile_picture_url}',
     access_token: input.accessToken,
   });
-  const response = await fetch(`https://graph.facebook.com/v18.0/me/accounts?${params}`);
+  const response = await fetch(`https://graph.facebook.com/v22.0/me/accounts?${params}`);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body?.error?.message ?? `Failed to fetch Meta pages (${response.status})`);

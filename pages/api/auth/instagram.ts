@@ -22,12 +22,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const params = new URLSearchParams({
       client_id: credentials.client_id,
       redirect_uri: `${getBaseUrl(req)}/api/auth/instagram/callback`,
-      scope: 'instagram_basic instagram_content_publish pages_show_list',
+      // business_management is required when the Facebook Page is owned by a
+      // Business Portfolio (Meta Business Suite). Without it, /me/accounts
+      // returns empty even when the user is a Page admin, and the callback
+      // throws "No Instagram Business account found".
+      scope: [
+        'pages_show_list',
+        'pages_read_engagement',
+        'instagram_basic',
+        'instagram_manage_insights',
+        'instagram_content_publish',
+        'business_management',
+      ].join(','),
       response_type: 'code',
       state,
     });
 
-    res.redirect(`https://www.facebook.com/v18.0/dialog/oauth?${params.toString()}`);
+    res.redirect(`https://www.facebook.com/v22.0/dialog/oauth?${params.toString()}`);
 
   } catch (error: any) {
     console.error('Instagram OAuth initiation error:', error);

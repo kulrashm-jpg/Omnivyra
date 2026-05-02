@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(DOTENV_CONFIG_PATH=.env.local node -r dotenv/config --import tsx scripts/backfillCanonicalDomains.ts --report=/tmp/canonical-backfill-final.json)"
+    ]
+  }
+}

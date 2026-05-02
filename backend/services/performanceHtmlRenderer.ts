@@ -575,6 +575,54 @@ export function renderNextBestMoves(data: PerformanceReportMappedData): string {
   `;
 }
 
+export function renderCompetitivePressureAnalysis(data: PerformanceReportMappedData): string {
+  const analysis = data.competitive_pressure_analysis;
+  if (!analysis || analysis.competitors.length === 0) {
+    return `
+      <section class="perf-section" id="competitive-pressure">
+        ${renderSectionHeader(
+          'Competitive Pressure',
+          'Competitive Pressure Analysis',
+          'Competitor pressure is not available for this report yet.',
+          'This diagnostic connects competitor authority, product depth, and ICP overlap to practical pressure areas.',
+        )}
+        ${renderEmptyState('No final-gated competitor strategy data available yet.')}
+      </section>
+    `;
+  }
+
+  const rows = analysis.competitors.slice(0, 5).map((item) => `
+    <article class="perf-card">
+      <div class="perf-card-header">
+        <div>
+          <div class="perf-list-title">${escapeHtml(item.name)}</div>
+          <div class="perf-list-meta">${escapeHtml(item.tier)} · ${escapeHtml(item.threat_level.toUpperCase())} threat · Authority ${escapeHtml(item.authority_score.toFixed(2))}</div>
+        </div>
+        <div class="perf-badge-group">
+          ${item.pressure_on.map((area) => `<span class="perf-badge perf-badge-impact">${escapeHtml(area)}</span>`).join('')}
+        </div>
+      </div>
+      <p class="perf-card-note">${escapeHtml(item.action)}</p>
+    </article>
+  `).join('');
+
+  return `
+    <section class="perf-section page-break" id="competitive-pressure">
+      ${renderSectionHeader(
+        'Competitive Pressure',
+        'Competitive Pressure Analysis',
+        analysis.summary.primary_risk,
+        'This section turns competitor strength into diagnostic pressure areas so execution can target the right gap.',
+      )}
+      <article class="perf-card perf-card-highlight">
+        <div class="perf-label">Next Action</div>
+        <p>${escapeHtml(analysis.summary.next_action)}</p>
+      </article>
+      <div class="perf-stack">${rows}</div>
+    </section>
+  `;
+}
+
 export const performanceRendererMap: Record<PerformanceSectionKey, (data: PerformanceReportMappedData) => string> = {
   key_decisions: renderLeadCommandCenter,
   funnel: renderLeadLeakage,
@@ -582,6 +630,7 @@ export const performanceRendererMap: Record<PerformanceSectionKey, (data: Perfor
   top_pages: renderTopPagesSection,
   drop_offs: renderDropOffsSection,
   traffic_sources: renderLeadSources,
+  competitive_pressure: renderCompetitivePressureAnalysis,
 };
 
 function renderHeader(meta?: PerformanceRenderMeta): string {

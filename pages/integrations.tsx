@@ -409,26 +409,16 @@ function formatDateTime(value: string | null | undefined): string {
   return timestamp.toLocaleString();
 }
 
-function GoogleAnalyticsSetupCard({
+function GoogleAnalyticsGridCard({
   isAdmin,
   gaStatus,
   gaLoading,
   gaError,
   gaNotice,
   gaConnecting,
-  gaSelectingProperty,
-  selectedPropertyId,
-  scriptAssistOpen,
-  scriptAssistLoading,
-  scriptAssistError,
-  scriptAssistForm,
-  scriptAssistResult,
+  gaSyncing,
   onConnect,
-  onSelectedPropertyChange,
-  onSelectProperty,
-  onToggleScriptAssist,
-  onScriptAssistInput,
-  onGenerateScriptAssist,
+  onForceSync: handleForceSync,
 }: {
   isAdmin: boolean;
   gaStatus: GoogleAnalyticsStatusResponse | null;
@@ -436,6 +426,141 @@ function GoogleAnalyticsSetupCard({
   gaError: string | null;
   gaNotice: string | null;
   gaConnecting: boolean;
+  gaSyncing: boolean;
+  onConnect: () => Promise<void>;
+  onForceSync: () => Promise<void>;
+}) {
+  const status = gaStatus?.status ?? 'not_connected';
+  const isConnected = ['connected', 'waiting_for_data', 'ready', 'low_data'].includes(status);
+  const isError = status === 'error';
+
+  // Single source of truth for the badge in the card's top-right corner.
+  // Reflects the user's actual connection state — no separate "Live now"
+  // marketing badge, since pairing it with "Not connected" creates conflicting
+  // signals on the same card.
+  const badgeClass =
+    status === 'ready'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : status === 'low_data'
+        ? 'border-amber-200 bg-amber-50 text-amber-700'
+        : status === 'waiting_for_data'
+          ? 'border-blue-200 bg-blue-50 text-blue-700'
+          : status === 'error'
+            ? 'border-red-200 bg-red-50 text-red-700'
+            : status === 'property_selection'
+              ? 'border-amber-200 bg-amber-50 text-amber-700'
+              : 'border-gray-200 bg-gray-50 text-gray-600';
+
+  const badgeLabel = gaLoading && !gaStatus
+    ? 'Loading...'
+    : status === 'ready'
+      ? 'Connected'
+      : status === 'waiting_for_data'
+        ? 'Syncing'
+        : status === 'low_data'
+          ? 'No data yet'
+          : status === 'error'
+            ? 'Error'
+            : status === 'property_selection'
+              ? 'Select property'
+              : 'Not connected';
+
+  return (
+    <div
+      id="google-analytics-section"
+      className="flex h-full flex-col rounded-2xl border border-amber-200 bg-white p-5 shadow-sm ring-1 ring-amber-100"
+    >
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-700">
+          <BarChart3 className="h-5 w-5" />
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${badgeClass}`}>
+          {badgeLabel}
+        </span>
+      </div>
+
+      <div className="mb-4">
+        <h3 className="text-base font-semibold text-gray-900">Google Analytics</h3>
+        <p className="mt-1 text-sm leading-6 text-gray-600">
+          Connect your Google Analytics account to track traffic, user behavior, and performance insights.
+        </p>
+      </div>
+
+      <div className="mb-5 space-y-2">
+        {['Sessions and traffic sources', 'Page views and engagement', 'Conversion events'].map((item) => (
+          <div key={item} className="flex items-start gap-2 text-sm text-gray-600">
+            <span className="mt-2 h-1.5 w-1.5 rounded-full bg-gray-400" />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mb-4 space-y-2 text-xs">
+        {gaStatus?.property?.name && (
+          <div className="text-gray-500">
+            Property: <span className="font-medium text-gray-700">{gaStatus.property.name}</span>
+          </div>
+        )}
+        {gaStatus?.last_sync && (
+          <div className="text-gray-500">Last sync: {formatDateTime(gaStatus.last_sync)}</div>
+        )}
+        {(gaError || (isError && gaStatus?.message)) && (
+          <div className="max-h-16 overflow-y-auto rounded-lg border border-red-200 bg-red-50 px-3 py-2 leading-5 text-red-700">
+            {gaError || gaStatus?.message}
+          </div>
+        )}
+        {!gaError && gaNotice && (
+          <div className="max-h-16 overflow-y-auto rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 leading-5 text-blue-700">
+            {gaNotice}
+          </div>
+        )}
+      </div>
+
+      {isAdmin && (
+        <div className="mt-auto flex flex-wrap gap-2">
+          {!isConnected ? (
+            <button
+              type="button"
+              onClick={() => void onConnect()}
+              disabled={gaConnecting || gaLoading}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${gaConnecting ? 'animate-spin' : ''}`} />
+              {gaStatus?.reconnect_required ? 'Reconnect Google Analytics' : 'Connect Google Analytics'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleForceSync()}
+              disabled={gaSyncing}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${gaSyncing ? 'animate-spin' : ''}`} />
+              {gaSyncing ? 'Syncing...' : 'Sync now'}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GoogleAnalyticsHelperPanel({
+  gaStatus,
+  gaSelectingProperty,
+  selectedPropertyId,
+  scriptAssistOpen,
+  scriptAssistLoading,
+  scriptAssistError,
+  scriptAssistForm,
+  scriptAssistResult,
+  onSelectedPropertyChange,
+  onSelectProperty,
+  onToggleScriptAssist,
+  onScriptAssistInput,
+  onGenerateScriptAssist,
+}: {
+  gaStatus: GoogleAnalyticsStatusResponse | null;
   gaSelectingProperty: boolean;
   selectedPropertyId: string;
   scriptAssistOpen: boolean;
@@ -443,7 +568,6 @@ function GoogleAnalyticsSetupCard({
   scriptAssistError: string | null;
   scriptAssistForm: { website_url: string; platform: string };
   scriptAssistResult: TrackingAssistResponse | null;
-  onConnect: () => Promise<void>;
   onSelectedPropertyChange: (value: string) => void;
   onSelectProperty: () => Promise<void>;
   onToggleScriptAssist: () => void;
@@ -452,231 +576,146 @@ function GoogleAnalyticsSetupCard({
 }) {
   const properties = gaStatus?.properties || [];
   const showPropertySelection = gaStatus?.status === 'property_selection';
-  const connectedState = gaStatus?.status && ['connected', 'waiting_for_data', 'ready', 'low_data'].includes(gaStatus.status);
 
-  return (
-    <section id="google-analytics-section" className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-              <BarChart3 className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="text-base font-semibold text-gray-900">Google Analytics</h2>
-              <p className="text-sm text-gray-500">Click connect, choose a property, and Omnivyra handles the rest.</p>
-            </div>
+  // Hide the helper panel entirely when there's nothing for the user to do.
+  if (!showPropertySelection && !scriptAssistOpen && !scriptAssistResult) {
+    return (
+      <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-4 py-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Need Help Setting Up Tracking?</h3>
+            <p className="text-sm text-gray-600">Optional. Use this when Google Analytics is connected but your site is not yet sending data.</p>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-            <span className={`rounded-full border px-2.5 py-1 font-medium ${
-              gaStatus?.status === 'ready'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : gaStatus?.status === 'low_data'
-                  ? 'border-amber-200 bg-amber-50 text-amber-700'
-                  : gaStatus?.status === 'waiting_for_data'
-                    ? 'border-blue-200 bg-blue-50 text-blue-700'
-                    : gaStatus?.status === 'error'
-                      ? 'border-red-200 bg-red-50 text-red-700'
-                      : 'border-gray-200 bg-gray-50 text-gray-600'
-            }`}>
-              {gaStatus?.status || 'not_connected'}
-            </span>
-            {gaStatus?.property?.name && (
-              <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 font-medium text-gray-600">
-                Property: {gaStatus.property.name}
-              </span>
-            )}
-            <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 font-medium text-gray-600">
-              Last sync: {formatDateTime(gaStatus?.last_sync)}
-            </span>
-          </div>
-        </div>
-
-        {isAdmin && (
           <button
             type="button"
-            onClick={() => void onConnect()}
-            disabled={gaConnecting || gaLoading}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+            onClick={onToggleScriptAssist}
+            className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
-            <RefreshCw className={`h-4 w-4 ${gaConnecting ? 'animate-spin' : ''}`} />
-            {gaStatus?.reconnect_required ? 'Reconnect Google Analytics' : 'Connect Google Analytics'}
+            Open setup help
           </button>
-        )}
+        </div>
       </div>
+    );
+  }
 
-      <div className="mt-4 space-y-3">
-        {gaLoading && (
-          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-            Loading Google Analytics status...
+  return (
+    <div className="space-y-3">
+      {showPropertySelection && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+          <div className="mb-3">
+            <h3 className="text-sm font-semibold text-gray-900">Choose the Google Analytics property to sync</h3>
+            <p className="text-sm text-gray-600">No manual configuration is needed beyond selecting the property you want Omnivyra to use.</p>
           </div>
-        )}
-
-        {gaConnecting && (
-          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-            Connecting Google Analytics...
-          </div>
-        )}
-
-        {gaNotice && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {gaNotice}
-          </div>
-        )}
-
-        {gaError && (
-          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {gaError}
-          </div>
-        )}
-
-        {gaStatus && !gaLoading && (
-          <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-4">
-            <div className="text-sm font-medium text-gray-900">{gaStatus.message}</div>
-            <div className="mt-1 text-sm text-gray-600">
-              {gaStatus.status === 'ready' && `Events in last 30 days: ${gaStatus.events_last_30_days || 0}`}
-              {gaStatus.status === 'low_data' && 'Not enough data yet'}
-              {gaStatus.status === 'waiting_for_data' && 'Collecting analytics data (may take a few hours)'}
-              {gaStatus.status === 'not_connected' && 'No API keys or technical setup are required from the Company Admin.'}
-              {gaStatus.status === 'error' && 'Reconnect to refresh access and continue syncing.'}
+          {properties.length === 0 ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              No GA properties found
             </div>
-          </div>
-        )}
-
-        {showPropertySelection && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-            <div className="mb-3">
-              <h3 className="text-sm font-semibold text-gray-900">Choose the Google Analytics property to sync</h3>
-              <p className="text-sm text-gray-600">No manual configuration is needed beyond selecting the property you want Omnivyra to use.</p>
-            </div>
-            {properties.length === 0 ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                No GA properties found
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <select
-                  value={selectedPropertyId}
-                  onChange={(event) => onSelectedPropertyChange(event.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
-                >
-                  <option value="">Select a property</option>
-                  {properties.map((property) => (
-                    <option key={property.id} value={property.id}>
-                      {property.name}{property.account_id ? ` · Account ${property.account_id}` : ''}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => void onSelectProperty()}
-                  disabled={!selectedPropertyId || gaSelectingProperty}
-                  className="inline-flex items-center justify-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
-                >
-                  {gaSelectingProperty ? 'Saving...' : 'Use this property'}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        {connectedState && gaStatus?.property && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-gray-400">Property</div>
-              <div className="mt-1 text-sm font-semibold text-gray-900">{gaStatus.property.name}</div>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-gray-400">Status</div>
-              <div className="mt-1 text-sm font-semibold text-gray-900">Active</div>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-gray-400">Last Sync</div>
-              <div className="mt-1 text-sm font-semibold text-gray-900">{formatDateTime(gaStatus.last_sync)}</div>
-            </div>
-          </div>
-        )}
-
-        <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-4 py-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-900">Need Help Setting Up Tracking?</h3>
-              <p className="text-sm text-gray-600">Optional only. Use this when Google Analytics is connected but your site is not sending data yet.</p>
-            </div>
-            <button
-              type="button"
-              onClick={onToggleScriptAssist}
-              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              {scriptAssistOpen ? 'Hide setup help' : 'Open setup help'}
-            </button>
-          </div>
-
-          {scriptAssistOpen && (
-            <div className="mt-4 space-y-4">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <input
-                  type="url"
-                  value={scriptAssistForm.website_url}
-                  onChange={(event) => onScriptAssistInput('website_url', event.target.value)}
-                  placeholder="https://yourwebsite.com"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                />
-                <select
-                  value={scriptAssistForm.platform}
-                  onChange={(event) => onScriptAssistInput('platform', event.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
-                >
-                  <option value="wordpress">WordPress</option>
-                  <option value="shopify">Shopify</option>
-                  <option value="custom">Custom</option>
-                  <option value="webflow">Webflow</option>
-                </select>
-              </div>
+          ) : (
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <select
+                value={selectedPropertyId}
+                onChange={(event) => onSelectedPropertyChange(event.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-300"
+              >
+                <option value="">Select a property</option>
+                {properties.map((property) => (
+                  <option key={property.id} value={property.id}>
+                    {property.name}{property.account_id ? ` · Account ${property.account_id}` : ''}
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
-                onClick={() => void onGenerateScriptAssist()}
-                disabled={scriptAssistLoading}
-                className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+                onClick={() => void onSelectProperty()}
+                disabled={!selectedPropertyId || gaSelectingProperty}
+                className="inline-flex items-center justify-center rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
               >
-                {scriptAssistLoading ? 'Generating...' : 'Generate setup help'}
+                {gaSelectingProperty ? 'Saving...' : 'Use this property'}
               </button>
-
-              {scriptAssistError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{scriptAssistError}</div>
-              )}
-
-              {scriptAssistResult && (
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 lg:col-span-2">
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Suggested GA Script</div>
-                    <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-gray-700">{scriptAssistResult.script}</pre>
-                  </div>
-                  <div className="space-y-4">
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Placement</div>
-                      <div className="space-y-2 text-sm text-gray-600">
-                        {scriptAssistResult.placement_instructions.map((item) => (
-                          <div key={item}>{item}</div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Validation</div>
-                      <div className="space-y-2 text-sm text-gray-600">
-                        {scriptAssistResult.validation_steps.map((item) => (
-                          <div key={item}>{item}</div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
+      )}
+
+      <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-4 py-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Need Help Setting Up Tracking?</h3>
+            <p className="text-sm text-gray-600">Optional. Use this when Google Analytics is connected but your site is not yet sending data.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onToggleScriptAssist}
+            className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            {scriptAssistOpen ? 'Hide setup help' : 'Open setup help'}
+          </button>
+        </div>
+
+        {scriptAssistOpen && (
+          <div className="mt-4 space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <input
+                type="url"
+                value={scriptAssistForm.website_url}
+                onChange={(event) => onScriptAssistInput('website_url', event.target.value)}
+                placeholder="https://yourwebsite.com"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              />
+              <select
+                value={scriptAssistForm.platform}
+                onChange={(event) => onScriptAssistInput('platform', event.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300"
+              >
+                <option value="wordpress">WordPress</option>
+                <option value="shopify">Shopify</option>
+                <option value="custom">Custom</option>
+                <option value="webflow">Webflow</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={() => void onGenerateScriptAssist()}
+              disabled={scriptAssistLoading}
+              className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-50"
+            >
+              {scriptAssistLoading ? 'Generating...' : 'Generate setup help'}
+            </button>
+
+            {scriptAssistError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{scriptAssistError}</div>
+            )}
+
+            {scriptAssistResult && (
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 lg:col-span-2">
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Suggested GA Script</div>
+                  <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-gray-700">{scriptAssistResult.script}</pre>
+                </div>
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Placement</div>
+                    <div className="space-y-2 text-sm text-gray-600">
+                      {scriptAssistResult.placement_instructions.map((item) => (
+                        <div key={item}>{item}</div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Validation</div>
+                    <div className="space-y-2 text-sm text-gray-600">
+                      {scriptAssistResult.validation_steps.map((item) => (
+                        <div key={item}>{item}</div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -700,6 +739,7 @@ export default function IntegrationsPage() {
   const [gaNotice, setGaNotice] = useState<string | null>(null);
   const [gaConnecting, setGaConnecting] = useState(false);
   const [gaSelectingProperty, setGaSelectingProperty] = useState(false);
+  const [gaSyncing, setGaSyncing] = useState(false);
   const [selectedPropertyId, setSelectedPropertyId] = useState('');
   const [scriptAssistOpen, setScriptAssistOpen] = useState(false);
   const [scriptAssistLoading, setScriptAssistLoading] = useState(false);
@@ -803,6 +843,88 @@ export default function IntegrationsPage() {
     } catch (err: any) {
       setGaError(err?.message || 'Failed to connect Google Analytics');
       setGaConnecting(false);
+    }
+  };
+
+  const handleForceSyncGoogleAnalytics = async () => {
+    if (!companyId || gaSyncing) return;
+    setGaSyncing(true);
+    setGaError(null);
+    setGaNotice('Syncing Google Analytics...');
+
+    const requestStart = Date.now();
+
+    try {
+      const response = await fetchWithAuth('/api/analytics/force-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 400 && data?.error === 'no_active_property') {
+        setGaError('Select a Google Analytics property before syncing.');
+        return;
+      }
+      if (!response.ok && response.status !== 202) {
+        throw new Error(data?.error || data?.message || 'Failed to sync Google Analytics');
+      }
+
+      if (data?.status === 'synced') {
+        const written = typeof data.sessions_written === 'number' ? ` (${data.sessions_written} sessions)` : '';
+        setGaNotice(`Sync complete${written}.`);
+        await loadGoogleAnalyticsStatus();
+        return;
+      }
+
+      // status === 'started' — poll /api/analytics/status until last_sync moves
+      // past requestStart, or status becomes error, or hard timeout (90s).
+      const POLL_TIMEOUT_MS = 90_000;
+      const POLL_INTERVAL_MS = 2_500;
+      const pollDeadline = Date.now() + POLL_TIMEOUT_MS;
+
+      let lastError: string | null = null;
+      while (Date.now() < pollDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        try {
+          const pollResponse = await fetchWithAuth(
+            `/api/analytics/status?companyId=${encodeURIComponent(companyId)}`,
+          );
+          if (!pollResponse.ok) continue;
+          const pollData = await pollResponse.json();
+
+          // Update the card live so the user sees status changes during polling.
+          setGaStatus(pollData);
+
+          if (pollData?.status === 'error') {
+            lastError = pollData?.message || 'Sync failed';
+            break;
+          }
+
+          const lastSyncMs = pollData?.last_sync ? new Date(pollData.last_sync).getTime() : 0;
+          if (
+            lastSyncMs > requestStart &&
+            pollData?.status &&
+            ['ready', 'low_data', 'waiting_for_data'].includes(pollData.status)
+          ) {
+            setGaNotice('Sync complete.');
+            return;
+          }
+        } catch {
+          // transient — keep polling
+        }
+      }
+
+      if (lastError) {
+        setGaError(lastError);
+      } else {
+        setGaNotice('Sync still running in the background. Refresh in a few minutes to see results.');
+      }
+    } catch (err: any) {
+      setGaError(err?.message || 'Failed to sync Google Analytics');
+    } finally {
+      setGaSyncing(false);
     }
   };
 
@@ -918,7 +1040,7 @@ export default function IntegrationsPage() {
 
   const highlightedIds = useMemo(() => {
     if (focus === 'website') return new Set(['website-publishing', 'lead-capture-forms']);
-    if (focus === 'data') return new Set(['crm-pipeline', 'website-analytics', 'files-imports']);
+    if (focus === 'data') return new Set(['crm-pipeline', 'google-analytics', 'files-imports']);
     return new Set<string>();
   }, [focus]);
 
@@ -963,17 +1085,15 @@ export default function IntegrationsPage() {
       actions: [],
     },
     {
-      id: 'website-analytics',
+      id: 'google-analytics',
       focus: 'data',
-      title: 'Website Analytics',
-      description: 'Connect traffic and behavior signals so weak momentum shows up with proof instead of guesswork.',
+      title: 'Google Analytics',
+      description: 'Connect your Google Analytics account to track traffic, user behavior, and performance insights.',
       badge: 'Live now',
       icon: <BarChart3 className="h-5 w-5" />,
       badgeClassName: 'border-amber-200 bg-amber-50 text-amber-700',
-      items: ['Google Analytics inputs', 'Traffic source trends', 'Conversion page performance'],
-      actions: [
-        { label: 'Open Google Analytics', href: '#google-analytics-section' },
-      ],
+      items: ['Sessions and traffic sources', 'Page views and engagement', 'Conversion events'],
+      actions: [],
     },
     {
       id: 'files-imports',
@@ -1026,13 +1146,29 @@ export default function IntegrationsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid auto-rows-fr grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
             {visibleCategoryCards.map((card) => {
+              if (card.id === 'google-analytics') {
+                return (
+                  <GoogleAnalyticsGridCard
+                    key={card.id}
+                    isAdmin={isAdmin}
+                    gaStatus={gaStatus}
+                    gaLoading={gaLoading}
+                    gaError={gaError}
+                    gaNotice={gaNotice}
+                    gaConnecting={gaConnecting}
+                    gaSyncing={gaSyncing}
+                    onConnect={handleConnectGoogleAnalytics}
+                    onForceSync={handleForceSyncGoogleAnalytics}
+                  />
+                );
+              }
               const isHighlighted = highlightedIds.has(card.id);
               return (
                 <div
                   key={card.id}
-                  className={`rounded-2xl border bg-white p-5 shadow-sm ${isHighlighted ? 'border-indigo-300 ring-1 ring-indigo-100 shadow-md' : 'border-gray-200'}`}
+                  className={`flex h-full flex-col rounded-2xl border bg-white p-5 shadow-sm ${isHighlighted ? 'border-indigo-300 ring-1 ring-indigo-100 shadow-md' : 'border-gray-200'}`}
                 >
                   <div className="mb-4 flex items-start justify-between gap-3">
                     <div className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${card.badgeClassName}`}>
@@ -1058,13 +1194,13 @@ export default function IntegrationsPage() {
                   </div>
 
                   {card.actions.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
+                    <div className="mt-auto flex flex-wrap gap-2">
                       {card.actions.map((action) => (
                         <CategoryAction key={action.label} action={action} />
                       ))}
                     </div>
                   ) : (
-                    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-500">
+                    <div className="mt-auto rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-500">
                       This source group is intentionally shown as a planned foundation area until a real setup surface exists.
                     </div>
                   )}
@@ -1219,13 +1355,8 @@ export default function IntegrationsPage() {
             )}
 
             {showDataFlow && (
-              <GoogleAnalyticsSetupCard
-                isAdmin={isAdmin}
+              <GoogleAnalyticsHelperPanel
                 gaStatus={gaStatus}
-                gaLoading={gaLoading}
-                gaError={gaError}
-                gaNotice={gaNotice}
-                gaConnecting={gaConnecting}
                 gaSelectingProperty={gaSelectingProperty}
                 selectedPropertyId={selectedPropertyId}
                 scriptAssistOpen={scriptAssistOpen}
@@ -1233,7 +1364,6 @@ export default function IntegrationsPage() {
                 scriptAssistError={scriptAssistError}
                 scriptAssistForm={scriptAssistForm}
                 scriptAssistResult={scriptAssistResult}
-                onConnect={handleConnectGoogleAnalytics}
                 onSelectedPropertyChange={setSelectedPropertyId}
                 onSelectProperty={handleSelectGoogleAnalyticsProperty}
                 onToggleScriptAssist={() => setScriptAssistOpen((current) => !current)}

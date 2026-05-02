@@ -21,6 +21,34 @@ export type MarketPulseProfileSettings = {
   target_expansion_markets?: string[] | null;
   named_competitors?: string[] | null;
   business_model?: string | null;
+  provider_type?: string | null;
+  domain_role?: string | null;
+  operating_model?: string | null;
+  solution_domains?: string[] | null;
+  competitor_details?: Array<{
+    name: string;
+    category?: string | null;
+    tier?: string | null;
+    score?: number | null;
+    confidence?: number | null;
+    rationale?: string | null;
+  }> | null;
+  competitor_quality?: {
+    highest_score?: number | null;
+    threshold?: number | null;
+    threshold_met?: boolean | null;
+    detail_mode?: 'high_confidence' | 'expanded_context' | null;
+  } | null;
+  market_alternatives?: Array<{
+    name: string;
+    category?: string | null;
+    tier?: string | null;
+    score?: number | null;
+    confidence?: number | null;
+    rationale?: string | null;
+    use_case?: string | null;
+    business_model?: string | null;
+  }> | null;
   core_offerings?: string[] | null;
   growth_priorities?: string[] | null;
   partnership_priorities?: string[] | null;
@@ -121,6 +149,13 @@ export async function getMarketPulseContext(companyId: string) {
       target_expansion_markets: expansionMarkets,
       named_competitors: [],
       business_model: settings.business_model ?? '',
+      provider_type: settings.provider_type ?? '',
+      domain_role: settings.domain_role ?? '',
+      operating_model: settings.operating_model ?? '',
+      solution_domains: normalizeStringArray(settings.solution_domains),
+      competitor_details: Array.isArray(settings.competitor_details) ? settings.competitor_details : [],
+      competitor_quality: settings.competitor_quality ?? null,
+      market_alternatives: Array.isArray(settings.market_alternatives) ? settings.market_alternatives : [],
       core_offerings: normalizeStringArray(settings.core_offerings),
       growth_priorities: normalizeStringArray(settings.growth_priorities),
       partnership_priorities: normalizeStringArray(settings.partnership_priorities),

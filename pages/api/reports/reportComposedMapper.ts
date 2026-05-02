@@ -133,9 +133,15 @@ export function mapComposedReport(
     : [];
 
   const finalDetectedCompetitors = Array.isArray(report.competitor_intelligence?.detected_competitors)
-    ? report.competitor_intelligence.detected_competitors.filter((item) =>
-        hasPassedFinalCompetitorGate(item as any),
-      )
+    ? report.competitor_intelligence.detected_competitors
+        .filter((item) => item?.source !== 'market_substitute')
+        .filter((item) => hasPassedFinalCompetitorGate(item as any))
+    : [];
+  const finalMarketAlternatives = Array.isArray(report.competitor_intelligence?.market_alternatives)
+    ? report.competitor_intelligence.market_alternatives
+        .filter((item) => item?.source === 'market_substitute')
+        .filter((item) => hasPassedFinalCompetitorGate(item as any))
+        .slice(0, 3)
     : [];
 
   const finalCompetitorKeys = new Set(finalDetectedCompetitors.flatMap((item) => [
@@ -162,8 +168,22 @@ export function mapComposedReport(
               marketOverlap: Number(item.market_overlap ?? 0),
               revenueTier: item.revenue_tier || null,
               productDepth: Number(item.product_depth ?? 0),
+              authorityScore: Number(item.authority_score ?? 0),
+              authoritySignals: item.authority_signals ?? null,
               finalScore: Number(item.final_score ?? 0),
               tier: item.tier || null,
+              positioning: item.positioning
+                ? {
+                    strengths_vs_company: Array.isArray(item.positioning.strengths_vs_company)
+                      ? item.positioning.strengths_vs_company
+                      : [],
+                    weaknesses_vs_company: Array.isArray(item.positioning.weaknesses_vs_company)
+                      ? item.positioning.weaknesses_vs_company
+                      : [],
+                    differentiation: item.positioning.differentiation || item.rationale || 'Competitive positioning is available from the final engine output.',
+                    threat_level: item.positioning.threat_level || 'low',
+                  }
+                : null,
               enrichmentConfidenceScore: Number(item.enrichment_confidence_score ?? item.enrichment?.confidence_score ?? 0.15),
               enrichment: item.enrichment ?? null,
               rationale: item.rationale || 'Included as part of the competitor benchmark set.',
@@ -178,6 +198,27 @@ export function mapComposedReport(
               ),
             }))
           : [],
+        marketAlternatives: finalMarketAlternatives.map((item) => ({
+          name: item.name || 'Market alternative',
+          category: item.category || null,
+          tier: item.tier || null,
+          relevanceScore: Number(item.relevance_score ?? 0),
+          finalScore: Number(item.final_score ?? 0),
+          authorityScore: Number(item.authority_score ?? 0),
+          rationale: item.rationale || item.positioning?.differentiation || 'Included as a non-competitor market alternative.',
+          useCase: item.enrichment?.icp?.use_case ?? null,
+          businessModel: item.enrichment?.business_model ?? null,
+        })),
+        competitiveSummary: report.competitor_intelligence.competitive_summary
+          ? {
+              topThreats: Array.isArray(report.competitor_intelligence.competitive_summary.top_threats)
+                ? report.competitor_intelligence.competitive_summary.top_threats
+                : [],
+              keyAdvantage: report.competitor_intelligence.competitive_summary.key_advantage || '',
+              keyRisk: report.competitor_intelligence.competitive_summary.key_risk || '',
+              positioningStatement: report.competitor_intelligence.competitive_summary.positioning_statement || '',
+            }
+          : null,
         strongestGaps: Array.isArray(report.competitor_intelligence.generated_gaps)
           ? report.competitor_intelligence.generated_gaps
               .map((gap) => ({
@@ -206,6 +247,7 @@ export function mapComposedReport(
         competitor_intelligence: {
           ...report.competitor_intelligence,
           detected_competitors: finalDetectedCompetitors,
+          market_alternatives: finalMarketAlternatives,
           comparison: {
             ...report.competitor_intelligence.comparison,
             competitors: Array.isArray(report.competitor_intelligence.comparison?.competitors)
@@ -311,6 +353,99 @@ export function mapComposedReport(
         outcomeConfidence: report.decision_snapshot?.outcome_confidence || 'medium',
       }
     : undefined;
+  const rawCompetitiveSnapshot = report.competitive_snapshot;
+  const competitiveSnapshot = rawCompetitiveSnapshot
+    ? {
+        competitors: Array.isArray(rawCompetitiveSnapshot.competitors)
+          ? rawCompetitiveSnapshot.competitors.slice(0, 3).map((item) => ({
+              name: item.name || 'Competitor',
+              tier: item.tier || 'Tier 3',
+              threatLevel: item.threat_level || 'low',
+              differentiation: item.differentiation || 'Differentiation is still being established.',
+            }))
+          : [],
+        summary: {
+          topThreat: rawCompetitiveSnapshot.competitive_snapshot_summary?.top_threat || 'No final-gated competitor',
+          immediatePositioningAngle: rawCompetitiveSnapshot.competitive_snapshot_summary?.immediate_positioning_angle || 'Position around the highest-fit customer problem.',
+          action: rawCompetitiveSnapshot.competitive_snapshot_summary?.action || 'Use competitor differentiation in executive messaging.',
+        },
+      }
+    : null;
+  const rawPressure = report.competitive_pressure_analysis ?? (report as any).mapped_data?.competitive_pressure_analysis ?? null;
+  const competitivePressureAnalysis = rawPressure
+    ? {
+        competitors: Array.isArray(rawPressure.competitors)
+          ? rawPressure.competitors.map((item: any) => ({
+              name: item.name || 'Competitor',
+              tier: item.tier || 'Tier 3',
+              threatLevel: item.threat_level || 'low',
+              authorityScore: Number(item.authority_score ?? 0),
+              pressureOn: Array.isArray(item.pressure_on) ? item.pressure_on : [],
+              action: item.action || 'Prioritize higher-confidence competitor actions first.',
+            }))
+          : [],
+        summary: {
+          highestPressure: rawPressure.summary?.highest_pressure || 'No final-gated competitor',
+          primaryRisk: rawPressure.summary?.primary_risk || 'Competitor pressure is still being established.',
+          nextAction: rawPressure.summary?.next_action || 'Run competitor discovery again after more market data is available.',
+        },
+      }
+    : null;
+  const rawStrategy = report.competitive_strategy_map ?? null;
+  const competitiveStrategyMap = rawStrategy
+    ? {
+        tierBreakdown: {
+          tier1: Array.isArray(rawStrategy.tier_breakdown?.tier_1)
+            ? rawStrategy.tier_breakdown.tier_1.map((item) => ({
+                name: item.name || 'Competitor',
+                tier: 'Tier 1' as const,
+                threatLevel: item.threat_level || 'low',
+                differentiation: item.differentiation || 'Differentiation is still being established.',
+              }))
+            : [],
+          tier2: Array.isArray(rawStrategy.tier_breakdown?.tier_2)
+            ? rawStrategy.tier_breakdown.tier_2.map((item) => ({
+                name: item.name || 'Competitor',
+                tier: 'Tier 2' as const,
+                threatLevel: item.threat_level || 'low',
+                differentiation: item.differentiation || 'Differentiation is still being established.',
+              }))
+            : [],
+          tier3: Array.isArray(rawStrategy.tier_breakdown?.tier_3)
+            ? rawStrategy.tier_breakdown.tier_3.map((item) => ({
+                name: item.name || 'Competitor',
+                tier: 'Tier 3' as const,
+                threatLevel: item.threat_level || 'low',
+                differentiation: item.differentiation || 'Differentiation is still being established.',
+              }))
+            : [],
+        },
+        opportunityMap: {
+          whitespaceOpportunities: Array.isArray(rawStrategy.opportunity_map?.whitespace_opportunities)
+            ? rawStrategy.opportunity_map.whitespace_opportunities
+            : [],
+          underexploitedIcpSegments: Array.isArray(rawStrategy.opportunity_map?.underexploited_icp_segments)
+            ? rawStrategy.opportunity_map.underexploited_icp_segments
+            : [],
+          weakCompetitorAreas: Array.isArray(rawStrategy.opportunity_map?.weak_competitor_areas)
+            ? rawStrategy.opportunity_map.weak_competitor_areas
+            : [],
+        },
+        strategicActions: {
+          howToBeatTier1: rawStrategy.strategic_actions?.how_to_beat_tier_1 || '',
+          howToDifferentiateFromTier2: rawStrategy.strategic_actions?.how_to_differentiate_from_tier_2 || '',
+          howToIgnoreTier3: rawStrategy.strategic_actions?.how_to_ignore_tier_3 || '',
+        },
+      }
+    : null;
+  const strategicPosition = report.strategic_position
+    ? {
+        positioningStatement: report.strategic_position.positioning_statement || '',
+        primaryBattlefield: report.strategic_position.primary_battlefield || '',
+        avoidanceZone: report.strategic_position.avoidance_zone || '',
+        messagingAngle: report.strategic_position.messaging_angle || '',
+      }
+    : null;
 
   return {
     reportId,
@@ -370,6 +505,10 @@ export function mapComposedReport(
     unifiedIntelligenceSummary: reportType === 'snapshot' ? buildUnifiedIntelligenceSummary(report) : undefined,
     competitorVisuals: reportType === 'snapshot' ? buildCompetitorVisuals(sanitizedReport) : undefined,
     competitorIntelligenceSummary: reportType === 'snapshot' ? buildCompetitorIntelligenceSummary(sanitizedReport) : undefined,
+    competitiveSnapshot,
+    competitivePressureAnalysis,
+    competitiveStrategyMap,
+    strategicPosition,
     decisionSnapshot,
     topPriorities,
     nextSteps,

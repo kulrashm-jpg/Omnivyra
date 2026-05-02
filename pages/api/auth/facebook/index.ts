@@ -22,12 +22,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const params = new URLSearchParams({
       client_id: credentials.client_id,
       redirect_uri: `${getBaseUrl(req)}/api/auth/facebook/callback`,
-      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish,public_profile',
+      // business_management is required when Pages are owned by a Business
+      // Portfolio — without it, /me/accounts returns empty for Business-owned
+      // Pages even when the OAuth user is admin.
+      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish,public_profile,business_management',
       response_type: 'code',
       state,
     });
 
-    res.redirect(`https://www.facebook.com/v18.0/dialog/oauth?${params.toString()}`);
+    res.redirect(`https://www.facebook.com/v22.0/dialog/oauth?${params.toString()}`);
   } catch (error: any) {
     console.error('Facebook OAuth initiation error:', error);
     res.status(500).json({ error: error.message });

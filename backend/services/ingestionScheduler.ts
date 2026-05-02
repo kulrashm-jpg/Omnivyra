@@ -200,6 +200,15 @@ export async function runIngestionForCompany(params: {
   companyId: string;
   sources?: IngestionSource[];
   overrides?: SchedulerOverrides;
+  /**
+   * When true, bypass the duplicate-idempotency-key short-circuit and force a
+   * fresh execution of each source. Used by the manual force-sync endpoint so
+   * the user always gets a real run instead of a cached "already completed"
+   * result. The hasRunningIngestion check still applies — we never double-run.
+   */
+  force?: boolean;
+  /** Audit tag persisted into ingestion_runs.cursor_payload.reason. */
+  reason?: string;
 }): Promise<CompanyIngestionSummary> {
   return runInBackgroundJobContext('ingestionScheduler', async () => {
     const companyId = params.companyId;
@@ -228,7 +237,7 @@ export async function runIngestionForCompany(params: {
         continue;
       }
 
-      if (existingRun?.status === 'completed') {
+      if (!params.force && existingRun?.status === 'completed') {
         results.push({
           source,
           success: true,
@@ -267,6 +276,7 @@ export async function runIngestionForCompany(params: {
         idempotencyKey: runKey,
         cursorPayload: {
           source,
+          ...(params.reason ? { reason: params.reason } : {}),
         },
       });
 

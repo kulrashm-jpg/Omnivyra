@@ -153,6 +153,110 @@ describe('communityAiActionExecutor — manual api-mode', () => {
     expect(result.response?.api_error).toBe('LINKEDIN_RATE_LIMIT');
   });
 
+  it('queues LinkedIn DM triage as continue_thread, not start_new_dm', async () => {
+    const result = await executeAction(
+      {
+        ...baseAction(),
+        action_type: 'dm',
+        target_id: 'Rajesh Singh',
+        suggested_text: 'Thanks Rajesh, I will check and get back to you.',
+        execution_mode: 'browser',
+      },
+      true,
+      { source: 'manual', notify: false, webhook: false },
+    );
+
+    expect(result.status).toBe('dispatched');
+    expect(result.execution_mode).toBe('browser');
+    expect((result as any).command_chain).toEqual([
+      {
+        action_type: 'continue_thread',
+        payload: {
+          text: 'Thanks Rajesh, I will check and get back to you.',
+          autoSubmit: true,
+        },
+      },
+    ]);
+  });
+
+  it('opens visible LinkedIn DM rows by participant name when no verified thread URL exists', async () => {
+    const result = await executeAction(
+      {
+        ...baseAction(),
+        action_type: 'dm',
+        target_id: 'Rajesh Singh',
+        suggested_text: 'Thanks Rajesh, I will check and get back to you.',
+        execution_mode: 'browser',
+        metadata: {
+          dm_thread_ready: true,
+          dm_participant_name: 'Rajesh Singh',
+          dm_last_message_preview: 'Rajesh: Hi Kuldeep, hope you are doing well!',
+        },
+      },
+      true,
+      { source: 'manual', notify: false, webhook: false },
+    );
+
+    expect(result.status).toBe('dispatched');
+    expect(result.execution_mode).toBe('browser');
+    expect((result as any).command_chain).toEqual([
+      {
+        action_type: 'open_thread',
+        payload: {
+          participantName: 'Rajesh Singh',
+          lastMessagePreview: 'Rajesh: Hi Kuldeep, hope you are doing well!',
+        },
+      },
+      {
+        action_type: 'continue_thread',
+        payload: {
+          text: 'Thanks Rajesh, I will check and get back to you.',
+          autoSubmit: true,
+          participantName: 'Rajesh Singh',
+          lastMessagePreview: 'Rajesh: Hi Kuldeep, hope you are doing well!',
+        },
+      },
+    ]);
+  });
+
+  it('targets resolved LinkedIn DM threads before continuing the conversation', async () => {
+    const result = await executeAction(
+      {
+        ...baseAction(),
+        action_type: 'dm',
+        target_id: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
+        suggested_text: 'Thanks Rajesh, I will check and get back to you.',
+        execution_mode: 'browser',
+        metadata: {
+          dm_thread_ready: true,
+          dm_thread_id: '2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA',
+          dm_thread_url: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
+        },
+      },
+      true,
+      { source: 'manual', notify: false, webhook: false },
+    );
+
+    expect(result.status).toBe('dispatched');
+    expect(result.execution_mode).toBe('browser');
+    expect((result as any).command_chain).toEqual([
+      {
+        action_type: 'open_thread',
+        payload: {
+          threadUrl: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
+        },
+      },
+      {
+        action_type: 'continue_thread',
+        payload: {
+          text: 'Thanks Rajesh, I will check and get back to you.',
+          autoSubmit: true,
+          threadUrl: 'https://www.linkedin.com/messaging/thread/2-MTc1MjQ5MzE5OTA1OGI0MjI1My0xMDA/',
+        },
+      },
+    ]);
+  });
+
   it('does NOT fabricate a platform_id when the connector omits one', async () => {
     // The "confirmed" UI state depends on a truthy platform_id. If a
     // connector returns success without an id, the executor must surface

@@ -7,10 +7,36 @@ import {
 } from '../../../backend/services/companyProfileService';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
+function stripCompetitorInputs(value: unknown): void {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const record = value as Record<string, any>;
+  delete record.competitors;
+  delete record.competitors_list;
+
+  if (record.profile && typeof record.profile === 'object' && !Array.isArray(record.profile)) {
+    stripCompetitorInputs(record.profile);
+  }
+  if (record.report_settings && typeof record.report_settings === 'object' && !Array.isArray(record.report_settings)) {
+    const reportSettings = record.report_settings as Record<string, any>;
+    if (reportSettings.default_inputs && typeof reportSettings.default_inputs === 'object') {
+      delete reportSettings.default_inputs.competitors;
+      delete reportSettings.default_inputs.competitors_list;
+    }
+    if (reportSettings.market_pulse && typeof reportSettings.market_pulse === 'object') {
+      delete reportSettings.market_pulse.named_competitors;
+      delete reportSettings.market_pulse.competitor_details;
+      delete reportSettings.market_pulse.competitor_quality;
+      delete reportSettings.market_pulse.market_alternatives;
+    }
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  stripCompetitorInputs(req.body);
 
   const companyId =
     (req.query.companyId as string | undefined) ||

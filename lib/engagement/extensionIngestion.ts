@@ -75,17 +75,25 @@ export function resolvePlatformUserId(
 }
 
 export function normalizeScrapedMessageContent(input: {
+  platform?: string | null;
+  platform_message_id?: string | null;
   content?: string | null;
   direction?: string | null;
   sender_self?: boolean | null;
   author_self?: boolean | null;
+  sender_username?: string | null;
+  sender_profile_url?: string | null;
 }): { content: string; isSelf: boolean; prefixDetected: boolean } {
   const rawContent = String(input.content ?? '');
   const prefixDetected = /^you\s*:/i.test(rawContent.trim());
   const isSelf = isAuthorSelf({
+    platform: input.platform,
+    platform_message_id: input.platform_message_id,
     direction: input.direction,
     sender_self: input.sender_self,
     author_self: input.author_self,
+    sender_username: input.sender_username,
+    sender_profile_url: input.sender_profile_url,
     content: rawContent,
   });
 

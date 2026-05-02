@@ -38,11 +38,15 @@ export default async function handler(
   const domain = raw.includes('@') ? raw.split('@')[1] : raw;
   if (!domain || !domain.includes('.')) return res.status(400).json({ error: 'Invalid domain' });
 
-  // ── 3. Look up domain in company_domains table ────────────────────────────
+  // ── 3. Look up canonical (final_domain) in company_domains ───────────────
+  // Reads final_domain — legacy `domain` column is deprecated. .limit(1)
+  // covers the transient case where multiple rows share a final_domain
+  // (only possible during a backfill window before collisions are frozen).
   const { data: domainRow } = await supabase
     .from('company_domains')
     .select('id')
-    .eq('domain', domain)
+    .eq('final_domain', domain)
+    .limit(1)
     .maybeSingle();
 
   return res.status(200).json({ taken: !!domainRow });

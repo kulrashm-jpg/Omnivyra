@@ -168,22 +168,6 @@ async function pollExtensionCommandsNowRequest() {
   return await responsePromise;
 }
 
-async function executePlatformActionRequest(
-  platform: string,
-  action: string,
-  payload: Record<string, unknown>
-) {
-  const responsePromise = waitForWindowMessage<{ success?: boolean; message?: string; result?: unknown }>(
-    'OMNIVYRA_PLATFORM_ACTION_RESULT',
-    PLATFORM_ACTION_TIMEOUT_MS
-  );
-  window.postMessage({
-    type: 'OMNIVYRA_EXECUTE_PLATFORM_ACTION',
-    data: { platform, action, payload }
-  }, '*');
-  return await responsePromise;
-}
-
 export function useExtensionBridge(configuredPlatforms: string[]) {
   const [status, setStatus] = useState<ExtensionStatus | null>(null);
   const [auth, setAuth] = useState<ExtensionAuthState | null>(null);
@@ -317,13 +301,7 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
 
   const executePlatformAction = useCallback(
     async (_platform: string, _action: string, _payload: Record<string, unknown>) => {
-      // HARD-REFUSED. Direct in-page platform action dispatch is no longer
-      // supported — browser actions must arrive as server-issued commands
-      // through the extension's queue. Keep this function so existing
-      // callers get a clear error instead of a silent failure.
-      throw new Error(
-        'Direct browser action execution is disabled. The action will be dispatched by the server command queue when the target platform tab is open.',
-      );
+      throw new Error('Direct platform action execution is disabled. Actions must be issued by the server.');
     },
     [],
   );

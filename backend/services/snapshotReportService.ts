@@ -86,6 +86,7 @@ import {
   buildCompetitorIntelligenceSummary,
   buildCompetitorVisuals,
 } from './snapshotReport/competitorSummaryHelpers';
+import { buildCompetitiveSnapshotReport } from './reportCompetitorStrategyService';
 import { buildUnifiedIntelligenceSummary } from './snapshotReport/unifiedSummaryHelpers';
 import { buildSnapshotVisualIntelligence } from './snapshotReport/visualIntelligenceHelpers';
 import {
@@ -356,6 +357,7 @@ export function composeSnapshotReportFromDecisions(params: {
     competitorVisuals,
     narrativeContext,
   });
+  const competitiveSnapshot = buildCompetitiveSnapshotReport(competitorIntelligence);
   const decisionSnapshot = buildDecisionSnapshot({
     diagnosis,
     coreProblem,
@@ -383,6 +385,7 @@ export function composeSnapshotReportFromDecisions(params: {
     unified_intelligence_summary: unifiedIntelligenceSummary,
     competitor_visuals: competitorVisuals,
     competitor_intelligence_summary: competitorIntelligenceSummary,
+    competitive_snapshot: competitiveSnapshot,
     visual_intelligence: visualIntelligence,
     signal_availability: signalAvailability,
     company_context: {

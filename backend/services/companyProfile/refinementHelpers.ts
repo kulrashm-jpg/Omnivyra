@@ -16,6 +16,33 @@ import {
 const MAX_CRAWL_PAGES = 4; // root + 3 sub-pages; 12 was causing 60s+ hangs on SPAs / Cloudflare sites
 const MAX_SOCIAL_LINKS = 8;
 
+const socialProfileKey = (platform: string | null | undefined, url: string | null | undefined): string | null => {
+  const normalized = normalizeSocialUrl(url || '');
+  if (!normalized) return null;
+  return `${String(platform || 'social').trim().toLowerCase()}:${normalized}`;
+};
+
+const dedupeSocialProfileEntries = (
+  entries: Array<{ platform: string; url: string; source?: string; confidence?: string }>,
+): Array<{ platform: string; url: string; source?: string; confidence?: string }> => {
+  const deduped = new Map<string, { platform: string; url: string; source?: string; confidence?: string }>();
+  entries.forEach((entry) => {
+    const normalized = normalizeSocialUrl(entry.url || '');
+    const key = socialProfileKey(entry.platform, normalized);
+    if (!normalized || !key) return;
+    const normalizedEntry = {
+      ...entry,
+      platform: String(entry.platform || 'social').trim().toLowerCase(),
+      url: normalized,
+    };
+    const existing = deduped.get(key);
+    if (!existing || shouldReplaceValue(normalizedEntry.confidence, existing.confidence)) {
+      deduped.set(key, normalizedEntry);
+    }
+  });
+  return Array.from(deduped.values());
+};
+
 const scoreUrl = (url: string): number => {
   const keywords = [
     'about', 'company', 'team', 'story', 'mission', 'values',
@@ -53,6 +80,7 @@ export const extractSocialLinksFromHtml = (
   const buckets: Record<string, Map<string, number>> = {
     linkedin: new Map(), facebook: new Map(), instagram: new Map(),
     x: new Map(), youtube: new Map(), tiktok: new Map(), reddit: new Map(),
+    pinterest: new Map(), whatsapp: new Map(),
   };
   const anchorRegex = /<a\s+[^>]*?>[\s\S]*?<\/a>/gi;
   const hrefRegex = /href=["']([^"']+)["']/i;
@@ -90,6 +118,8 @@ export const extractSocialLinksFromHtml = (
     else if ((lower.includes('youtube.com') || lower.includes('youtu.be')) && isLikelyCompanySocialLink('youtube', normalized)) addTo(buckets.youtube);
     else if (lower.includes('tiktok.com') && isLikelyCompanySocialLink('tiktok', normalized)) addTo(buckets.tiktok);
     else if (lower.includes('reddit.com') && isLikelyCompanySocialLink('reddit', normalized)) addTo(buckets.reddit);
+    else if (lower.includes('pinterest.com') && isLikelyCompanySocialLink('pinterest', normalized)) addTo(buckets.pinterest);
+    else if ((lower.includes('wa.me') || lower.includes('whatsapp.com')) && isLikelyCompanySocialLink('whatsapp', normalized)) addTo(buckets.whatsapp);
   };
 
   const anchors: string[] = html.match(anchorRegex) || [];
@@ -124,6 +154,8 @@ export const extractSocialLinksFromHtml = (
     youtube: finalizeBucket(buckets.youtube),
     tiktok: finalizeBucket(buckets.tiktok),
     reddit: finalizeBucket(buckets.reddit),
+    pinterest: finalizeBucket(buckets.pinterest),
+    whatsapp: finalizeBucket(buckets.whatsapp),
   };
 };
 
@@ -262,6 +294,8 @@ export const buildSourceList = (profile: CompanyProfile): Array<{ label: string;
   if (profile.youtube_url) sources.push({ label: 'youtube', url: profile.youtube_url });
   if (profile.tiktok_url) sources.push({ label: 'tiktok', url: profile.tiktok_url });
   if (profile.reddit_url) sources.push({ label: 'reddit', url: profile.reddit_url });
+  if (profile.pinterest_url) sources.push({ label: 'pinterest', url: profile.pinterest_url });
+  if (profile.whatsapp_url) sources.push({ label: 'whatsapp', url: profile.whatsapp_url });
   if (profile.blog_url) sources.push({ label: 'blog', url: profile.blog_url });
 
   (profile.other_social_links || []).forEach((entry, index) => {
@@ -306,19 +340,11 @@ export const buildSocialProfileList = (
   add('youtube', incoming?.youtube);
   add('tiktok', incoming?.tiktok);
   add('reddit', incoming?.reddit);
+  add('pinterest', incoming?.pinterest);
+  add('whatsapp', incoming?.whatsapp);
   add('blog', incoming?.blog);
 
-  const merged = [...(current || []), ...result];
-  const deduped = new Map<string, { platform: string; url: string; source?: string; confidence?: string }>();
-  merged.forEach((entry) => {
-    const normalized = normalizeSocialUrl(entry.url || '');
-    if (!normalized) return;
-    const existing = deduped.get(normalized);
-    if (!existing || shouldReplaceValue(entry.confidence, existing.confidence)) {
-      deduped.set(normalized, { ...entry, url: normalized });
-    }
-  });
-  return Array.from(deduped.values());
+  return dedupeSocialProfileEntries([...(current || []), ...result]);
 };
 
 export const mergeDiscoveredSocialProfiles = (
@@ -335,6 +361,8 @@ export const mergeDiscoveredSocialProfiles = (
   const youtube = getList('youtube');
   const tiktok = getList('tiktok');
   const reddit = getList('reddit');
+  const pinterest = getList('pinterest');
+  const whatsapp = getList('whatsapp');
 
   if (!updated.linkedin_url && linkedin[0]) updated.linkedin_url = linkedin[0];
   if (!updated.facebook_url && facebook[0]) updated.facebook_url = facebook[0];
@@ -343,6 +371,8 @@ export const mergeDiscoveredSocialProfiles = (
   if (!updated.youtube_url && youtube[0]) updated.youtube_url = youtube[0];
   if (!updated.tiktok_url && tiktok[0]) updated.tiktok_url = tiktok[0];
   if (!updated.reddit_url && reddit[0]) updated.reddit_url = reddit[0];
+  if (!updated.pinterest_url && pinterest[0]) updated.pinterest_url = pinterest[0];
+  if (!updated.whatsapp_url && whatsapp[0]) updated.whatsapp_url = whatsapp[0];
 
   const primarySocials = [
     { platform: 'linkedin', url: linkedin[0] || '' },
@@ -352,30 +382,40 @@ export const mergeDiscoveredSocialProfiles = (
     { platform: 'youtube', url: youtube[0] || '' },
     { platform: 'tiktok', url: tiktok[0] || '' },
     { platform: 'reddit', url: reddit[0] || '' },
+    { platform: 'pinterest', url: pinterest[0] || '' },
+    { platform: 'whatsapp', url: whatsapp[0] || '' },
   ].filter((entry) => entry.url);
 
-  const existingProfiles = Array.isArray(updated.social_profiles) ? [...updated.social_profiles] : [];
-  const seen = new Set(existingProfiles.map((entry) => normalizeSocialUrl(entry.url || '')).filter(Boolean));
+  const existingProfiles = dedupeSocialProfileEntries(
+    Array.isArray(updated.social_profiles) ? [...updated.social_profiles] : [],
+  );
+  const seen = new Set(existingProfiles.map((entry) => socialProfileKey(entry.platform, entry.url)).filter(Boolean));
   primarySocials.forEach((entry) => {
     const normalized = normalizeSocialUrl(entry.url);
-    if (!normalized || seen.has(normalized)) return;
+    const key = socialProfileKey(entry.platform, normalized);
+    if (!normalized || !key || seen.has(key)) return;
     if (isPlaceholderUrl(normalized)) return;
     existingProfiles.push({ platform: entry.platform, url: normalized, source: 'website', confidence: 'Medium' });
-    seen.add(normalized);
+    seen.add(key);
   });
-  updated.social_profiles = existingProfiles;
+  updated.social_profiles = dedupeSocialProfileEntries(existingProfiles);
 
   const extraSocial = [
     ...linkedin.slice(1), ...facebook.slice(1), ...instagram.slice(1),
     ...x.slice(1), ...youtube.slice(1), ...tiktok.slice(1), ...reddit.slice(1),
+    ...pinterest.slice(1), ...whatsapp.slice(1),
   ];
 
   if (extraSocial.length > 0) {
     const existing = Array.isArray(updated.other_social_links) ? [...updated.other_social_links] : [];
+    const seenExtra = new Set(existing.map((entry) => normalizeSocialUrl(entry.url || '')).filter(Boolean));
     extraSocial.slice(0, MAX_SOCIAL_LINKS).forEach((url, index) => {
       const normalized = normalizeUrl(url);
       if (!normalized || isPlaceholderUrl(normalized)) return;
-      existing.push({ label: `discovered_${index + 1}`, url });
+      const normalizedSocial = normalizeSocialUrl(normalized);
+      if (!normalizedSocial || seenExtra.has(normalizedSocial)) return;
+      existing.push({ label: `discovered_${index + 1}`, url: normalizedSocial });
+      seenExtra.add(normalizedSocial);
     });
     updated.other_social_links = existing;
   }
@@ -388,7 +428,7 @@ export const buildChangedFields = (
   afterProfile: CompanyProfile
 ): Array<{ field: string; before: any; after: any }> => {
   const trackedFields: Array<keyof CompanyProfile> = [
-    'name', 'industry', 'category', 'products_services', 'target_audience',
+    'name', 'industry', 'category', 'business_classification', 'products_services', 'target_audience',
     'geography', 'brand_voice', 'goals', 'competitors', 'unique_value',
     'content_themes', 'confidence_score',
   ];

@@ -4,11 +4,126 @@ import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import CompanyStrategyProfileCard from '../components/company/CompanyStrategyProfileCard';
 import type { useCompanyProfileState } from '../hooks/useCompanyProfileState';
-import { joinList, splitToList } from './company-profile.types';
+import type { CompanyProfile } from './company-profile.types';
+import { dedupeSocialProfiles, joinList, normalizeProfileSocialUrl, splitToList } from './company-profile.types';
 
 type ProfileState = ReturnType<typeof useCompanyProfileState>;
 
 type BrandAssetField = 'logo_url' | 'favicon_url';
+type SocialAccountField = Extract<
+  keyof CompanyProfile,
+  | 'linkedin_url'
+  | 'facebook_url'
+  | 'instagram_url'
+  | 'x_url'
+  | 'youtube_url'
+  | 'tiktok_url'
+  | 'reddit_url'
+  | 'pinterest_url'
+  | 'whatsapp_url'
+  | 'blog_url'
+>;
+type MissingFieldQuestion = {
+  field: string;
+  question: string;
+  options?: string[];
+  allow_multiple?: boolean;
+};
+type InlineQuestionFieldKey =
+  | 'industry'
+  | 'category'
+  | 'geography'
+  | 'products_services'
+  | 'target_audience'
+  | 'brand_voice'
+  | 'goals'
+  | 'unique_value'
+  | 'content_themes';
+
+const INLINE_QUESTION_FIELD_MATCHERS: Record<InlineQuestionFieldKey, string[]> = {
+  industry: ['industry'],
+  category: ['category', 'categories'],
+  geography: ['geography', 'geographic', 'geographical', 'location', 'market_area', 'served_area'],
+  products_services: ['product', 'products', 'service', 'services', 'offering', 'offerings'],
+  target_audience: ['target_audience', 'audience', 'customer', 'icp', 'segment'],
+  brand_voice: ['brand_voice', 'voice', 'tone'],
+  goals: ['goal', 'goals', 'objective', 'objectives'],
+  unique_value: ['unique_value', 'unique_value_proposition', 'value_proposition', 'differentiator'],
+  content_themes: ['content_theme', 'content_themes', 'theme', 'themes', 'topic', 'topics'],
+};
+
+const BLOCKED_REFINEMENT_QUESTION_TOKENS = [
+  'competitor',
+  'competitors',
+  'social',
+  'social_profile',
+  'linkedin',
+  'facebook',
+  'instagram',
+  'twitter',
+  'youtube',
+  'tiktok',
+  'reddit',
+  'blog',
+  'website',
+  'url',
+  'link',
+];
+
+const normalizeQuestionFieldKey = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const isBlockedRefinementQuestion = (question: MissingFieldQuestion) => {
+  const normalized = normalizeQuestionFieldKey(`${question.field} ${question.question}`);
+  return BLOCKED_REFINEMENT_QUESTION_TOKENS.some((token) => normalized.includes(token));
+};
+
+const questionMatchesInlineField = (
+  question: MissingFieldQuestion,
+  fieldKey: InlineQuestionFieldKey,
+) => {
+  if (isBlockedRefinementQuestion(question)) return false;
+  const normalized = normalizeQuestionFieldKey(`${question.field} ${question.question}`);
+  return INLINE_QUESTION_FIELD_MATCHERS[fieldKey].some((token) => normalized.includes(token));
+};
+
+const questionMatchesAnyInlineField = (question: MissingFieldQuestion) =>
+  (Object.keys(INLINE_QUESTION_FIELD_MATCHERS) as InlineQuestionFieldKey[]).some((fieldKey) =>
+    questionMatchesInlineField(question, fieldKey)
+  );
+
+const BUSINESS_CLASSIFICATION_LABELS: Record<string, string> = {
+  product_company: 'Product Company',
+  services_company: 'Services Company',
+  marketplace: 'Marketplace',
+  retailer: 'Retailer',
+  distributor: 'Distributor',
+  manufacturer: 'Manufacturer',
+  hybrid: 'Hybrid',
+  saas_product: 'Software Product',
+  ai_product: 'AI Tool',
+  mobile_app: 'Mobile App',
+  cpg_brand: 'Consumer Brand',
+  hardware_product: 'Hardware Product',
+  it_services: 'IT Services',
+  marketing_agency: 'Marketing Agency',
+  consulting: 'Consulting',
+  coaching: 'Coaching',
+  outsourcing: 'Outsourcing',
+  b2b_marketplace: 'B2B Marketplace',
+  b2c_marketplace: 'Consumer Marketplace',
+};
+
+const formatBusinessClassificationLabel = (value?: string | null): string =>
+  BUSINESS_CLASSIFICATION_LABELS[String(value || '').toLowerCase()] ||
+  String(value || '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 
 const BRAND_ASSET_SPECS: Record<
   BrandAssetField,
@@ -37,6 +152,74 @@ const BRAND_ASSET_SPECS: Record<
 };
 
 const BRAND_ASSET_ACCEPT = 'image/png,image/jpeg,image/jpg,image/webp';
+
+const SOCIAL_ACCOUNT_FIELDS: Array<{
+  field: SocialAccountField;
+  platform: string;
+  label: string;
+  placeholder: string;
+}> = [
+  {
+    field: 'linkedin_url',
+    platform: 'linkedin',
+    label: 'LinkedIn',
+    placeholder: 'https://linkedin.com/company/yourpage',
+  },
+  {
+    field: 'instagram_url',
+    platform: 'instagram',
+    label: 'Instagram',
+    placeholder: 'https://instagram.com/yourhandle',
+  },
+  {
+    field: 'facebook_url',
+    platform: 'facebook',
+    label: 'Facebook',
+    placeholder: 'https://facebook.com/yourpage',
+  },
+  {
+    field: 'x_url',
+    platform: 'x',
+    label: 'X (Twitter)',
+    placeholder: 'https://x.com/yourhandle',
+  },
+  {
+    field: 'youtube_url',
+    platform: 'youtube',
+    label: 'YouTube',
+    placeholder: 'https://youtube.com/@yourchannel',
+  },
+  {
+    field: 'tiktok_url',
+    platform: 'tiktok',
+    label: 'TikTok',
+    placeholder: 'https://tiktok.com/@yourhandle',
+  },
+  {
+    field: 'pinterest_url',
+    platform: 'pinterest',
+    label: 'Pinterest',
+    placeholder: 'https://pinterest.com/yourprofile',
+  },
+  {
+    field: 'whatsapp_url',
+    platform: 'whatsapp',
+    label: 'WhatsApp',
+    placeholder: 'https://wa.me/15551234567',
+  },
+  {
+    field: 'reddit_url',
+    platform: 'reddit',
+    label: 'Reddit',
+    placeholder: 'https://reddit.com/r/yourcommunity',
+  },
+  {
+    field: 'blog_url',
+    platform: 'blog',
+    label: 'Blog / Website Page',
+    placeholder: 'https://example.com/blog',
+  },
+];
 
 const formatFileSize = (bytes: number) => {
   if (bytes >= 1024 * 1024) {
@@ -453,10 +636,73 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   } = d;
 
   const marketPulseSettings = activeProfile.report_settings?.market_pulse ?? {};
+  const marketAlternativeLabels = (marketPulseSettings.market_alternatives ?? [])
+    .slice(0, 3)
+    .map((item) => [item.name, item.category].filter(Boolean).join(' - '))
+    .filter(Boolean);
+  const competitorDetails = (marketPulseSettings.competitor_details ?? []).slice(0, 3);
+  const competitorQuality = marketPulseSettings.competitor_quality ?? null;
+  const competitorScoreThreshold = Number(competitorQuality?.threshold ?? 90);
+  const topCompetitorScore = competitorQuality?.highest_score ?? (
+    competitorDetails.length
+      ? Math.max(...competitorDetails.map((item) => Number(item.score ?? 0)))
+      : null
+  );
+  const competitorThresholdMet = competitorQuality?.threshold_met ?? (
+    topCompetitorScore != null ? topCompetitorScore >= competitorScoreThreshold : null
+  );
+  const businessClassification =
+    activeProfile.business_classification && typeof activeProfile.business_classification === 'object'
+      ? activeProfile.business_classification
+      : null;
+  const filledSocialAccounts = SOCIAL_ACCOUNT_FIELDS
+    .map((account) => ({
+      ...account,
+      value: String(activeProfile[account.field] || '').trim(),
+    }))
+    .filter((account) => account.value.length > 0);
+  const socialPreviewAccounts = [
+    ...filledSocialAccounts,
+    ...SOCIAL_ACCOUNT_FIELDS.filter(
+      (account) => !filledSocialAccounts.some((filled) => filled.field === account.field)
+    ).map((account) => ({ ...account, value: '' })),
+  ].slice(0, 2);
+  const primarySocialKeys = new Set(
+    SOCIAL_ACCOUNT_FIELDS
+      .map((account) => {
+        const normalized = normalizeProfileSocialUrl(String(activeProfile[account.field] || ''));
+        return normalized ? `${account.platform}:${normalized}` : null;
+      })
+      .filter((key): key is string => Boolean(key)),
+  );
+  const discoveredSocialProfiles = dedupeSocialProfiles(activeProfile.social_profiles)
+    .filter((entry) => !primarySocialKeys.has(`${entry.platform}:${entry.url}`));
   const intelligenceSettings = activeProfile.report_settings?.intelligence ?? {};
   const displayFieldValue = React.useCallback(
     (primary?: string | null, extracted?: string[] | null) => joinList(extracted, primary) || '',
     [],
+  );
+  const actionableRefinementQuestions = React.useMemo(() => {
+    const questions = latestRefinement?.missing_fields_questions ?? [];
+    const seen = new Set<string>();
+
+    return questions.filter((question) => {
+      if (!question?.field || !question?.question) return false;
+      if (!questionMatchesAnyInlineField(question)) return false;
+
+      const key = normalizeQuestionFieldKey(`${question.field}:${question.question}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [latestRefinement]);
+
+  const getRefinementQuestionsForField = React.useCallback(
+    (fieldKey: InlineQuestionFieldKey) =>
+      actionableRefinementQuestions.filter((question) =>
+        questionMatchesInlineField(question, fieldKey)
+      ),
+    [actionableRefinementQuestions],
   );
   const [brandAssetUploading, setBrandAssetUploading] = React.useState<Record<BrandAssetField, boolean>>({
     logo_url: false,
@@ -587,6 +833,69 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     }
   };
 
+  const renderInlineRefinementQuestions = (fieldKey: InlineQuestionFieldKey) => {
+    const questions = getRefinementQuestionsForField(fieldKey);
+    if (questions.length === 0) return null;
+
+    return (
+      <div className="mt-2 space-y-2 rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-2">
+        {questions.map((question, index) => {
+          const selected = missingFieldAnswers[question.field] || [];
+          const options = (question.options ?? []).filter(Boolean);
+
+          return (
+            <div key={`${fieldKey}-${question.field}-${index}`} className="space-y-1">
+              <div className="text-xs font-medium text-indigo-900">{question.question}</div>
+              {options.length > 0 ? (
+                question.allow_multiple ? (
+                  <select
+                    multiple
+                    value={selected}
+                    onChange={(event) => {
+                      const values = Array.from(event.target.selectedOptions).map(
+                        (option) => option.value
+                      );
+                      handleMissingAnswer(question.field, values);
+                    }}
+                    className="w-full rounded-md border border-indigo-100 bg-white px-2 py-1 text-xs text-slate-800"
+                  >
+                    {options.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select
+                    value={selected[0] || ''}
+                    onChange={(event) =>
+                      handleMissingAnswer(
+                        question.field,
+                        event.target.value ? [event.target.value] : []
+                      )
+                    }
+                    className="w-full rounded-md border border-indigo-100 bg-white px-2 py-1 text-xs text-slate-800"
+                  >
+                    <option value="">Select an option</option>
+                    {options.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                )
+              ) : (
+                <div className="text-xs text-indigo-700">
+                  Type the answer directly in this field.
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <>
       <div className="mx-auto mt-6 max-w-5xl rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
@@ -689,12 +998,11 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 </div>
               </details>
             )}
-            {latestRefinement.missing_fields_questions &&
-              latestRefinement.missing_fields_questions.length > 0 && (
+            {actionableRefinementQuestions.length > 0 && (
                 <details className="bg-white rounded border border-indigo-200 p-3">
                   <summary className="cursor-pointer text-sm font-medium">Missing fields</summary>
                   <div className="mt-2 space-y-3 text-xs text-gray-700">
-                    {latestRefinement.missing_fields_questions.map((question, index) => (
+                    {actionableRefinementQuestions.map((question, index) => (
                       <div key={`missing-${question.field}-${index}`} className="space-y-1">
                         <div className="font-semibold">{question.field}</div>
                         <div>{question.question}</div>
@@ -827,6 +1135,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   onChange={(e) => handleChange('industry', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {renderInlineRefinementQuestions('industry')}
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Category</label>
@@ -835,7 +1144,29 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   onChange={(e) => handleChange('category', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {renderInlineRefinementQuestions('category')}
               </div>
+              {businessClassification && (
+                <div className="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-sm font-semibold text-slate-900">Business Classification</div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700">
+                      Business model: {formatBusinessClassificationLabel(businessClassification.level_1)}
+                    </span>
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-700">
+                      Type: {formatBusinessClassificationLabel(businessClassification.level_2)}
+                    </span>
+                    {(businessClassification.level_3 || []).slice(0, 2).map((domain) => (
+                      <span
+                        key={domain}
+                        className="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700"
+                      >
+                        Domain: {formatBusinessClassificationLabel(domain)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div>
                 <label className="text-sm font-medium text-gray-700">Website URL</label>
                 <input
@@ -940,78 +1271,52 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   })}
                 </div>
               </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">LinkedIn</label>
-                <input
-                  value={activeProfile.linkedin_url || ''}
-                  onChange={(e) => handleChange('linkedin_url', e.target.value)}
-                  placeholder="https://linkedin.com/company/yourpage"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Facebook</label>
-                <input
-                  value={activeProfile.facebook_url || ''}
-                  onChange={(e) => handleChange('facebook_url', e.target.value)}
-                  placeholder="https://facebook.com/yourpage"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Instagram</label>
-                <input
-                  value={activeProfile.instagram_url || ''}
-                  onChange={(e) => handleChange('instagram_url', e.target.value)}
-                  placeholder="https://instagram.com/yourhandle"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">X (Twitter)</label>
-                <input
-                  value={activeProfile.x_url || ''}
-                  onChange={(e) => handleChange('x_url', e.target.value)}
-                  placeholder="https://x.com/yourhandle"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">YouTube</label>
-                <input
-                  value={activeProfile.youtube_url || ''}
-                  onChange={(e) => handleChange('youtube_url', e.target.value)}
-                  placeholder="https://youtube.com/@yourchannel"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">TikTok</label>
-                <input
-                  value={activeProfile.tiktok_url || ''}
-                  onChange={(e) => handleChange('tiktok_url', e.target.value)}
-                  placeholder="https://tiktok.com/@yourhandle"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Reddit</label>
-                <input
-                  value={activeProfile.reddit_url || ''}
-                  onChange={(e) => handleChange('reddit_url', e.target.value)}
-                  placeholder="https://reddit.com/r/yourcommunity"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Blog / Website Page</label>
-                <input
-                  value={activeProfile.blog_url || ''}
-                  onChange={(e) => handleChange('blog_url', e.target.value)}
-                  placeholder="https://example.com/blog"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-              </div>
+              <details className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-4">
+                <summary className="cursor-pointer list-none">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">Social Accounts</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        Add primary platform profiles used for crawling, publishing, and readiness checks.
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {socialPreviewAccounts.map((account) => (
+                        <span
+                          key={account.field}
+                          className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                            account.value
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : 'border-slate-200 bg-slate-50 text-slate-500'
+                          }`}
+                          title={account.value || `Add ${account.label}`}
+                        >
+                          {account.label}{account.value ? ' connected' : ' pending'}
+                        </span>
+                      ))}
+                      {filledSocialAccounts.length > 2 ? (
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500">
+                          +{filledSocialAccounts.length - 2} more
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </summary>
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {SOCIAL_ACCOUNT_FIELDS.map((account) => (
+                    <div key={account.field}>
+                      <label className="text-sm font-medium text-gray-700">{account.label}</label>
+                      <input
+                        value={String(activeProfile[account.field] || '')}
+                        onChange={(e) => handleChange(account.field, e.target.value)}
+                        onBlur={(e) => normalizeUrlField(account.field, e.target.value)}
+                        placeholder={account.placeholder}
+                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </details>
               <div>
                 <label className="text-sm font-medium text-gray-700">Geography</label>
                 <input
@@ -1019,6 +1324,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   onChange={(e) => handleChange('geography', e.target.value)}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {renderInlineRefinementQuestions('geography')}
             </div>
             </div>
             </SectionCard>
@@ -1085,19 +1391,19 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             <div className="border rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-semibold text-gray-800">Additional Digital Assets</h3>
-                {isEditing && (
-                  <button
-                    type="button"
-                    onClick={addOtherSocial}
-                    className="px-3 py-1 bg-gray-100 text-gray-800 rounded text-xs"
-                  >
-                    + Add
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={addOtherSocial}
+                  className="px-3 py-1 bg-gray-100 text-gray-800 rounded text-xs hover:bg-gray-200"
+                >
+                  + Add asset
+                </button>
               </div>
               <p className="text-xs text-gray-500 mb-2">Add any other digital presence — communities (Slack, Discord, Circle), profile pages (Crunchbase, G2, Clutch), newsletters, podcasts, or other links. Refine with AI will crawl these too.</p>
               {(activeProfile.other_social_links || []).length === 0 && (
-                <div className="text-xs text-gray-500">No additional profiles added.</div>
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-gray-500">
+                  No additional profiles added. Use Add asset to enter a label and URL.
+                </div>
               )}
               <div className="space-y-2">
                 {(activeProfile.other_social_links || []).map((item, index) => (
@@ -1105,7 +1411,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     <input
                       value={item?.label || ''}
                       onChange={(e) => updateOtherSocial(index, 'label', e.target.value)}
-                      placeholder="Label (e.g. Pinterest)"
+                      placeholder="Label (e.g. Crunchbase)"
                       className="md:col-span-2 border border-gray-300 rounded-lg px-3 py-2 text-sm"
                     />
                     <input
@@ -1142,6 +1448,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {renderInlineRefinementQuestions('products_services')}
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Target Audience</label>
@@ -1151,6 +1458,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {renderInlineRefinementQuestions('target_audience')}
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Brand Voice</label>
@@ -1160,6 +1468,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {renderInlineRefinementQuestions('brand_voice')}
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Goals</label>
@@ -1169,16 +1478,47 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {renderInlineRefinementQuestions('goals')}
             </div>
             {(canViewStrategicSections || isCompanyAdmin) && (
               <div>
                 <label className="text-sm font-medium text-gray-700">Competitors</label>
                 <textarea
-                  value={displayFieldValue(activeProfile.competitors, activeProfile.competitors_list)}
+                  value={joinList(activeProfile.competitors_list, activeProfile.competitors) || ''}
                   onChange={(e) => handleChange('competitors', e.target.value)}
                   rows={2}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
+                {competitorDetails.length > 0 ? (
+                  <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-slate-800">
+                        Top match: {topCompetitorScore != null ? `${Math.round(topCompetitorScore)}%` : 'Not scored'}
+                      </span>
+                      <span className={`rounded-full px-2 py-0.5 font-semibold ${
+                        competitorThresholdMet ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {competitorThresholdMet ? '90%+ match' : `Below ${Math.round(competitorScoreThreshold)}%`}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {competitorDetails.map((competitor) => (
+                        <span
+                          key={competitor.name}
+                          className="rounded-full border border-slate-200 bg-white px-2 py-1"
+                        >
+                          {competitor.name}: {Math.round(Number(competitor.score ?? 0))}%
+                        </span>
+                      ))}
+                    </div>
+                    {!competitorThresholdMet && marketAlternativeLabels.length > 0 ? (
+                      <div className="mt-2">
+                        <div className="font-semibold text-slate-800">Expanded context</div>
+                        <div className="mt-1">{marketAlternativeLabels.join(', ')}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             )}
             <div>
@@ -1189,6 +1529,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {renderInlineRefinementQuestions('unique_value')}
             </div>
             <div>
               <label className="text-sm font-medium text-gray-700">Content Themes</label>
@@ -1198,6 +1539,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 rows={2}
                 className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
               />
+              {renderInlineRefinementQuestions('content_themes')}
             </div>
             </div>
             </SectionCard>
@@ -1396,6 +1738,53 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     onChange={(e) => handleMarketPulseSettingChange('business_model', e.target.value)}
                     placeholder="e.g. SaaS, services, marketplace"
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Provider type</label>
+                  <input
+                    value={marketPulseSettings.provider_type || ''}
+                    onChange={(e) => handleMarketPulseSettingChange('provider_type', e.target.value)}
+                    placeholder="e.g. AI-powered solution provider"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Domain role</label>
+                  <input
+                    value={marketPulseSettings.domain_role || ''}
+                    onChange={(e) => handleMarketPulseSettingChange('domain_role', e.target.value)}
+                    placeholder="e.g. AI-powered problem-solution provider"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Operating model</label>
+                  <input
+                    value={marketPulseSettings.operating_model || ''}
+                    onChange={(e) => handleMarketPulseSettingChange('operating_model', e.target.value)}
+                    placeholder="e.g. AI software platform"
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Solution domains</label>
+                  <textarea
+                    value={joinList(marketPulseSettings.solution_domains)}
+                    onChange={(e) => handleMarketPulseSettingArrayChange('solution_domains', e.target.value)}
+                    placeholder="Comma-separated: mental clarity, decision support"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Market alternatives</label>
+                  <textarea
+                    value={marketAlternativeLabels.join(', ')}
+                    readOnly
+                    placeholder="Generated during refinement"
+                    rows={2}
+                    className="mt-1 w-full border border-gray-300 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700"
                   />
                 </div>
                 <div>
@@ -1791,67 +2180,11 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             </div>
             )}
 
-            {latestRefinement?.missing_fields_questions &&
-              latestRefinement.missing_fields_questions.length > 0 && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
-                  <div className="text-sm font-semibold text-amber-900">
-                    Help us improve your company profile
-                  </div>
-                  {latestRefinement.missing_fields_questions.map((question, index) => {
-                    const selected = missingFieldAnswers[question.field] || [];
-                    return (
-                      <div key={`${question.field}-${index}`} className="space-y-1">
-                        <label className="text-xs font-medium text-amber-900">
-                          {question.question}
-                        </label>
-                        {question.allow_multiple ? (
-                          <select
-                            multiple
-                            value={selected}
-                            onChange={(event) => {
-                              const values = Array.from(event.target.selectedOptions).map(
-                                (option) => option.value
-                              );
-                              handleMissingAnswer(question.field, values);
-                            }}
-                            className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
-                          >
-                            {question.options?.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <select
-                            value={selected[0] || ''}
-                            onChange={(event) =>
-                              handleMissingAnswer(
-                                question.field,
-                                event.target.value ? [event.target.value] : []
-                              )
-                            }
-                            className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
-                          >
-                            <option value="">Select an option</option>
-                            {question.options?.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
-                            ))}
-                          </select>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-            {activeProfile.social_profiles && activeProfile.social_profiles.length > 0 && (
+            {discoveredSocialProfiles.length > 0 && (
               <div className="rounded-lg border border-gray-200 p-4">
                 <div className="text-sm font-semibold text-gray-800 mb-2">Discovered Social Profiles</div>
                 <ul className="text-xs text-gray-600 space-y-1">
-                  {activeProfile.social_profiles.map((entry, index) => (
+                  {discoveredSocialProfiles.map((entry, index) => (
                     <li key={`${entry.platform}-${entry.url}-${index}`}>
                       <a
                         href={entry.url}

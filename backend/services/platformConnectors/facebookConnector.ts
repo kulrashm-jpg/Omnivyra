@@ -1,7 +1,7 @@
 import type { CommunityAiAction } from '../communityAiActionExecutor';
 import type { PlatformConnector } from './baseConnector';
 
-const GRAPH_API = 'https://graph.facebook.com/v19.0';
+const GRAPH_API = 'https://graph.facebook.com/v22.0';
 
 const isUrl = (value: string) => /^https?:\/\//i.test(value);
 

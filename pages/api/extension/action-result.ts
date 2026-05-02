@@ -39,6 +39,7 @@ import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddlewa
 import { supabase } from '@/backend/db/supabaseClient';
 import { recordOutcome } from '@/backend/services/extensionReliabilityService';
 import { persistExecutionResult, recordExecutionMetric } from '@/backend/services/communityAiActionExecutor';
+import { mirrorOutboundDmAction } from '@/backend/services/engagementOutboundMirrorService';
 
 type NormalizedResult = {
   success: boolean;
@@ -107,7 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { data: existing, error: fetchError } = await supabase
       .from('community_ai_actions')
-      .select('id, organization_id, status, platform, action_type, target_id, dispatch_lease_id, dispatch_lease_holder_id, dispatch_lease_expires_at, idempotency_key, execution_result, execution_correlation_id, command_chain, command_chain_index')
+      .select('id, organization_id, status, platform, action_type, target_id, suggested_text, final_text, dispatch_lease_id, dispatch_lease_holder_id, dispatch_lease_expires_at, idempotency_key, execution_result, execution_correlation_id, command_chain, command_chain_index')
       .eq('id', commandId)
       .maybeSingle();
 
@@ -280,6 +281,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         error: 'LEASE_MISMATCH',
         current_status: persistOutcome.current_status ?? null,
       });
+    }
+
+    if (finalStatus === 'executed' && String(existing.action_type || '').toLowerCase() === 'dm') {
+      const mirrorResult = await mirrorOutboundDmAction({
+        organizationId: session.orgId,
+        actionId: commandId,
+        platform: existing.platform ?? null,
+        targetId: (existing as { target_id?: string | null }).target_id ?? null,
+        text:
+          (existing as { final_text?: string | null }).final_text
+          ?? (existing as { suggested_text?: string | null }).suggested_text
+          ?? null,
+        sentAt: result?.verified_at ?? null,
+        platformId: result?.platform_id ?? null,
+        confirmed: isConfirmed,
+      });
+      if (mirrorResult.error) {
+        console.warn('[extension/action-result] outbound DM mirror warning:', mirrorResult.error, {
+          actionId: commandId,
+          threadId: mirrorResult.thread_id,
+        });
+      }
     }
 
     try {

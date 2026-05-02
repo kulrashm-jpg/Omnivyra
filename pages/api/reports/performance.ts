@@ -5,6 +5,7 @@ import {
   composePerformanceIntelligenceReport,
   type PerformanceIntelligenceReportResponse,
 } from '../../../backend/services/performanceReportService';
+import { resolveAnalyticsReportInput } from '../../../backend/services/analyticsInputResolver';
 
 type PerformanceReportApiResponse = PerformanceIntelligenceReportResponse | {
   error?: string;
@@ -72,8 +73,13 @@ export default async function handler(
       : req.query.since_days;
     const sinceDays = sinceDaysParam ? Number.parseInt(sinceDaysParam, 10) : undefined;
 
+    const resolvedInput = await resolveAnalyticsReportInput({
+      companyId,
+      reportCategory: 'performance',
+    });
     const performanceReport = await composePerformanceIntelligenceReport(companyId, {
       sinceDays: Number.isFinite(sinceDays) && sinceDays && sinceDays > 0 ? sinceDays : undefined,
+      resolvedInput,
     });
     return res.status(200).json(performanceReport);
   } catch (error) {

@@ -30,6 +30,34 @@ type ContextResponse = {
     effective_market_focus?: string[];
     effective_competitors?: string[];
     business_model?: string;
+    provider_type?: string;
+    domain_role?: string;
+    operating_model?: string;
+    solution_domains?: string[];
+    competitor_details?: Array<{
+      name: string;
+      category?: string | null;
+      tier?: string | null;
+      score?: number | null;
+      confidence?: number | null;
+      rationale?: string | null;
+    }>;
+    competitor_quality?: {
+      highest_score?: number | null;
+      threshold?: number | null;
+      threshold_met?: boolean | null;
+      detail_mode?: 'high_confidence' | 'expanded_context' | null;
+    };
+    market_alternatives?: Array<{
+      name: string;
+      category?: string | null;
+      tier?: string | null;
+      score?: number | null;
+      confidence?: number | null;
+      rationale?: string | null;
+      use_case?: string | null;
+      business_model?: string | null;
+    }>;
     core_offerings?: string[];
     growth_priorities?: string[];
     partnership_priorities?: string[];
@@ -546,8 +574,8 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
                   <div className="mt-1">{context.marketPulseProfile.effective_market_focus?.join(', ') || 'Not set'}</div>
                 </div>
                 <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-700">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Competitors</div>
-                  <div className="mt-1">{context.marketPulseProfile.effective_competitors?.join(', ') || 'Not set'}</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Domain Role</div>
+                  <div className="mt-1">{context.marketPulseProfile.domain_role || context.marketPulseProfile.provider_type || 'Not set'}</div>
                 </div>
                 <div className="rounded-xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-700">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Policy Sensitivity</div>
@@ -699,7 +727,8 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
             <h4 className="text-sm font-semibold text-gray-900">Profile-backed defaults</h4>
             <div className="mt-3 space-y-2 text-sm text-gray-600">
               <div><strong>Market focus:</strong> {context?.marketPulseProfile.effective_market_focus?.join(', ') || 'Not set'}</div>
-              <div><strong>Competitors:</strong> {context?.marketPulseProfile.effective_competitors?.join(', ') || 'Not set'}</div>
+              <div><strong>Domain role:</strong> {context?.marketPulseProfile.domain_role || context?.marketPulseProfile.provider_type || 'Not set'}</div>
+              <div><strong>Solution domains:</strong> {context?.marketPulseProfile.solution_domains?.join(', ') || 'Not set'}</div>
               <div><strong>Policy sensitivity:</strong> {context?.marketPulseProfile.regulatory_policy_sensitivity?.join(', ') || 'Not set'}</div>
             </div>
           </section>

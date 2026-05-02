@@ -104,7 +104,7 @@ export const ReplyComposer = React.memo(function ReplyComposer({
         if (
           executionResult
           && typeof executionResult === 'object'
-          && ['browser_failed', 'browser_unverified'].includes(String(executionResult.mode || ''))
+          && ['browser_failed', 'browser_unverified', 'browser_queued', 'browser_pending'].includes(String(executionResult.mode || ''))
         ) {
           throw new Error(executionResult.message || 'Browser delivery was not confirmed.');
         }

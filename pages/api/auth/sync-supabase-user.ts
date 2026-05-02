@@ -22,11 +22,51 @@ import {
   sendCompanyAdminReferral,
   sendInboundSignupNoticeToAdmin,
 } from '../../../backend/services/emailService';
+import { resolveDomain } from '../../../backend/services/domainCanonicalService';
+import { saveDomainRecord } from '../../../backend/services/domainRecordService';
+import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
+import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
+import { logDomainEvent } from '../../../backend/services/domainEventLogger';
+
+type BootstrapRejection = {
+  code:
+    | 'DOMAIN_NOT_CANONICAL'
+    | 'DOMAIN_FORWARDING_NOT_ALLOWED'
+    | 'DOMAIN_ALREADY_REGISTERED'
+    | 'DOMAIN_RESOLUTION_FAILED';
+  status: number;
+  details: string;
+  final_domain?: string;
+  conflicting_company_id?: string;
+};
+type DomainVerificationCarryOut = {
+  required: true;
+  final_domain: string;
+  token: string;
+  methods: ['dns', 'http'];
+};
+type BootstrapResult =
+  | { ok: true; domain_verification?: DomainVerificationCarryOut }
+  | { ok: false; rejection: BootstrapRejection };
 
 const SUPPORT_EMAIL = 'support@omnivyra.com';
 
-type SuccessResponse = { ok: true };
-type ErrorResponse   = { error: string; code?: string };
+type SuccessResponse = {
+  ok: true;
+  domain_verification?: {
+    required: true;
+    final_domain: string;
+    token: string;
+    methods: ['dns', 'http'];
+  };
+};
+type ErrorResponse   = {
+  error: string;
+  code?: string;
+  details?: string;
+  final_domain?: string;
+  conflicting_company_id?: string;
+};
 
 export default async function handler(
   req: NextApiRequest,
@@ -46,6 +86,13 @@ export default async function handler(
   } catch {
     return res.status(401).json({ error: 'Invalid or expired session' });
   }
+
+  // Extract client IP once — used to rate-limit domain canonical resolution.
+  const clientIp = String(
+    req.headers['x-forwarded-for']
+    ?? (req.socket as any)?.remoteAddress
+    ?? 'unknown',
+  ).split(',')[0].trim();
 
   // ── 2. Work-email validation (skip for invited users — they may use any domain) ──
   // Don't block social logins with personal emails if they were explicitly invited.
@@ -124,9 +171,30 @@ export default async function handler(
       .update({ is_email_verified: true, last_sign_in_at: now, has_password: hasPassword })
       .eq('supabase_uid', supabaseUid);
     try {
-      await bootstrapCompanyFromSignupIntent({
+      const result = await bootstrapCompanyFromSignupIntent({
         userId: (existingByUid as { id: string }).id,
         email: normalizedEmail,
+        clientIp,
+      });
+      if (result.ok === false) {
+        const rejection = result.rejection;
+        return res.status(rejection.status).json({
+          error:   rejection.code,
+          code:    rejection.code,
+          details: rejection.details,
+          ...(rejection.final_domain
+            ? { final_domain: rejection.final_domain }
+            : {}),
+          ...(rejection.conflicting_company_id
+            ? { conflicting_company_id: rejection.conflicting_company_id }
+            : {}),
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        ...(result.domain_verification
+          ? { domain_verification: result.domain_verification }
+          : {}),
       });
     } catch (err) {
       logger.warn('auth_sync_bootstrap_outer_threw_existing_uid', {
@@ -165,9 +233,30 @@ export default async function handler(
     }
     await supabase.from('users').update(updatePayload).eq('id', (byEmail as any).id);
     try {
-      await bootstrapCompanyFromSignupIntent({
+      const result = await bootstrapCompanyFromSignupIntent({
         userId: (byEmail as { id: string }).id,
         email: normalizedEmail,
+        clientIp,
+      });
+      if (result.ok === false) {
+        const rejection = result.rejection;
+        return res.status(rejection.status).json({
+          error:   rejection.code,
+          code:    rejection.code,
+          details: rejection.details,
+          ...(rejection.final_domain
+            ? { final_domain: rejection.final_domain }
+            : {}),
+          ...(rejection.conflicting_company_id
+            ? { conflicting_company_id: rejection.conflicting_company_id }
+            : {}),
+        });
+      }
+      return res.status(200).json({
+        ok: true,
+        ...(result.domain_verification
+          ? { domain_verification: result.domain_verification }
+          : {}),
       });
     } catch (err) {
       logger.warn('auth_sync_bootstrap_outer_threw_existing_email', {
@@ -207,6 +296,10 @@ export default async function handler(
     return res.status(500).json({ error: 'Failed to sync user to database' });
   }
 
+  // Captured from the brand-new-user bootstrap so the success response can
+  // surface the raw verification token to the client.
+  let insertBranchVerification: SuccessResponse['domain_verification'] | undefined;
+
   // Look the row up separately (instead of chaining .select() onto the
   // insert) so the success/failure of the insert is decoupled from any
   // read-back semantics. The bootstrap is best-effort — wrapped in its
@@ -219,10 +312,45 @@ export default async function handler(
       .eq('supabase_uid', supabaseUid)
       .maybeSingle();
     if (insertedUser) {
-      await bootstrapCompanyFromSignupIntent({
-        userId: (insertedUser as { id: string }).id,
+      const insertedUserId = (insertedUser as { id: string }).id;
+      const result = await bootstrapCompanyFromSignupIntent({
+        userId: insertedUserId,
         email: normalizedEmail,
+        clientIp,
       });
+      if (result.ok === true) {
+        insertBranchVerification = result.domain_verification;
+      } else if (result.ok === false) {
+        const rejection = result.rejection;
+        // Honor the spec's "DO NOT create user/company" guarantee: the user
+        // row was just inserted, so soft-delete it and remove the auth
+        // identity. Soft-delete is sufficient because is_deleted blocks
+        // every downstream auth path; the auth.users row is removed so the
+        // user can re-attempt with a corrected domain on a clean slate.
+        await supabase
+          .from('users')
+          .update({ is_deleted: true, deleted_at: new Date().toISOString() })
+          .eq('id', insertedUserId);
+        try {
+          await supabase.auth.admin.deleteUser(supabaseUid);
+        } catch (authErr) {
+          logger.warn('auth_sync_canonical_reject_auth_cleanup_failed', {
+            email: normalizedEmail,
+            message: authErr instanceof Error ? authErr.message : String(authErr),
+          });
+        }
+        return res.status(rejection.status).json({
+          error:   rejection.code,
+          code:    rejection.code,
+          details: rejection.details,
+          ...(rejection.final_domain
+            ? { final_domain: rejection.final_domain }
+            : {}),
+          ...(rejection.conflicting_company_id
+            ? { conflicting_company_id: rejection.conflicting_company_id }
+            : {}),
+        });
+      }
     }
   } catch (err) {
     logger.warn('auth_sync_post_insert_lookup_failed', {
@@ -231,7 +359,12 @@ export default async function handler(
     });
   }
 
-  return res.status(200).json({ ok: true });
+  return res.status(200).json({
+    ok: true,
+    ...(insertBranchVerification
+      ? { domain_verification: insertBranchVerification }
+      : {}),
+  });
 }
 
 /**
@@ -248,7 +381,8 @@ export default async function handler(
 async function bootstrapCompanyFromSignupIntent(input: {
   userId: string;
   email: string;
-}): Promise<void> {
+  clientIp?: string;
+}): Promise<BootstrapResult> {
   try {
     // Skip if user already has any active role — invited users or
     // returning users already belong to a company.
@@ -259,7 +393,20 @@ async function bootstrapCompanyFromSignupIntent(input: {
       .eq('status', 'active')
       .limit(1)
       .maybeSingle();
-    if (existingRole) return;
+    if (existingRole) return { ok: true };
+
+    // Skip if there's a pending invitation for this email — invited users
+    // must not be subjected to canonical-domain enforcement (an invited gmail
+    // user is legitimate; the inviting admin already vouched for them).
+    const { data: pendingInvite } = await supabase
+      .from('invitations')
+      .select('id')
+      .eq('email', input.email)
+      .is('accepted_at', null)
+      .is('revoked_at', null)
+      .limit(1)
+      .maybeSingle();
+    if (pendingInvite) return { ok: true };
 
     // Pull the company name from the signup_intents row that was written
     // by /api/auth/signup before the email was sent.
@@ -272,12 +419,12 @@ async function bootstrapCompanyFromSignupIntent(input: {
       .maybeSingle();
     const intentData = (intentRow as { intent_data?: Record<string, unknown> } | null)?.intent_data ?? null;
     const rawCompanyName = intentData ? String((intentData as Record<string, unknown>).company_name ?? '').trim() : '';
-    if (!rawCompanyName) return;
+    if (!rawCompanyName) return { ok: true };
 
     // Skip free-email domains for self-create — those users must join an
     // existing org via invite (matches setup-company's existing rule).
     const emailDomain = extractDomain(input.email) ?? '';
-    if (!emailDomain || isFreeEmailDomain(emailDomain)) return;
+    if (!emailDomain || isFreeEmailDomain(emailDomain)) return { ok: true };
 
     // If a company already owns this email domain, the verified user
     // CANNOT auto-create a duplicate company and is NOT attached as
@@ -309,7 +456,199 @@ async function bootstrapCompanyFromSignupIntent(input: {
       // and post-login-route will route them through onboarding so they
       // can request access to the existing company once the admin invites
       // them.
-      return;
+      return { ok: true };
+    }
+
+    // ── Canonical-domain enforcement (USER flow only) ─────────────────────
+    // resolveDomain follows HTTP redirects to determine the canonical host.
+    // We reject when:
+    //   - input_domain != final_domain  → DOMAIN_NOT_CANONICAL
+    //   - is_forwarding === true        → DOMAIN_FORWARDING_NOT_ALLOWED
+    //   - final_domain already maps to another company → DOMAIN_ALREADY_REGISTERED
+    //   - resolveDomain reports resolution_failed/blocked → DOMAIN_RESOLUTION_FAILED
+    // SUPER_ADMIN flow uses pages/api/super-admin/users.ts and is NOT affected.
+
+    // Rate-limit per client IP — caps the SSRF probing surface AND the
+    // outbound HTTP cost a single IP can incur.
+    if (input.clientIp) {
+      const rl = await checkRateLimit(input.clientIp, DOMAIN_RESOLUTION_LIMIT);
+      if (!rl.allowed) {
+        logger.warn('domain_resolution_rate_limited', {
+          email: input.email,
+          ip: input.clientIp,
+        });
+        return {
+          ok: false,
+          rejection: {
+            code: 'DOMAIN_RESOLUTION_FAILED',
+            status: 429,
+            details: 'Too many domain verification attempts. Please try again later.',
+          },
+        };
+      }
+    }
+
+    let resolution;
+    try {
+      resolution = await resolveDomain(emailDomain);
+    } catch (err) {
+      // resolveDomain shouldn't throw, but defend against future changes.
+      // Treat any throw as fail-closed: surface DOMAIN_RESOLUTION_FAILED.
+      logger.warn('auth_sync_resolve_domain_threw', {
+        email: input.email,
+        emailDomain,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      void logDomainEvent({
+        event_type:   'DOMAIN_RESOLUTION_FAILED',
+        company_id:   null,
+        final_domain: emailDomain,
+        user_id:      input.userId,
+        metadata:     { reason: 'threw', message: err instanceof Error ? err.message : String(err) },
+      });
+      return {
+        ok: false,
+        rejection: {
+          code: 'DOMAIN_RESOLUTION_FAILED',
+          status: 503,
+          details: 'Unable to verify domain. Please try again.',
+        },
+      };
+    }
+
+    // Fail-closed: any DNS / timeout / fetch error surfaces as a hard reject.
+    if (resolution.resolution_failed) {
+      logger.warn('auth_sync_resolution_failed_rejected', {
+        email: input.email,
+        emailDomain,
+      });
+      void logDomainEvent({
+        event_type:   'DOMAIN_RESOLUTION_FAILED',
+        company_id:   null,
+        final_domain: emailDomain,
+        user_id:      input.userId,
+        metadata:     { reason: 'fail_closed' },
+      });
+      return {
+        ok: false,
+        rejection: {
+          code: 'DOMAIN_RESOLUTION_FAILED',
+          status: 503,
+          details: 'Unable to verify domain. Please try again.',
+        },
+      };
+    }
+
+    // SSRF gate tripped — reject as failed so the user can't probe internal hosts.
+    if (resolution.resolution_blocked) {
+      logger.warn('auth_sync_resolution_blocked_rejected', {
+        email: input.email,
+        emailDomain,
+      });
+      void logDomainEvent({
+        event_type:   'DOMAIN_RESOLUTION_BLOCKED',
+        company_id:   null,
+        final_domain: emailDomain,
+        user_id:      input.userId,
+        metadata:     { reason: 'ssrf_or_rebind' },
+      });
+      return {
+        ok: false,
+        rejection: {
+          code: 'DOMAIN_RESOLUTION_FAILED',
+          status: 503,
+          details: 'Unable to verify domain. Please try again.',
+        },
+      };
+    }
+
+    if (resolution.input_domain !== resolution.final_domain) {
+      logger.warn('auth_sync_canonical_rejected', {
+        email: input.email,
+        input_domain: resolution.input_domain,
+        final_domain: resolution.final_domain,
+        is_forwarding: resolution.is_forwarding,
+      });
+      void logDomainEvent({
+        event_type:   'DOMAIN_NOT_CANONICAL',
+        company_id:   null, // no company exists yet at the canonical-reject point
+        final_domain: resolution.final_domain,
+        user_id:      input.userId,
+        metadata:     {
+          input_domain:  resolution.input_domain,
+          is_forwarding: resolution.is_forwarding,
+        },
+      });
+      return {
+        ok: false,
+        rejection: {
+          code: 'DOMAIN_NOT_CANONICAL',
+          status: 400,
+          details:
+            `This domain forwards to ${resolution.final_domain}. ` +
+            `Please register using the primary domain.`,
+          final_domain: resolution.final_domain,
+        },
+      };
+    }
+    if (resolution.is_forwarding) {
+      logger.warn('auth_sync_forwarding_rejected', {
+        email: input.email,
+        input_domain: resolution.input_domain,
+        final_domain: resolution.final_domain,
+      });
+      void logDomainEvent({
+        event_type:   'DOMAIN_FORWARDING_BLOCKED',
+        company_id:   null,
+        final_domain: resolution.final_domain,
+        user_id:      input.userId,
+        metadata:     { input_domain: resolution.input_domain },
+      });
+      return {
+        ok: false,
+        rejection: {
+          code: 'DOMAIN_FORWARDING_NOT_ALLOWED',
+          status: 400,
+          details:
+            'Forwarding-only domains cannot be used to register. ' +
+            'Please use the primary corporate domain.',
+          final_domain: resolution.final_domain,
+        },
+      };
+    }
+
+    // Duplicate check on the canonical (final) domain. Reads final_domain
+    // only — every row has final_domain populated by the canonical-foundation
+    // migration backfill, and legacy `domain` is deprecated.
+    const { data: canonicalConflictRows } = await supabase
+      .from('company_domains')
+      .select('id, company_id, final_domain')
+      .eq('final_domain', resolution.final_domain);
+    if (canonicalConflictRows && canonicalConflictRows.length > 0) {
+      const conflict = canonicalConflictRows[0] as any;
+      logger.warn('auth_sync_canonical_duplicate_rejected', {
+        email: input.email,
+        final_domain: resolution.final_domain,
+        conflicting_company_id: conflict.company_id,
+      });
+      void logDomainEvent({
+        event_type:   'DOMAIN_ALREADY_REGISTERED',
+        company_id:   conflict.company_id,
+        final_domain: resolution.final_domain,
+        user_id:      input.userId,
+        metadata:     { input_domain: resolution.input_domain },
+      });
+      return {
+        ok: false,
+        rejection: {
+          code: 'DOMAIN_ALREADY_REGISTERED',
+          status: 409,
+          details:
+            `The domain ${resolution.final_domain} is already registered.`,
+          final_domain: resolution.final_domain,
+          conflicting_company_id: conflict.company_id,
+        },
+      };
     }
 
     let companyId = randomUUID();
@@ -332,7 +671,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
           .maybeSingle();
         if (!raceWinner) {
           logger.warn('auth_sync_bootstrap_company_race_unresolved', { email: input.email, message: companyErr.message });
-          return;
+          return { ok: true };
         }
         // The race winner is now the canonical company — treat this as a
         // claimed-domain branch and email both parties instead of stamping
@@ -345,11 +684,49 @@ async function bootstrapCompanyFromSignupIntent(input: {
           companyName: (raceWinner as { name?: string | null }).name ?? rawCompanyName,
           nowIso: now,
         });
-        return;
+        return { ok: true };
       }
       logger.warn('auth_sync_bootstrap_company_insert_failed', { email: input.email, message: companyErr.message });
-      return;
+      return { ok: true };
     }
+
+    // Persist the canonical domain through the central writer. saveDomainRecord
+    // owns: input/final domain split, redirect chain, override-reason
+    // invariant, and the canonical-conflict probe. We pass
+    // verification_status='pending' (not 'verified') because the email
+    // domain's MX has been validated upstream but the company itself has not
+    // proven ownership yet.
+    const domainSave = await saveDomainRecord({
+      company_id:          companyId,
+      input_domain:        resolution.input_domain,
+      final_domain:        resolution.final_domain,
+      redirect_chain:      resolution.redirect_chain,
+      is_forwarding:       resolution.is_forwarding,
+      verification_status: 'pending',
+      created_via:         'user',
+      is_primary:          true,
+    });
+    if (!domainSave.ok) {
+      // Non-fatal — the company row exists. The user can still proceed; the
+      // domain just isn't canonically tracked yet. A follow-up reconciliation
+      // job will retry. We DO log loudly so dashboards surface drift.
+      logger.warn('auth_sync_save_domain_record_failed', {
+        email: input.email,
+        company_id: companyId,
+        input_domain: resolution.input_domain,
+        final_domain: resolution.final_domain,
+        error: domainSave.error,
+      });
+    }
+
+    // Soft-enforcement signal — log that this newly-bootstrapped company has
+    // an unverified domain. Status is always 'pending' at this point (the row
+    // we just wrote with verification_status: 'pending').
+    void logDomainUnverifiedUsageForCompany({
+      company_id: companyId,
+      operation:  'auth_sync_company_bootstrap',
+      metadata:   { user_id: input.userId, source: 'self_registered' },
+    });
 
     // Insert user_company_roles (idempotent on duplicate user/company pair).
     const { error: roleErr } = await supabase.from('user_company_roles').insert({
@@ -364,7 +741,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
     });
     if (roleErr && roleErr.code !== '23505') {
       logger.warn('auth_sync_bootstrap_role_insert_failed', { email: input.email, message: roleErr.message });
-      return;
+      return { ok: true };
     }
 
     // Stamp the user row so post-login-route routes them past the
@@ -397,11 +774,27 @@ async function bootstrapCompanyFromSignupIntent(input: {
         .update({ status: 'completed', completed_at: now })
         .eq('id', (intentRow as { id: string }).id);
     }
+    // Surface the raw verification token to the caller IF saveDomainRecord
+    // generated one. It's the only chance the server has to expose it — the
+    // DB stores HMAC(token), not the raw value.
+    if (domainSave.ok && domainSave.verification_token) {
+      return {
+        ok: true,
+        domain_verification: {
+          required:     true,
+          final_domain: resolution.final_domain,
+          token:        domainSave.verification_token,
+          methods:      ['dns', 'http'],
+        },
+      };
+    }
+    return { ok: true };
   } catch (err) {
     logger.warn('auth_sync_bootstrap_threw', {
       email: input.email,
       message: err instanceof Error ? err.message : String(err),
     });
+    return { ok: true };
   }
 }
 

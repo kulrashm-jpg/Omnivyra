@@ -321,6 +321,15 @@ async function exchangeAuthorizationCode(
   const redirectUri =
     credentials.redirect_uri ||
     `${(requestBaseUrl || '').replace(/\/$/, '')}/api/analytics/connect/google/callback`;
+
+  console.log('[GA-OAUTH][token-exchange] attempt', {
+    redirect_uri: redirectUri,
+    client_id_present: Boolean(credentials.client_id),
+    client_id_suffix: credentials.client_id ? credentials.client_id.slice(-12) : null,
+    client_secret_present: Boolean(credentials.client_secret),
+    code_length: code.length,
+  });
+
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: {
@@ -337,10 +346,20 @@ async function exchangeAuthorizationCode(
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
+    console.error('[GA-OAUTH][token-exchange] failed', {
+      status: response.status,
+      body,
+    });
     throw new Error(`GA4 token exchange failed (${response.status}): ${body || 'unknown error'}`);
   }
 
   const tokenData = await response.json();
+  console.log('[GA-OAUTH][token-exchange] success', {
+    access_token_present: Boolean(tokenData.access_token),
+    refresh_token_present: Boolean(tokenData.refresh_token),
+    expires_in: tokenData.expires_in ?? null,
+    scope: tokenData.scope ?? null,
+  });
   return {
     access_token: String(tokenData.access_token || ''),
     refresh_token: tokenData.refresh_token ? String(tokenData.refresh_token) : undefined,
@@ -363,6 +382,11 @@ async function fetchGoogleAdminJson(
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
+    console.error('[GA-OAUTH][admin-api] request failed', {
+      url,
+      status: response.status,
+      body,
+    });
     throw new Error(`Google Analytics Admin API request failed (${response.status}) for ${url}: ${body || 'unknown error'}`);
   }
 
@@ -525,6 +549,11 @@ export async function handleOAuthCallback(
   returnTo: string | null;
 }> {
   const state = decodeOAuthState(input.state);
+  console.log('[GA-OAUTH][handleOAuthCallback] start', {
+    state_valid: state.valid,
+    state_company_id: state.companyId ?? null,
+    has_request_base_url: Boolean(input.requestBaseUrl),
+  });
   if (state.valid !== true) {
     throw new Error('Invalid OAuth state');
   }
@@ -541,10 +570,30 @@ export async function handleOAuthCallback(
   }
 
   const integration = await ensureAnalyticsIntegration(state.companyId, 'connected');
+  console.log('[GA-OAUTH][handleOAuthCallback] integration upserted', {
+    integration_id: integration.id,
+    status: integration.status,
+  });
   await saveAnalyticsTokens(integration.id, token);
+  console.log('[GA-OAUTH][handleOAuthCallback] tokens saved');
 
+  console.log('[GA-OAUTH][ga-api] fetching accounts/properties');
   const properties = await fetchGAAccountsAndProperties(token.access_token);
+  console.log('[GA-OAUTH][ga-api] properties fetched', {
+    count: properties.length,
+    sample: properties.slice(0, 3).map((p) => ({ id: p.propertyId, name: p.propertyName })),
+  });
   const syncedProperties = await syncAnalyticsProperties(integration.id, properties);
+  console.log('[GA-OAUTH][handleOAuthCallback] properties synced', {
+    synced_count: syncedProperties.length,
+  });
+
+  // Fire-and-forget initial ingestion ONLY when a property is already active
+  // (typical reconnect path). For first-time connections, the property hasn't
+  // been chosen yet — saveSelectedProperty() will fire ingestion instead.
+  if (syncedProperties.some((p) => p.is_active)) {
+    triggerImmediateGa4Ingestion(state.companyId);
+  }
 
   return {
     companyId: state.companyId,
@@ -552,6 +601,45 @@ export async function handleOAuthCallback(
     properties: syncedProperties,
     returnTo: state.returnTo ?? null,
   };
+}
+
+/**
+ * Kick off an initial GA4 ingestion immediately after the connection is usable
+ * (token saved + property activated). Fire-and-forget: the caller's HTTP
+ * response must not wait on this. Errors are logged, never thrown.
+ *
+ * Uses a deferred dynamic import to avoid the cycle between this module and
+ * ingestionScheduler (the scheduler imports getGoogleAnalyticsStatus from
+ * here).
+ */
+export function triggerImmediateGa4Ingestion(companyId: string): void {
+  void (async () => {
+    try {
+      const { runIngestionForCompany } = await import('./ingestionScheduler');
+      const summary = await runIngestionForCompany({
+        companyId,
+        sources: ['ga4'],
+      });
+      console.log('[GA-OAUTH][initial-ingestion] completed', {
+        company_id: companyId,
+        sources: summary.sources.map((s) => ({
+          source: s.source,
+          success: s.success,
+          skipped: s.skipped ?? false,
+          error: s.error ?? null,
+        })),
+        ready: summary.ready,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      console.error('[GA-OAUTH][INITIAL_GA_INGESTION_FAILED]', {
+        company_id: companyId,
+        message,
+        stack,
+      });
+    }
+  })();
 }
 
 export async function saveSelectedProperty(
@@ -599,6 +687,8 @@ export async function saveSelectedProperty(
   if (error) {
     throw new Error(`Failed to activate GA4 property: ${error.message}`);
   }
+
+  triggerImmediateGa4Ingestion(companyId);
 
   return data as AnalyticsPropertyRecord;
 }

@@ -16,12 +16,26 @@ export type RecommendationContext = {
   insights: Array<Record<string, unknown>>;
 };
 
+export type BusinessClassification = {
+  level_1:
+    | 'product_company'
+    | 'services_company'
+    | 'marketplace'
+    | 'retailer'
+    | 'distributor'
+    | 'manufacturer'
+    | 'hybrid';
+  level_2: string;
+  level_3: string[];
+};
+
 export type CompanyProfile = {
   id?: string;
   company_id: string;
   name?: string;
   industry?: string;
   category?: string;
+  business_classification?: BusinessClassification | null;
   website_url?: string;
   logo_url?: string | null;
   favicon_url?: string | null;
@@ -46,6 +60,7 @@ export type CompanyProfile = {
   tiktok_url?: string;
   reddit_url?: string;
   pinterest_url?: string;
+  whatsapp_url?: string;
   blog_url?: string;
   other_social_links?: Array<{ label?: string; url?: string }>;
   products_services?: string;
@@ -153,6 +168,34 @@ export type CompanyProfile = {
       target_expansion_markets?: string[] | null;
       named_competitors?: string[] | null;
       business_model?: string | null;
+      provider_type?: string | null;
+      domain_role?: string | null;
+      operating_model?: string | null;
+      solution_domains?: string[] | null;
+      competitor_details?: Array<{
+        name: string;
+        category?: string | null;
+        tier?: string | null;
+        score?: number | null;
+        confidence?: number | null;
+        rationale?: string | null;
+      }> | null;
+      competitor_quality?: {
+        highest_score?: number | null;
+        threshold?: number | null;
+        threshold_met?: boolean | null;
+        detail_mode?: 'high_confidence' | 'expanded_context' | null;
+      } | null;
+      market_alternatives?: Array<{
+        name: string;
+        category?: string | null;
+        tier?: string | null;
+        score?: number | null;
+        confidence?: number | null;
+        rationale?: string | null;
+        use_case?: string | null;
+        business_model?: string | null;
+      }> | null;
       core_offerings?: string[] | null;
       growth_priorities?: string[] | null;
       partnership_priorities?: string[] | null;
@@ -267,6 +310,8 @@ export type CompanyProfileExtractionOutput = {
     youtube?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
     tiktok?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
     reddit?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
+    pinterest?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
+    whatsapp?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
     blog?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
   };
   geography?: { value?: string | string[] | null; values?: string | string[] | null; source: 'website' | 'social' | 'inferred' | 'user' | 'missing'; confidence: 'High' | 'Medium' | 'Low' };
@@ -296,6 +341,8 @@ export type EnrichmentOutput = {
     youtube?: EnrichmentField;
     tiktok?: EnrichmentField;
     reddit?: EnrichmentField;
+    pinterest?: EnrichmentField;
+    whatsapp?: EnrichmentField;
     blog?: EnrichmentField;
   };
   geography?: EnrichmentField;

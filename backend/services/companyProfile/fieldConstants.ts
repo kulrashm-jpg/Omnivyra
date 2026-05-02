@@ -44,7 +44,7 @@ const SECTION_WEIGHTS = {
   commercial: 0.1,
 } as const;
 
-const IDENTITY_FIELDS = ['name', 'industry', 'category', 'website_url', 'geography'] as const;
+const IDENTITY_FIELDS = ['name', 'industry', 'category', 'business_classification', 'website_url', 'geography'] as const;
 const BRAND_STRATEGY_FIELDS = [
   'brand_voice',
   'brand_positioning',

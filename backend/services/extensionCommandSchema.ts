@@ -48,7 +48,7 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     return { ok: true, payload: p };
   },
   'linkedin.continue_thread': (p) => {
-    const unknown = allowOnly(p, ['text', 'reply', 'content', 'autoSubmit', 'threadId', 'commentText', 'replyToComment', 'messageText']);
+    const unknown = allowOnly(p, ['text', 'reply', 'content', 'autoSubmit', 'threadId', 'threadUrl', 'participantName', 'lastMessagePreview', 'commentText', 'replyToComment', 'messageText']);
     if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
     const text = requireString(p, 'text', 1);
     if (text.ok !== true) return { ok: false, code: 'INVALID_PAYLOAD', message: (text as { message: string }).message };
@@ -75,7 +75,7 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     return { ok: true, payload: p };
   },
   'twitter.continue_thread': (p) => {
-    const unknown = allowOnly(p, ['text', 'reply', 'content', 'autoSubmit', 'threadId', 'commentText', 'replyToComment']);
+    const unknown = allowOnly(p, ['text', 'reply', 'content', 'autoSubmit', 'threadId', 'threadUrl', 'commentText', 'replyToComment']);
     if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
     const text = requireString(p, 'text', 1);
     if (text.ok !== true) return { ok: false, code: 'INVALID_PAYLOAD', message: (text as { message: string }).message };
@@ -120,7 +120,7 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     // Messenger DM reply. `threadId` is advisory — the extension requires
     // the tab to already be on the Messenger conversation; we do not
     // navigate cross-origin.
-    const unknown = allowOnly(p, ['text', 'reply', 'content', 'message', 'autoSubmit', 'threadId']);
+    const unknown = allowOnly(p, ['text', 'reply', 'content', 'message', 'autoSubmit', 'threadId', 'threadUrl']);
     if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
     const text = requireString(p, 'text', 1);
     if (text.ok !== true) return { ok: false, code: 'INVALID_PAYLOAD', message: (text as { message: string }).message };
@@ -175,7 +175,7 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
   },
   'instagram.continue_thread': (p) => {
     // Instagram Direct DM reply. Requires the tab to be on /direct/t/<thread>.
-    const unknown = allowOnly(p, ['text', 'reply', 'content', 'message', 'autoSubmit', 'threadId']);
+    const unknown = allowOnly(p, ['text', 'reply', 'content', 'message', 'autoSubmit', 'threadId', 'threadUrl']);
     if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
     const text = requireString(p, 'text', 1);
     if (text.ok !== true) return { ok: false, code: 'INVALID_PAYLOAD', message: (text as { message: string }).message };
@@ -207,10 +207,10 @@ const VALIDATORS: Record<string, (p: any) => Validation> = {
     return { ok: true, payload: { ...p, autoSubmit: p.autoSubmit !== false } };
   },
   'linkedin.open_thread': (p) => {
-    const unknown = allowOnly(p, ['threadId', 'threadUrl']);
+    const unknown = allowOnly(p, ['threadId', 'threadUrl', 'participantName', 'lastMessagePreview']);
     if (unknown) return { ok: false, code: 'UNKNOWN_FIELD', message: unknown };
-    if (!p.threadId && !p.threadUrl) {
-      return { ok: false, code: 'INVALID_PAYLOAD', message: 'threadId or threadUrl required' };
+    if (!p.threadId && !p.threadUrl && !p.participantName) {
+      return { ok: false, code: 'INVALID_PAYLOAD', message: 'threadId, threadUrl, or participantName required' };
     }
     return { ok: true, payload: p };
   },

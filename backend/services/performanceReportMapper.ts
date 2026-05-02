@@ -1,5 +1,6 @@
 import type { BehaviorReportData } from './performanceReportService';
 import type { BehaviorRecommendation } from './behaviorRecommendationService';
+import type { CompetitivePressureAnalysis } from './reportCompetitorStrategyService';
 
 export interface PerformanceCampaignItem {
   id: string;
@@ -18,6 +19,7 @@ export interface PerformanceEngagementContext {
 export interface PerformanceMapperContext {
   campaigns?: PerformanceCampaignItem[];
   engagement?: PerformanceEngagementContext | null;
+  competitivePressureAnalysis?: CompetitivePressureAnalysis | null;
 }
 
 export interface PerformanceReportMappedData {
@@ -141,6 +143,7 @@ export interface PerformanceReportMappedData {
     effort: BehaviorRecommendation['effort_level'];
     source: string;
   }>;
+  competitive_pressure_analysis: CompetitivePressureAnalysis | null;
 }
 
 function safeDiv(num: number, den: number): number {
@@ -676,6 +679,7 @@ export function mapPerformanceReportData(
     maturity: inferMaturity(data),
     next_moves: nextMoves,
     focus_this_week: focusThisWeek,
+    competitive_pressure_analysis: context?.competitivePressureAnalysis ?? null,
   };
 
   return mapped;

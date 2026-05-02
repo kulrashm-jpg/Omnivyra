@@ -79,7 +79,7 @@ export async function getGoogleAnalyticsStatusPayload(
       connected: false,
       property: mapProperty(connectionStatus.activeProperty),
       status: 'error',
-      message: 'Reconnect Google Analytics',
+      message: 'Failed to sync analytics data',
       last_sync: lastCompletedRun?.completed_at ?? null,
       events_last_30_days: readiness.events_last_30_days,
       properties: mappedProperties,
@@ -105,7 +105,7 @@ export async function getGoogleAnalyticsStatusPayload(
       connected: true,
       property: mapProperty(connectionStatus.activeProperty),
       status: 'waiting_for_data',
-      message: 'Collecting analytics data (may take a few hours)',
+      message: 'Syncing analytics data...',
       last_sync: null,
       events_last_30_days: readiness.events_last_30_days,
       properties: mappedProperties,
@@ -116,8 +116,8 @@ export async function getGoogleAnalyticsStatusPayload(
   if (!readiness.ready) {
     const status = readiness.events_last_30_days > 0 ? 'low_data' : 'waiting_for_data';
     const message = status === 'low_data'
-      ? 'Not enough data yet'
-      : 'Collecting analytics data (may take a few hours)';
+      ? 'No analytics data available yet'
+      : 'Syncing analytics data...';
 
     return {
       connected: true,

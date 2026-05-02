@@ -8,6 +8,13 @@
 import { supabase } from '../db/supabaseClient';
 import { scoreThreadPriority } from './engagementThreadPriorityService';
 import { computeThreadLeadScoresBatch } from './leadThreadScoring';
+import { isActionableDmPreview, isAuthorSelf } from '../../lib/engagement/messageRoles';
+import {
+  compareMessagesDescending,
+  getEffectiveMessageTimeMs,
+  getEffectiveMessageTimestamp,
+  parseMessageDateMs,
+} from '../../lib/engagement/messageTime';
 
 export type GetThreadsFilters = {
   organization_id: string;
@@ -90,7 +97,10 @@ async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
 }
 
 function inferInboundDmFallback(input: {
+  platform?: string | null;
+  platform_message_id?: string | null;
   message_type?: string | null;
+  direction?: string | null;
   raw_payload?: Record<string, unknown> | null;
   content?: string | null;
 }): boolean {
@@ -106,18 +116,106 @@ function inferInboundDmFallback(input: {
   const content = (input.content ?? '').trim();
   if (!content) return false;
 
-  // LinkedIn exported self-authored message previews usually begin with "You:".
-  // Treat the rest of the DM threads as requiring attention until a richer read-state exists.
-  return !/^you\s*:/i.test(content);
+  return !isAuthorSelf({
+    platform: input.platform,
+    platform_message_id: input.platform_message_id,
+    direction: input.direction,
+    author_self: input.raw_payload?.author_self as boolean | null | undefined,
+    sender_self: input.raw_payload?.sender_self as boolean | null | undefined,
+    sender_username: input.raw_payload?.sender_username as string | null | undefined,
+    sender_profile_url: input.raw_payload?.sender_profile_url as string | null | undefined,
+    content,
+  });
 }
 
 export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSummary[]> {
   const limit = Math.min(500, Math.max(1, filters.limit ?? 50));
   const orgAuthorIds = await getOrgAuthorIds(filters.organization_id);
 
+  let dateScopedThreadIds: string[] | null = null;
+  if (filters.start_date || filters.end_date) {
+    let threadScopeQuery = supabase
+      .from('engagement_threads')
+      .select('id, raw_payload')
+      .eq('organization_id', filters.organization_id)
+      .limit(5000);
+
+    if (filters.platform) {
+      threadScopeQuery = threadScopeQuery.eq('platform', filters.platform);
+    }
+    if (filters.exclude_ignored) {
+      threadScopeQuery = threadScopeQuery.eq('ignored', false);
+    }
+    if (filters.source_id) {
+      threadScopeQuery = threadScopeQuery.eq('source_id', filters.source_id);
+    }
+
+    const { data: scopedThreads, error: scopedThreadsError } = await threadScopeQuery;
+    if (scopedThreadsError) {
+      throw new Error(`Failed to fetch date-scoped engagement threads: ${scopedThreadsError.message}`);
+    }
+
+    const scopedThreadIds = (scopedThreads ?? [])
+      .map((row: { id: string | null }) => row.id)
+      .filter((threadId): threadId is string => Boolean(threadId));
+
+    if (scopedThreadIds.length === 0) {
+      return [];
+    }
+
+    let messageScopeQuery = supabase
+      .from('engagement_messages')
+      .select('thread_id, platform_created_at, created_at')
+      .in('thread_id', scopedThreadIds)
+      .order('platform_created_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false, nullsFirst: false })
+      .limit(5000);
+
+    const { data: scopedMessages, error: scopedMessagesError } = await messageScopeQuery;
+    if (scopedMessagesError) {
+      throw new Error(`Failed to fetch date-scoped engagement messages: ${scopedMessagesError.message}`);
+    }
+
+    const startMs = parseMessageDateMs(filters.start_date);
+    const endMs = parseMessageDateMs(filters.end_date);
+    const idsInWindow = new Set<string>(
+      (scopedMessages ?? [])
+        .filter((row: {
+          platform_created_at?: string | null;
+          created_at?: string | null;
+        }) => {
+          const effectiveTimeMs = parseMessageDateMs(row.platform_created_at ?? row.created_at ?? null);
+          if (effectiveTimeMs === null) return false;
+          if (startMs !== null && effectiveTimeMs < startMs) return false;
+          if (endMs !== null && effectiveTimeMs > endMs) return false;
+          return true;
+        })
+        .map((row: { thread_id: string | null }) => row.thread_id)
+        .filter((threadId): threadId is string => Boolean(threadId))
+    );
+
+    (scopedThreads ?? []).forEach((row: { id: string | null; raw_payload?: Record<string, unknown> | null }) => {
+      const lastMessageAt =
+        row.raw_payload && typeof row.raw_payload === 'object' && typeof row.raw_payload.last_message_at === 'string'
+          ? row.raw_payload.last_message_at
+          : null;
+      const lastMessageMs = parseMessageDateMs(lastMessageAt);
+      if (!row.id || lastMessageMs === null) return;
+      if (startMs !== null && lastMessageMs < startMs) return;
+      if (endMs !== null && lastMessageMs > endMs) return;
+      idsInWindow.add(row.id);
+    });
+
+    dateScopedThreadIds = Array.from(idsInWindow);
+
+    if (dateScopedThreadIds.length === 0) {
+      return [];
+    }
+  }
+
   let query = supabase
     .from('engagement_threads')
-    .select('id, platform, platform_thread_id, source_id, organization_id, priority_score, unread_count, created_at, updated_at')
+    .select('id, platform, platform_thread_id, source_id, organization_id, priority_score, unread_count, raw_payload, created_at, updated_at')
     .eq('organization_id', filters.organization_id)
     .order('updated_at', { ascending: false })
     .limit(Math.min(1000, Math.max(limit * 2, 300)));
@@ -131,11 +229,8 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
   if (filters.source_id) {
     query = query.eq('source_id', filters.source_id);
   }
-  if (filters.start_date) {
-    query = query.gte('updated_at', filters.start_date);
-  }
-  if (filters.end_date) {
-    query = query.lte('updated_at', filters.end_date);
+  if (dateScopedThreadIds) {
+    query = query.in('id', dateScopedThreadIds);
   }
 
   const { data: threads, error } = await query;
@@ -182,7 +277,7 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
 
   const { data: messages } = await supabase
     .from('engagement_messages')
-    .select('id, thread_id, content, platform_created_at, created_at, author_id, sentiment_score, message_type, raw_payload')
+    .select('id, thread_id, platform, platform_message_id, content, platform_created_at, created_at, author_id, sentiment_score, message_type, direction, raw_payload')
     .in('thread_id', threadIds)
     // Order by platform_created_at DESC NULLS LAST, then created_at DESC.
     // Default Postgres DESC puts NULLs FIRST, which made any row with a
@@ -195,23 +290,33 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
 
   const latestByThread = new Map<string, {
     id: string;
+    platform: string | null;
+    platform_message_id: string | null;
     content: string;
     platform_created_at: string | null;
+    created_at: string | null;
     sentiment_score?: number | null;
     message_type?: string | null;
+    direction?: string | null;
     raw_payload?: Record<string, unknown> | null;
     author_id?: string | null;
   }>();
   const countByThread = new Map<string, number>();
   const authorIds = new Set<string>();
-  (messages ?? []).forEach((m: any) => {
+  const orderedMessages = [...(messages ?? [])].sort(compareMessagesDescending);
+
+  orderedMessages.forEach((m: any) => {
     if (!latestByThread.has(m.thread_id)) {
       latestByThread.set(m.thread_id, {
         id: m.id,
+        platform: m.platform ?? null,
+        platform_message_id: m.platform_message_id ?? null,
         content: (m.content ?? '').toString().slice(0, 200),
         platform_created_at: m.platform_created_at ?? null,
+        created_at: m.created_at ?? null,
         sentiment_score: m.sentiment_score ?? null,
         message_type: m.message_type ?? null,
+        direction: m.direction ?? null,
         raw_payload:
           m.raw_payload && typeof m.raw_payload === 'object'
             ? (m.raw_payload as Record<string, unknown>)
@@ -244,13 +349,60 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
   for (const t of list) {
     const latest = latestByThread.get(t.id);
     const msgCount = countByThread.get(t.id) ?? 0;
-    const authorSummary = firstAuthorByThread.get(t.id) ?? 'Unknown';
+    const threadRawPayload =
+      t.raw_payload && typeof t.raw_payload === 'object'
+        ? (t.raw_payload as Record<string, unknown>)
+        : {};
+    const threadPreview =
+      typeof threadRawPayload.last_message_preview === 'string'
+        ? threadRawPayload.last_message_preview.trim()
+        : '';
+    const actionableThreadPreview = isActionableDmPreview(threadPreview);
+    const threadPreviewTime =
+      typeof threadRawPayload.last_message_at === 'string'
+        ? threadRawPayload.last_message_at
+        : null;
+    const latestMessageMs = latest ? getEffectiveMessageTimeMs(latest) : null;
+    const threadPreviewMs = actionableThreadPreview ? parseMessageDateMs(threadPreviewTime) : null;
+    const threadPreviewWins =
+      actionableThreadPreview
+      && threadPreviewMs !== null
+      && (latestMessageMs === null || threadPreviewMs >= latestMessageMs);
+    const effectiveMessageCount = msgCount > 0 ? msgCount : actionableThreadPreview ? 1 : 0;
+    const rawParticipantName =
+      typeof threadRawPayload.participant_name === 'string'
+        ? threadRawPayload.participant_name.trim()
+        : '';
+    const rawParticipantUsername =
+      typeof threadRawPayload.participant_username === 'string'
+        ? threadRawPayload.participant_username.trim()
+        : '';
+    const firstAuthor = firstAuthorByThread.get(t.id);
+    const authorSummary = firstAuthor && firstAuthor.trim()
+      ? firstAuthor
+      : rawParticipantName || rawParticipantUsername || 'Unknown';
     const intel = intelByThread.get(t.id);
     const leadResult = leadScores.get(t.id);
     const leadDetected = leadResult?.lead_detected ?? intel?.lead_detected ?? false;
     const leadScore = leadResult?.thread_lead_score ?? 0;
     const classification = classificationByThread.get(t.id);
-    const latestAuthorIsExternal = latest?.author_id ? !orgAuthorIds.has(latest.author_id) : true;
+    const latestAuthorSelf = latest
+      ? isAuthorSelf({
+          platform: latest.platform,
+          platform_message_id: latest.platform_message_id,
+          direction: latest.direction,
+          author_self: latest.raw_payload?.author_self as boolean | null | undefined,
+          sender_self: latest.raw_payload?.sender_self as boolean | null | undefined,
+          sender_username: latest.raw_payload?.sender_username as string | null | undefined,
+          sender_profile_url: latest.raw_payload?.sender_profile_url as string | null | undefined,
+          content: latest.content,
+        })
+      : false;
+    const latestAuthorIsExternal = latestAuthorSelf
+      ? false
+      : latest?.author_id
+        ? !orgAuthorIds.has(latest.author_id)
+        : true;
     const inferredUnreadCount =
       Number(t.unread_count) > 0
         ? Number(t.unread_count)
@@ -261,7 +413,10 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       inferredUnreadCount > 0
         ? inferredUnreadCount
         : inferInboundDmFallback({
+            platform: latest?.platform ?? null,
+            platform_message_id: latest?.platform_message_id ?? null,
             message_type: latest?.message_type ?? null,
+            direction: latest?.direction ?? null,
             raw_payload: latest?.raw_payload ?? null,
             content: latest?.content ?? null,
           })
@@ -285,10 +440,15 @@ export async function getThreads(filters: GetThreadsFilters): Promise<ThreadSumm
       thread_id: t.id,
       platform: t.platform,
       author_summary: authorSummary,
-      message_count: msgCount,
-      latest_message: latest?.content ?? null,
-      latest_message_time: latest?.platform_created_at ?? null,
-      latest_message_id: latest?.id ?? null,
+      message_count: effectiveMessageCount,
+      latest_message: threadPreviewWins ? threadPreview : latest?.content ?? (actionableThreadPreview ? threadPreview : null),
+      latest_message_time: threadPreviewWins
+        ? threadPreviewTime
+        : (latest ? getEffectiveMessageTimestamp(latest) : null) ?? (actionableThreadPreview ? threadPreviewTime : null) ?? null,
+      // If the thread-list preview is fresher than our detailed rows, do not
+      // expose a stale message id. The inbox route will then use raw_payload
+      // last_message_self/preview metadata to classify the true latest turn.
+      latest_message_id: threadPreviewWins ? null : latest?.id ?? null,
       priority_score: priorityScore,
       unread_count: dmFallbackUnread,
       dominant_intent: intel?.dominant_intent ?? null,

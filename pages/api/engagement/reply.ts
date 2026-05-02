@@ -75,6 +75,108 @@ function isUsableLinkedInThreadId(value: string | null | undefined): value is st
   return false;
 }
 
+function normalizeIdentityValue(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return null;
+  const lowered = normalized.toLowerCase();
+  if (['unknown', 'linkedin member', 'member'].includes(lowered)) return null;
+  return normalized;
+}
+
+function normalizeIdentityKey(value: unknown): string | null {
+  const normalized = normalizeIdentityValue(value);
+  return normalized ? normalized.replace(/\/+$/, '').toLowerCase() : null;
+}
+
+function linkedInThreadUrl(threadIdOrUrl: string | null | undefined): string | null {
+  const candidate = (threadIdOrUrl || '').trim();
+  if (!candidate) return null;
+  if (/^https?:\/\//i.test(candidate)) return candidate;
+  if (!isUsableLinkedInThreadId(candidate)) return null;
+  if (/^urn:li:/i.test(candidate)) return null;
+  return `https://www.linkedin.com/messaging/thread/${candidate}/`;
+}
+
+async function resolveLinkedInDmDispatchTarget(input: {
+  organizationId: string;
+  currentThreadId: string;
+  currentPlatformThreadId: string | null;
+  threadRawPayload: Record<string, unknown> | null;
+  messageRawPayload: Record<string, unknown> | null;
+  recipientProfileUrl: string | null;
+  recipientDisplayName: string | null;
+}): Promise<{ threadId: string | null; threadUrl: string | null }> {
+  if (isUsableLinkedInThreadId(input.currentPlatformThreadId)) {
+    return {
+      threadId: input.currentPlatformThreadId,
+      threadUrl: linkedInThreadUrl(input.currentPlatformThreadId),
+    };
+  }
+
+  const threadRaw = input.threadRawPayload ?? {};
+  const messageRaw = input.messageRawPayload ?? {};
+  const profileKeys = [
+    input.recipientProfileUrl,
+    threadRaw.participant_profile_url,
+    messageRaw.sender_profile_url,
+  ].map(normalizeIdentityKey).filter((v): v is string => Boolean(v));
+  const usernameKeys = [
+    threadRaw.participant_username,
+    messageRaw.sender_username,
+  ].map(normalizeIdentityKey).filter((v): v is string => Boolean(v));
+  const nameKeys = [
+    input.recipientDisplayName,
+    threadRaw.participant_name,
+    messageRaw.sender_name,
+  ].map(normalizeIdentityKey).filter((v): v is string => Boolean(v));
+
+  if (profileKeys.length === 0 && usernameKeys.length === 0) {
+    return { threadId: null, threadUrl: null };
+  }
+
+  const { data, error } = await supabase
+    .from('engagement_threads')
+    .select('id, platform_thread_id, raw_payload, updated_at')
+    .eq('organization_id', input.organizationId)
+    .eq('platform', 'linkedin')
+    .order('updated_at', { ascending: false })
+    .limit(100);
+  if (error) {
+    console.warn('[engagement/reply] LinkedIn DM target lookup failed:', error.message);
+    return { threadId: null, threadUrl: null };
+  }
+
+  const currentThread = input.currentThreadId;
+  const candidates = (data ?? [])
+    .filter((row: { id?: string | null; platform_thread_id?: string | null }) =>
+      row.id !== currentThread && isUsableLinkedInThreadId(row.platform_thread_id)
+    )
+    .map((row) => {
+      const raw = (row.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {}) as Record<string, unknown>;
+      const rowProfile = normalizeIdentityKey(raw.participant_profile_url);
+      const rowUsername = normalizeIdentityKey(raw.participant_username);
+      const rowName = normalizeIdentityKey(raw.participant_name);
+      let score = 0;
+      if (rowProfile && profileKeys.includes(rowProfile)) score += 100;
+      if (rowUsername && usernameKeys.includes(rowUsername)) score += 80;
+      if (score > 0 && rowName && nameKeys.includes(rowName)) score += 5;
+      return { row, score };
+    })
+    .filter((candidate) => candidate.score >= 80)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return String(b.row.updated_at ?? '').localeCompare(String(a.row.updated_at ?? ''));
+    });
+
+  const best = candidates[0]?.row as { platform_thread_id?: string | null } | undefined;
+  const threadId = best?.platform_thread_id ?? null;
+  return {
+    threadId,
+    threadUrl: linkedInThreadUrl(threadId),
+  };
+}
+
 /**
  * Resolve a campaign engagement signal to the fields executeAction needs.
  * Signals carry their own platform + conversation_url + author and do not
@@ -248,6 +350,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           platform: string | null;
           message_type: string | null;
           author_id: string | null;
+          raw_payload: Record<string, unknown> | null;
         }
       | null = null;
     // LinkedIn uses POST URNs (urn:li:share:... / urn:li:ugcPost:...) as
@@ -255,6 +358,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // conversation id from engagement_threads.platform_thread_id. We
     // capture both here and branch below on message_type.
     let threadPlatformUrn: string | null = null;
+    let threadRawPayload: Record<string, unknown> | null = null;
     // For DM dispatch via the Chrome extension we resolve the recipient's
     // identity (LinkedIn profile URL preferred, display name as fallback)
     // so the executor's buildDmCommandChain can route through start_new_dm
@@ -278,7 +382,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       const { data: thread } = await supabase
         .from('engagement_threads')
-        .select('id, organization_id, platform_thread_id')
+        .select('id, organization_id, platform_thread_id, raw_payload')
         .eq('id', msg.thread_id)
         .maybeSingle();
 
@@ -287,6 +391,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       threadPlatformUrn = (thread as { platform_thread_id?: string | null })?.platform_thread_id ?? null;
+      threadRawPayload =
+        thread && typeof (thread as { raw_payload?: unknown }).raw_payload === 'object'
+          ? ((thread as { raw_payload?: Record<string, unknown> | null }).raw_payload ?? null)
+          : null;
       message = msg as typeof message;
 
       // Pull the OTHER party's identity for DM dispatch. The legacy
@@ -310,6 +418,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           recipientProfileUrl = profileFromUrl ?? profileFromUserId;
           recipientDisplayName = typeof author.display_name === 'string' ? author.display_name : null;
         }
+      }
+      const msgRawPayload =
+        msg.raw_payload && typeof msg.raw_payload === 'object'
+          ? msg.raw_payload
+          : {};
+      if (!recipientProfileUrl && typeof msgRawPayload.sender_profile_url === 'string') {
+        recipientProfileUrl = msgRawPayload.sender_profile_url;
+      }
+      if (!recipientDisplayName && typeof msgRawPayload.sender_name === 'string') {
+        recipientDisplayName = msgRawPayload.sender_name;
       }
     }
 
@@ -370,17 +488,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Target resolution:
-    //   DM reply:      target_id = the messaging thread's
-    //                  platform_thread_id (conversation id). The
-    //                  executor's buildDmCommandChain detects this
-    //                  shape and emits [open_thread, continue_thread]
-    //                  through the extension.
+    //   DM reply:      target_id identifies the conversation or participant.
+    //                  LinkedIn DM sends should normally use the direct
+    //                  browser bridge in InboxDashboard; this queued backend
+    //                  path is only a fallback and must continue the already
+    //                  open Messaging thread instead of starting a new DM.
     //   Comment (LI):  POST URN (engagement_threads.platform_thread_id,
     //                  set at publish time from x-restli-id). The
     //                  connector calls /socialActions/{postUrn}/comments.
     //   Comment (others): platform_message_id (Twitter tweet id,
     //                  FB/IG comment id — all usable as-is).
     const isLinkedIn = platform === 'linkedin';
+    const linkedInDmDispatchTarget = isDm && isLinkedIn && message
+      ? await resolveLinkedInDmDispatchTarget({
+          organizationId,
+          currentThreadId: message.thread_id,
+          currentPlatformThreadId: threadPlatformUrn,
+          threadRawPayload,
+          messageRawPayload:
+            messageRawPayload && typeof messageRawPayload === 'object'
+              ? messageRawPayload
+              : null,
+          recipientProfileUrl,
+          recipientDisplayName,
+        })
+      : { threadId: null, threadUrl: null };
+    const linkedInDmParticipantName = isDm && isLinkedIn
+      ? (
+          normalizeIdentityValue(recipientDisplayName)
+          ?? normalizeIdentityValue(threadRawPayload?.participant_name)
+          ?? normalizeIdentityValue(messageRawPayload?.sender_name)
+        )
+      : null;
+    const linkedInDmLastMessagePreview = isDm && isLinkedIn
+      ? (
+          normalizeIdentityValue(threadRawPayload?.last_message_preview)
+          ?? normalizeIdentityValue(messageRawPayload?.content)
+          ?? normalizeIdentityValue(messageRawPayload?.text)
+          ?? normalizeIdentityValue(messageRawPayload?.body)
+        )
+      : null;
     // For DMs, prefer recipient identity over the legacy thread id.
     // buildDmCommandChain detects:
     //   profile URL  → start_new_dm with recipientProfileUrl (LinkedIn)
@@ -391,7 +538,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const linkedInThreadTarget = isUsableLinkedInThreadId(threadPlatformUrn) ? threadPlatformUrn : null;
     const dmRecipientTarget = platform === 'twitter'
       ? (threadPlatformUrn || recipientDisplayName?.trim() || recipientProfileUrl || (messageId as string))
-      : (linkedInThreadTarget
+      : (linkedInDmDispatchTarget.threadUrl
+          || linkedInDmDispatchTarget.threadId
+          || linkedInThreadTarget
           || recipientProfileUrl
           || (recipientDisplayName ? recipientDisplayName.trim() : null)
           || threadPlatformUrn
@@ -433,6 +582,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // connector or persists a community_ai_actions row with
         // execution_mode='browser' for the extension to claim.
         execution_mode: capability.mode ?? (isDm ? 'browser' : 'api'),
+        metadata: isDm && isLinkedIn
+          ? {
+              dm_thread_ready: true,
+              dm_thread_id: linkedInDmDispatchTarget.threadId,
+              dm_thread_url: linkedInDmDispatchTarget.threadUrl,
+              dm_participant_name: linkedInDmParticipantName,
+              dm_last_message_preview: linkedInDmLastMessagePreview,
+            }
+          : null,
         parent_comment_urn: parentCommentUrn,
       },
       true,

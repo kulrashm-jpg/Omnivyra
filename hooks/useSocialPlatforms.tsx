@@ -574,6 +574,7 @@ export function useSocialPlatforms() {
   };
 
   const getStatusBadge = (p: PlatformStatus) => {
+    const isThreads = p.platform_key === 'threads';
     if (p.connected && p.expired) return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
         <Clock className="h-3 w-3" /> Token Expired
@@ -584,7 +585,14 @@ export function useSocialPlatforms() {
         <CheckCircle2 className="h-3 w-3" /> {p.platform_key === 'threads' ? 'Enabled' : 'Connected'}
       </span>
     );
-    if (!p.oauth_configured) {
+    if (isThreads && p.connection_status === 'disconnected') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
+          <AlertCircle className="h-3 w-3" /> Disconnected
+        </span>
+      );
+    }
+    if (!p.oauth_configured && !isThreads) {
       // Super admins see the setup-required indicator; everyone else sees "Not available"
       return isSuperAdmin ? (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-500 border border-gray-200">
@@ -604,6 +612,9 @@ export function useSocialPlatforms() {
   };
 
   const renderPlatformCard = (p: PlatformStatus) => {
+    const isThreads = p.platform_key === 'threads';
+    const oauthConfigured = p.oauth_configured || isThreads;
+    const authPath = isThreads ? '/api/auth/instagram' : p.auth_path;
     const meta = PLATFORM_META[p.platform_key];
     const isChecking = checking === p.platform_key;
     const builtinTypes = CONTENT_TYPES_PER_PLATFORM[p.platform_key] ?? ['post'];
@@ -643,17 +654,17 @@ export function useSocialPlatforms() {
                   )}
                 </div>
               )}
-              {!p.oauth_configured && !p.connected && isSuperAdmin && (
+              {!oauthConfigured && !p.connected && isSuperAdmin && (
                 <div className="mt-0.5 text-xs text-gray-400">
                   Add credentials in Super Admin → Platform Config
                 </div>
               )}
-              {p.oauth_configured && !p.connected && p.auth_path && (
+              {oauthConfigured && !p.connected && authPath && (
                 <div className="mt-0.5 text-xs text-gray-400">
-                  Ready to connect
-                  {(p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp' || p.platform_key === 'threads') && (
+                  {isThreads && p.connection_status === 'disconnected' ? 'Ready to reconnect' : 'Ready to connect'}
+                  {(p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp' || isThreads) && (
                     <span className="ml-1 italic text-amber-600">
-                      {p.platform_key === 'threads'
+                      {isThreads
                         ? '- connect Instagram to enable Threads'
                         : '- connects Facebook, Instagram & WhatsApp in one Meta consent'}
                     </span>
@@ -695,7 +706,7 @@ export function useSocialPlatforms() {
               <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
             </button>
 
-            {p.oauth_configured && (
+            {oauthConfigured && (
               <button
                 onClick={() => handleCheck(p)}
                 disabled={isChecking}
@@ -712,9 +723,9 @@ export function useSocialPlatforms() {
 
             {p.connected ? (
               <>
-                {p.expired && p.auth_path && (
+                {p.expired && authPath && (
                   <button
-                    onClick={() => handleConnect(p)}
+                    onClick={() => handleConnect({ ...p, auth_path: authPath, oauth_configured: oauthConfigured })}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium hover:bg-amber-100 transition-colors"
                   >
                     <RefreshCw className="h-3.5 w-3.5" /> Reconnect
@@ -729,34 +740,34 @@ export function useSocialPlatforms() {
                   {disconnecting === p.platform_key ? 'Disconnecting…' : 'Disconnect'}
                 </button>
               </>
-            ) : p.oauth_configured && p.auth_path ? (
+            ) : oauthConfigured && authPath ? (
               <button
-                onClick={() => handleConnect(p)}
+                onClick={() => handleConnect({ ...p, auth_path: authPath, oauth_configured: oauthConfigured })}
                 title={
                   p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp'
                     ? 'Meta requires one consent for Facebook, Instagram, and WhatsApp — all three will be connected together.'
-                    : p.platform_key === 'threads'
+                    : isThreads
                       ? 'Connect Instagram to enable Threads.'
                     : `Connect ${p.platform_label}`
                 }
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 transition-colors"
               >
                 <Link2 className="h-3.5 w-3.5" /> {
-                  p.platform_key === 'threads' && p.connection_status === 'disconnected'
+                  isThreads && p.connection_status === 'disconnected'
                     ? 'Reconnect'
-                    : p.platform_key === 'threads'
+                    : isThreads
                       ? 'Connect Instagram (enables Threads)'
                       : 'Connect'
                 }
               </button>
-            ) : p.oauth_configured && !p.auth_path ? (
+            ) : oauthConfigured && !authPath ? (
               <span className="text-xs text-gray-400">Coming soon</span>
             ) : isSuperAdmin ? (
               <span className="inline-flex items-center gap-1 text-xs text-gray-400">
                 <Lock className="h-3.5 w-3.5" /> Configure
               </span>
             ) : null}
-            {!p.connected && !p.oauth_configured && (
+            {!p.connected && !oauthConfigured && (
               <button
                 onClick={() => socialHiders.hide(p.platform_key)}
                 title="Hide from my list"
@@ -985,8 +996,8 @@ export function useSocialPlatforms() {
   // OAuth-configured platforms are never hidden (they have a connect button the user needs).
   const partition = (list: typeof visibleSocial) => ({
     connected: list.filter((p) => p.connected),
-    available: list.filter((p) => !p.connected && (!hiddenSocial.has(p.platform_key) || p.oauth_configured)),
-    hidden:    list.filter((p) => !p.connected && hiddenSocial.has(p.platform_key) && !p.oauth_configured),
+    available: list.filter((p) => !p.connected && (!hiddenSocial.has(p.platform_key) || p.oauth_configured || p.platform_key === 'threads')),
+    hidden:    list.filter((p) => !p.connected && hiddenSocial.has(p.platform_key) && !p.oauth_configured && p.platform_key !== 'threads'),
   });
   const writerParts  = partition(writerSocial);
   const creatorParts = partition(creatorSocial);

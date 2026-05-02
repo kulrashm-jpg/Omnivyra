@@ -15,6 +15,8 @@ import {
   type CompetitorSource as EngineCompetitorSource,
   type CompetitorRevenueTier,
   type CompetitorTier,
+  type CompetitorAuthoritySignals,
+  type CompetitorPositioning,
 } from './competitorEngineService';
 import type { CompetitorEnrichmentProfile } from './competitorEnrichmentKnowledge';
 import type { CompetitorSecondaryTag } from './competitorTaxonomy';
@@ -45,8 +47,11 @@ export type DetectedCompetitor = {
   market_overlap: number;
   revenue_tier: CompetitorRevenueTier;
   product_depth: number;
+  authority_score: number;
+  authority_signals: CompetitorAuthoritySignals;
   final_score: number;
   tier: CompetitorTier;
+  positioning: CompetitorPositioning;
   enrichment: CompetitorEnrichmentProfile | null;
   enrichment_confidence_score: number;
   rationale: string;
@@ -85,6 +90,13 @@ export type CompetitorGap = {
   leading_competitors: string[];
 };
 
+export type CompetitiveSummary = {
+  top_threats: string[];
+  key_advantage: string;
+  key_risk: string;
+  positioning_statement: string;
+};
+
 export type CompetitorIntelligenceResult = {
   summary: string;
   detected_competitors: DetectedCompetitor[];
@@ -98,6 +110,7 @@ export type CompetitorIntelligenceResult = {
     competitors: CompetitorComparisonEntry[];
   };
   generated_gaps: CompetitorGap[];
+  competitive_summary: CompetitiveSummary;
   keyword_gap?: {
     missing_keywords: string[];
     weak_keywords: string[];
@@ -309,6 +322,176 @@ export function extractBusinessKeywords(value: string | null | undefined): strin
 }
 
 export type CompanyCompetitiveContext = EngineCompanyCompetitiveContext;
+
+export type DiscoveryKeywordInput =
+  | ResolvedReportInput
+  | CompanyCompetitiveContext
+  | Record<string, unknown>
+  | null
+  | undefined;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function textValue(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.replace(/\s+/g, ' ').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function textList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(textValue).filter((item): item is string => Boolean(item));
+  }
+  const single = textValue(value);
+  return single ? [single] : [];
+}
+
+function pickText(records: Array<Record<string, unknown> | null | undefined>, keys: string[]): string | null {
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of keys) {
+      const direct = textValue(record[key]);
+      if (direct) return direct;
+      const firstListItem = textList(record[key])[0];
+      if (firstListItem) return firstListItem;
+    }
+  }
+  return null;
+}
+
+export function normalizeQueryPart(value: string | null | undefined, maxTokens = 6): string | null {
+  const normalized = String(value ?? '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/www\.[^\s]+/gi, ' ')
+    .replace(/[^\w\s-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return null;
+  const tokens = normalized.split(/\s+/).filter((token) => token.length > 0);
+  return tokens.slice(0, maxTokens).join(' ');
+}
+
+function pushUniqueQuery(queries: string[], value: string | null | undefined): void {
+  const normalized = normalizeQueryPart(value, 8);
+  if (!normalized) return;
+  const key = normalized.toLowerCase();
+  if (!queries.some((query) => query.toLowerCase() === key)) {
+    queries.push(normalized);
+  }
+}
+
+function extractDiscoveryFields(companyProfile: DiscoveryKeywordInput): {
+  problem: string | null;
+  product: string | null;
+  category: string | null;
+  icp: string | null;
+  domain: string | null;
+  context: CompanyCompetitiveContext;
+} {
+  const inputRecord: Record<string, unknown> | null = isRecord(companyProfile)
+    ? companyProfile as Record<string, unknown>
+    : null;
+  const resolvedRecord = isRecord(inputRecord?.resolved) ? inputRecord.resolved : null;
+  const profileRecord = isRecord(inputRecord?.profile) ? inputRecord.profile : inputRecord;
+  const companyContextRecord = isRecord(resolvedRecord?.companyContext)
+    ? resolvedRecord.companyContext
+    : isRecord(inputRecord?.companyContext)
+      ? inputRecord.companyContext
+      : inputRecord;
+
+  const context = resolvedRecord
+    ? extractCompanyCompetitiveContext(companyProfile as ResolvedReportInput)
+    : {
+        marketFocus: pickText([companyContextRecord, profileRecord], ['marketFocus', 'market_focus', 'category', 'industry', 'businessType', 'business_type']),
+        primaryService: pickText([companyContextRecord, profileRecord], ['primaryService', 'primary_service', 'productServices', 'product_services', 'products_services', 'products_services_list']),
+        targetCustomer: pickText([companyContextRecord, profileRecord], ['targetCustomer', 'target_customer', 'targetCustomerSegment', 'target_customer_segment', 'target_audience']),
+        idealCustomerProfile: pickText([companyContextRecord, profileRecord], ['idealCustomerProfile', 'ideal_customer_profile', 'icp']),
+        brandPositioning: pickText([companyContextRecord, profileRecord], ['brandPositioning', 'brand_positioning', 'problem', 'pain_points', 'competitiveAdvantages', 'competitive_advantages']),
+        geography: pickText([companyContextRecord, profileRecord], ['geography', 'market', 'region']),
+        teamSize: pickText([companyContextRecord, profileRecord], ['teamSize', 'team_size']),
+        foundedYear: pickText([companyContextRecord, profileRecord], ['foundedYear', 'founded_year']),
+        revenueRange: pickText([companyContextRecord, profileRecord], ['revenueRange', 'revenue_range']),
+        businessModel: pickText([companyContextRecord, profileRecord], ['businessModel', 'business_model', 'pricing_model', 'sales_motion']),
+      } satisfies CompanyCompetitiveContext;
+
+  const domain = normalizeDomain(
+    pickText([resolvedRecord, profileRecord], ['websiteDomain', 'website_domain', 'website_url', 'url', 'domain']),
+  );
+
+  return {
+    problem: pickText([companyContextRecord, profileRecord], ['problem', 'pain_points', 'brandPositioning', 'brand_positioning', 'competitiveAdvantages', 'competitive_advantages']) ?? context.brandPositioning,
+    product: context.primaryService,
+    category: context.marketFocus,
+    icp: context.targetCustomer ?? context.idealCustomerProfile,
+    domain,
+    context,
+  };
+}
+
+export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput): string[] {
+  const fields = extractDiscoveryFields(companyProfile);
+  const category = normalizeQueryPart(fields.category, 5);
+  const product = normalizeQueryPart(fields.product, 5);
+  const problem = normalizeQueryPart(fields.problem, 5);
+  const icp = normalizeQueryPart(fields.icp, 5);
+  const domainTerms = extractDomainKeywords(fields.domain).join(' ');
+  const base = category ?? product ?? problem ?? domainTerms ?? 'business software';
+  const contextText = [
+    fields.category,
+    fields.product,
+    fields.problem,
+    fields.icp,
+    domainTerms,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  const queries: string[] = [];
+  pushUniqueQuery(queries, `${base} competitors`);
+  pushUniqueQuery(queries, `${base} alternatives`);
+  pushUniqueQuery(queries, `${base} software platforms`);
+  if (product) {
+    pushUniqueQuery(queries, `${product} competitors`);
+    pushUniqueQuery(queries, `${product} alternatives`);
+    pushUniqueQuery(queries, `${product} tools`);
+  }
+  if (problem) pushUniqueQuery(queries, `${problem} tools`);
+  if (icp && category) pushUniqueQuery(queries, `${icp} ${category} platforms`);
+
+  if (/\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|self reflection|self-reflection|clarity|emotional|mood|journaling|meditation|mindfulness|stress|anxiety)\b/.test(contextText)) {
+    [
+      'AI mental wellness apps',
+      'AI therapy chatbot competitors',
+      'self reflection AI tools',
+      'mental clarity apps',
+      'digital therapy platforms',
+      'guided journaling apps',
+      'emotional wellbeing AI apps',
+    ].forEach((query) => pushUniqueQuery(queries, query));
+  }
+
+  if (/\b(marketing|crm|sales|campaign|growth|seo|content|revenue|customer|automation|lead|pipeline|demand)\b/.test(contextText)) {
+    [
+      'marketing automation platforms',
+      'B2B marketing operating system competitors',
+      'campaign execution software',
+      'marketing readiness tools',
+      'growth workflow platforms',
+      'CRM marketing automation alternatives',
+      'customer growth software platforms',
+    ].forEach((query) => pushUniqueQuery(queries, query));
+  }
+
+  [
+    `${base} tools`,
+    `${base} apps`,
+    `${base} platforms`,
+    `${base} market leaders`,
+    `${base} category competitors`,
+  ].forEach((query) => pushUniqueQuery(queries, query));
+
+  return queries.slice(0, 10);
+}
 
 
 export function toShortLabel(value: string | null | undefined, fallback: string): string {

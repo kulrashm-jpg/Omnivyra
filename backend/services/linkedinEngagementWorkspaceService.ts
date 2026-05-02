@@ -38,7 +38,7 @@ async function getLinkedInThreadCounts(organizationId: string) {
     .from('engagement_messages')
     .select('thread_id')
     .in('thread_id', threadIds)
-    .eq('message_type', 'dm');
+    .in('message_type', ['dm', 'direct_message']);
 
   if (dmMessageError) {
     throw new Error(`Failed to load LinkedIn DM messages: ${dmMessageError.message}`);

@@ -99,6 +99,27 @@ export default function AuthCallback() {
           throw new Error('sync_failed');
         }
 
+        // Capture the one-time domain verification token (if present) into
+        // sessionStorage so /onboarding/domain-verification can display it.
+        // The DB stores HMAC(token); this is the only window to surface the
+        // raw value to the client.
+        try {
+          const syncJson = await syncRes.clone().json().catch(() => ({})) as {
+            domain_verification?: { token: string; final_domain: string };
+          };
+          if (syncJson.domain_verification?.token) {
+            window.sessionStorage.setItem(
+              'domain_verification_token_v1',
+              JSON.stringify({
+                token:        syncJson.domain_verification.token,
+                final_domain: syncJson.domain_verification.final_domain,
+              }),
+            );
+          }
+        } catch {
+          /* non-fatal — verification UI will degrade gracefully */
+        }
+
         setStatusMsg('Verifying your account…');
         const verifyRes = await fetch('/api/auth/verify-email', {
           method: 'POST',

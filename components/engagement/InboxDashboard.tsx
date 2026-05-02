@@ -4,7 +4,11 @@
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
-import { isDmMessageType } from '@/lib/engagement/messageRoles';
+import {
+  NEEDS_RESPONSE_VISIBLE_LIMIT,
+  selectNeedsResponseThreads,
+  selectPeopleReactionThreads,
+} from '@/lib/engagement/queueRules';
 import { PlatformTabs } from '@/components/engagement/PlatformTabs';
 import { PlatformHealthStrip } from '@/components/engagement/PlatformHealthStrip';
 import { useEngagementPlatformHealth } from '@/hooks/useEngagementPlatformHealth';
@@ -24,9 +28,7 @@ import { useEngagementMessages } from '@/hooks/useEngagementMessages';
 import { useLinkedInEngagementWorkspace } from '@/hooks/useLinkedInEngagementWorkspace';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import { recordEngagementEvent } from '@/lib/engagementTelemetry';
-import { getAuthToken } from '@/utils/getAuthToken';
-import { apiFetch } from '@/lib/apiFetch';
-import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
+import { isDmMessageType } from '@/lib/engagement/messageRoles';
 import { normalizePlatform } from '@/utils/platformIcons';
 import { isBrowserAssistRuntimeEnabled } from '@/lib/featureFlags';
 import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
@@ -39,9 +41,9 @@ import {
 
 const RECOMMENDATION_TTL_MS = 12 * 60 * 1000;
 const RECOMMENDATION_FADE_WINDOW_MS = 2 * 60 * 1000;
-const NEEDS_RESPONSE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
-const NEEDS_RESPONSE_VISIBLE_LIMIT = 10;
-const BROWSER_DELIVERY_POLL_ATTEMPTS = 8;
+const PLATFORM_SYNC_SETTLE_DELAYS_MS = [1500, 3500, 6500] as const;
+const BACKGROUND_PLATFORM_SYNC_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const BROWSER_DELIVERY_POLL_ATTEMPTS = 6;
 const BROWSER_DELIVERY_POLL_INTERVAL_MS = 1500;
 const EXTENSION_SYNC_PLATFORM_SET = new Set([
   'linkedin',
@@ -50,6 +52,7 @@ const EXTENSION_SYNC_PLATFORM_SET = new Set([
   'x',
   'twitter',
 ]);
+const SERVER_SYNC_PLATFORM_SET = new Set(['linkedin']);
 const GENERIC_BROWSER_ASSIST_PLATFORM_SET = new Set([
   'facebook',
   'instagram',
@@ -63,12 +66,92 @@ type EngagementActionStatus = {
   confirmed?: boolean;
   platform_id?: string | null;
   error?: string | null;
+  dispatch_lease_id?: string | null;
+  dispatch_lease_expires_at?: string | null;
+  dispatch_acknowledged_at?: string | null;
+  claimed?: boolean;
+  lease_expired?: boolean;
+  acknowledged?: boolean;
 };
+
+type ExtensionCommandPollResult = {
+  success?: boolean;
+  commandCount?: number;
+  dispatchedCount?: number;
+  message?: string;
+  error?: string;
+};
+
+type PlatformSyncTrustState = {
+  status: 'idle' | 'syncing' | 'fresh' | 'warning' | 'failed';
+  lastSyncedAt: number | null;
+  message: string | null;
+};
+
+type ServerPlatformSyncCommand = {
+  id: string;
+  platform: string;
+  status: string | null;
+};
+
+type ServerPlatformSyncStart = {
+  requested_at: string;
+  commands: ServerPlatformSyncCommand[];
+  unsupported_platforms?: string[];
+};
+
+type ServerPlatformSyncStatus = {
+  platforms: Record<string, {
+    fresh: boolean;
+    latest_thread_update: string | null;
+    terminal_action: boolean;
+    failed_action: boolean;
+    failure_reason?: string | null;
+  }>;
+};
+
+async function requestServerPlatformSync(organizationId: string, platforms: string[]): Promise<ServerPlatformSyncStart> {
+  const response = await fetch('/api/engagement/platform-sync', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ organization_id: organizationId, platforms }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.success) {
+    throw new Error(payload?.error || 'Unable to queue platform inbox sync');
+  }
+  return payload.data as ServerPlatformSyncStart;
+}
+
+async function readServerPlatformSyncStatus(input: {
+  organizationId: string;
+  platforms: string[];
+  requestedAt: string;
+  actionIds: string[];
+}): Promise<ServerPlatformSyncStatus> {
+  const params = new URLSearchParams({
+    organization_id: input.organizationId,
+    platforms: input.platforms.join(','),
+    since: input.requestedAt,
+    action_ids: input.actionIds.join(','),
+  });
+  const response = await fetch(`/api/engagement/platform-sync?${params.toString()}`, {
+    method: 'GET',
+    credentials: 'include',
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.success) {
+    throw new Error(payload?.error || 'Unable to verify platform inbox sync');
+  }
+  return payload.data as ServerPlatformSyncStatus;
+}
 
 async function waitForBrowserActionTerminalStatus(
   organizationId: string,
   actionId: string,
 ): Promise<EngagementActionStatus | null> {
+  let latestStatus: EngagementActionStatus | null = null;
   for (let attempt = 0; attempt < BROWSER_DELIVERY_POLL_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
       await new Promise((resolve) => window.setTimeout(resolve, BROWSER_DELIVERY_POLL_INTERVAL_MS));
@@ -79,11 +162,25 @@ async function waitForBrowserActionTerminalStatus(
     );
     const statusJson = (await statusRes.json().catch(() => ({}))) as EngagementActionStatus;
     if (!statusRes.ok || statusJson.success !== true) continue;
+    latestStatus = statusJson;
     if (['executed', 'sent_unverified', 'failed', 'skipped', 'blocked'].includes(String(statusJson.status || ''))) {
       return statusJson;
     }
   }
-  return null;
+  return latestStatus;
+}
+
+async function cancelUnclaimedQueuedAction(
+  organizationId: string,
+  actionId: string | null | undefined,
+): Promise<void> {
+  if (!actionId) return;
+  await fetch('/api/engagement/cancel-queued', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ organization_id: organizationId, action_id: actionId }),
+  }).catch(() => {});
 }
 
 export interface InboxDashboardProps {
@@ -109,29 +206,24 @@ export function InboxDashboard({
   const [authorFilter, setAuthorFilter] = useState<{ authorName: string; platform: string } | null>(
     null
   );
-  // Tracks which specific comment/message the user is replying to. Lifted up
-  // from ConversationView so AIEngagementAssistant can target THAT message
-  // for its suggestion instead of always defaulting to the latest inbound.
-  const [replyTargetMessageId, setReplyTargetMessageId] = useState<string | null>(null);
   // Switching primary tab is the user's signal that they want fresh data
   // for that view — kick a re-fetch. Skips first mount (the inbox load
   // already runs there) and avoids a double-fetch on initial render.
   const isFirstFilterRender = useRef(true);
-  useEffect(() => {
-    if (isFirstFilterRender.current) {
-      isFirstFilterRender.current = false;
-      return;
-    }
-    refresh();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeQueueFilter]);
   const [browserAssistError, setBrowserAssistError] = useState<string | null>(null);
   const [browserAssistBusyPlatform, setBrowserAssistBusyPlatform] = useState<string | null>(null);
   const [browserAssistStatusByPlatform, setBrowserAssistStatusByPlatform] = useState<Record<string, string | null>>({});
   const [browserAssistErrorByPlatform, setBrowserAssistErrorByPlatform] = useState<Record<string, string | null>>({});
   const [linkedInSurfaceActionBusy, setLinkedInSurfaceActionBusy] = useState<'sales_navigator' | 'recruiter' | null>(null);
   const [linkedInSurfaceActionStatus, setLinkedInSurfaceActionStatus] = useState<string | null>(null);
+  const [platformSyncTrust, setPlatformSyncTrust] = useState<PlatformSyncTrustState>({
+    status: 'idle',
+    lastSyncedAt: null,
+    message: null,
+  });
   const attemptedExtensionAuthRef = useRef<string | null>(null);
+  const initialPlatformSyncKeyRef = useRef<string | null>(null);
+  const lastPlatformSyncAtRef = useRef<number>(0);
   // Clear the "already-attempted" lock whenever the user returns to the tab
   // or refocuses the window. The lock prevents redundant retries during a
   // single page session, but it also prevents recovery from a transient
@@ -168,6 +260,16 @@ export function InboxDashboard({
     refresh: refreshWorkQueue,
   } = useWorkQueue(organizationId);
   const { platforms: integrations } = useCompanyIntegrations(organizationId);
+  const connectedPlatformSlugs = useMemo(
+    () => Array.from(
+      new Set(
+        integrations
+          .map((integration) => normalizePlatform(integration.platform))
+          .filter(Boolean)
+      )
+    ),
+    [integrations]
+  );
   // Per-platform health (API / RPA / Extension / Publish adapter + ingress).
   // Renders as a compact strip under the platform tabs so the operator
   // can tell at a glance whether a given platform's selected actions
@@ -187,7 +289,6 @@ export function InboxDashboard({
     updatingPlatform: updatingBrowserPlatform,
     authenticating: extensionAuthenticating,
     setBrowserPlatformEnabled,
-    authenticateExtensionSession,
     authenticateExtensionViaClaimCode,
     pollExtensionCommandsNow,
     triggerPlatformSync,
@@ -201,11 +302,17 @@ export function InboxDashboard({
     setPlatformEnabled: setWorkspacePlatformEnabled,
   } = useEngagementPlatformPreferences(organizationId);
   const { items, loading, error, refresh, patchThread } = useEngagementInbox(organizationId, filters);
+  useEffect(() => {
+    if (isFirstFilterRender.current) {
+      isFirstFilterRender.current = false;
+      return;
+    }
+    refresh();
+  }, [activeQueueFilter, refresh]);
   const {
     messages,
     loading: messagesLoading,
     refresh: refreshMessages,
-    addOptimisticMessage,
   } = useEngagementMessages(
     organizationId,
     selectedThread?.thread_id ?? null,
@@ -269,10 +376,6 @@ export function InboxDashboard({
   //   - postThreads:    activity on the user's posts (People Reaction domain)
   // Doing the split once here keeps the count badges consistent with what's
   // actually shown in each tab.
-  const isCommentThread = (t: typeof filteredItems[number]) =>
-    t.latest_message_type === 'comment';
-  const isPostThread = (t: typeof filteredItems[number]) =>
-    t.latest_message_type === 'comment' || t.latest_message_type === 'reaction';
   // "Needs response" rule: only DMs where the *other party* sent the last
   // message AND the user hasn't already queued an outbound reply through
   // the engagement pipeline. If the user already replied (outgoing or
@@ -280,44 +383,26 @@ export function InboxDashboard({
   // row exists), the thread drops out of the queue until the counterparty
   // sends something new — otherwise the operator sees their own replies
   // sitting in the inbox waiting for action that's already been taken.
-  const otherPartyRepliedLast = (t: typeof filteredItems[number]) => {
-    if (t.latest_message_direction === 'outgoing') return false;
-    if (t.latest_message_author_self === true) return false;
-    if (t.has_pending_outbound_action === true) return false;
-    return true;
-  };
-  const withinNeedsResponseWindow = (t: typeof filteredItems[number]) => {
-    if (!t.latest_message_time) return true;
-    const ts = new Date(t.latest_message_time).getTime();
-    if (!Number.isFinite(ts)) return true;
-    return ts >= Date.now() - NEEDS_RESPONSE_LOOKBACK_MS;
-  };
   const dmThreads = useMemo(
-    () => filteredItems.filter((t) => !isPostThread(t) && otherPartyRepliedLast(t) && withinNeedsResponseWindow(t)),
+    () => selectNeedsResponseThreads(filteredItems),
     [filteredItems]
   );
   // People Reaction visibility rules (operator-defined):
-  //   1. Only posts whose latest activity is within the last 2 days.
+  //   1. Only comment threads where someone else wrote the latest comment.
   //      The window is rolling — every fetch advances "now," so when the
   //      user signs back in after a gap they see whatever's actionable in
-  //      the current 2-day slice rather than an unbounded backlog.
-  //   2. (Future) hide once all comments are responded to. For now we
-  //      keep posts visible as long as any comment-type message exists.
+  //      the current 60-day slice rather than an unbounded backlog.
+  //   2. Hide once the latest visible comment is self-authored or a reply
+  //      action for that thread has already been completed.
   //
   // Note: Date.now() lives INSIDE the useMemo, not in deps, otherwise the
   // ms-level drift on every render would re-create the array reference,
   // invalidate visibleQueueItems, fire the recommendation useEffect, and
   // trigger an infinite re-render loop ("Maximum update depth exceeded").
-  const POST_VISIBILITY_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
-  const postThreads = useMemo(() => {
-    const cutoff = Date.now() - POST_VISIBILITY_WINDOW_MS;
-    return filteredItems.filter((t) => {
-      if (!isCommentThread(t)) return false;
-      const ts = t.latest_message_time ? new Date(t.latest_message_time).getTime() : NaN;
-      if (!Number.isFinite(ts)) return true; // missing timestamp — don't hide
-      return ts >= cutoff;
-    });
-  }, [filteredItems]);
+  const postThreads = useMemo(
+    () => selectPeopleReactionThreads(filteredItems),
+    [filteredItems]
+  );
 
   const needsResponseQueueItems = useMemo(
     () => filterThreadsForQueue(dmThreads, 'Needs Response').slice(0, NEEDS_RESPONSE_VISIBLE_LIMIT),
@@ -336,16 +421,33 @@ export function InboxDashboard({
   const peopleReactedCount = postThreads.length;
 
   useEffect(() => {
-    if (!threadIdFromUrl || items.length === 0) return;
-    const match = items.find((t) => t.thread_id === threadIdFromUrl);
-    if (match) setSelectedThread(match);
-  }, [threadIdFromUrl, items]);
+    if (!threadIdFromUrl) return;
+    const match = visibleQueueItems.find((t) => t.thread_id === threadIdFromUrl);
+    if (match) {
+      setSelectedThread(match);
+      return;
+    }
+
+    if (loading && visibleQueueItems.length === 0) return;
+    const nextThread = visibleQueueItems[0] ?? null;
+    if (selectedThread?.thread_id !== nextThread?.thread_id) {
+      setSelectedThread(nextThread);
+    }
+    replaceEngagementRoute(nextThread ? { thread: nextThread.thread_id } : undefined);
+  }, [threadIdFromUrl, visibleQueueItems, replaceEngagementRoute, selectedThread?.thread_id, loading]);
 
   useEffect(() => {
     if (!selectedThread) return;
-    const stillInFilter = filteredItems.some((t) => t.thread_id === selectedThread.thread_id);
-    if (!stillInFilter) setSelectedThread(null);
-  }, [selectedThread, filteredItems]);
+    const stillVisible = visibleQueueItems.find((t) => t.thread_id === selectedThread.thread_id);
+    if (stillVisible) {
+      if (selectedThread !== stillVisible) setSelectedThread(stillVisible);
+      return;
+    }
+
+    const nextThread = visibleQueueItems[0] ?? null;
+    setSelectedThread(nextThread);
+    replaceEngagementRoute(nextThread ? { thread: nextThread.thread_id } : undefined);
+  }, [selectedThread, visibleQueueItems, replaceEngagementRoute]);
 
   const handleSelectThread = useCallback(
     (thread: InboxThread) => {
@@ -384,13 +486,13 @@ export function InboxDashboard({
 
   const handleSelectThreadById = useCallback(
     (threadId: string) => {
-      const thread = items.find((entry) => entry.thread_id === threadId);
+      const thread = visibleQueueItems.find((entry) => entry.thread_id === threadId);
       if (thread) {
         handleSelectThread(thread);
         setMobileTab('conversation');
       }
     },
-    [items, handleSelectThread]
+    [visibleQueueItems, handleSelectThread]
   );
 
   const handleSelectPlatform = useCallback(
@@ -407,6 +509,157 @@ export function InboxDashboard({
     return normalized === 'twitter' ? 'x' : normalized;
   }, []);
 
+  const syncableBrowserPlatforms = useMemo(
+    () => Array.from(
+      new Set(
+        connectedPlatformSlugs
+          .map((platform) => getBrowserActionPlatform(platform))
+          .filter((platform) => EXTENSION_SYNC_PLATFORM_SET.has(platform))
+      )
+    ),
+    [connectedPlatformSlugs, getBrowserActionPlatform]
+  );
+
+  const runPlatformSyncAndRefresh = useCallback(
+    async (platforms: string[]) => {
+      const uniquePlatforms = Array.from(new Set(platforms)).filter((platform) =>
+        EXTENSION_SYNC_PLATFORM_SET.has(platform)
+      );
+      if (uniquePlatforms.length === 0) return;
+
+      setPlatformSyncTrust((current) => ({
+        status: 'syncing',
+        lastSyncedAt: current.lastSyncedAt,
+        message: 'Checking latest platform messages...',
+      }));
+
+      const serverSyncPlatforms = organizationId
+        ? uniquePlatforms.filter((platform) => SERVER_SYNC_PLATFORM_SET.has(platform))
+        : [];
+      const directSyncPlatforms = uniquePlatforms.filter((platform) => !SERVER_SYNC_PLATFORM_SET.has(platform));
+      const confirmedPlatforms = new Set<string>();
+      const failedPlatforms = new Set<string>();
+      const pendingServerPlatforms = new Set<string>();
+      let serverSync: ServerPlatformSyncStart | null = null;
+
+      if (serverSyncPlatforms.length > 0 && organizationId) {
+        try {
+          serverSync = await requestServerPlatformSync(organizationId, serverSyncPlatforms);
+          for (const platform of serverSyncPlatforms) pendingServerPlatforms.add(platform);
+          void pollExtensionCommandsNow().catch((pollError) => {
+            console.warn('[engagement] extension command wakeup failed:', pollError);
+          });
+          void Promise.allSettled(serverSyncPlatforms.map((platform) => triggerPlatformSync(platform))).then((results) => {
+            if (results.some((result) => result.status === 'rejected')) {
+              console.warn('[engagement] direct platform sync wakeup did not confirm for every server-queued platform');
+            }
+          });
+        } catch (syncError) {
+          console.warn('[engagement] server platform sync queue failed:', syncError);
+          for (const platform of serverSyncPlatforms) failedPlatforms.add(platform);
+        }
+      }
+
+      if (directSyncPlatforms.length > 0) {
+        const results = await Promise.allSettled(directSyncPlatforms.map((platform) => triggerPlatformSync(platform)));
+        directSyncPlatforms.forEach((platform, index) => {
+          if (results[index]?.status === 'fulfilled') confirmedPlatforms.add(platform);
+          else failedPlatforms.add(platform);
+        });
+      }
+
+      const refreshAll = () => {
+        void refresh();
+        void refreshCounts();
+        void refreshWorkQueue();
+        void refreshLinkedInOverview();
+      };
+
+      if (serverSync && serverSyncPlatforms.length > 0 && organizationId) {
+        const actionIds = serverSync.commands.map((command) => command.id).filter(Boolean);
+        for (const delay of PLATFORM_SYNC_SETTLE_DELAYS_MS) {
+          await new Promise((resolve) => window.setTimeout(resolve, delay));
+          refreshAll();
+
+          try {
+            const status = await readServerPlatformSyncStatus({
+              organizationId,
+              platforms: serverSyncPlatforms,
+              requestedAt: serverSync.requested_at,
+              actionIds,
+            });
+            for (const platform of serverSyncPlatforms) {
+              const platformStatus = status.platforms?.[platform];
+              if (platformStatus?.fresh) {
+                confirmedPlatforms.add(platform);
+                pendingServerPlatforms.delete(platform);
+              } else if (platformStatus?.failed_action) {
+                failedPlatforms.add(platform);
+                pendingServerPlatforms.delete(platform);
+              }
+            }
+            if (serverSyncPlatforms.every((platform) => confirmedPlatforms.has(platform))) break;
+          } catch (statusError) {
+            console.warn('[engagement] server platform sync status failed:', statusError);
+          }
+        }
+      } else {
+        for (const delay of PLATFORM_SYNC_SETTLE_DELAYS_MS) {
+          await new Promise((resolve) => window.setTimeout(resolve, delay));
+          refreshAll();
+        }
+      }
+
+      if (confirmedPlatforms.size === 0 && pendingServerPlatforms.size === 0) {
+        setPlatformSyncTrust({
+          status: 'failed',
+          lastSyncedAt: null,
+          message: `Latest inbox check could not be started for ${uniquePlatforms.join(', ')}.`,
+        });
+        return;
+      }
+
+      const syncedAt = Date.now();
+      lastPlatformSyncAtRef.current = syncedAt;
+      const unconfirmedServerPlatforms = serverSyncPlatforms.filter((platform) => !confirmedPlatforms.has(platform));
+      if (unconfirmedServerPlatforms.length > 0) {
+        const failedServerPlatforms = unconfirmedServerPlatforms.filter((platform) => failedPlatforms.has(platform));
+        setPlatformSyncTrust({
+          status: failedServerPlatforms.length > 0 ? 'failed' : 'syncing',
+          lastSyncedAt: null,
+          message:
+            failedServerPlatforms.length > 0
+              ? `Still checking ${failedServerPlatforms.join(', ')} messages. Keep the platform inbox open, then use Check latest messages to retry now.`
+              : `Inbox refresh requested for ${unconfirmedServerPlatforms.join(', ')}. The queue will update as soon as the browser extension sends the latest messages.`,
+        });
+        return;
+      }
+
+      const successfulPlatforms = Array.from(confirmedPlatforms);
+      const failedPlatformList = Array.from(failedPlatforms);
+      setPlatformSyncTrust({
+        status: failedPlatformList.length > 0 || pendingServerPlatforms.size > 0 ? 'warning' : 'fresh',
+        lastSyncedAt: syncedAt,
+        message:
+          failedPlatformList.length > 0 || pendingServerPlatforms.size > 0
+            ? `Fresh sync confirmed for ${successfulPlatforms.join(', ')}. Still checking ${[
+                ...Array.from(pendingServerPlatforms),
+                ...failedPlatformList,
+              ].join(', ')}.`
+            : `Fresh sync confirmed for ${successfulPlatforms.join(', ')}.`,
+      });
+    },
+    [
+      organizationId,
+      pollExtensionCommandsNow,
+      refresh,
+      refreshCounts,
+      refreshLinkedInOverview,
+      refreshWorkQueue,
+      triggerPlatformSync,
+    ]
+  );
+
   const handleRefresh = useCallback(async () => {
     setBrowserAssistError(null);
     void refresh();
@@ -422,37 +675,23 @@ export function InboxDashboard({
     // and JS TDZ would reject it from inside this useCallback.
     attemptedExtensionAuthRef.current = null;
 
-    const connectedBrowserPlatforms = Array.from(
-      new Set(
-        integrations
-          .map((integration) => getBrowserActionPlatform(integration.platform))
-          .filter((platform) => EXTENSION_SYNC_PLATFORM_SET.has(platform))
-      )
-    );
     const platformsToSync =
       selectedPlatform && selectedPlatform !== 'all'
-        ? connectedBrowserPlatforms.filter((platform) => platform === getBrowserActionPlatform(selectedPlatform))
-        : connectedBrowserPlatforms;
+        ? syncableBrowserPlatforms.filter((platform) => platform === getBrowserActionPlatform(selectedPlatform))
+        : syncableBrowserPlatforms;
 
     if (platformsToSync.length > 0) {
-      await Promise.allSettled(platformsToSync.map((platform) => triggerPlatformSync(platform)));
-      for (const delay of [1500, 3500, 6500]) {
-        await new Promise((resolve) => window.setTimeout(resolve, delay));
-        void refresh();
-        void refreshCounts();
-        void refreshWorkQueue();
-        void refreshLinkedInOverview();
-      }
+      await runPlatformSyncAndRefresh(platformsToSync);
     }
   }, [
     getBrowserActionPlatform,
-    integrations,
     refresh,
     refreshCounts,
     refreshLinkedInOverview,
     refreshWorkQueue,
+    runPlatformSyncAndRefresh,
     selectedPlatform,
-    triggerPlatformSync,
+    syncableBrowserPlatforms,
   ]);
 
   // Counts must mirror what the user actually sees in the Needs Response
@@ -529,13 +768,17 @@ export function InboxDashboard({
     [visibleQueueItems, recommendedThreadId]
   );
   const actionableThreads = queueCounts.needsResponse;
-  const connectedPlatformsCount = integrations.length;
+  const connectedPlatformsCount = connectedPlatformSlugs.length;
+  const connectedPlatformSet = useMemo(
+    () => new Set(connectedPlatformSlugs),
+    [connectedPlatformSlugs]
+  );
+  const connectedPlatformHealth = useMemo(
+    () => platformHealth.filter((platform) => connectedPlatformSet.has(normalizePlatform(platform.platform))),
+    [connectedPlatformSet, platformHealth]
+  );
   const extensionPanelPlatforms = useMemo(() => {
-    const connectedPlatforms = integrations
-      .map((integration) => normalizePlatform(integration.platform))
-      .filter(Boolean);
-
-    return connectedPlatforms.map((platform) => {
+    return connectedPlatformSlugs.map((platform) => {
       const extensionPlatform = mergedPlatforms.find((entry) => entry.platform === platform);
 
       return {
@@ -551,7 +794,7 @@ export function InboxDashboard({
         workspaceEnabled: workspacePreferenceMap[platform] ?? true,
       };
     });
-  }, [integrations, mergedPlatforms, workspacePreferenceMap]);
+  }, [connectedPlatformSlugs, mergedPlatforms, workspacePreferenceMap]);
   const updatingExtensionPlatform = updatingWorkspacePlatform || updatingBrowserPlatform;
   const linkedInBrowserState = extensionPanelPlatforms.find((platform) => platform.platform === 'linkedin');
   const genericBrowserPlatforms = useMemo(
@@ -597,8 +840,22 @@ export function InboxDashboard({
   const hasAnyThreads = filteredItems.length > 0;
   const hasActionRequired = actionableThreads > 0;
   const hasBlockingError = Boolean(error);
-  const showNoActivityState = !loading && !hasBlockingError && !authorFilter && !hasAnyThreads;
-  const showAllCaughtUpState = !loading && !hasBlockingError && !authorFilter && hasAnyThreads && !hasActionRequired;
+  const requiresFreshPlatformSync = syncableBrowserPlatforms.length > 0;
+  const platformSyncFreshEnough =
+    !requiresFreshPlatformSync
+    || (
+      platformSyncTrust.status === 'fresh'
+      && platformSyncTrust.lastSyncedAt !== null
+      && Date.now() - platformSyncTrust.lastSyncedAt < BACKGROUND_PLATFORM_SYNC_INTERVAL_MS
+    );
+  const showSyncUnverifiedState =
+    !loading
+    && !hasBlockingError
+    && !authorFilter
+    && !hasActionRequired
+    && !platformSyncFreshEnough;
+  const showNoActivityState = !loading && !hasBlockingError && !authorFilter && !showSyncUnverifiedState && !hasAnyThreads;
+  const showAllCaughtUpState = !loading && !hasBlockingError && !authorFilter && !showSyncUnverifiedState && hasAnyThreads && !hasActionRequired;
 
   const queueEmptyState = useMemo(() => {
     if (hasBlockingError) {
@@ -637,6 +894,27 @@ export function InboxDashboard({
       );
     }
 
+    if (showSyncUnverifiedState) {
+      return (
+        <div className="mx-auto w-full max-w-sm rounded-2xl border border-amber-200 bg-amber-50 p-5 text-center">
+          <h3 className="text-base font-semibold text-amber-950">
+            Checking latest messages
+          </h3>
+          <p className="mt-2 text-sm leading-6 text-amber-900">
+            {platformSyncTrust.message
+              || 'Omnivyra is refreshing the browser inbox before showing the queue.'}
+          </p>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            className="mt-4 rounded-full bg-amber-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-amber-800"
+          >
+            Check latest messages
+          </button>
+        </div>
+      );
+    }
+
     if (showAllCaughtUpState) {
       return (
         <div className="mx-auto w-full max-w-sm rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center">
@@ -649,7 +927,17 @@ export function InboxDashboard({
     }
 
     return undefined;
-  }, [error, handleRefresh, hasBlockingError, router, showAllCaughtUpState, showNoActivityState]);
+  }, [
+    error,
+    handleRefresh,
+    hasBlockingError,
+    platformSyncTrust.message,
+    platformSyncTrust.status,
+    router,
+    showAllCaughtUpState,
+    showNoActivityState,
+    showSyncUnverifiedState,
+  ]);
 
   const conversationEmptyState = useMemo(() => {
     if (hasBlockingError) {
@@ -664,6 +952,14 @@ export function InboxDashboard({
         description: "Once people reply to your posts or messages, they'll appear here.",
       };
     }
+    if (showSyncUnverifiedState) {
+      return {
+        title: 'Checking latest messages',
+        description:
+          platformSyncTrust.message
+          || 'Omnivyra is refreshing the browser inbox before showing the queue.',
+      };
+    }
     if (showAllCaughtUpState) {
       return {
         title: 'All caught up 🎉',
@@ -674,7 +970,14 @@ export function InboxDashboard({
       title: 'Select a conversation to start',
       description: 'Choose a thread from the queue to review context and respond.',
     };
-  }, [hasBlockingError, showAllCaughtUpState, showNoActivityState]);
+  }, [
+    hasBlockingError,
+    platformSyncTrust.message,
+    platformSyncTrust.status,
+    showAllCaughtUpState,
+    showNoActivityState,
+    showSyncUnverifiedState,
+  ]);
 
   useEffect(() => {
     const nextRecommended = getRecommendedThread(visibleQueueItems);
@@ -754,12 +1057,32 @@ export function InboxDashboard({
     setRecommendationSeed((current) => current + 1);
   }, [organizationId, selectedThread, refresh, refreshCounts, refreshWorkQueue, refreshMessages]);
 
+  const hideThreadAfterResponse = useCallback((threadId: string) => {
+    patchThread(threadId, (thread) => ({
+      ...thread,
+      has_completed_outbound_action: true,
+      has_pending_outbound_action: true,
+      latest_message_direction: 'outgoing',
+      latest_message_author_self: true,
+      unread_count: 0,
+    }));
+
+    if (selectedThread?.thread_id === threadId) {
+      const nextThread = visibleQueueItems.find((thread) => thread.thread_id !== threadId) ?? null;
+      setSelectedThread(nextThread);
+      replaceEngagementRoute(nextThread ? { thread: nextThread.thread_id } : undefined);
+    }
+  }, [patchThread, replaceEngagementRoute, selectedThread?.thread_id, visibleQueueItems]);
+
   const handleReplySent = useCallback(() => {
+    if (selectedThread) {
+      hideThreadAfterResponse(selectedThread.thread_id);
+    }
     refresh();
     refreshCounts();
     refreshWorkQueue();
     refreshMessages();
-  }, [refresh, refreshCounts, refreshWorkQueue, refreshMessages]);
+  }, [hideThreadAfterResponse, refresh, refreshCounts, refreshWorkQueue, refreshMessages, selectedThread]);
 
   const handleToggleExtensionPlatform = useCallback(
     async (platform: string, enabled: boolean) => {
@@ -777,59 +1100,12 @@ export function InboxDashboard({
     }
 
     const attemptKey = `${organizationId}:${extensionStatus.runtimeId}`;
+    if (attemptedExtensionAuthRef.current === attemptKey) return false;
     attemptedExtensionAuthRef.current = attemptKey;
 
-    const {
-      data: { session },
-    } = await getSupabaseBrowser().auth.getSession();
-
-    let sessionToken = await getAuthToken();
-    let userId = session?.user?.id ?? null;
-    let expiresAt = session?.expires_at ? session.expires_at * 1000 : undefined;
-
-    if (!sessionToken) {
-      try {
-        const params = new URLSearchParams({
-          organization_id: organizationId,
-          organizationId,
-        });
-        const sessionResponse = await apiFetch(`/api/extension/session?${params.toString()}`);
-        const sessionBody = await sessionResponse.json().catch(() => ({}));
-        if (!sessionResponse.ok || !sessionBody?.data?.sessionToken) {
-          throw new Error(sessionBody.error || sessionBody.message || 'Unable to create extension session');
-        }
-
-        sessionToken = sessionBody.data.sessionToken;
-        userId = sessionBody.data.userId || userId;
-        expiresAt = sessionBody.data.expiresAt || expiresAt;
-      } catch (sessionError) {
-        attemptedExtensionAuthRef.current = null;
-        console.warn('[engagement] extension session bootstrap failed:', sessionError);
-        return false;
-      }
-    }
-
-    if (!sessionToken || !userId) {
-      attemptedExtensionAuthRef.current = null;
-      return false;
-    }
-
     try {
-      await authenticateExtensionSession({
-        userId,
-        orgId: organizationId,
-        sessionToken,
-        apiBaseUrl: window.location.origin,
-        expiresAt,
-        user: {
-          id: userId,
-          name:
-            (session?.user?.user_metadata?.full_name as string | undefined) ||
-            (session?.user?.user_metadata?.name as string | undefined) ||
-            null,
-          email: session?.user?.email ?? null,
-        },
-      });
+      await authenticateExtensionViaClaimCode(organizationId);
+      attemptedExtensionAuthRef.current = null;
       return true;
     } catch (authError) {
       attemptedExtensionAuthRef.current = null;
@@ -837,7 +1113,7 @@ export function InboxDashboard({
       return false;
     }
   }, [
-    authenticateExtensionSession,
+    authenticateExtensionViaClaimCode,
     extensionAuth?.isAuthenticated,
     extensionError,
     extensionStatus?.runtimeId,
@@ -850,26 +1126,6 @@ export function InboxDashboard({
     void refreshLinkedInOverview();
     void bootstrapExtensionAuth();
   }, [bootstrapExtensionAuth, refreshExtension, refreshWorkspacePreferences, refreshLinkedInOverview]);
-
-  const getPreferredReplyMessage = useCallback(() => {
-    if (messages.length === 0) return null;
-
-    const sorted = [...messages].sort((a, b) => {
-      const ta = new Date(a.platform_created_at ?? a.created_at ?? 0).getTime();
-      const tb = new Date(b.platform_created_at ?? b.created_at ?? 0).getTime();
-      return tb - ta;
-    });
-
-    return (
-      sorted.find((message) => {
-        const content = (message.content ?? '').trim();
-        if (!content) return false;
-        return !/^you\s*:/i.test(content);
-      }) ??
-      sorted[0] ??
-      null
-    );
-  }, [messages]);
 
   const handleExecuteReply = useCallback(
     async ({
@@ -898,6 +1154,9 @@ export function InboxDashboard({
           capability.reason ?? `${isDm ? 'DM' : 'Reply'} is not supported on ${platform}.`
         );
       }
+
+      const niceLabel = platform === 'twitter' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
+      const browserPlatformState = getBrowserPlatformState(platform);
 
       const res = await fetch('/api/engagement/reply', {
         method: 'POST',
@@ -933,67 +1192,85 @@ export function InboxDashboard({
         throw new Error(json.error || 'Platform did not confirm the reply was sent');
       }
 
-      await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
-
-      const niceLabel = platform === 'twitter' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
       if (isQueued) {
-        const browserPlatformState = getBrowserPlatformState(platform);
-        const browserSurfaceReady = Boolean(
-          isDm
-          && browserPlatformState?.browserEnabled
-          && (
-            platform === 'linkedin'
-              ? browserPlatformState.hasMessagingTab
-              : browserPlatformState.hasMessagingTab || browserPlatformState.hasOpenTab
-          )
-        );
-        if (browserSurfaceReady) {
-          try {
-            await pollExtensionCommandsNow();
-            await new Promise((resolve) => window.setTimeout(resolve, 1800));
-            await pollExtensionCommandsNow();
-            const actionStatus = json.action_id
-              ? await waitForBrowserActionTerminalStatus(organizationId, json.action_id)
-              : null;
-            await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
-            if (actionStatus?.status === 'executed' && actionStatus.confirmed) {
-              return {
-                mode: 'browser_dispatched',
-                platform,
-                message: `${isDm ? 'DM' : 'Reply'} confirmed on ${niceLabel}.`,
-              };
-            }
-            if (actionStatus?.status === 'failed' || actionStatus?.status === 'blocked' || actionStatus?.status === 'skipped') {
-              return {
-                mode: 'browser_failed',
-                platform,
-                message: `${isDm ? 'DM' : 'Reply'} was not delivered on ${niceLabel}: ${actionStatus.error || actionStatus.status}.`,
-              };
-            }
-            if (actionStatus?.status === 'sent_unverified') {
-              return {
-                mode: 'browser_unverified',
-                platform,
-                message: `${isDm ? 'DM' : 'Reply'} ran in the ${niceLabel} tab, but LinkedIn did not confirm delivery.`,
-              };
-            }
-            return {
-              mode: 'browser_queued',
-              platform,
-              message: `${isDm ? 'DM' : 'Reply'} delivery is still in progress in the open ${niceLabel} tab.`,
-            };
-          } catch (error) {
-            console.warn('[engagement] immediate browser dispatch failed:', error);
-          }
+        if (browserPlatformState?.browserEnabled === false) {
+          await cancelUnclaimedQueuedAction(organizationId, json.action_id);
+          await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
+          return {
+            mode: 'browser_failed',
+            platform,
+            message: `${isDm ? 'DM' : 'Reply'} was queued, but browser delivery is disabled for ${niceLabel}.`,
+          };
         }
-        return {
-          mode: 'browser_queued',
-          platform,
-          message:
-            json.message ||
-            `${isDm ? 'DM' : 'Reply'} queued — open the ${niceLabel} tab so the Omnivyra extension can deliver it.`,
-        };
+
+        try {
+          await bootstrapExtensionAuth();
+          const firstPoll = await pollExtensionCommandsNow() as ExtensionCommandPollResult;
+          await new Promise((resolve) => window.setTimeout(resolve, 1800));
+          const secondPoll = await pollExtensionCommandsNow() as ExtensionCommandPollResult;
+          const actionStatus = json.action_id
+            ? await waitForBrowserActionTerminalStatus(organizationId, json.action_id)
+            : null;
+          await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
+          if (actionStatus?.status === 'executed' && actionStatus.confirmed) {
+            hideThreadAfterResponse(threadId);
+            return {
+              mode: 'browser_dispatched',
+              platform,
+              message: `${isDm ? 'DM' : 'Reply'} confirmed on ${niceLabel}.`,
+            };
+          }
+          if (actionStatus?.status === 'failed' || actionStatus?.status === 'blocked' || actionStatus?.status === 'skipped') {
+            return {
+              mode: 'browser_failed',
+              platform,
+              message: `${isDm ? 'DM' : 'Reply'} was not delivered on ${niceLabel}: ${actionStatus.error || actionStatus.status}.`,
+            };
+          }
+          if (actionStatus?.status === 'sent_unverified') {
+            return {
+              mode: 'browser_unverified',
+              platform,
+              message: `${isDm ? 'DM' : 'Reply'} ran in the ${niceLabel} tab, but ${niceLabel} did not confirm delivery.`,
+            };
+          }
+          const commandCount = Math.max(Number(firstPoll?.commandCount ?? 0), Number(secondPoll?.commandCount ?? 0));
+          const dispatchedCount = Math.max(Number(firstPoll?.dispatchedCount ?? 0), Number(secondPoll?.dispatchedCount ?? 0));
+          const claimedByExtension =
+            Boolean(actionStatus?.claimed || actionStatus?.dispatch_lease_id)
+            && actionStatus?.lease_expired !== true;
+          if (!claimedByExtension && dispatchedCount === 0) {
+            await cancelUnclaimedQueuedAction(organizationId, json.action_id);
+            await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
+          }
+          if (claimedByExtension) {
+            return {
+              mode: 'browser_pending',
+              platform,
+              message: `${isDm ? 'DM' : 'Reply'} was claimed by Omnivyra and is still waiting for ${niceLabel} to report delivery. Keep ${niceLabel} Messaging open and refresh in a moment.`,
+            };
+          }
+          return {
+            mode: 'browser_failed',
+            platform,
+            message:
+              commandCount > 0 && dispatchedCount === 0
+                ? `Omnivyra found the queued ${isDm ? 'DM' : 'reply'}, but no ${niceLabel} tab accepted it. Open the ${niceLabel} Messaging thread and try Send again.`
+                : `${isDm ? 'DM' : 'Reply'} was queued, but the Omnivyra extension did not claim it. Keep ${niceLabel} Messaging open and try Send again.`,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unable to wake the Omnivyra extension';
+          await cancelUnclaimedQueuedAction(organizationId, json.action_id);
+          await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
+          return {
+            mode: 'browser_failed',
+            platform,
+            message: `${isDm ? 'DM' : 'Reply'} was queued, but delivery could not start: ${message}`,
+          };
+        }
       }
+      hideThreadAfterResponse(threadId);
+      await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
       const message =
         json.confirmed && json.platform_id
           ? `Reply confirmed by ${niceLabel} (id: ${json.platform_id}).`
@@ -1004,18 +1281,13 @@ export function InboxDashboard({
         message,
       };
     },
-    [getBrowserPlatformState, organizationId, pollExtensionCommandsNow, refresh, refreshCounts, refreshMessages, refreshWorkQueue]
+    [bootstrapExtensionAuth, getBrowserPlatformState, hideThreadAfterResponse, organizationId, pollExtensionCommandsNow, refresh, refreshCounts, refreshMessages, refreshWorkQueue]
   );
 
   const handleRetryQueuedDelivery = useCallback(
     async (actionId: string) => {
-      const pollResult = await pollExtensionCommandsNow() as {
-        success?: boolean;
-        commandCount?: number;
-        dispatchedCount?: number;
-        message?: string;
-        error?: string;
-      };
+      await bootstrapExtensionAuth();
+      const pollResult = await pollExtensionCommandsNow() as ExtensionCommandPollResult;
       await new Promise((resolve) => window.setTimeout(resolve, 1800));
       const actionStatus = await waitForBrowserActionTerminalStatus(organizationId, actionId);
       await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
@@ -1028,6 +1300,11 @@ export function InboxDashboard({
       }
       if (actionStatus?.status === 'sent_unverified') {
         return { message: 'The extension ran the reply, but LinkedIn did not confirm delivery.' };
+      }
+      if ((actionStatus?.claimed || actionStatus?.dispatch_lease_id) && actionStatus?.lease_expired !== true) {
+        return {
+          message: 'The extension claimed this queued reply and is still waiting for LinkedIn to report delivery. Keep LinkedIn Messaging open and refresh in a moment.',
+        };
       }
 
       const commandCount = Number(pollResult?.commandCount ?? 0);
@@ -1049,7 +1326,7 @@ export function InboxDashboard({
         message: 'Delivery was triggered and is still in progress. Wait a moment, then refresh the LinkedIn thread.',
       };
     },
-    [organizationId, pollExtensionCommandsNow, refresh, refreshCounts, refreshMessages, refreshWorkQueue],
+    [bootstrapExtensionAuth, organizationId, pollExtensionCommandsNow, refresh, refreshCounts, refreshMessages, refreshWorkQueue],
   );
 
   const handleSyncLinkedIn = useCallback(async () => {
@@ -1058,54 +1335,6 @@ export function InboxDashboard({
     refreshCounts();
     refreshWorkQueue();
   }, [refresh, refreshCounts, refreshWorkQueue, syncLinkedInNow]);
-
-  const handleUseSuggestedReply = useCallback(
-    (replyText: string, messageId?: string | null) => {
-      if (!selectedThread || typeof window === 'undefined') return;
-
-      const token = `engagement-reply-${selectedThread.thread_id}-${Date.now()}`;
-      sessionStorage.setItem(
-        token,
-        JSON.stringify({
-          threadId: selectedThread.thread_id,
-          messageId: messageId ?? null,
-          text: replyText,
-        })
-      );
-
-      setMobileTab('conversation');
-      replaceEngagementRoute({
-        thread: selectedThread.thread_id,
-        prefill_reply: token,
-      });
-    },
-    [replaceEngagementRoute, selectedThread]
-  );
-
-  const handleSendSuggestedReply = useCallback(
-    async (replyText: string, messageId?: string | null) => {
-      if (!selectedThread) {
-        throw new Error('Select a thread before sending a suggested reply');
-      }
-
-      const targetMessage =
-        (messageId ? messages.find((message) => message.id === messageId) : null)
-        ?? getPreferredReplyMessage();
-      if (!targetMessage) {
-        throw new Error('No target message is available for this thread');
-      }
-
-      setMobileTab('conversation');
-      return await handleExecuteReply({
-        threadId: selectedThread.thread_id,
-        messageId: targetMessage.id,
-        platform: targetMessage.platform ?? selectedThread.platform,
-        replyText,
-        messageType: targetMessage.message_type ?? null,
-      });
-    },
-    [getPreferredReplyMessage, handleExecuteReply, messages, selectedThread]
-  );
 
   const handleRunLinkedInBrowserAssist = useCallback(async () => {
     setBrowserAssistError(null);
@@ -1246,6 +1475,70 @@ export function InboxDashboard({
     organizationId,
   ]);
 
+  useEffect(() => {
+    if (!organizationId || !extensionStatus?.runtimeId || extensionError) return;
+    if (syncableBrowserPlatforms.length === 0) return;
+
+    const syncKey = `${organizationId}:${extensionStatus.runtimeId}:${syncableBrowserPlatforms.join(',')}`;
+    if (initialPlatformSyncKeyRef.current === syncKey) return;
+
+    let cancelled = false;
+    initialPlatformSyncKeyRef.current = syncKey;
+
+    void (async () => {
+      const authenticated = await bootstrapExtensionAuth();
+      if (!authenticated || cancelled) {
+        if (!cancelled) initialPlatformSyncKeyRef.current = null;
+        return;
+      }
+      await runPlatformSyncAndRefresh(syncableBrowserPlatforms);
+    })().catch((syncError) => {
+      initialPlatformSyncKeyRef.current = null;
+      console.warn('[engagement] initial platform inbox sync failed:', syncError);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    bootstrapExtensionAuth,
+    extensionError,
+    extensionStatus?.runtimeId,
+    organizationId,
+    runPlatformSyncAndRefresh,
+    syncableBrowserPlatforms,
+  ]);
+
+  useEffect(() => {
+    if (!organizationId || syncableBrowserPlatforms.length === 0) return;
+
+    const runIfDue = () => {
+      if (Date.now() - lastPlatformSyncAtRef.current < BACKGROUND_PLATFORM_SYNC_INTERVAL_MS) return;
+      void (async () => {
+        const authenticated = await bootstrapExtensionAuth();
+        if (!authenticated) return;
+        await runPlatformSyncAndRefresh(syncableBrowserPlatforms);
+      })().catch((syncError) => {
+        console.warn('[engagement] scheduled platform inbox sync failed:', syncError);
+      });
+    };
+
+    const intervalId = window.setInterval(runIfDue, BACKGROUND_PLATFORM_SYNC_INTERVAL_MS);
+    const onFocus = () => runIfDue();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') runIfDue();
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [bootstrapExtensionAuth, organizationId, runPlatformSyncAndRefresh, syncableBrowserPlatforms]);
+
   const handleLike = useCallback(
     async (messageId: string, platform: string) => {
       if (!organizationId) return;
@@ -1320,9 +1613,9 @@ export function InboxDashboard({
       switch (key) {
         case 'j': {
           const idx = selectedThread
-            ? filteredItems.findIndex((t) => t.thread_id === selectedThread.thread_id)
+            ? visibleQueueItems.findIndex((t) => t.thread_id === selectedThread.thread_id)
             : -1;
-          const next = idx < filteredItems.length - 1 ? filteredItems[idx + 1] : null;
+          const next = idx < visibleQueueItems.length - 1 ? visibleQueueItems[idx + 1] : null;
           if (next) {
             handleSelectThread(next);
             setMobileTab('conversation');
@@ -1331,9 +1624,9 @@ export function InboxDashboard({
         }
         case 'k': {
           const idx = selectedThread
-            ? filteredItems.findIndex((t) => t.thread_id === selectedThread.thread_id)
+            ? visibleQueueItems.findIndex((t) => t.thread_id === selectedThread.thread_id)
             : 0;
-          const prev = idx > 0 ? filteredItems[idx - 1] : filteredItems[0] ?? null;
+          const prev = idx > 0 ? visibleQueueItems[idx - 1] : visibleQueueItems[0] ?? null;
           if (prev) {
             handleSelectThread(prev);
             setMobileTab('conversation');
@@ -1362,7 +1655,7 @@ export function InboxDashboard({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [filteredItems, selectedThread, messages, handleSelectThread, handleLike]);
+  }, [visibleQueueItems, selectedThread, messages, handleSelectThread, handleLike]);
 
   const handleIgnore = useCallback(
     async (threadId: string) => {
@@ -1559,7 +1852,7 @@ export function InboxDashboard({
           selectedPlatform={selectedPlatform}
           onSelectPlatform={handleSelectPlatform}
           workQueue={clientWorkQueue as typeof workQueue}
-          platforms={integrations.map((integration) => integration.platform)}
+          platforms={connectedPlatformSlugs}
           loading={countsLoading || workQueueLoading}
           className="mt-4"
         />
@@ -1572,7 +1865,7 @@ export function InboxDashboard({
           instead of the full grid.
         */}
         <PlatformHealthStrip
-          platforms={platformHealth}
+          platforms={connectedPlatformHealth}
           selectedPlatform={selectedPlatform}
           organizationId={organizationId}
           onSelectPlatform={handleSelectPlatform}
@@ -1695,7 +1988,6 @@ export function InboxDashboard({
             onIgnore={handleIgnore}
             onMarkResolved={handleMarkResolved}
             onRetryQueuedDelivery={handleRetryQueuedDelivery}
-            onReplyTargetChange={setReplyTargetMessageId}
           />
         </section>
 
@@ -1706,9 +1998,6 @@ export function InboxDashboard({
               messages={messages}
               organizationId={organizationId}
               recommendedThread={recommendedThread}
-              onUseSuggestedReply={handleUseSuggestedReply}
-              onSendSuggestedReply={handleSendSuggestedReply}
-              replyTargetMessageId={replyTargetMessageId}
               onSelectThread={(threadId) => {
                 handleSelectThreadById(threadId);
                 setMobileTab('threads');
@@ -1753,9 +2042,6 @@ export function InboxDashboard({
                     messages={messages}
                     organizationId={organizationId}
                     recommendedThread={recommendedThread}
-                    onUseSuggestedReply={handleUseSuggestedReply}
-                    onSendSuggestedReply={handleSendSuggestedReply}
-                    replyTargetMessageId={replyTargetMessageId}
                     onSelectThread={(threadId) => {
                       handleSelectThreadById(threadId);
                       setMobileTab('threads');
@@ -1783,9 +2069,6 @@ export function InboxDashboard({
             messages={messages}
             organizationId={organizationId}
             recommendedThread={recommendedThread}
-            onUseSuggestedReply={handleUseSuggestedReply}
-            onSendSuggestedReply={handleSendSuggestedReply}
-            replyTargetMessageId={replyTargetMessageId}
             onSelectThread={(threadId) => {
               handleSelectThreadById(threadId);
               setMobileTab('threads');

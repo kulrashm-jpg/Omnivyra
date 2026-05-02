@@ -108,6 +108,8 @@ function toSocialLinks(profile: Record<string, any> | null | undefined): string 
     profile?.youtube_url,
     profile?.tiktok_url,
     profile?.reddit_url,
+    profile?.pinterest_url,
+    profile?.whatsapp_url,
     profile?.blog_url,
   ].filter(Boolean);
 

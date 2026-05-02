@@ -13,9 +13,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { requireSuperAdmin } from '../../../backend/middleware/authMiddleware';
+import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 
 type SuccessResponse = { companyId: string };
-type ErrorResponse   = { error: string; code?: string };
+type ErrorResponse   = { error: string; code?: string; details?: string; conflicts?: string[] };
 
 export default async function handler(
   req: NextApiRequest,
@@ -56,18 +57,24 @@ export default async function handler(
     }
   }
 
-  // ── 4. Check for domain conflicts ────────────────────────────────────────
+  // ── 4. Pre-flight conflict check ─────────────────────────────────────────
+  // saveDomainRecord enforces the same-company-only rule per row, but doing a
+  // single bulk pre-check lets us reject the request BEFORE creating the
+  // companies row — otherwise we'd leak orphan companies on conflict.
+  // Reads final_domain (canonical) — legacy `domain` column is deprecated.
   if (domainList.length > 0) {
     const { data: existingDomains } = await supabase
       .from('company_domains')
-      .select('domain, company_id')
-      .in('domain', domainList);
+      .select('final_domain, company_id')
+      .in('final_domain', domainList);
 
     if (existingDomains && existingDomains.length > 0) {
-      const conflicts = (existingDomains as any[]).map((d) => d.domain);
+      const conflicts = (existingDomains as any[]).map((d) => d.final_domain);
       return res.status(409).json({
-        error: `Domain(s) already assigned to another company: ${conflicts.join(', ')}`,
-        code: 'DOMAIN_CONFLICT',
+        error: 'DOMAIN_ALREADY_REGISTERED',
+        code: 'DOMAIN_ALREADY_REGISTERED',
+        details: `Domain(s) already assigned to another company: ${conflicts.join(', ')}`,
+        conflicts,
       });
     }
   }
@@ -94,22 +101,26 @@ export default async function handler(
 
   const companyId = (company as any).id;
 
-  // ── 6. Create company_domains records ─────────────────────────────────────
-  if (domainList.length > 0) {
-    const domainRows = domainList.map((domain, index) => ({
-      company_id: companyId,
-      domain,
-      is_primary: index === 0,
-      verified:   true,
-    }));
-
-    const { error: domainErr } = await supabase
-      .from('company_domains')
-      .insert(domainRows);
-
-    if (domainErr) {
-      console.error('[admin/create-company] domain insert error:', domainErr.message);
-      // Company was created — log the domain error but don't fail the whole request
+  // ── 6. Create company_domains records via the central writer ─────────────
+  // saveDomainRecord owns: input/final domain split, override-reason
+  // invariant, canonical-conflict probe, and same-company-only claim
+  // semantics. Direct inserts are no longer permitted from this route.
+  for (let i = 0; i < domainList.length; i += 1) {
+    const d = domainList[i];
+    const result = await saveDomainRecord({
+      company_id:          companyId,
+      input_domain:        d,
+      final_domain:        d,
+      redirect_chain:      null,
+      is_forwarding:       false,
+      verification_status: 'verified', // admin asserts the domain at create time
+      created_via:         'admin',
+      is_primary:          i === 0,
+    });
+    if (!result.ok) {
+      console.error('[admin/create-company] saveDomainRecord error:', result.error, d);
+      // Company was created — log the failure but don't roll back. The admin
+      // can re-run the domain attach via the explicit reassign flow if needed.
     }
   }
 

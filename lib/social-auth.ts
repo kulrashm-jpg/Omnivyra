@@ -33,14 +33,14 @@ export const SOCIAL_AUTH_CONFIGS = {
     requiredPermissions: ['tweet.write', 'users.read']
   },
   facebook: {
-    authUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
-    tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
+    authUrl: 'https://www.facebook.com/v22.0/dialog/oauth',
+    tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token',
     scope: ['pages_manage_posts', 'pages_read_engagement', 'pages_show_list'],
     requiredPermissions: ['pages_manage_posts', 'pages_read_engagement']
   },
   instagram: {
-    authUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
-    tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
+    authUrl: 'https://www.facebook.com/v22.0/dialog/oauth',
+    tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token',
     scope: ['instagram_basic', 'instagram_content_publish', 'pages_show_list'],
     requiredPermissions: ['instagram_content_publish']
   }
@@ -95,8 +95,8 @@ export const getUserProfile = async (platform: string, accessToken: string): Pro
   const profileUrls = {
     linkedin: 'https://api.linkedin.com/v2/people/~',
     twitter: 'https://api.twitter.com/2/users/me',
-    facebook: 'https://graph.facebook.com/v18.0/me',
-    instagram: 'https://graph.facebook.com/v18.0/me'
+    facebook: 'https://graph.facebook.com/v22.0/me',
+    instagram: 'https://graph.facebook.com/v22.0/me'
   };
 
   const url = profileUrls[platform];

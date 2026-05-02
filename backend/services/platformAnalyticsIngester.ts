@@ -389,7 +389,7 @@ export async function ingestFacebookPost(
 ): Promise<Partial<RawPostMetrics>> {
   try {
     const data = await fetchJsonWithBearer(
-      `https://graph.facebook.com/v18.0/${postId}/insights?metric=post_impressions,post_reach,post_reactions_by_type_total,post_clicks&period=lifetime&access_token=${accessToken}`,
+      `https://graph.facebook.com/v22.0/${postId}/insights?metric=post_impressions,post_reach,post_reactions_by_type_total,post_clicks&period=lifetime&access_token=${accessToken}`,
       accessToken,
     );
     const byName = (name: string) =>
@@ -412,7 +412,7 @@ export async function ingestFacebookGrowth(
 ): Promise<Partial<AccountGrowthMetrics>> {
   try {
     const data = await fetchJsonWithBearer(
-      `https://graph.facebook.com/v18.0/${pageId}?fields=fan_count,followers_count&access_token=${accessToken}`,
+      `https://graph.facebook.com/v22.0/${pageId}?fields=fan_count,followers_count&access_token=${accessToken}`,
       accessToken,
     );
     const followers = data?.fan_count ?? data?.followers_count ?? 0;

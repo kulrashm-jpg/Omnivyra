@@ -110,7 +110,7 @@ export async function publishToFacebook(
 
   try {
     const pageId = account.platform_user_id;
-    const apiUrl = `https://graph.facebook.com/v18.0/${pageId}/feed`;
+    const apiUrl = `https://graph.facebook.com/v22.0/${pageId}/feed`;
 
     // Format content automatically for Facebook
     const formatted = formatContentForPlatform(post.content, 'facebook', {

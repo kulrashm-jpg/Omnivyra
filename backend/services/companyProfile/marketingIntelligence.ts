@@ -1,5 +1,4 @@
 import { runCompletionWithOperation } from '../aiGateway';
-import { filterProfileCompetitorNames } from '../competitorEngineService';
 import type { CompanyProfile } from './types';
 
 export type MarketingIntelligenceDraft = {
@@ -10,7 +9,6 @@ export type MarketingIntelligenceDraft = {
   brand_positioning: string;
   competitive_advantages: string;
   growth_priorities: string;
-  competitors: string[];
 };
 
 const EMPTY_DRAFT: MarketingIntelligenceDraft = {
@@ -21,36 +19,10 @@ const EMPTY_DRAFT: MarketingIntelligenceDraft = {
   brand_positioning: '',
   competitive_advantages: '',
   growth_priorities: '',
-  competitors: [],
 };
 
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function normalizeCompetitorList(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return Array.from(
-      new Set(
-        value
-          .map((item) => cleanText(item))
-          .filter(Boolean),
-      ),
-    ).slice(0, 8);
-  }
-
-  if (typeof value === 'string') {
-    return Array.from(
-      new Set(
-        value
-          .split(/[\n,;]+/)
-          .map((item) => item.trim())
-          .filter(Boolean),
-      ),
-    ).slice(0, 8);
-  }
-
-  return [];
 }
 
 export async function generateMarketingIntelligenceDraft(
@@ -60,7 +32,7 @@ export async function generateMarketingIntelligenceDraft(
   if (!companyId) return EMPTY_DRAFT;
 
   const systemPrompt =
-    'You are a marketing intelligence analyst. Given a company profile, produce structured marketing intelligence and competitor suggestions.\n\n' +
+    'You are a marketing intelligence analyst. Given a company profile, produce structured marketing intelligence.\n\n' +
     'Return JSON only with exactly these keys:\n' +
     '- marketing_channels: string (1-3 sentences, empty string if unclear)\n' +
     '- content_strategy: string (1-3 sentences, empty string if unclear)\n' +
@@ -68,13 +40,11 @@ export async function generateMarketingIntelligenceDraft(
     '- key_messages: string (1-3 sentences, empty string if unclear)\n' +
     '- brand_positioning: string (1-3 sentences, empty string if unclear)\n' +
     '- competitive_advantages: string (1-3 sentences, empty string if unclear)\n' +
-    '- growth_priorities: string (1-3 sentences, empty string if unclear)\n' +
-    '- competitors: string[] (up to 5 realistic competitor names, empty array if unclear)\n\n' +
+    '- growth_priorities: string (1-3 sentences, empty string if unclear)\n\n' +
     'Rules:\n' +
     '1. Prefer specific, practical phrasing over generic filler.\n' +
     '2. Do not hallucinate niche capabilities.\n' +
-    '3. Competitors should be realistic alternatives a buyer might evaluate.\n' +
-    '4. If confidence is weak, return fewer competitors rather than weak guesses.';
+    '3. Do not generate or infer competitors here. Competitor discovery is handled only by the competitor engine.';
 
   try {
     const result = await runCompletionWithOperation({
@@ -92,8 +62,6 @@ export async function generateMarketingIntelligenceDraft(
 
     const parsed = JSON.parse(result.output?.trim() || '{}') as Record<string, unknown>;
 
-    const competitorSuggestions = normalizeCompetitorList(parsed.competitors);
-
     return {
       marketing_channels: cleanText(parsed.marketing_channels),
       content_strategy: cleanText(parsed.content_strategy),
@@ -102,7 +70,6 @@ export async function generateMarketingIntelligenceDraft(
       brand_positioning: cleanText(parsed.brand_positioning),
       competitive_advantages: cleanText(parsed.competitive_advantages),
       growth_priorities: cleanText(parsed.growth_priorities),
-      competitors: filterProfileCompetitorNames(profile, competitorSuggestions),
     };
   } catch {
     return EMPTY_DRAFT;

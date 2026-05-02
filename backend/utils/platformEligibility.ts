@@ -18,6 +18,7 @@ const PLATFORM_URL_KEYS: Record<string, keyof CompanyProfile> = {
   tiktok: 'tiktok_url',
   reddit: 'reddit_url',
   pinterest: 'pinterest_url',
+  whatsapp: 'whatsapp_url',
 };
 
 /**
@@ -70,6 +71,7 @@ const PLATFORM_PRIORITY_ORDER = [
   'tiktok',
   'reddit',
   'pinterest',
+  'whatsapp',
 ];
 
 export function sortPlatformsByPriority(platforms: string[]): string[] {
@@ -88,7 +90,7 @@ export function sortPlatformsByPriority(platforms: string[]): string[] {
  * Used for multi-platform posting eligibility.
  */
 export const CONTENT_PLATFORM_AFFINITY: Record<string, string[]> = {
-  post:        ['linkedin', 'facebook', 'instagram', 'x', 'reddit'],
+  post:        ['linkedin', 'facebook', 'instagram', 'x', 'reddit', 'whatsapp'],
   tweet:       ['x', 'twitter', 'linkedin', 'facebook'],
   feed_post:   ['instagram', 'facebook', 'linkedin'],
   article:     ['linkedin', 'facebook', 'medium', 'devto', 'github'],

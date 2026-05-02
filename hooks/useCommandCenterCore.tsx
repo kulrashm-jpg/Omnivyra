@@ -126,7 +126,7 @@ export function useCommandCenter() {
         setProfileStatus({
           missingSections: profileData?.completeness?.missing_sections ?? null,
           score: typeof profileData?.overall_profile_completion === 'number' ? profileData.overall_profile_completion : null,
-          connectedPlatforms: [profileData?.profile?.linkedin_url ? 'LinkedIn' : null, profileData?.profile?.facebook_url ? 'Facebook' : null, profileData?.profile?.instagram_url ? 'Instagram' : null, profileData?.profile?.x_url ? 'X' : null, profileData?.profile?.youtube_url ? 'YouTube' : null, profileData?.profile?.tiktok_url ? 'TikTok' : null, profileData?.profile?.reddit_url ? 'Reddit' : null].filter(Boolean),
+          connectedPlatforms: [profileData?.profile?.linkedin_url ? 'LinkedIn' : null, profileData?.profile?.facebook_url ? 'Facebook' : null, profileData?.profile?.instagram_url ? 'Instagram' : null, profileData?.profile?.x_url ? 'X' : null, profileData?.profile?.youtube_url ? 'YouTube' : null, profileData?.profile?.tiktok_url ? 'TikTok' : null, profileData?.profile?.reddit_url ? 'Reddit' : null, profileData?.profile?.pinterest_url ? 'Pinterest' : null, profileData?.profile?.whatsapp_url ? 'WhatsApp' : null].filter(Boolean),
           configuredApis,
         });
       } else {

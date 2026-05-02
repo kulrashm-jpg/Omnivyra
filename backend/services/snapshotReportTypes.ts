@@ -2,6 +2,7 @@ import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ReportReadinessResult } from './reportReadinessService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import type { CompetitorIntelligenceResult } from './reportCompetitorIntelligenceService';
+import type { CompetitiveSnapshotReport } from './reportCompetitorStrategyService';
 import type { buildPublicDomainAuditDecisions } from './publicDomainAuditService';
 import type { PriorityType } from './actionPriorityService';
 import type { buildReportScoreModel } from './reportScoreModelService';
@@ -277,6 +278,7 @@ export interface SnapshotReport {
     competitive_position: 'leader' | 'competitive' | 'lagging';
     confidence: 'high' | 'medium' | 'low';
   } | null;
+  competitive_snapshot: CompetitiveSnapshotReport;
   visual_intelligence: {
     seo_capability_radar: {
       technical_seo_score: number | null;

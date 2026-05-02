@@ -15,6 +15,20 @@
  */
 
 export async function register() {
+  // ── Fail-fast: VERIFICATION_SECRET must be set before serving requests ──
+  // Domain-ownership tokens are HMAC'd with this secret. If it's missing the
+  // first INSERT or verify call would 500 mid-request — louder to crash now.
+  try {
+    const { getVerificationSecret } = await import('./backend/services/verificationSecret');
+    getVerificationSecret();
+  } catch (err) {
+    console.error('VERIFICATION_SECRET_MISSING', {
+      message: (err as Error)?.message ?? String(err),
+    });
+    // Hard exit — Next.js' supervisor will restart and surface the failure.
+    process.exit(1);
+  }
+
   const monitoringFlag = process.env.ENABLE_REDIS_USAGE_MONITORING;
   const isProduction =
     process.env.OMNIVYRA_ENV === 'production' ||

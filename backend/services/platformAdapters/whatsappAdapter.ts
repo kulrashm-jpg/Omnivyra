@@ -2,7 +2,7 @@
  * WhatsApp Business Platform Adapter
  *
  * Implements IPlatformAdapter for WhatsApp Business API.
- * Uses Facebook Graph API: https://graph.facebook.com/v18.0
+ * Uses Facebook Graph API: https://graph.facebook.com/v22.0
  */
 
 import type {
@@ -15,7 +15,7 @@ import type {
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
 
-const WHATSAPP_API = 'https://graph.facebook.com/v18.0';
+const WHATSAPP_API = 'https://graph.facebook.com/v22.0';
 
 export const whatsappAdapter: IPlatformAdapter = {
   platformKey: 'whatsapp',

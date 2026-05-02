@@ -5,6 +5,7 @@ import { createAndSendInvitation } from '../../../backend/services/invitationSer
 import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
+import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
 
 const VALID_ROLES = new Set([
   'COMPANY_ADMIN',
@@ -98,6 +99,14 @@ async function handler(
       role,
       invitedBy: user.id,
       idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+    });
+
+    // Soft-enforcement signal — non-blocking log when a company-admin issues
+    // an invitation for a company whose domain is not yet verified.
+    void logDomainUnverifiedUsageForCompany({
+      company_id: companyId,
+      operation:  'admin_invite_user',
+      metadata:   { invitationId: invitation.id, role, invited_by: user.id },
     });
 
     return res.status(201).json({ invitationId: invitation.id });

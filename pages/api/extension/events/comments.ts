@@ -102,6 +102,14 @@ function normalizeIso(v: unknown): string | null {
   return new Date(parsed).toISOString();
 }
 
+function firstText(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return null;
+}
+
 function isSyncValidationError(err: unknown): boolean {
   const message = (err as Error)?.message || '';
   return /\b(required|must be|parent_id not found)\b/i.test(message);
@@ -212,8 +220,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── Messages (one per comment) ────────────────────────────────────────
     let messagesUpserted = 0;
+    let duplicatesUpdated = 0;
     let duplicatesRejected = 0;
     const insertedMessageIdByPlatformId = new Map<string, string>();
+    const touchedThreadIds = new Set<string>();
     const sortedComments = [...incomingComments].sort((a, b) => {
       const aParent = Boolean(a.parent_id ?? a.parent_comment_urn);
       const bParent = Boolean(b.parent_id ?? b.parent_comment_urn);
@@ -225,17 +235,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const commentUrn = (c.platform_message_id || c.comment_urn || '').toString().trim();
       const content = (c.content ?? '').toString();
       const parentId = (c.parent_id ?? c.parent_comment_urn ?? null) as string | null;
+      const scrapedAt = normalizeIso(c.scraped_at)
+        ?? normalizeIso(c.normalized_time)
+        ?? normalizeIso(c.created_at)
+        ?? new Date().toISOString();
+      const normalizedTime = firstText(c.normalized_time, c.created_at);
+      const timestampConfidence = firstText(c.timestamp_confidence)
+        ?? (normalizeIso(normalizedTime) ? null : 'low');
+      const rawTime = firstText(c.raw_time, c.normalized_time, c.created_at, scrapedAt);
+      const actorId = firstText(
+        c.actor_id,
+        c.author_handle,
+        c.author_name,
+        c.author_self ? `self:${organizationId}` : null,
+        commentUrn,
+      );
       const syncRecord = validateSyncRecord({
         platform_message_id: commentUrn,
         thread_id: c.thread_id,
         parent_id: parentId,
         content,
         actor_type: c.actor_type ?? (c.author_self ? 'company' : 'user'),
-        actor_id: c.actor_id ?? c.author_handle ?? c.author_name,
-        raw_time: c.raw_time,
-        normalized_time: c.normalized_time ?? c.created_at,
-        scraped_at: c.scraped_at,
-        timestamp_confidence: c.timestamp_confidence,
+        actor_id: actorId,
+        raw_time: rawTime,
+        normalized_time: normalizedTime,
+        scraped_at: scrapedAt,
+        timestamp_confidence: timestampConfidence,
         source: c.source ?? 'platform_sync',
       });
       if (!postUrn) throw new Error('post_urn required');
@@ -268,6 +293,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
       if (!threadUuid) continue;
+      touchedThreadIds.add(threadUuid);
 
       const normalizedComment = normalizeScrapedMessageContent({
         content: syncRecord.content,
@@ -341,16 +367,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .single();
       if (insertErr) {
         if ((insertErr as { code?: string }).code === '23505') {
-          const { data: existingRow } = await supabase
+          const { data: updatedRow, error: updateErr } = await supabase
             .from('engagement_messages')
-            .select('id')
+            .update(row)
             .eq('platform', platform)
             .eq('platform_message_id', syncRecord.platform_message_id)
+            .eq('thread_id', threadUuid)
+            .select('id')
             .maybeSingle();
-          if (existingRow?.id) {
-            insertedMessageIdByPlatformId.set(syncRecord.platform_message_id, existingRow.id as string);
+          if (updateErr) {
+            console.warn('[extension/events/comments] duplicate message refresh failed:', updateErr.message);
+            duplicatesRejected += 1;
+            continue;
           }
-          duplicatesRejected += 1;
+          if (updatedRow?.id) {
+            insertedMessageIdByPlatformId.set(syncRecord.platform_message_id, updatedRow.id as string);
+          }
+          duplicatesUpdated += 1;
           continue;
         }
         console.warn('[extension/events/comments] message insert failed:', insertErr.message);
@@ -362,11 +395,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       messagesUpserted += 1;
     }
 
+    if (touchedThreadIds.size > 0) {
+      await supabase
+        .from('engagement_threads')
+        .update({ updated_at: new Date().toISOString() })
+        .in('id', Array.from(touchedThreadIds));
+    }
+
     return res.status(200).json({
       success: true,
       platform,
       threads_upserted: threadsUpserted,
       messages_upserted: messagesUpserted,
+      duplicates_updated: duplicatesUpdated,
       duplicates_rejected: duplicatesRejected,
     });
   } catch (err) {

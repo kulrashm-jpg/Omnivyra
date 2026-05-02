@@ -45,13 +45,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
 import { supabase } from '@/backend/db/supabaseClient';
+import { config } from '@/config';
 import {
   isExtensionDmPlatform,
   normalizeExtensionPlatform,
   normalizeScrapedMessageContent,
   resolvePlatformUserId,
 } from '@/lib/engagement/extensionIngestion';
+import { isActionableDmPreview, isLinkedInMailboxSelfSender } from '@/lib/engagement/messageRoles';
 import { validateSyncRecord } from '@/lib/engagement/syncIngestion';
+import { parseMessageDateMs } from '@/lib/engagement/messageTime';
 
 type IncomingThread = {
   platform_thread_id?: string;
@@ -108,9 +111,55 @@ function normalizeIso(v: unknown): string | null {
   return new Date(parsed).toISOString();
 }
 
+function firstText(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return null;
+}
+
 function isSyncValidationError(err: unknown): boolean {
   const message = (err as Error)?.message || '';
   return /\b(required|must be)\b/i.test(message);
+}
+
+function normalizeComparableText(value: string | null | undefined): string | null {
+  const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isTerminalOutboundStatus(status: string | null | undefined): boolean {
+  const normalized = (status ?? '').trim().toLowerCase();
+  return Boolean(normalized) && ![
+    'failed',
+    'blocked',
+    'skipped',
+    'cancelled',
+    'canceled',
+    'rejected',
+    'expired',
+  ].includes(normalized);
+}
+
+function actionMatchesScrapedMessage(input: {
+  actionText: string | null | undefined;
+  actionTime: string | null | undefined;
+  messageText: string | null | undefined;
+  observedAt: string | null | undefined;
+}): boolean {
+  const actionText = normalizeComparableText(input.actionText);
+  const messageText = normalizeComparableText(input.messageText);
+  if (!actionText || !messageText || actionText !== messageText) return false;
+
+  const actionMs = parseMessageDateMs(input.actionTime);
+  const observedMs = parseMessageDateMs(input.observedAt);
+  if (actionMs === null || observedMs === null) return true;
+
+  const toleranceBeforeActionMs = 5 * 60 * 1000;
+  const maxScrapeDelayMs = 7 * 24 * 60 * 60 * 1000;
+  return observedMs >= actionMs - toleranceBeforeActionMs
+    && observedMs <= actionMs + maxScrapeDelayMs;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -132,7 +181,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const incomingThreads = Array.isArray(body.threads) ? body.threads : [];
   const incomingMessages = Array.isArray(body.messages) ? body.messages : [];
   if (incomingThreads.length === 0 && incomingMessages.length === 0) {
-    return res.status(200).json({ success: true, threads_upserted: 0, messages_upserted: 0 });
+    return res.status(200).json({
+      success: true,
+      threads_upserted: 0,
+      messages_upserted: 0,
+      duplicates_updated: 0,
+      duplicates_rejected: 0,
+    });
   }
 
   try {
@@ -197,7 +252,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const m of incomingMessages) {
       // Self messages don't need an author row — they're the user, not a
       // counterparty. Skipping keeps the engagement_authors table tidy.
-      if (normalizeScrapedMessageContent({ content: m.content, sender_self: m.sender_self }).isSelf) continue;
+      if (normalizeScrapedMessageContent({
+        platform,
+        platform_message_id: m.platform_message_id,
+        content: m.content,
+        sender_self: m.sender_self,
+        sender_username: m.sender_username,
+        sender_profile_url: m.sender_profile_url,
+      }).isSelf) continue;
       collectAuthor(m.sender_profile_url, m.sender_username, m.sender_name);
     }
 
@@ -324,23 +386,173 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // ── Messages upsert ────────────────────────────────────────────────────
+    const platformThreadIdsWithDetailedMessages = new Set(
+      incomingMessages
+        .map((m) => (m.platform_thread_id || m.thread_id || '').toString().trim())
+        .filter(Boolean)
+    );
+    const messageInputs: IncomingMessage[] = [...incomingMessages];
+    const threadUuidsForPreview = Object.values(threadIdByPlatformThread);
+    const latestDetailedMessageTimeByThread = new Map<string, number>();
+    if (threadUuidsForPreview.length > 0) {
+      const { data: existingMessageRows } = await supabase
+        .from('engagement_messages')
+        .select('thread_id, platform_message_id, platform_created_at, created_at')
+        .in('thread_id', threadUuidsForPreview)
+        .limit(5000);
+      for (const row of existingMessageRows ?? []) {
+        const r = row as {
+          thread_id: string | null;
+          platform_message_id: string | null;
+          platform_created_at?: string | null;
+          created_at?: string | null;
+        };
+        if (!r.thread_id || !r.platform_message_id || r.platform_message_id.startsWith('preview:')) {
+          continue;
+        }
+        const messageMs = Date.parse(r.platform_created_at ?? r.created_at ?? '');
+        if (!Number.isFinite(messageMs)) continue;
+        const currentMs = latestDetailedMessageTimeByThread.get(r.thread_id) ?? 0;
+        if (messageMs > currentMs) {
+          latestDetailedMessageTimeByThread.set(r.thread_id, messageMs);
+        }
+      }
+    }
+    for (const t of incomingThreads) {
+      const platformThreadId = (t.platform_thread_id || '').toString().trim();
+      const preview = (t.last_message_preview || '').toString().trim();
+      const threadUuid = threadIdByPlatformThread[platformThreadId];
+      if (!platformThreadId || !preview || !threadUuid) continue;
+      if (!isActionableDmPreview(preview)) continue;
+      if (platformThreadIdsWithDetailedMessages.has(platformThreadId)) continue;
+      const previewTime = normalizeIso(t.last_message_at);
+      if (!previewTime) continue;
+      const previewMs = Date.parse(previewTime);
+      const latestDetailedMs = latestDetailedMessageTimeByThread.get(threadUuid) ?? 0;
+      if (Number.isFinite(previewMs) && latestDetailedMs >= previewMs) continue;
+      messageInputs.push({
+        platform_thread_id: platformThreadId,
+        platform_message_id: `preview:${platformThreadId}`,
+        sender_name: t.last_message_self ? null : t.participant_name ?? null,
+        sender_username: t.last_message_self ? null : t.participant_username ?? null,
+        sender_profile_url: t.last_message_self ? null : t.participant_profile_url ?? null,
+        sender_self: Boolean(t.last_message_self),
+        content: preview,
+        sent_at: previewTime,
+        normalized_time: previewTime,
+        scraped_at: new Date().toISOString(),
+        timestamp_confidence: 'medium',
+        source: 'platform_sync',
+      });
+    }
+
     let messagesUpserted = 0;
+    let duplicatesUpdated = 0;
     let duplicatesRejected = 0;
-    for (const m of incomingMessages) {
+    const touchedThreadIds = new Set<string>();
+    const actionTargetsByPlatformThread = new Map<string, Set<string>>();
+    const addActionTarget = (platformThreadId: string, value: unknown) => {
+      const target = typeof value === 'string' ? value.trim() : '';
+      if (!platformThreadId || !target) return;
+      const set = actionTargetsByPlatformThread.get(platformThreadId) ?? new Set<string>();
+      set.add(target);
+      actionTargetsByPlatformThread.set(platformThreadId, set);
+    };
+    for (const t of incomingThreads) {
+      const platformThreadId = (t.platform_thread_id || '').toString().trim();
+      if (!platformThreadId) continue;
+      addActionTarget(platformThreadId, platformThreadId);
+      addActionTarget(platformThreadId, t.participant_profile_url);
+      addActionTarget(platformThreadId, t.participant_username);
+      addActionTarget(platformThreadId, t.participant_name);
+    }
+    for (const m of messageInputs) {
+      const platformThreadId = (m.platform_thread_id || m.thread_id || '').toString().trim();
+      if (!platformThreadId) continue;
+      addActionTarget(platformThreadId, platformThreadId);
+      addActionTarget(platformThreadId, m.sender_profile_url);
+      addActionTarget(platformThreadId, m.sender_username);
+      addActionTarget(platformThreadId, m.sender_name);
+    }
+    const targetToPlatformThreadIds = new Map<string, string[]>();
+    for (const [platformThreadId, targets] of actionTargetsByPlatformThread.entries()) {
+      for (const target of targets) {
+        targetToPlatformThreadIds.set(target, [
+          ...(targetToPlatformThreadIds.get(target) ?? []),
+          platformThreadId,
+        ]);
+      }
+    }
+    const outboundActionsByPlatformThread = new Map<string, Array<{
+      final_text?: string | null;
+      suggested_text?: string | null;
+      created_at?: string | null;
+      updated_at?: string | null;
+    }>>();
+    const actionTargetIds = Array.from(targetToPlatformThreadIds.keys());
+    if (actionTargetIds.length > 0) {
+      const { data: actions } = await supabase
+        .from('community_ai_actions')
+        .select('target_id, status, action_type, created_at, updated_at, final_text, suggested_text')
+        .eq('organization_id', organizationId)
+        .in('target_id', actionTargetIds)
+        .in('action_type', ['dm', 'reply']);
+      for (const action of actions ?? []) {
+        const row = action as {
+          target_id?: string | null;
+          status?: string | null;
+          final_text?: string | null;
+          suggested_text?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+        };
+        if (!isTerminalOutboundStatus(row.status)) continue;
+        const platformThreadIds = row.target_id ? targetToPlatformThreadIds.get(row.target_id) ?? [] : [];
+        for (const platformThreadId of platformThreadIds) {
+          const list = outboundActionsByPlatformThread.get(platformThreadId) ?? [];
+          list.push(row);
+          outboundActionsByPlatformThread.set(platformThreadId, list);
+        }
+      }
+    }
+    for (const m of messageInputs) {
       const platformThreadId = (m.platform_thread_id || m.thread_id || '').toString().trim();
       const platformMessageId = (m.platform_message_id || '').toString().trim();
       const content = (m.content ?? '').toString();
+      const scrapedAt = normalizeIso(m.scraped_at)
+        ?? normalizeIso(m.normalized_time)
+        ?? normalizeIso(m.sent_at)
+        ?? new Date().toISOString();
+      const normalizedTime = firstText(m.normalized_time, m.sent_at);
+      const timestampConfidence = firstText(m.timestamp_confidence)
+        ?? (normalizeIso(normalizedTime) ? null : 'low');
+      const rawTime = firstText(m.raw_time, m.normalized_time, m.sent_at, scrapedAt);
+      const linkedInMailboxSelf = isLinkedInMailboxSelfSender({
+        platform,
+        platform_message_id: platformMessageId,
+        sender_username: m.sender_username,
+        sender_profile_url: m.sender_profile_url,
+      });
+      const provisionalSelf = Boolean(m.sender_self) || linkedInMailboxSelf;
+      const actorId = firstText(
+        m.actor_id,
+        provisionalSelf ? `self:${organizationId}` : null,
+        m.sender_profile_url,
+        m.sender_username,
+        m.sender_name,
+        platformThreadId,
+      );
       const syncRecord = validateSyncRecord({
         platform_message_id: platformMessageId,
         thread_id: m.thread_id ?? platformThreadId,
         parent_id: m.parent_id ?? null,
         content,
-        actor_type: m.actor_type ?? (m.sender_self ? 'company' : 'user'),
-        actor_id: m.actor_id ?? m.sender_profile_url ?? m.sender_username ?? m.sender_name,
-        raw_time: m.raw_time,
-        normalized_time: m.normalized_time ?? m.sent_at,
-        scraped_at: m.scraped_at,
-        timestamp_confidence: m.timestamp_confidence,
+        actor_type: m.actor_type ?? (provisionalSelf ? 'company' : 'user'),
+        actor_id: actorId,
+        raw_time: rawTime,
+        normalized_time: normalizedTime,
+        scraped_at: scrapedAt,
+        timestamp_confidence: timestampConfidence,
         source: m.source ?? 'platform_sync',
       });
       if (!platformThreadId) throw new Error('thread_id required');
@@ -373,15 +585,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
       if (!threadUuid) continue;
+      touchedThreadIds.add(threadUuid);
 
       // Upsert by (thread_id, platform_message_id). Unique index
       // idx_engagement_messages_platform_thread enforces dedup.
       //
       const normalizedMessage = normalizeScrapedMessageContent({
+        platform,
+        platform_message_id: syncRecord.platform_message_id,
         content: syncRecord.content,
-        sender_self: m.sender_self,
+        sender_self: provisionalSelf,
+        sender_username: m.sender_username,
+        sender_profile_url: m.sender_profile_url,
       });
-      const isSelf = normalizedMessage.isSelf;
+      const actionMatchedSelf = (outboundActionsByPlatformThread.get(platformThreadId) ?? []).some((action) =>
+        actionMatchesScrapedMessage({
+          actionText: action.final_text ?? action.suggested_text ?? null,
+          actionTime: action.updated_at ?? action.created_at ?? null,
+          messageText: normalizedMessage.content,
+          observedAt: syncRecord.scraped_at ?? syncRecord.normalized_time,
+        })
+      );
+      const isSelf = normalizedMessage.isSelf || actionMatchedSelf;
 
       // Resolve author_id for the counterparty. Self messages keep
       // author_id=null since "self" isn't a counterparty.
@@ -419,6 +644,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           sender_username: m.sender_username ?? null,
           sender_profile_url: m.sender_profile_url ?? null,
           sender_self: isSelf,
+          author_self: isSelf,
+          self_inferred_from_linkedin_mailbox: linkedInMailboxSelf || undefined,
+          self_inferred_from_action: actionMatchedSelf || undefined,
           you_prefix_detected: normalizedMessage.prefixDetected,
           sync_thread_id: syncRecord.thread_id,
           raw_time: syncRecord.raw_time,
@@ -435,7 +663,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .insert(row);
       if (insertErr) {
         if ((insertErr as { code?: string }).code === '23505') {
-          duplicatesRejected += 1;
+          const { error: updateErr } = await supabase
+            .from('engagement_messages')
+            .update(row)
+            .eq('thread_id', threadUuid)
+            .eq('platform_message_id', syncRecord.platform_message_id);
+          if (updateErr) {
+            console.warn('[extension/events/dms] duplicate message refresh failed:', updateErr.message);
+            duplicatesRejected += 1;
+            continue;
+          }
+          duplicatesUpdated += 1;
           continue;
         }
         console.warn('[extension/events/dms] message insert failed:', insertErr.message);
@@ -444,11 +682,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       messagesUpserted += 1;
     }
 
+    if (touchedThreadIds.size > 0) {
+      const nowIso = new Date().toISOString();
+      await supabase
+        .from('engagement_threads')
+        .update({ updated_at: nowIso })
+        .in('id', Array.from(touchedThreadIds));
+    }
+
     return res.status(200).json({
       success: true,
       platform,
       threads_upserted: threadsUpserted,
       messages_upserted: messagesUpserted,
+      duplicates_updated: duplicatesUpdated,
       duplicates_rejected: duplicatesRejected,
     });
   } catch (err) {
@@ -462,7 +709,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       success: false,
       error: e?.message || 'dm sync failed',
       error_class: e?.name || 'Error',
-      stack: process.env.NODE_ENV !== 'production' ? e?.stack?.split('\n').slice(0, 6) : undefined,
+      stack: config.NODE_ENV !== 'production' ? e?.stack?.split('\n').slice(0, 6) : undefined,
     });
   }
 }

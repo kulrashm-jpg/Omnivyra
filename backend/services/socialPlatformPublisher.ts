@@ -64,7 +64,7 @@ const publishToFacebook = async (payload: any, apiConfig: any) => {
   const base = apiConfig.base_url || '';
   const url = base.includes('graph.facebook.com')
     ? base
-    : `https://graph.facebook.com/v18.0/${base}/feed`;
+    : `https://graph.facebook.com/v22.0/${base}/feed`;
 
   const { ok, body } = await fetchJson(url, {
     method: 'POST',

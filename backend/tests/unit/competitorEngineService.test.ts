@@ -5,11 +5,15 @@ import {
   getFinalCompetitors,
   getFinalCompetitorsSync,
   rankCompetitorCandidates,
+  splitRankedCompetitorsForOutput,
 } from '../../services/competitorEngineService';
 import { enrichCompetitorCandidates } from '../../services/competitorEnrichmentService';
+import { buildCompetitorFeedbackMemory } from '../../services/competitorFeedbackService';
 import type { CompanyProfile } from '../../services/companyProfileService';
 import {
-  assertSortedByScoreDesc,
+  assertNoMarketSubstituteCompetitors,
+  assertOnlyMarketSubstituteAlternatives,
+  assertSortedByTierThenScore,
   assertValidCompetitor,
   assertValidCompetitorList,
 } from '../helpers/assertValidCompetitor';
@@ -41,11 +45,14 @@ describe('competitorEngineService', () => {
     const filtered = filterProfileCompetitorNames(drishikProfile, [
       'Optimal Virtual Employee',
       'Wysa',
+      'Woebot Health',
+      'Reflectly',
       'Headspace',
     ]);
 
     expect(filtered).not.toContain('Optimal Virtual Employee');
-    expect(filtered).toEqual(expect.arrayContaining(['Wysa', 'Headspace']));
+    expect(filtered).not.toContain('Headspace');
+    expect(filtered).toEqual(expect.arrayContaining(['Wysa', 'Woebot Health', 'Reflectly']));
   });
 
   it('returns fit signals used by reports and profile paths from the same context', () => {
@@ -90,6 +97,62 @@ describe('competitorEngineService', () => {
     expect(ranked[0]?.problem_overlap).toBeGreaterThanOrEqual(0.65);
     expect(ranked[0]?.icp_overlap).toBeGreaterThanOrEqual(0.55);
     expect(ranked[0]?.final_score).toBeGreaterThan(0.5);
+    expect(ranked[0]?.authority_score).toBeGreaterThan(0);
+    expect(ranked[0]?.authority_signals).toMatchObject({
+      funding_level: expect.any(String),
+      brand_strength: expect.any(String),
+    });
+  });
+
+  it('adds market authority without letting authority override relevance', () => {
+    const wellnessContext = extractCompetitiveContextFromProfile(drishikProfile);
+    const marketingContext = {
+      marketFocus: 'AI marketing automation and growth intelligence',
+      primaryService: 'AI marketing command center for campaign planning and revenue growth',
+      targetCustomer: 'B2B founders, marketers, and growth teams',
+      idealCustomerProfile: 'lean growth teams managing campaigns and customer acquisition',
+      brandPositioning: 'AI-powered marketing operations and growth intelligence platform',
+      geography: 'Global',
+      teamSize: '1-10',
+      foundedYear: '2025',
+      revenueRange: 'Pre-revenue',
+      businessModel: 'B2B SaaS',
+    };
+
+    const hubSpot = evaluateCompetitorCandidate({ name: 'HubSpot', source: 'manual' }, marketingContext);
+    const wysa = evaluateCompetitorCandidate({ name: 'Wysa', source: 'manual' }, wellnessContext);
+    const irrelevantEnterprise = evaluateCompetitorCandidate({ name: 'HubSpot', source: 'manual' }, wellnessContext);
+
+    expect(hubSpot.authority_score).toBeGreaterThan(0.7);
+    expect(hubSpot.authority_signals).toMatchObject({
+      funding_level: 'enterprise',
+      brand_strength: 'high',
+    });
+    expect(wysa.authority_score).toBeLessThan(hubSpot.authority_score);
+    expect(wysa.final_score).toBeGreaterThanOrEqual(0.7);
+    expect(irrelevantEnterprise.authority_score).toBeGreaterThan(0.7);
+    expect(getFinalCompetitorsSync({
+      context: wellnessContext,
+      candidates: [{ name: 'HubSpot', source: 'manual' }],
+    })).toHaveLength(0);
+
+    const marketingFinal = getFinalCompetitorsSync({
+      context: marketingContext,
+      candidates: [
+        { name: 'HubSpot', source: 'manual' },
+        { name: 'Salesforce', source: 'manual' },
+      ],
+      max: 2,
+    });
+    expect(marketingFinal.map((competitor) => competitor.name)).toEqual(expect.arrayContaining(['HubSpot', 'Salesforce']));
+    expect(marketingFinal.every((competitor) => competitor.positioning.threat_level === 'high')).toBe(true);
+
+    const wysaFinal = getFinalCompetitorsSync({
+      context: wellnessContext,
+      candidates: [{ name: 'Wysa', source: 'manual' }],
+    });
+    expect(wysaFinal[0]?.positioning.threat_level).toBe('high');
+    expect(wysaFinal[0]?.positioning.differentiation).toContain('AI clarity engine');
   });
 
   it('keeps irrelevant profile AI competitors below the acceptance threshold', () => {
@@ -148,7 +211,52 @@ describe('competitorEngineService', () => {
     expect(ranked[0]?.enrichment_confidence_score).toBeGreaterThanOrEqual(0.8);
     expect(ranked.some((competitor) => competitor.name === 'Wysa')).toBe(true);
     assertValidCompetitor(ranked[0] as any);
-    assertSortedByScoreDesc(ranked as any[]);
+    assertSortedByTierThenScore(ranked as any[]);
+  });
+
+  it('deduplicates legal-name variants before final output and keeps the strongest enriched entity', () => {
+    const context = extractCompetitiveContextFromProfile(drishikProfile);
+    const ranked = getFinalCompetitorsSync({
+      context,
+      candidates: [
+        { name: 'Wysa Private Limited', source: 'manual' },
+        { name: 'Wysa', source: 'manual' },
+        { name: 'Woebot Health Inc', source: 'manual', domain: 'woebothealth.com' },
+        { name: 'Woebot Health', source: 'manual' },
+        { name: 'Reflectly', source: 'manual' },
+      ],
+      max: 6,
+    });
+
+    expect(ranked.map((competitor) => competitor.name)).toEqual(['Wysa', 'Woebot Health', 'Reflectly']);
+    assertValidCompetitorList(ranked as any[]);
+    assertSortedByTierThenScore(ranked as any[]);
+  });
+
+  it('enforces hard relevance, category, authority-mismatch, confidence, and max-count limits', () => {
+    const context = extractCompetitiveContextFromProfile(drishikProfile);
+    const ranked = getFinalCompetitorsSync({
+      context,
+      candidates: [
+        { name: 'Wysa', source: 'manual' },
+        { name: 'Woebot Health', source: 'manual' },
+        { name: 'Reflectly', source: 'manual' },
+        { name: 'Replika', source: 'manual' },
+        { name: 'Headspace', source: 'manual' },
+        { name: 'Calm', source: 'manual' },
+        { name: 'BetterHelp', source: 'manual' },
+        { name: 'HubSpot', source: 'manual' },
+        { name: 'Optimal Virtual Employee', source: 'manual' },
+      ],
+      max: 10,
+    });
+    const names = ranked.map((competitor) => competitor.name);
+
+    expect(ranked.length).toBeLessThanOrEqual(6);
+    expect(names).toEqual(expect.arrayContaining(['Wysa', 'Woebot Health', 'Reflectly']));
+    expect(names).not.toEqual(expect.arrayContaining(['Replika', 'Headspace', 'Calm', 'BetterHelp', 'HubSpot', 'Optimal Virtual Employee']));
+    assertValidCompetitorList(ranked as any[]);
+    assertSortedByTierThenScore(ranked as any[]);
   });
 
   it('revalidates cached competitors by re-enriching and re-scoring before reuse', async () => {
@@ -208,6 +316,8 @@ describe('competitorEngineService', () => {
       context,
       candidates: [
         { name: 'Wysa', source: 'manual' },
+        { name: 'Woebot Health', source: 'manual' },
+        { name: 'Reflectly', source: 'manual' },
         { name: 'Replika', source: 'manual' },
         { name: 'Headspace', source: 'manual' },
         { name: 'Calm', source: 'manual' },
@@ -220,12 +330,182 @@ describe('competitorEngineService', () => {
     const byName = new Map(ranked.map((competitor) => [competitor.name, competitor]));
 
     expect(byName.get('Wysa')).toMatchObject({ category: 'mental_wellness_ai', tier: 'Tier 1' });
-    expect(byName.get('Replika')).toMatchObject({ category: 'ai_companion', tier: 'Tier 2' });
-    expect(byName.get('Headspace')).toMatchObject({ category: 'meditation_mindfulness', tier: 'Tier 3' });
-    expect(byName.get('Calm')).toMatchObject({ category: 'meditation_mindfulness', tier: 'Tier 3' });
+    expect(byName.get('Woebot Health')).toMatchObject({ category: 'mental_wellness_ai', tier: 'Tier 1' });
+    expect(byName.get('Reflectly')).toMatchObject({ category: 'journaling_self_reflection', tier: 'Tier 2' });
+    expect(byName.has('Replika')).toBe(false);
+    expect(byName.has('Headspace')).toBe(false);
+    expect(byName.has('Calm')).toBe(false);
     expect(byName.has('Optimal Virtual Employee')).toBe(false);
     expect(byName.get('Wysa')?.tags).toEqual(expect.arrayContaining(['chatbot']));
     assertValidCompetitorList(ranked as any[]);
-    assertSortedByScoreDesc(ranked as any[]);
+    assertSortedByTierThenScore(ranked as any[]);
+  });
+
+  it('adds professional and category substitutes when no named competitor reaches 90', () => {
+    const context = extractCompetitiveContextFromProfile(drishikProfile);
+    const ranked = getFinalCompetitorsSync({
+      context,
+      candidates: [
+        { name: 'Wysa', source: 'profile_ai' },
+        { name: 'Woebot Health', source: 'profile_ai' },
+        { name: 'Reflectly', source: 'profile_ai' },
+      ],
+      max: 6,
+      includeMarketSubstitutes: true,
+    });
+    const names = ranked.map((competitor) => competitor.name);
+
+    expect(ranked.some((competitor) => competitor.relevance_score >= 90 && competitor.source !== 'market_substitute')).toBe(false);
+    expect(names).toEqual(expect.arrayContaining([
+      'Wysa',
+      'Woebot Health',
+      'Reflectly',
+      'Life coaches and clarity consultants',
+    ]));
+    expect(ranked.find((competitor) => competitor.name === 'Life coaches and clarity consultants')).toMatchObject({
+      source: 'market_substitute',
+      category: 'coaching_consulting',
+      tier: 'Tier 2',
+    });
+    const split = splitRankedCompetitorsForOutput(ranked, 3, 3);
+    expect(split.competitors.map((competitor) => competitor.name)).toEqual(expect.arrayContaining([
+      'Wysa',
+      'Woebot Health',
+      'Reflectly',
+    ]));
+    assertNoMarketSubstituteCompetitors(split.competitors as any[]);
+    expect(split.market_alternatives).toHaveLength(3);
+    assertOnlyMarketSubstituteAlternatives(split.market_alternatives as any[]);
+    assertValidCompetitorList(ranked as any[]);
+    assertSortedByTierThenScore(ranked as any[]);
+  });
+
+  it('suppresses competitors rejected by company feedback before final output', () => {
+    const context = extractCompetitiveContextFromProfile(drishikProfile);
+    const feedbackMemory = buildCompetitorFeedbackMemory([
+      {
+        company_id: 'drishik',
+        competitor_name: 'Wysa',
+        category: 'mental_wellness_ai',
+        feedback_type: 'incorrect',
+        created_at: '2026-05-01T00:00:00.000Z',
+      },
+    ], {
+      companyId: 'drishik',
+      categories: ['mental_wellness_ai'],
+    });
+
+    const ranked = getFinalCompetitorsSync({
+      context,
+      feedbackMemory,
+      candidates: [
+        { name: 'Wysa', source: 'manual' },
+        { name: 'Woebot Health', source: 'manual' },
+        { name: 'Reflectly', source: 'manual' },
+      ],
+    });
+
+    expect(ranked.map((competitor) => competitor.name)).not.toContain('Wysa');
+    expect(ranked.map((competitor) => competitor.name)).toEqual(expect.arrayContaining(['Woebot Health', 'Reflectly']));
+    assertValidCompetitorList(ranked as any[]);
+  });
+
+  it('boosts confirmed competitors without bypassing hard validation', () => {
+    const context = extractCompetitiveContextFromProfile(drishikProfile);
+    const base = getFinalCompetitorsSync({
+      context,
+      candidates: [{ name: 'Wysa', source: 'manual' }],
+    })[0];
+    const feedbackMemory = buildCompetitorFeedbackMemory([
+      {
+        company_id: 'drishik',
+        competitor_name: 'Wysa',
+        category: 'mental_wellness_ai',
+        feedback_type: 'correct',
+        created_at: '2026-05-01T00:00:00.000Z',
+      },
+    ], {
+      companyId: 'drishik',
+      categories: ['mental_wellness_ai'],
+    });
+    const boosted = getFinalCompetitorsSync({
+      context,
+      feedbackMemory,
+      candidates: [{ name: 'Wysa', source: 'manual' }],
+    })[0];
+
+    assertValidCompetitor(boosted as any);
+    expect(boosted?.final_score).toBeGreaterThan(base?.final_score ?? 0);
+    expect(boosted?.relevance_score).toBeGreaterThan(base?.relevance_score ?? 0);
+    expect(boosted?.rationale).toContain('Feedback learning');
+  });
+
+  it('revalidates missing competitor feedback through enrichment and scoring before inclusion', () => {
+    const context = extractCompetitiveContextFromProfile(drishikProfile);
+    const feedbackMemory = buildCompetitorFeedbackMemory([
+      {
+        company_id: 'drishik',
+        competitor_name: 'Woebot Health',
+        category: 'mental_wellness_ai',
+        feedback_type: 'missing',
+        created_at: '2026-05-01T00:00:00.000Z',
+      },
+    ], {
+      companyId: 'drishik',
+      categories: ['mental_wellness_ai'],
+    });
+
+    const ranked = getFinalCompetitorsSync({
+      context,
+      feedbackMemory,
+      candidates: [{ name: 'Wysa', source: 'manual' }],
+      max: 3,
+    });
+
+    expect(ranked.map((competitor) => competitor.name)).toEqual(expect.arrayContaining(['Wysa', 'Woebot Health']));
+    assertValidCompetitorList(ranked as any[]);
+  });
+
+  it('applies category-level rejection memory across companies', () => {
+    const context = extractCompetitiveContextFromProfile(drishikProfile);
+    const feedbackMemory = buildCompetitorFeedbackMemory([
+      {
+        company_id: 'company-a',
+        competitor_name: 'Reflectly',
+        category: 'mental_wellness_ai',
+        feedback_type: 'incorrect',
+        created_at: '2026-05-01T00:00:00.000Z',
+      },
+      {
+        company_id: 'company-b',
+        competitor_name: 'Reflectly',
+        category: 'mental_wellness_ai',
+        feedback_type: 'incorrect',
+        created_at: '2026-05-01T00:00:00.000Z',
+      },
+      {
+        company_id: 'company-c',
+        competitor_name: 'Reflectly',
+        category: 'mental_wellness_ai',
+        feedback_type: 'incorrect',
+        created_at: '2026-05-01T00:00:00.000Z',
+      },
+    ], {
+      companyId: 'drishik',
+      categories: ['mental_wellness_ai'],
+    });
+
+    const ranked = getFinalCompetitorsSync({
+      context,
+      feedbackMemory,
+      candidates: [
+        { name: 'Wysa', source: 'manual' },
+        { name: 'Woebot Health', source: 'manual' },
+        { name: 'Reflectly', source: 'manual' },
+      ],
+    });
+
+    expect(ranked.map((competitor) => competitor.name)).not.toContain('Reflectly');
+    expect(ranked.map((competitor) => competitor.name)).toEqual(expect.arrayContaining(['Wysa', 'Woebot Health']));
   });
 });

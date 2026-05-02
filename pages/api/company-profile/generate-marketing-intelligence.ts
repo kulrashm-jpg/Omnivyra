@@ -63,7 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn('MARKETING_INTELLIGENCE_GENERATED audit failed', e);
     }
 
-    return res.status(200).json({ structuredFields, competitors: draft.competitors });
+    return res.status(200).json({ structuredFields });
   } catch (err: any) {
     console.error('Generate marketing intelligence failed:', err);
     return res.status(500).json({

@@ -101,7 +101,7 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
       }
       case 'instagram':
       case 'facebook': {
-        const response = await fetch(`https://graph.facebook.com/v20.0/me?fields=id,name&access_token=${accessToken}`);
+        const response = await fetch(`https://graph.facebook.com/v22.0/me?fields=id,name&access_token=${accessToken}`);
         if (response.ok) {
           const body = await response.json().catch(() => ({}));
           return {

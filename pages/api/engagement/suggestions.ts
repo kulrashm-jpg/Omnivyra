@@ -14,9 +14,9 @@ import { generateReplySuggestions } from '../../../backend/services/engagementAi
 import { supabase } from '../../../backend/db/supabaseClient';
 
 const FALLBACK_SUGGESTIONS = [
-  'Thank you for your message. We appreciate your feedback.',
-  'Thanks for reaching out! Happy to help.',
-  'Great question. Here\'s some context that might help.',
+  { text: 'Thanks for sharing this. Send me the key details and I will take a proper look.', tone: 'accept' },
+  { text: 'Can you share the specific context or next step you have in mind so I respond correctly?', tone: 'clarify' },
+  { text: 'I may not be able to act on this immediately, but send the relevant details and I will review them.', tone: 'defer' },
 ];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -66,17 +66,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const result = await generateReplySuggestions(messageId, organizationId);
-    const replies = result.suggested_replies ?? [];
-    const min3 = Math.max(3, replies.length);
+    const replies = (result.suggested_replies ?? []).filter((reply) =>
+      (reply.text ?? '').toString().trim().length > 0
+    );
     const padded: Array<{ text: string; tone?: string }> = [...replies];
-    while (padded.length < min3) {
-      padded.push({ text: FALLBACK_SUGGESTIONS[padded.length % FALLBACK_SUGGESTIONS.length], tone: 'professional' });
+    while (padded.length < 3) {
+      padded.push(FALLBACK_SUGGESTIONS[padded.length % FALLBACK_SUGGESTIONS.length]);
     }
 
-    const suggestions = padded.slice(0, Math.max(3, padded.length)).map((r, i) => ({
+    const suggestions = padded.slice(0, 3).map((r, i) => ({
       id: `sug-${crypto.randomUUID()}`,
-      text: (r.text ?? '').toString().trim() || FALLBACK_SUGGESTIONS[i % FALLBACK_SUGGESTIONS.length],
-      explanation_tag: r.tone ? ` ${r.tone}` : undefined,
+      text: (r.text ?? '').toString().trim() || FALLBACK_SUGGESTIONS[i % FALLBACK_SUGGESTIONS.length].text,
+      explanation_tag: r.tone ? r.tone.replace(/_/g, ' ') : undefined,
     }));
 
     return res.status(200).json({ suggestions });

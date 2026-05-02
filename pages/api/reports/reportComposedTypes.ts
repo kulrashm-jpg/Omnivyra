@@ -107,8 +107,23 @@ export type ComposedReportData = {
       market_overlap?: number;
       revenue_tier?: 'startup' | 'growth' | 'scale' | 'enterprise';
       product_depth?: number;
+      authority_score?: number;
+      authority_signals?: {
+        traffic_estimate?: string | null;
+        installs?: string | null;
+        reviews?: string | null;
+        funding_level?: 'bootstrap' | 'funded' | 'enterprise';
+        search_visibility?: string | null;
+        brand_strength?: 'low' | 'medium' | 'high';
+      };
       final_score?: number;
       tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
+      positioning?: {
+        strengths_vs_company?: string[];
+        weaknesses_vs_company?: string[];
+        differentiation?: string;
+        threat_level?: 'low' | 'medium' | 'high';
+      };
       enrichment_confidence_score?: number;
       enrichment?: {
         category?: string | null;
@@ -127,10 +142,64 @@ export type ComposedReportData = {
       } | null;
       rationale?: string;
     }>;
+    market_alternatives?: Array<{
+      name?: string;
+      domain?: string | null;
+      classification?: string;
+      source?: string;
+      relevance_score?: number;
+      category?: string;
+      tags?: string[];
+      problem_overlap?: number;
+      icp_overlap?: number;
+      market_overlap?: number;
+      revenue_tier?: 'startup' | 'growth' | 'scale' | 'enterprise';
+      product_depth?: number;
+      authority_score?: number;
+      authority_signals?: {
+        traffic_estimate?: string | null;
+        installs?: string | null;
+        reviews?: string | null;
+        funding_level?: 'bootstrap' | 'funded' | 'enterprise';
+        search_visibility?: string | null;
+        brand_strength?: 'low' | 'medium' | 'high';
+      };
+      final_score?: number;
+      tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
+      positioning?: {
+        strengths_vs_company?: string[];
+        weaknesses_vs_company?: string[];
+        differentiation?: string;
+        threat_level?: 'low' | 'medium' | 'high';
+      };
+      enrichment_confidence_score?: number;
+      enrichment?: {
+        category?: string | null;
+        description?: string | null;
+        icp?: {
+          age_group?: string | null;
+          use_case?: string | null;
+          user_intent?: string | null;
+        };
+        business_model?: string | null;
+        geography?: string | null;
+        product_type?: string | null;
+        scale_signals?: Record<string, unknown>;
+        confidence_score?: number;
+        sources?: string[];
+      } | null;
+      rationale?: string;
+    }>;
+    competitive_summary?: {
+      top_threats?: string[];
+      key_advantage?: string;
+      key_risk?: string;
+      positioning_statement?: string;
+    };
     competitors_by_tier?: {
-      tier_1?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; rationale?: string }>;
-      tier_2?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; rationale?: string }>;
-      tier_3?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; rationale?: string }>;
+      tier_1?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; authority_score?: number; positioning?: { strengths_vs_company?: string[]; weaknesses_vs_company?: string[]; differentiation?: string; threat_level?: 'low' | 'medium' | 'high' }; rationale?: string }>;
+      tier_2?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; authority_score?: number; positioning?: { strengths_vs_company?: string[]; weaknesses_vs_company?: string[]; differentiation?: string; threat_level?: 'low' | 'medium' | 'high' }; rationale?: string }>;
+      tier_3?: Array<{ name?: string; category?: string; tags?: string[]; tier?: string; final_score?: number; authority_score?: number; positioning?: { strengths_vs_company?: string[]; weaknesses_vs_company?: string[]; differentiation?: string; threat_level?: 'low' | 'medium' | 'high' }; rationale?: string }>;
     };
     comparison?: {
       competitors?: Array<{
@@ -425,6 +494,57 @@ export type ComposedReportData = {
     }>;
     competitive_position?: 'leader' | 'competitive' | 'lagging';
     confidence?: 'high' | 'medium' | 'low';
+  } | null;
+  competitive_snapshot?: {
+    competitors?: Array<{
+      name?: string;
+      tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
+      threat_level?: 'low' | 'medium' | 'high';
+      differentiation?: string;
+    }>;
+    competitive_snapshot_summary?: {
+      top_threat?: string;
+      immediate_positioning_angle?: string;
+      action?: string;
+    };
+  };
+  competitive_pressure_analysis?: {
+    competitors?: Array<{
+      name?: string;
+      tier?: 'Tier 1' | 'Tier 2' | 'Tier 3';
+      threat_level?: 'low' | 'medium' | 'high';
+      authority_score?: number;
+      pressure_on?: string[];
+      action?: string;
+    }>;
+    summary?: {
+      highest_pressure?: string;
+      primary_risk?: string;
+      next_action?: string;
+    };
+  } | null;
+  competitive_strategy_map?: {
+    tier_breakdown?: {
+      tier_1?: Array<{ name?: string; tier?: 'Tier 1'; threat_level?: 'low' | 'medium' | 'high'; differentiation?: string }>;
+      tier_2?: Array<{ name?: string; tier?: 'Tier 2'; threat_level?: 'low' | 'medium' | 'high'; differentiation?: string }>;
+      tier_3?: Array<{ name?: string; tier?: 'Tier 3'; threat_level?: 'low' | 'medium' | 'high'; differentiation?: string }>;
+    };
+    opportunity_map?: {
+      whitespace_opportunities?: string[];
+      underexploited_icp_segments?: string[];
+      weak_competitor_areas?: string[];
+    };
+    strategic_actions?: {
+      how_to_beat_tier_1?: string;
+      how_to_differentiate_from_tier_2?: string;
+      how_to_ignore_tier_3?: string;
+    };
+  } | null;
+  strategic_position?: {
+    positioning_statement?: string;
+    primary_battlefield?: string;
+    avoidance_zone?: string;
+    messaging_angle?: string;
   } | null;
   decision_snapshot?: {
     primary_focus_area?: string;

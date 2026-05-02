@@ -184,7 +184,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const result = SUPPORTED_PLATFORMS.map((p) => {
     const acc = accountMap[p.key] ?? null;
     const inactiveAcc = inactiveAccountMap[p.key] ?? null;
-    const connected = !!acc?.access_token;
+    const isThreads = p.key === 'threads';
+    const connected = isThreads ? !!acc : !!acc?.access_token;
     const isExpired = acc?.token_expires_at && acc.token_expires_at < now;
     return {
       platform_key: p.key,

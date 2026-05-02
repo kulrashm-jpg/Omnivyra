@@ -211,13 +211,18 @@ async function fetchGa4EventRows(input: Ga4IngestionInput): Promise<Ga4EventRow[
           endDate: input.endDate ?? 'today',
         },
       ],
+      // GA4 runReport allows at most 9 dimensions per request. Campaign name
+      // is intentionally omitted here — it is already captured by the
+      // session-level report in fetchGa4Rows() and is propagated into
+      // canonical_sessions.source_campaign, so canonical_events can retrieve
+      // it via session_id. Adding sessionCampaignName here would push the
+      // request to 10 dimensions and fail with INVALID_ARGUMENT.
       dimensions: [
         { name: 'dateHourMinute' },
         { name: 'eventName' },
         { name: 'pagePath' },
         { name: 'sessionDefaultChannelGroup' },
         { name: 'sessionMedium' },
-        { name: 'sessionCampaignName' },
         { name: 'country' },
         { name: 'region' },
         { name: 'city' },
@@ -244,11 +249,11 @@ async function fetchGa4EventRows(input: Ga4IngestionInput): Promise<Ga4EventRow[
     pagePath: row.dimensionValues?.[2]?.value ?? '/',
     trafficSource: row.dimensionValues?.[3]?.value ?? 'unknown',
     trafficMedium: row.dimensionValues?.[4]?.value ?? null,
-    campaignName: row.dimensionValues?.[5]?.value ?? null,
-    country: row.dimensionValues?.[6]?.value ?? null,
-    region: row.dimensionValues?.[7]?.value ?? null,
-    city: row.dimensionValues?.[8]?.value ?? null,
-    deviceCategory: row.dimensionValues?.[9]?.value ?? null,
+    campaignName: null,
+    country: row.dimensionValues?.[5]?.value ?? null,
+    region: row.dimensionValues?.[6]?.value ?? null,
+    city: row.dimensionValues?.[7]?.value ?? null,
+    deviceCategory: row.dimensionValues?.[8]?.value ?? null,
     eventCount: row.metricValues?.[0]?.value ?? 0,
     eventValue: row.metricValues?.[1]?.value ?? null,
   }));
@@ -562,27 +567,43 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
     });
 
     const pageUrl = normalizeUrl(new URL(normalizePath(row.pagePath), website).toString());
-    const { error: viewError } = await supabase
+    const viewedAt = new Date(normalizeGaDate(row.sessionDate)).toISOString();
+
+    // The unique index on (company_id, page_url, viewed_at, session_id) is
+    // PARTIAL (WHERE page_url IS NOT NULL), so supabase-js .upsert()'s
+    // onConflict cannot bind to it. Mirror the existence-check pattern used
+    // by upsertSession() above instead of relying on ON CONFLICT.
+    const { data: existingView, error: existingViewError } = await supabase
       .from('canonical_page_views')
-      .upsert({
+      .select('id')
+      .eq('company_id', input.companyId)
+      .eq('page_url', pageUrl)
+      .eq('viewed_at', viewedAt)
+      .eq('session_id', sessionId)
+      .maybeSingle();
+
+    if (existingViewError) {
+      throw new Error(`Failed to check existing GA4 page view: ${existingViewError.message}`);
+    }
+
+    if (!existingView) {
+      const { error: viewError } = await supabase.from('canonical_page_views').insert({
         company_id: input.companyId,
         page_id: pageId,
         page_url: pageUrl,
         session_id: sessionId,
-        viewed_at: new Date(normalizeGaDate(row.sessionDate)).toISOString(),
+        viewed_at: viewedAt,
         view_count: Math.max(1, safeInteger(row.screenPageViews, 1)),
         engagement_time_msec: safeInteger(row.engagementTimeMsec, 0),
         view_metadata: {
           source_medium: row.trafficMedium ?? null,
           campaign_name: row.campaignName ?? null,
         },
-      }, {
-        onConflict: 'company_id,page_url,viewed_at,session_id',
-        ignoreDuplicates: true,
       });
 
-    if (viewError) {
-      throw new Error(`Failed to insert GA4 page view: ${viewError.message}`);
+      if (viewError) {
+        throw new Error(`Failed to insert GA4 page view: ${viewError.message}`);
+      }
     }
 
     sessionsInserted += 1;
@@ -655,9 +676,13 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
       },
     });
 
+    // canonical_events.session_id and canonical_conversions.session_id are
+    // TEXT and have an FK to canonical_sessions.external_session_id (NOT to
+    // canonical_sessions.id). Pass the external key, not the UUID returned
+    // by upsertSession().
     eventRecords.push(buildCanonicalEventRecord({
       companyId: input.companyId,
-      sessionId,
+      sessionId: sessionKey,
       userId,
       pageUrl,
       eventTimestamp,
@@ -666,7 +691,7 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
 
     const conversionRecord = buildCanonicalConversionRecord({
       companyId: input.companyId,
-      sessionId,
+      sessionId: sessionKey,
       userId,
       pageUrl,
       eventTimestamp,

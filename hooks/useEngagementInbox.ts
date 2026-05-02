@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import { ACTIONABLE_INBOX_LOOKBACK_DAYS } from '@/lib/engagement/queueRules';
 
 export type InboxThread = {
   thread_id: string;
@@ -39,16 +40,25 @@ export type InboxThread = {
    *  Cross-checked with direction to avoid mis-classifying inbound replies
    *  that happen to have author_self=true on a self-comment. */
   latest_message_author_self?: boolean;
-  /** True when the user has already triggered a reply/DM action on this
-   *  thread through the engagement pipeline (community_ai_actions row in
-   *  pending/dispatched/executed/sent_unverified state). Lets the
-   *  Needs-Response filter drop the thread the moment Send is clicked,
-   *  before the outgoing message is mirrored back into engagement_messages. */
+  /** True when a completed outbound reply/DM action covers the latest
+   *  captured message. Lets Needs Response hide threads the user already
+   *  handled, while allowing a newer counterparty reply to reopen them. */
+  has_completed_outbound_action?: boolean;
+  /** Legacy API alias for has_completed_outbound_action. */
   has_pending_outbound_action?: boolean;
+  /** Server-side diagnostics stamped with the same shared queue predicates
+   *  the client uses. The UI still filters client-side after platform/user
+   *  filters, but these make audits explicit. */
+  needs_response_eligible?: boolean;
+  people_reaction_eligible?: boolean;
   /** Engagement-author id of the OTHER party on the latest message.
    *  Stable per-person identifier (keyed on LinkedIn profile URL).
    *  Used to collapse legacy-split DM threads in the inbox view. */
   counterparty_author_id?: string | null;
+  /** Stable fallback key for the DM counterparty. Derived from the whole
+   *  conversation (author/profile/username/name/thread) so self-latest
+   *  messages still collapse with older inbound sibling rows. */
+  counterparty_identity_key?: string | null;
   /** Other engagement_threads rows that share this counterparty and got
    *  collapsed into this canonical entry. The conversation pane can
    *  pull messages from these in addition to the canonical thread to
@@ -75,7 +85,6 @@ export type InboxThread = {
 // scrape data lands (DOM scraper throttle is 30 s) and the inbox cost is
 // just one DB read per refresh.
 const REFRESH_INTERVAL_MS = 30 * 1000; // 30 seconds
-const INBOX_LOOKBACK_DAYS = 30;
 const INBOX_FETCH_LIMIT = 500;
 
 export type InboxFilters = {
@@ -116,7 +125,7 @@ export function useEngagementInbox(
     if (!background) setLoading(true);
     setError(null);
 
-    const lookbackStart = new Date(Date.now() - INBOX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const lookbackStart = new Date(Date.now() - ACTIONABLE_INBOX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const params = new URLSearchParams({
       organization_id: organizationId,
       organizationId: organizationId,

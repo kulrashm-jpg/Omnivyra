@@ -66,7 +66,7 @@ async function fetchTwitterComments(accessToken: string, platformPostId: string)
 
 async function fetchFacebookComments(accessToken: string, platformPostId: string): Promise<any> {
   const response = await fetch(
-    `https://graph.facebook.com/v18.0/${platformPostId}/comments`,
+    `https://graph.facebook.com/v22.0/${platformPostId}/comments`,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -82,7 +82,7 @@ async function fetchFacebookComments(accessToken: string, platformPostId: string
 
 async function fetchInstagramComments(accessToken: string, platformPostId: string): Promise<any> {
   const response = await fetch(
-    `https://graph.facebook.com/v18.0/${platformPostId}/comments`,
+    `https://graph.facebook.com/v22.0/${platformPostId}/comments`,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,

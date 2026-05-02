@@ -40,10 +40,10 @@ INSERT INTO platform_registry (
   ('twitter', 'Twitter/X', 'https://api.twitter.com/2', 'oauth', true, true, true, true, true, true, 'social'),
   ('youtube', 'YouTube', 'https://www.googleapis.com/youtube/v3', 'oauth', true, true, true, false, true, true, 'social'),
   ('reddit', 'Reddit', 'https://oauth.reddit.com/api', 'oauth', true, true, true, true, false, true, 'social'),
-  ('facebook', 'Facebook', 'https://graph.facebook.com/v18.0', 'oauth', true, true, true, false, true, true, 'social'),
+  ('facebook', 'Facebook', 'https://graph.facebook.com/v22.0', 'oauth', true, true, true, false, true, true, 'social'),
   ('instagram', 'Instagram', 'https://graph.instagram.com', 'oauth', true, true, true, false, true, true, 'social'),
   ('tiktok', 'TikTok', 'https://open.tiktokapis.com/v2', 'oauth', true, true, true, false, true, true, 'social'),
-  ('whatsapp', 'WhatsApp Business', 'https://graph.facebook.com/v18.0', 'oauth', true, true, false, true, false, true, 'social'),
+  ('whatsapp', 'WhatsApp Business', 'https://graph.facebook.com/v22.0', 'oauth', true, true, false, true, false, true, 'social'),
   ('pinterest', 'Pinterest', 'https://api.pinterest.com/v5', 'oauth', true, false, true, false, false, true, 'social'),
   ('quora', 'Quora', 'https://api.quora.com', 'oauth', true, true, true, true, false, false, 'social')
 ON CONFLICT (platform_key) DO NOTHING;

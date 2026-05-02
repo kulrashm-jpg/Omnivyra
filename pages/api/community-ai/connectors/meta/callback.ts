@@ -3,6 +3,7 @@ import { saveToken } from '../../../../../backend/services/platformTokenService'
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
+import { syncInstagramAndThreadsFromMeta } from '../../../../../backend/services/metaDerivedAccountsService';
 
 /**
  * GET /api/community-ai/connectors/meta/callback
@@ -70,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     // Exchange code for access token
     const tokenResponse = await fetch(
-      `https://graph.facebook.com/v20.0/oauth/access_token?${new URLSearchParams({
+      `https://graph.facebook.com/v22.0/oauth/access_token?${new URLSearchParams({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         redirect_uri: redirectUri,
@@ -97,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let metaUserId: string | null = null;
     let metaName: string | null = null;
     const profileRes = await fetch(
-      `https://graph.facebook.com/v20.0/me?fields=id,name&access_token=${tokenData.access_token}`
+      `https://graph.facebook.com/v22.0/me?fields=id,name&access_token=${tokenData.access_token}`
     );
     if (profileRes.ok) {
       const profile = await profileRes.json();
@@ -121,12 +122,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       saveToken(tenantId, organizationId, 'whatsapp', tokenPayload),
     ]);
 
-    // Dual-write to publishing layer (social_accounts) for facebook + instagram
-    const dualToken = { access_token: tokenData.access_token, refresh_token: tokenData.refresh_token || undefined, expires_at: expiresAt || undefined };
-    await Promise.all([
-      dualWriteSocialAccount({ userId: access.userId, companyId: organizationId, platform: 'facebook',  platformUserId: metaUserId, accountName: metaName, token: dualToken }),
-      dualWriteSocialAccount({ userId: access.userId, companyId: organizationId, platform: 'instagram', platformUserId: metaUserId, accountName: metaName, token: dualToken }),
-    ]);
+    // Dual-write Facebook to publishing layer (social_accounts).
+    // Instagram is intentionally NOT dual-written here — its row needs the IG
+    // Business account ID as platform_user_id (not the FB user ID), and the IG
+    // username as account_name. We call syncInstagramAndThreadsFromMeta below
+    // which queries /me/accounts?fields=instagram_business_account, finds the
+    // real IG account linked to a Page, and inserts/updates with correct values.
+    // Earlier code ran dualWriteSocialAccount for IG with FB data, leaving every
+    // future IG publish call broken (FB user ID isn't a valid IG account ID).
+    const dualToken = {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token || undefined,
+      expires_at: expiresAt || undefined,
+      scope: typeof tokenData.scope === 'string' ? tokenData.scope : undefined,
+    };
+    const grantedScopesList = String(tokenData.scope || '')
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    await dualWriteSocialAccount({
+      userId: access.userId,
+      companyId: organizationId,
+      platform: 'facebook',
+      platformUserId: metaUserId,
+      accountName: metaName,
+      token: dualToken,
+      permissions: grantedScopesList,
+    });
+
+    // Resolve the real Instagram Business account(s) from Pages and create
+    // proper instagram + threads rows. Non-fatal: if the user has no IG-linked
+    // Page, the FB connection still succeeds and we just skip IG/Threads.
+    let derivedThreadsCount = 0;
+    let derivedInstagramCount = 0;
+    try {
+      const syncResult = await syncInstagramAndThreadsFromMeta({
+        userId: access.userId,
+        companyId: organizationId,
+        accessToken: tokenData.access_token,
+        expiresAt: expiresAt ?? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
+        permissions: grantedScopesList,
+      });
+      derivedInstagramCount = syncResult.instagramAccounts.length;
+      derivedThreadsCount = syncResult.threadsAccounts.length;
+    } catch (syncErr: any) {
+      console.warn('[meta/callback] IG/Threads derivation skipped:', syncErr?.message);
+    }
 
     // Audit log
     console.info('[connector_audit]', JSON.stringify({
@@ -136,6 +177,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       action: 'connect',
       meta_user_id: metaUserId,
       meta_name: metaName,
+      derived_instagram_count: derivedInstagramCount,
+      derived_threads_count: derivedThreadsCount,
     }));
 
     return res.redirect(`${redirectTo}?connected=meta&status=success`);

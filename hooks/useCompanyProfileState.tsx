@@ -368,7 +368,7 @@ export function useCompanyProfileState() {
   };
 
   const handleMarketPulseSettingChange = (
-    field: 'business_model',
+    field: 'business_model' | 'provider_type' | 'domain_role' | 'operating_model',
     value: string,
   ) => {
     if (!isEditing) return;
@@ -388,7 +388,7 @@ export function useCompanyProfileState() {
     field:
       | 'primary_operating_markets'
       | 'target_expansion_markets'
-      | 'named_competitors'
+      | 'solution_domains'
       | 'core_offerings'
       | 'growth_priorities'
       | 'partnership_priorities'
@@ -445,6 +445,9 @@ export function useCompanyProfileState() {
   };
 
   const addOtherSocial = () => {
+    if (!isEditing) {
+      setIsEditing(true);
+    }
     updateActiveProfile({
       ...activeProfile,
       other_social_links: [...(activeProfile.other_social_links || []), { label: '', url: '' }],
@@ -460,38 +463,68 @@ export function useCompanyProfileState() {
 
   const handleMissingAnswer = (field: string, values: string[]) => {
     const normalized = field.toLowerCase().replace(/\s+/g, '_');
+    if (normalized.includes('competitor')) {
+      setMissingFieldAnswers((prev) => ({ ...prev, [field]: values }));
+      return;
+    }
     const updated: CompanyProfile = { ...activeProfile };
 
     if (normalized.includes('industry')) {
       updated.industry_list = values;
       updated.industry = values.join(', ');
-    } else if (normalized.includes('category')) {
+    } else if (normalized.includes('category') || normalized.includes('categories')) {
       updated.category_list = values;
       updated.category = values.join(', ');
-    } else if (normalized.includes('geography')) {
+    } else if (
+      normalized.includes('geography') ||
+      normalized.includes('geographic') ||
+      normalized.includes('geographical') ||
+      normalized.includes('location') ||
+      normalized.includes('market_area') ||
+      normalized.includes('served_area')
+    ) {
       updated.geography_list = values;
       updated.geography = values.join(', ');
-    } else if (normalized.includes('competitor')) {
-      updated.competitors_list = values;
-      updated.competitors = values.join(', ');
     } else if (normalized.includes('content_theme')) {
       updated.content_themes_list = values;
       updated.content_themes = values.join(', ');
-    } else if (normalized.includes('product')) {
+    } else if (
+      normalized.includes('product') ||
+      normalized.includes('service') ||
+      normalized.includes('offering')
+    ) {
       updated.products_services_list = values;
       updated.products_services = values.join(', ');
-    } else if (normalized.includes('target_audience')) {
+    } else if (
+      normalized.includes('target_audience') ||
+      normalized.includes('audience') ||
+      normalized.includes('customer') ||
+      normalized.includes('icp') ||
+      normalized.includes('segment')
+    ) {
       updated.target_audience_list = values;
       updated.target_audience = values.join(', ');
-    } else if (normalized.includes('goals')) {
+    } else if (
+      normalized.includes('goals') ||
+      normalized.includes('goal') ||
+      normalized.includes('objective')
+    ) {
       updated.goals_list = values;
       updated.goals = values.join(', ');
-    } else if (normalized.includes('brand_voice')) {
+    } else if (
+      normalized.includes('brand_voice') ||
+      normalized.includes('voice') ||
+      normalized.includes('tone')
+    ) {
       updated.brand_voice_list = values;
       updated.brand_voice = values.join(', ');
     } else if (normalized.includes('company_name')) {
       updated.name = values[0] || updated.name;
-    } else if (normalized.includes('unique_value')) {
+    } else if (
+      normalized.includes('unique_value') ||
+      normalized.includes('value_proposition') ||
+      normalized.includes('differentiator')
+    ) {
       updated.unique_value = values[0] || updated.unique_value;
     }
 
@@ -600,14 +633,56 @@ export function useCompanyProfileState() {
         setErrorMessage('Select a company to continue.');
         return;
       }
+      const resetCompetitorsForLoading = (current: CompanyProfile | null): CompanyProfile | null =>
+        current
+          ? {
+              ...current,
+              competitors: '',
+              competitors_list: [],
+            }
+          : current;
+      setProfile(resetCompetitorsForLoading);
+      setDraftProfile((prev) => ({
+        ...prev,
+        competitors: '',
+        competitors_list: [],
+      }));
+
+      const {
+        competitors: _refineCompetitors,
+        competitors_list: _refineCompetitorsList,
+        report_settings: activeReportSettings,
+        ...activeProfileForRefine
+      } = activeProfile;
+      const refineReportSettings: Record<string, any> | undefined = activeReportSettings
+        ? { ...(activeReportSettings as Record<string, any>) }
+        : undefined;
+      if (refineReportSettings?.default_inputs && typeof refineReportSettings.default_inputs === 'object') {
+        const {
+          competitors: _defaultCompetitors,
+          competitors_list: _defaultCompetitorsList,
+          ...defaultInputs
+        } = refineReportSettings.default_inputs as Record<string, any>;
+        refineReportSettings.default_inputs = defaultInputs;
+      }
+      if (refineReportSettings?.market_pulse && typeof refineReportSettings.market_pulse === 'object') {
+        const {
+          named_competitors: _namedCompetitors,
+          competitor_details: _competitorDetails,
+          competitor_quality: _competitorQuality,
+          market_alternatives: _marketAlternatives,
+          ...marketPulse
+        } = refineReportSettings.market_pulse as Record<string, any>;
+        refineReportSettings.market_pulse = marketPulse;
+      }
       const payload = {
-        ...activeProfile,
+        ...activeProfileForRefine,
+        report_settings: refineReportSettings,
         companyId: companyId || activeProfile.company_id,
         company_id: companyId || activeProfile.company_id,
         industry_list: activeProfile.industry_list ?? splitToList(activeProfile.industry),
         category_list: activeProfile.category_list ?? splitToList(activeProfile.category),
         geography_list: activeProfile.geography_list ?? splitToList(activeProfile.geography),
-        competitors_list: activeProfile.competitors_list ?? splitToList(activeProfile.competitors),
         content_themes_list: activeProfile.content_themes_list ?? splitToList(activeProfile.content_themes),
         products_services_list: activeProfile.products_services_list ?? splitToList(activeProfile.products_services),
         target_audience_list: activeProfile.target_audience_list ?? splitToList(activeProfile.target_audience),
@@ -634,12 +709,16 @@ export function useCompanyProfileState() {
         throw new Error(errorBody?.error || errorBody?.details || 'Failed to refine profile');
       }
       const data = await response.json();
-      setProfile(data.profile || activeProfile);
-      setDraftProfile(data.profile || activeProfile);
-      if (data.profile?.company_id) {
-        setCompanyId(data.profile.company_id);
-        setSelectedCompanyId(data.profile.company_id);
-        console.log('Profile loaded:', data.profile.company_id);
+      const refinedProfileFromAPI = data.profile as CompanyProfile | undefined;
+      if (!refinedProfileFromAPI) {
+        throw new Error('Refine response did not include a profile');
+      }
+      setProfile(refinedProfileFromAPI);
+      setDraftProfile(refinedProfileFromAPI);
+      if (refinedProfileFromAPI.company_id) {
+        setCompanyId(refinedProfileFromAPI.company_id);
+        setSelectedCompanyId(refinedProfileFromAPI.company_id);
+        console.log('Profile loaded:', refinedProfileFromAPI.company_id);
       }
       clearTimers();
       setRefineStep(0);
@@ -1184,18 +1263,9 @@ export function useCompanyProfileState() {
       }
       const data = await response.json();
       const structuredFields = data.structuredFields || {};
-      const competitorList = Array.isArray(data.competitors)
-        ? data.competitors.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
-        : [];
       updateActiveProfile({
         ...activeProfile,
         ...structuredFields,
-        ...(competitorList.length > 0
-          ? {
-              competitors: competitorList.join(', '),
-              competitors_list: competitorList,
-            }
-          : {}),
       });
       setSuccessMessage('Marketing intelligence generated. Review, edit if needed, then click Save Profile to persist and lock.');
     } catch (e) {

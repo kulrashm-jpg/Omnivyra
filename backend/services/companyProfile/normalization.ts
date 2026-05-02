@@ -298,6 +298,8 @@ export const normalizeCompanyProfile = (
       [
         ...normalizeList(profile?.industry),
         ...normalizeList(profile?.category),
+        ...normalizeList(profile?.business_classification?.level_2),
+        ...(profile?.business_classification?.level_3 ?? []),
         ...normalizeList(profile?.content_themes),
       ].filter(Boolean)
     )

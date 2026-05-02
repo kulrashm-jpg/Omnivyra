@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import { compareMessagesAscending } from '@/lib/engagement/messageTime';
 
 export type EngagementMessage = {
   id: string;
@@ -19,6 +20,7 @@ export type EngagementMessage = {
   sentiment_score?: number | null;
   created_at?: string | null;
   platform_created_at?: string | null;
+  display_time_label?: string | null;
   optimistic?: boolean;
   /** Display name of the comment author, sourced from raw_payload.author_name
    *  on the server. Falls back to author_id (UUID) if not captured. Used by
@@ -39,11 +41,19 @@ export type EngagementMessage = {
   /** community_ai_actions.id for the queued action, used by the cancel
    *  button to call /api/engagement/cancel-queued. */
   pending_action_id?: string | null;
+  /** True once the extension has leased/claimed the command. Claimed rows
+   *  cannot be cancelled safely until the lease expires or the extension
+   *  reports a terminal delivery result. */
+  pending_action_claimed?: boolean;
+  pending_action_acknowledged?: boolean;
+  pending_action_lease_expires_at?: string | null;
+  pending_action_lease_expired?: boolean;
 };
 
 // Conversation pane refresh cadence. Mirrors the inbox: 30 s so the
 // reactions/replies on the open thread reflect new scraped data quickly.
 const REFRESH_INTERVAL_MS = 30 * 1000; // 30 seconds
+const VISIBLE_THREAD_MESSAGE_LIMIT = 3;
 
 export function useEngagementMessages(
   organizationId: string,
@@ -151,11 +161,9 @@ export function useEngagementMessages(
     setOptimisticMessages([]);
   }, []);
 
-  const mergedMessages = [...optimisticMessages, ...messages].sort((a, b) => {
-    const ta = new Date(a.platform_created_at ?? a.created_at ?? 0).getTime();
-    const tb = new Date(b.platform_created_at ?? b.created_at ?? 0).getTime();
-    return ta - tb;
-  });
+  const mergedMessages = [...optimisticMessages, ...messages]
+    .sort(compareMessagesAscending)
+    .slice(-VISIBLE_THREAD_MESSAGE_LIMIT);
 
   // Public refresh is a *background* refresh — see useEngagementInbox for
   // the same rationale. Keeps the message list visible across click-driven

@@ -247,6 +247,8 @@ async function fetchCompanyProfileSignals(companyId: string): Promise<CompanyPro
       profile?.youtube_url,
       profile?.tiktok_url,
       profile?.reddit_url,
+      profile?.pinterest_url,
+      profile?.whatsapp_url,
     ]
       .filter((value) => typeof value === 'string' && value.trim().length > 0)
       .length;

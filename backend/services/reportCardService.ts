@@ -563,10 +563,10 @@ export async function generateReportPayload(
   try {
     if (requestedCategory === 'growth') {
       const { composeGrowthReport } = await import('./growthReportService');
-      composed_report = await composeGrowthReport(report.company_id) as unknown as Record<string, unknown>;
+      composed_report = await composeGrowthReport(report.company_id, { resolvedInput }) as unknown as Record<string, unknown>;
     } else if (requestedCategory === 'performance') {
       const { composePerformanceIntelligenceReport } = await import('./performanceReportService');
-      composed_report = await composePerformanceIntelligenceReport(report.company_id) as unknown as Record<string, unknown>;
+      composed_report = await composePerformanceIntelligenceReport(report.company_id, { resolvedInput }) as unknown as Record<string, unknown>;
     } else {
       const { composeSnapshotReport } = await import('./snapshotReportService');
       composed_report = await composeSnapshotReport(report.company_id, {

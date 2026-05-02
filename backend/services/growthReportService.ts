@@ -5,6 +5,14 @@ import {
   type IntelligenceUnitWithConfig,
 } from './intelligenceUnitService';
 import type { PersistedDecisionObject } from './decisionObjectService';
+import type { ResolvedReportInput } from './reportInputResolver';
+import { resolveAnalyticsReportInput } from './analyticsInputResolver';
+import { buildCompetitorIntelligence } from './reportCompetitorIntelligenceService';
+import {
+  buildCompetitiveStrategyMap,
+  type CompetitiveStrategyMap,
+  type StrategicPositionBlock,
+} from './reportCompetitorStrategyService';
 import {
   impactScore,
   rankByImpactConfidence,
@@ -72,8 +80,14 @@ export interface GrowthReport {
     value: null;
     label: null;
   };
+  competitive_strategy_map: CompetitiveStrategyMap | null;
+  strategic_position: StrategicPositionBlock | null;
   sections: GrowthReportSection[];
 }
+
+type GrowthReportOptions = {
+  resolvedInput?: ResolvedReportInput | null;
+};
 
 function toInsight(decision: PersistedDecisionObject): GrowthInsight {
   return {
@@ -135,7 +149,162 @@ function mergeUniqueDecisions(...decisionLists: PersistedDecisionObject[][]): Pe
   return [...byId.values()];
 }
 
-export async function composeGrowthReport(companyId: string): Promise<GrowthReport> {
+async function resolveGrowthInput(companyId: string, resolvedInput?: ResolvedReportInput | null): Promise<ResolvedReportInput | null> {
+  if (resolvedInput) return resolvedInput;
+  try {
+    return await resolveAnalyticsReportInput({
+      companyId,
+      reportCategory: 'growth',
+    });
+  } catch (error) {
+    console.warn('[competitor-strategy][growth-input-resolution-failed]', {
+      company_id: companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+function buildGrowthCompetitorStrategy(params: {
+  decisions: PersistedDecisionObject[];
+  resolvedInput: ResolvedReportInput | null;
+}): {
+  competitiveStrategyMap: CompetitiveStrategyMap | null;
+  strategicPosition: StrategicPositionBlock | null;
+} {
+  if (!params.resolvedInput) return { competitiveStrategyMap: null, strategicPosition: null };
+  try {
+    const intelligence = buildCompetitorIntelligence({
+      decisions: params.decisions,
+      resolvedInput: params.resolvedInput,
+    });
+    const strategy = buildCompetitiveStrategyMap(intelligence);
+    return {
+      competitiveStrategyMap: strategy.competitive_strategy_map,
+      strategicPosition: strategy.strategic_position,
+    };
+  } catch (error) {
+    console.warn('[competitor-strategy][growth-build-failed]', {
+      company_id: params.resolvedInput.companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { competitiveStrategyMap: null, strategicPosition: null };
+  }
+}
+
+function buildCompetitiveStrategySection(
+  strategyMap: CompetitiveStrategyMap | null,
+  strategicPosition: StrategicPositionBlock | null,
+): GrowthReportSection[] {
+  if (!strategyMap || !strategicPosition) return [];
+
+  const tierInsight = (label: string, items: CompetitiveStrategyMap['tier_breakdown']['tier_1']) => ({
+    decision_id: `competitive_strategy_${label.toLowerCase().replace(/\s+/g, '_')}`,
+    title: `${label} competitor pressure`,
+    description: items.length
+      ? items.map((item) => `${item.name}: ${item.threat_level} threat, ${item.differentiation}`).join(' ')
+      : `${label} has no final-gated competitors in this report.`,
+    issue_type: 'competitor_strategy',
+    confidence_score: 0.9,
+    impact_score: items.some((item) => item.threat_level === 'high') ? 86 : 68,
+    recommendation: label === 'Tier 1'
+      ? strategyMap.strategic_actions.how_to_beat_tier_1
+      : label === 'Tier 2'
+        ? strategyMap.strategic_actions.how_to_differentiate_from_tier_2
+        : strategyMap.strategic_actions.how_to_ignore_tier_3,
+    action_type: 'improve_content',
+  });
+
+  return [
+    {
+      section_name: 'Competitive Strategy Map',
+      IU_ids: ['IU-15'],
+      insights: [
+        tierInsight('Tier 1', strategyMap.tier_breakdown.tier_1),
+        tierInsight('Tier 2', strategyMap.tier_breakdown.tier_2),
+        tierInsight('Tier 3', strategyMap.tier_breakdown.tier_3),
+      ],
+      opportunities: [
+        ...strategyMap.opportunity_map.whitespace_opportunities.slice(0, 2).map((item, index) => ({
+          decision_id: `competitive_whitespace_${index}`,
+          title: item,
+          recommendation: 'Turn this into a comparison, proof, or answer-ready asset.',
+          confidence_score: 0.84,
+          action_type: 'improve_content',
+        })),
+        ...strategyMap.opportunity_map.underexploited_icp_segments.slice(0, 2).map((item, index) => ({
+          decision_id: `competitive_icp_${index}`,
+          title: item,
+          recommendation: 'Use this ICP angle in landing page messaging and campaign targeting.',
+          confidence_score: 0.82,
+          action_type: 'improve_content',
+        })),
+      ],
+      actions: [
+        {
+          decision_id: 'competitive_action_tier_1',
+          title: 'How to beat Tier 1 competitors',
+          recommendation: strategyMap.strategic_actions.how_to_beat_tier_1,
+          action_type: 'improve_content',
+          action_payload: { tier: 'Tier 1', focus: 'direct_competitors' },
+        },
+        {
+          decision_id: 'competitive_action_tier_2',
+          title: 'How to differentiate from Tier 2',
+          recommendation: strategyMap.strategic_actions.how_to_differentiate_from_tier_2,
+          action_type: 'improve_content',
+          action_payload: { tier: 'Tier 2', focus: 'alternatives' },
+        },
+        {
+          decision_id: 'competitive_action_tier_3',
+          title: 'How to ignore Tier 3',
+          recommendation: strategyMap.strategic_actions.how_to_ignore_tier_3,
+          action_type: 'improve_content',
+          action_payload: { tier: 'Tier 3', focus: 'substitutes' },
+        },
+      ],
+    },
+    {
+      section_name: 'Your Strategic Position',
+      IU_ids: ['IU-15'],
+      insights: [
+        {
+          decision_id: 'strategic_position_statement',
+          title: 'Your Strategic Position',
+          description: strategicPosition.positioning_statement,
+          issue_type: 'competitor_positioning',
+          confidence_score: 0.9,
+          impact_score: 88,
+          recommendation: strategicPosition.messaging_angle,
+          action_type: 'improve_content',
+        },
+      ],
+      opportunities: [
+        {
+          decision_id: 'strategic_position_battlefield',
+          title: `Primary battlefield: ${strategicPosition.primary_battlefield}`,
+          recommendation: `Compete here with proof, comparison pages, and sharper ICP messaging. Avoid ${strategicPosition.avoidance_zone}.`,
+          confidence_score: 0.88,
+          action_type: 'improve_content',
+        },
+      ],
+      actions: [
+        {
+          decision_id: 'strategic_position_messaging',
+          title: 'Messaging angle',
+          recommendation: strategicPosition.messaging_angle,
+          action_type: 'improve_content',
+          action_payload: {
+            primary_battlefield: strategicPosition.primary_battlefield,
+            avoidance_zone: strategicPosition.avoidance_zone,
+          },
+        },
+      ],
+    },
+  ];
+}
+
+export async function composeGrowthReport(companyId: string, options?: GrowthReportOptions): Promise<GrowthReport> {
   const [growthComposed, deepComposed, units] = await Promise.all([
     composeReport({
       companyId,
@@ -152,6 +321,11 @@ export async function composeGrowthReport(companyId: string): Promise<GrowthRepo
 
   const growthUnits = units.filter((unit) => unit.enabled && GROWTH_IU_IDS.has(unit.id));
   const mergedDecisions = mergeUniqueDecisions(growthComposed.decisions, deepComposed.decisions);
+  const resolvedInput = await resolveGrowthInput(companyId, options?.resolvedInput ?? null);
+  const growthStrategy = buildGrowthCompetitorStrategy({
+    decisions: mergedDecisions,
+    resolvedInput,
+  });
   const grouped = mapDecisionsToGrowthGroups(mergedDecisions, growthUnits);
 
   const sections: GrowthReportSection[] = GROWTH_SECTION_DEFINITIONS.map((section) => {
@@ -181,6 +355,11 @@ export async function composeGrowthReport(companyId: string): Promise<GrowthRepo
     };
   });
 
+  const competitiveSections = buildCompetitiveStrategySection(
+    growthStrategy.competitiveStrategyMap,
+    growthStrategy.strategicPosition,
+  );
+
   return {
     report_type: 'growth',
     score: {
@@ -188,6 +367,8 @@ export async function composeGrowthReport(companyId: string): Promise<GrowthRepo
       value: null,
       label: null,
     },
-    sections,
+    competitive_strategy_map: growthStrategy.competitiveStrategyMap,
+    strategic_position: growthStrategy.strategicPosition,
+    sections: [...sections, ...competitiveSections],
   };
 }

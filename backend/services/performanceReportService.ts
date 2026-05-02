@@ -7,6 +7,12 @@ import {
 } from './intelligenceUnitService';
 import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
+import { resolveAnalyticsReportInput } from './analyticsInputResolver';
+import { buildCompetitorIntelligence, type CompetitorIntelligenceResult } from './reportCompetitorIntelligenceService';
+import {
+  buildCompetitivePressureAnalysis,
+  type CompetitivePressureAnalysis,
+} from './reportCompetitorStrategyService';
 import {
   impactScore,
   rankByImpactConfidence,
@@ -115,10 +121,15 @@ export interface PerformanceReport {
     value: null;
     label: null;
   };
+  competitive_pressure_analysis: CompetitivePressureAnalysis | null;
   sections: PerformanceReportSection[];
 }
 
 type PerformanceReportOptions = {
+  resolvedInput?: ResolvedReportInput | null;
+};
+
+type PerformanceIntelligenceOptions = BehaviorQueryOpts & {
   resolvedInput?: ResolvedReportInput | null;
 };
 
@@ -173,6 +184,53 @@ function mapDecisionsToPerformanceGroups(
   return groups;
 }
 
+async function resolveInputForCompetitorStrategy(params: {
+  companyId: string;
+  reportCategory: 'performance' | 'growth';
+  resolvedInput?: ResolvedReportInput | null;
+}): Promise<ResolvedReportInput | null> {
+  if (params.resolvedInput) return params.resolvedInput;
+  try {
+    return await resolveAnalyticsReportInput({
+      companyId: params.companyId,
+      reportCategory: params.reportCategory,
+    });
+  } catch (error) {
+    console.warn('[competitor-strategy][input-resolution-failed]', {
+      company_id: params.companyId,
+      report_category: params.reportCategory,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+function buildCompetitivePressureSafely(params: {
+  decisions: PersistedDecisionObject[];
+  resolvedInput: ResolvedReportInput | null;
+}): {
+  intelligence: CompetitorIntelligenceResult | null;
+  pressure: CompetitivePressureAnalysis | null;
+} {
+  if (!params.resolvedInput) return { intelligence: null, pressure: null };
+  try {
+    const intelligence = buildCompetitorIntelligence({
+      decisions: params.decisions,
+      resolvedInput: params.resolvedInput,
+    });
+    return {
+      intelligence,
+      pressure: buildCompetitivePressureAnalysis(intelligence),
+    };
+  } catch (error) {
+    console.warn('[competitor-strategy][pressure-build-failed]', {
+      company_id: params.resolvedInput.companyId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { intelligence: null, pressure: null };
+  }
+}
+
 export async function composePerformanceReport(
   companyId: string,
   options?: PerformanceReportOptions,
@@ -192,8 +250,18 @@ export async function composePerformanceReport(
   });
 
   const performanceUnits = units.filter((unit) => unit.enabled && PERFORMANCE_IU_IDS.has(unit.id));
+  const allDecisions = [...baseReport.decisions, ...publicAudit.decisions];
+  const resolvedInput = await resolveInputForCompetitorStrategy({
+    companyId,
+    reportCategory: 'performance',
+    resolvedInput: options?.resolvedInput ?? null,
+  });
+  const competitivePressure = buildCompetitivePressureSafely({
+    decisions: allDecisions,
+    resolvedInput,
+  }).pressure;
   const grouped = mapDecisionsToPerformanceGroups(
-    [...baseReport.decisions, ...publicAudit.decisions],
+    allDecisions,
     performanceUnits,
   );
 
@@ -231,6 +299,7 @@ export async function composePerformanceReport(
       value: null,
       label: null,
     },
+    competitive_pressure_analysis: competitivePressure,
     sections,
   };
 }
@@ -286,6 +355,7 @@ export type PerformanceIntelligenceReportResponse =
       window_days: number;
       warnings: string[];
       sections: typeof performanceSections;
+      competitive_pressure_analysis: CompetitivePressureAnalysis | null;
       mapped_data: PerformanceReportMappedData;
       html: string;
       source_data: BehaviorReportData;
@@ -382,7 +452,7 @@ export function renderPerformanceReport(
 
 export async function composePerformanceIntelligenceReport(
   companyId: string,
-  opts?: BehaviorQueryOpts,
+  opts?: PerformanceIntelligenceOptions,
 ): Promise<PerformanceIntelligenceReportResponse> {
   const base = await composeBehaviorReport(companyId, opts);
 
@@ -404,7 +474,18 @@ export async function composePerformanceIntelligenceReport(
   }
 
   const reportData: ReadyBehaviorReportResponse = base;
-  const mappedData = mapPerformanceReportData(reportData);
+  const resolvedInput = await resolveInputForCompetitorStrategy({
+    companyId,
+    reportCategory: 'performance',
+    resolvedInput: opts?.resolvedInput ?? null,
+  });
+  const competitivePressure = buildCompetitivePressureSafely({
+    decisions: [],
+    resolvedInput,
+  }).pressure;
+  const mappedData = mapPerformanceReportData(reportData, {
+    competitivePressureAnalysis: competitivePressure,
+  });
 
   return {
     report_type: 'performance_intelligence',
@@ -413,6 +494,7 @@ export async function composePerformanceIntelligenceReport(
     window_days: reportData.window_days,
     warnings: reportData.warnings,
     sections: performanceSections,
+    competitive_pressure_analysis: competitivePressure,
     mapped_data: mappedData,
     html: renderPerformanceDocument(
       performanceSections.map((sectionKey) => performanceRendererMap[sectionKey](mappedData)).join(''),

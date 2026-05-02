@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { supabase } from '../db/supabaseClient';
+import type { UnifiedSource } from './sourceNormalizationService';
 
 export type IngestionSource = 'crawler' | 'ga4' | 'gsc' | 'crm' | 'ads';
 export type IngestionRunStatus = 'running' | 'completed' | 'failed' | 'partial' | 'skipped';
@@ -29,6 +30,7 @@ export interface IngestionRunRecord {
   retry_count: number;
   error_message: string | null;
   cursor_payload: Record<string, unknown>;
+  unified_source?: UnifiedSource | null;
 }
 
 export function buildIngestionIdempotencyKey(input: Record<string, unknown>): string {
@@ -43,6 +45,7 @@ export async function beginIngestionRun(params: {
   idempotencyKey: string;
   cursorPayload?: Record<string, unknown>;
   retryCount?: number;
+  unifiedSource?: UnifiedSource;
 }): Promise<IngestionRunRecord> {
   const payload = {
     company_id: params.companyId,
@@ -51,6 +54,7 @@ export async function beginIngestionRun(params: {
     status: 'running' as const,
     retry_count: params.retryCount ?? 0,
     cursor_payload: params.cursorPayload ?? {},
+    ...(params.unifiedSource ? { unified_source: params.unifiedSource } : {}),
   };
 
   const { data, error } = await supabase
@@ -118,6 +122,7 @@ export async function setDataSourceStatus(params: {
   status: 'connected' | 'syncing' | 'error' | 'missing';
   lastSyncedAt?: string | null;
   errorMessage?: string | null;
+  unifiedSource?: UnifiedSource;
 }): Promise<void> {
   const { error } = await supabase
     .from('data_source_status')
@@ -128,6 +133,7 @@ export async function setDataSourceStatus(params: {
         status: params.status,
         last_synced_at: params.lastSyncedAt ?? null,
         error_message: params.errorMessage ?? null,
+        ...(params.unifiedSource ? { unified_source: params.unifiedSource } : {}),
       },
       { onConflict: 'company_id,source' }
     );

@@ -140,8 +140,7 @@ export default function ReportPageContent({
     return colors[impact as keyof typeof colors] || colors.low;
   };
 
-  const getCompetitorLabel = (classification: string, source: string) => {
-    if (source === 'inferred_keyword_peer') return 'Market benchmark';
+  const getCompetitorLabel = (classification: string, _source: string) => {
     if (classification === 'authority_leader') return 'Authority';
     if (classification === 'seo_competitor') return 'SEO';
     return 'Direct';
@@ -647,6 +646,30 @@ export default function ReportPageContent({
                           </div>
                         ))}
                       </div>
+
+                      {reportData.competitorContext.marketAlternatives?.length ? (
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Market Alternatives
+                          </p>
+                          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                            {reportData.competitorContext.marketAlternatives.slice(0, 3).map((alternative, idx) => (
+                              <div
+                                key={`${alternative.name}-${idx}`}
+                                className="rounded-lg border border-slate-200 bg-white p-4"
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-semibold text-slate-900">{alternative.name}</p>
+                                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                                    {alternative.category || 'alternative'}
+                                  </span>
+                                </div>
+                                <p className="mt-2 text-sm text-slate-600">{alternative.rationale}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
 
                       {reportData.competitorContext.strongestGaps[0] ? (
                         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">

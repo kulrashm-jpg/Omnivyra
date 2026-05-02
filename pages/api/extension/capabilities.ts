@@ -33,6 +33,15 @@ const EXTENSION_ACTION_BY_PAIR = {
   like: 'like_message',
   dm: 'continue_thread',
   post_create: 'create_post',
+  // Internal browser-command steps. /api/extension/commands can dispatch
+  // these as command_chain steps, so the extension capability payload must
+  // disclose them too; otherwise a server-issued inbox refresh can reach an
+  // extension whose runtime says its capabilities are unavailable.
+  open_thread: 'open_thread',
+  continue_thread: 'continue_thread',
+  search_user: 'search_user',
+  start_new_dm: 'start_new_dm',
+  sync_dm_inbox: 'sync_dm_inbox',
 } as const;
 
 // Platform aliases the backend accepts. Keep in sync with the capability

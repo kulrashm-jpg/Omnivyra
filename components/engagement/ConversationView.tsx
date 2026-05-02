@@ -10,8 +10,14 @@ import { AISuggestionPanel } from './AISuggestionPanel';
 import type { EngagementMessage } from '@/hooks/useEngagementMessages';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
+import {
+  compareMessagesAscending,
+  compareMessagesDescending,
+  getEffectiveMessageTimeMs,
+} from '@/lib/engagement/messageTime';
 
-function formatTimestamp(iso: string | null | undefined): string {
+function formatTimestamp(iso: string | null | undefined, displayLabel?: string | null): string {
+  if (displayLabel && displayLabel.trim()) return displayLabel.trim();
   if (!iso) return '—';
   try {
     return new Date(iso).toLocaleString(undefined, {
@@ -44,12 +50,22 @@ function authorInitials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-function avatarColor(name: string): string {
+const OTHER_AVATAR_CLASSES = [
+  'border-emerald-200 bg-emerald-100 text-emerald-800',
+  'border-amber-200 bg-amber-100 text-amber-900',
+  'border-rose-200 bg-rose-100 text-rose-800',
+  'border-violet-200 bg-violet-100 text-violet-800',
+  'border-teal-200 bg-teal-100 text-teal-800',
+  'border-orange-200 bg-orange-100 text-orange-800',
+  'border-slate-300 bg-slate-100 text-slate-700',
+];
+
+function avatarTone(name: string, isSelf: boolean): string {
+  if (isSelf) return 'border-blue-200 bg-blue-100 text-blue-800';
   // Deterministic color from name — same name always gets same hue.
   let hash = 0;
   for (let i = 0; i < name.length; i += 1) hash = (hash << 5) - hash + name.charCodeAt(i);
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 55%, 45%)`;
+  return OTHER_AVATAR_CLASSES[Math.abs(hash) % OTHER_AVATAR_CLASSES.length];
 }
 
 export interface ConversationViewProps {
@@ -159,14 +175,18 @@ export const ConversationView = React.memo(function ConversationView({
 
   const latestMessage = useMemo(() => {
     if (!messages.length) return null;
-    return [...messages].sort((a, b) => {
-      const ta = new Date(a.platform_created_at ?? a.created_at ?? 0).getTime();
-      const tb = new Date(b.platform_created_at ?? b.created_at ?? 0).getTime();
-      return tb - ta;
-    })[0];
+    return [...messages].sort(compareMessagesDescending)[0];
   }, [messages]);
 
-  const replyTarget = replyingTo ?? latestMessage;
+  const latestReplyableMessage = useMemo(() => {
+    if (!messages.length) return null;
+    return [...messages]
+      .sort(compareMessagesDescending)
+      .find((message) => message.author_self !== true && message.author_id !== '__self__' && message.is_pending_outbound !== true)
+      ?? null;
+  }, [messages]);
+
+  const replyTarget = replyingTo ?? latestReplyableMessage ?? latestMessage;
   const prefillReplyToken = typeof router.query.prefill_reply === 'string' ? router.query.prefill_reply : '';
 
   React.useEffect(() => {
@@ -239,8 +259,8 @@ export const ConversationView = React.memo(function ConversationView({
       const stack: Array<EngagementMessage & { children?: EngagementMessage[] }> = [root];
       while (stack.length > 0) {
         const node = stack.pop()!;
-        const nodeTs = new Date(node.platform_created_at ?? node.created_at ?? 0).getTime();
-        const latestTs = new Date(latest.platform_created_at ?? latest.created_at ?? 0).getTime();
+        const nodeTs = getEffectiveMessageTimeMs(node);
+        const latestTs = getEffectiveMessageTimeMs(latest);
         if (nodeTs > latestTs) latest = node;
         const children = node.children ?? [];
         for (const child of children) stack.push(child as EngagementMessage & { children?: EngagementMessage[] });
@@ -260,8 +280,7 @@ export const ConversationView = React.memo(function ConversationView({
         })
       : roots;
 
-    const getMessageTime = (message: EngagementMessage) =>
-      new Date(message.platform_created_at ?? message.created_at ?? 0).getTime();
+    const getMessageTime = (message: EngagementMessage) => getEffectiveMessageTimeMs(message);
 
     // DM convention: a thread surfaces in "Needs Response" only when the
     // other party sent the latest message (handled upstream in the
@@ -271,7 +290,7 @@ export const ConversationView = React.memo(function ConversationView({
     // bottom. More than that is archive territory and lives on LinkedIn
     // itself.
     if (!isPostContext) {
-      const chronological = [...filteredRoots].sort((a, b) => getMessageTime(a) - getMessageTime(b));
+      const chronological = [...filteredRoots].sort(compareMessagesAscending);
       return chronological.length > 3 ? chronological.slice(-3) : chronological;
     }
 
@@ -280,7 +299,7 @@ export const ConversationView = React.memo(function ConversationView({
   }, [messages, thread?.latest_message_type]);
 
   const handleInsertSuggestion = useCallback((text: string) => {
-    setReplyText((prev) => prev + (prev ? ' ' : '') + text);
+    setReplyText(text);
   }, []);
 
   const handleMarkResolved = useCallback(async () => {
@@ -380,16 +399,29 @@ export const ConversationView = React.memo(function ConversationView({
     // which marks the row failed/user_cancelled, freeing the composer to
     // accept a new reply.
     if (msg.is_pending_outbound) {
+      const claimedAndActive = msg.pending_action_claimed === true && msg.pending_action_lease_expired !== true;
+      const statusLabel = claimedAndActive
+        ? 'Handed to LinkedIn - awaiting delivery'
+        : 'Queued - not yet delivered';
+      const statusDetail = claimedAndActive
+        ? 'Omnivyra has handed this to the LinkedIn tab. Waiting for LinkedIn to report the send result.'
+        : 'Will be sent when the LinkedIn tab is open and the Omnivyra extension claims the action.';
       return (
         <div key={msg.id} className="my-2 ml-auto max-w-[80%]">
-          <div className="rounded-2xl bg-amber-50 border border-amber-200 px-3 py-2">
-            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-amber-800">
-              <span>⏳ Queued · not yet delivered</span>
+          <div className={`rounded-2xl border px-3 py-2 ${
+            claimedAndActive
+              ? 'border-blue-200 bg-blue-50'
+              : 'border-amber-200 bg-amber-50'
+          }`}>
+            <div className={`flex items-center gap-2 text-[11px] uppercase tracking-wide ${
+              claimedAndActive ? 'text-blue-800' : 'text-amber-800'
+            }`}>
+              <span>{statusLabel}</span>
             </div>
             <p className="mt-1 text-sm text-slate-800 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
-              <span>Will be sent when the LinkedIn tab is open and the Omnivyra extension claims the action.</span>
-              {msg.pending_action_id && onRetryQueuedDelivery && (
+              <span>{statusDetail}</span>
+              {msg.pending_action_id && onRetryQueuedDelivery && !claimedAndActive && (
                 <button
                   type="button"
                   onClick={async () => {
@@ -405,35 +437,37 @@ export const ConversationView = React.memo(function ConversationView({
                   Retry delivery
                 </button>
               )}
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!msg.pending_action_id) return;
-                  if (typeof window !== 'undefined' && !window.confirm('Cancel this queued reply? You can rewrite and send a new one after.')) return;
-                  try {
-                    const res = await fetch('/api/engagement/cancel-queued', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      credentials: 'include',
-                      body: JSON.stringify({
-                        organization_id: organizationId,
-                        action_id: msg.pending_action_id,
-                      }),
-                    });
-                    if (!res.ok) {
-                      const body = await res.json().catch(() => ({}));
-                      window.alert(body?.error ?? 'Failed to cancel queued reply');
-                      return;
+              {!claimedAndActive && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!msg.pending_action_id) return;
+                    if (typeof window !== 'undefined' && !window.confirm('Cancel this queued reply? You can rewrite and send a new one after.')) return;
+                    try {
+                      const res = await fetch('/api/engagement/cancel-queued', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                          organization_id: organizationId,
+                          action_id: msg.pending_action_id,
+                        }),
+                      });
+                      if (!res.ok) {
+                        const body = await res.json().catch(() => ({}));
+                        window.alert(body?.error ?? 'Failed to cancel queued reply');
+                        return;
+                      }
+                      onReplySent?.();
+                    } catch (e) {
+                      window.alert((e as Error)?.message ?? 'Failed to cancel queued reply');
                     }
-                    onReplySent?.();
-                  } catch (e) {
-                    window.alert((e as Error)?.message ?? 'Failed to cancel queued reply');
-                  }
-                }}
-                className="font-medium text-amber-900 hover:text-amber-700 underline-offset-2 hover:underline"
-              >
-                Cancel
-              </button>
+                  }}
+                  className="font-medium text-amber-900 hover:text-amber-700 underline-offset-2 hover:underline"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -446,9 +480,10 @@ export const ConversationView = React.memo(function ConversationView({
     // account's real name (carried on author_display_name) to compute KR;
     // showing a "Y" initial is wrong because two different LinkedIn accounts
     // named "Kuldeep" would otherwise be indistinguishable.
-    const accountName = msg.author_self ? (msg.author_display_name || displayName) : displayName;
+    const isSelfAuthor = msg.author_self === true || msg.author_id === '__self__';
+    const accountName = isSelfAuthor ? (msg.author_display_name || displayName) : displayName;
     const initials = authorInitials(accountName);
-    const avatarBg = avatarColor(accountName);
+    const avatarClasses = avatarTone(accountName, isSelfAuthor);
     // Profile pic — when present, render an actual image. Initials are
     // the fallback for when the scraper hasn't captured a pic or the URL
     // fails to load (LinkedIn CDN can return 403 in rare cases).
@@ -457,11 +492,10 @@ export const ConversationView = React.memo(function ConversationView({
     <div key={msg.id} className={depth > 0 ? 'ml-6 mt-2 pl-4 border-l-2 border-slate-200' : ''}>
       <div className="flex gap-2 py-2">
         {avatarImgSrc ? (
-          // eslint-disable-next-line @next/next/no-img-element -- third-party CDN, not a Next-optimised asset
           <img
             src={avatarImgSrc}
             alt={displayName}
-            className="w-8 h-8 rounded-full object-cover bg-slate-200 shrink-0"
+            className={`w-8 h-8 rounded-full border object-cover shrink-0 ${isSelfAuthor ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-slate-200'}`}
             referrerPolicy="no-referrer"
             onError={(e) => {
               // Fall back to initials by hiding the broken img.
@@ -472,8 +506,8 @@ export const ConversationView = React.memo(function ConversationView({
           />
         ) : null}
         <div
-          className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shrink-0"
-          style={{ backgroundColor: avatarBg, display: avatarImgSrc ? 'none' : 'flex' }}
+          className={`w-8 h-8 rounded-full border flex items-center justify-center text-xs font-semibold shrink-0 ${avatarClasses}`}
+          style={{ display: avatarImgSrc ? 'none' : 'flex' }}
           title={displayName}
         >
           {initials}
@@ -494,7 +528,7 @@ export const ConversationView = React.memo(function ConversationView({
               </a>
             )}
             <PlatformIcon platform={msg.platform ?? ''} size={12} />
-            <span className="text-xs text-slate-500">{formatTimestamp(msg.platform_created_at ?? msg.created_at)}</span>
+            <span className="text-xs text-slate-500">{formatTimestamp(msg.platform_created_at ?? msg.created_at, msg.display_time_label)}</span>
           </div>
           <p className="text-sm text-slate-700 mt-0.5 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
           {/* Per-comment engagement chips — mirrors LinkedIn's tiny
@@ -513,7 +547,7 @@ export const ConversationView = React.memo(function ConversationView({
             </div>
           )}
           <div className="flex items-center gap-2 mt-1">
-            {!msg.author_self && (
+            {!isSelfAuthor && (
               <button
                 type="button"
                 onClick={async () => {
@@ -554,8 +588,8 @@ export const ConversationView = React.memo(function ConversationView({
               // URN, but that's surfaced via toast/tooltip rather than
               // blocking the UX. Real scraped comments work end-to-end.
               const isPlaceholder = msg.is_placeholder === true;
-              const likeDisabled = likeCap.status !== 'api_verified';
-              const replyDisabled = replyCap.status !== 'api_verified';
+              const likeDisabled = likeCap.status !== 'api_verified' || isSelfAuthor;
+              const replyDisabled = replyCap.status !== 'api_verified' || isSelfAuthor;
               const likeTitle = isPlaceholder
                 ? 'Demo seed — clicking will call LinkedIn but the synthetic URN is rejected; real scraped comments will succeed.'
                 : (likeCap.status === 'api_verified' ? undefined : likeCap.reason);
@@ -756,11 +790,18 @@ export const ConversationView = React.memo(function ConversationView({
           (m) => m.is_pending_outbound === true && m.thread_id === thread.thread_id,
         );
         if (pendingForThisThread) {
+          const claimedAndActive = pendingForThisThread.pending_action_claimed === true
+            && pendingForThisThread.pending_action_lease_expired !== true;
           return (
             <div className="p-4 border-t border-slate-200">
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                A reply is queued for this conversation and waiting on the LinkedIn tab to deliver it.
-                Use Retry delivery on the queued message above, or cancel it before writing a new reply.
+              <div className={`rounded-lg border px-4 py-3 text-sm ${
+                claimedAndActive
+                  ? 'border-blue-200 bg-blue-50 text-blue-900'
+                  : 'border-amber-200 bg-amber-50 text-amber-900'
+              }`}>
+                {claimedAndActive
+                  ? 'LinkedIn delivery is in progress for this conversation. Wait for the result before writing another reply.'
+                  : 'A reply is queued for this conversation. Use Retry delivery on the queued message above, or cancel it before writing a new reply.'}
               </div>
             </div>
           );

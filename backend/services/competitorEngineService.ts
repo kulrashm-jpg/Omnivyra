@@ -9,6 +9,7 @@ import type {
   CompetitorProductType,
   CompetitorScaleSignals,
 } from './competitorEnrichmentKnowledge';
+import { findKnownCompetitorProfile } from './competitorEnrichmentKnowledge';
 import {
   categoryAffinity,
   normalizeCompetitorCategory,
@@ -16,6 +17,13 @@ import {
   type CompetitorSecondaryTag,
   type StandardCompetitorCategory,
 } from './competitorTaxonomy';
+import {
+  applyCompetitorFeedbackBoost,
+  buildFeedbackMissingCompetitorCandidates,
+  getCompetitorFeedbackDecision,
+  loadCompetitorFeedbackMemory,
+  type CompetitorFeedbackMemory,
+} from './competitorFeedbackService';
 
 export type CompetitorSource =
   | 'user'
@@ -25,6 +33,7 @@ export type CompetitorSource =
   | 'decision_evidence'
   | 'serp_live'
   | 'known_category_dataset'
+  | 'market_substitute'
   | 'profile_ai'
   | 'inferred_keyword_peer'
   | 'serp_unavailable_fallback';
@@ -32,6 +41,26 @@ export type CompetitorSource =
 export type CompetitorClassification = 'direct_competitor' | 'seo_competitor' | 'authority_leader';
 export type CompetitorRevenueTier = 'startup' | 'growth' | 'scale' | 'enterprise';
 export type CompetitorTier = 'Tier 1' | 'Tier 2' | 'Tier 3';
+export type CompetitorFundingLevel = 'bootstrap' | 'funded' | 'enterprise';
+export type CompetitorBrandStrength = 'low' | 'medium' | 'high';
+
+export type CompetitorAuthoritySignals = {
+  traffic_estimate: string | null;
+  installs: string | null;
+  reviews: string | null;
+  funding_level: CompetitorFundingLevel;
+  search_visibility: string | null;
+  brand_strength: CompetitorBrandStrength;
+};
+
+export type CompetitorThreatLevel = 'low' | 'medium' | 'high';
+
+export type CompetitorPositioning = {
+  strengths_vs_company: string[];
+  weaknesses_vs_company: string[];
+  differentiation: string;
+  threat_level: CompetitorThreatLevel;
+};
 
 export type CompanyCompetitiveContext = {
   marketFocus: string | null;
@@ -80,8 +109,11 @@ export type RankedCompetitor = {
   market_overlap: number;
   revenue_tier: CompetitorRevenueTier;
   product_depth: number;
+  authority_score: number;
+  authority_signals: CompetitorAuthoritySignals;
   final_score: number;
   tier: CompetitorTier;
+  positioning: CompetitorPositioning;
   enrichment: CompetitorEnrichmentProfile | null;
   enrichment_confidence_score: number;
   rationale: string;
@@ -111,6 +143,8 @@ export type CompetitorScoreBreakdown = Pick<
   | 'market_overlap'
   | 'revenue_tier'
   | 'product_depth'
+  | 'authority_score'
+  | 'authority_signals'
   | 'final_score'
   | 'tier'
 >;
@@ -128,7 +162,6 @@ const TRUSTED_SOURCES = new Set<CompetitorSource>([
   'manual',
   'website',
   'social',
-  'decision_evidence',
   'serp_live',
   'known_category_dataset',
 ]);
@@ -138,21 +171,41 @@ const SOURCE_BASE_SCORE: Record<CompetitorSource, number> = {
   manual: 70,
   website: 64,
   social: 58,
-  decision_evidence: 62,
+  decision_evidence: 0,
   serp_live: 58,
   known_category_dataset: 58,
+  market_substitute: 52,
   profile_ai: 14,
-  inferred_keyword_peer: 28,
-  serp_unavailable_fallback: 22,
+  inferred_keyword_peer: 0,
+  serp_unavailable_fallback: 0,
 };
 
 export const FINAL_COMPETITOR_MIN_SCORE = 42;
+export const HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE = 90;
+export const MARKET_SUBSTITUTE_MAX_COUNT = 3;
+const FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP = 0.5;
+const FINAL_COMPETITOR_MIN_ICP_OVERLAP = 0.4;
+const FINAL_COMPETITOR_MIN_FINAL_SCORE = 0.5;
+const FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE = 0.6;
+const FINAL_COMPETITOR_MIN_COUNT = 3;
+const FINAL_COMPETITOR_MAX_COUNT = 6;
+const HIGH_AUTHORITY_MISMATCH_AUTHORITY = 0.7;
+const HIGH_AUTHORITY_MISMATCH_PROBLEM = 0.4;
 
 const FINAL_BLOCKED_SOURCES = new Set<CompetitorSource>([
   'decision_evidence',
   'inferred_keyword_peer',
   'serp_unavailable_fallback',
 ]);
+
+const TIER_PRIORITY: Record<CompetitorTier, number> = {
+  'Tier 1': 0,
+  'Tier 2': 1,
+  'Tier 3': 2,
+};
+
+const COMPANY_SUFFIX_PATTERN = /\b(private limited|pvt ltd|pvt|limited liability company|llc|llp|incorporated|inc|ltd|limited|plc|corp|corporation|company|co|technologies|technology|solutions|services|service)\b/g;
+const UNRELATED_COMPETITOR_TEXT_PATTERN = /\b(staffing|staff augmentation|virtual employee|virtual employees|outsourc(?:e|ing)?|bpo|call center|recruit(?:ing|ment)?|hiring|logistics|freight|shipping|transportation|generic it|managed it|it services|web development services|software development services)\b/i;
 
 const REVENUE_TIER_RANK: Record<CompetitorRevenueTier, number> = {
   startup: 0,
@@ -303,6 +356,141 @@ function revenueAdjustment(companyTier: CompetitorRevenueTier, competitorTier: C
   return 0.6;
 }
 
+function scaleSignalText(candidate: CompetitorCandidate): string {
+  return [
+    candidate.name,
+    candidate.domain,
+    candidate.source,
+    candidate.description,
+    candidate.businessModel,
+    candidate.revenueRange,
+    candidate.productType,
+    candidate.enrichment?.description,
+    candidate.enrichment?.business_model,
+    candidate.enrichment?.product_type,
+    candidate.enrichment?.category,
+    ...(candidate.enrichment?.sources ?? []),
+    ...Object.values(candidate.scaleSignals ?? {}).filter(Boolean),
+    ...Object.values(candidate.enrichment?.scale_signals ?? {}).filter(Boolean),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function scaleSignalValue(
+  candidate: CompetitorCandidate,
+  key: keyof CompetitorScaleSignals,
+): string | null {
+  return cleanText(candidate.scaleSignals?.[key]) ?? cleanText(candidate.enrichment?.scale_signals?.[key]) ?? null;
+}
+
+function inferTrafficEstimate(candidate: CompetitorCandidate, signalText: string): string | null {
+  const explicit = scaleSignalValue(candidate, 'traffic');
+  if (explicit) return explicit;
+  if (/\b(very large|public|enterprise-scale|enterprise scale|category leader|global ai platform)\b/.test(signalText)) {
+    return '1M+ monthly visits (estimated from scale signals)';
+  }
+  if (/\b(large|major|substantial|global)\b/.test(signalText)) {
+    return '100K-1M monthly visits (estimated from scale signals)';
+  }
+  if (/\b(known|recognized|venture-backed|venture backed)\b/.test(signalText)) {
+    return '10K-100K monthly visits (estimated from scale signals)';
+  }
+  return null;
+}
+
+function inferFundingLevel(signalText: string): CompetitorFundingLevel {
+  if (/\b(public|enterprise-scale|enterprise scale|enterprise software|enterprise company|public company|1b|billion)\b/.test(signalText)) {
+    return 'enterprise';
+  }
+  if (/\b(funded|funding|venture-backed|venture backed|backed|series [a-z]|vc)\b/.test(signalText)) {
+    return 'funded';
+  }
+  return 'bootstrap';
+}
+
+function inferBrandStrength(signalText: string): CompetitorBrandStrength {
+  if (/\b(very large|category leader|major|public|enterprise-scale|enterprise scale|global ai platform|large global)\b/.test(signalText)) {
+    return 'high';
+  }
+  if (/\b(large|known|recognized|substantial|venture-backed|venture backed|global|workplace|enterprise)\b/.test(signalText)) {
+    return 'medium';
+  }
+  return 'low';
+}
+
+function inferSearchVisibility(
+  candidate: CompetitorCandidate,
+  signalText: string,
+  brandStrength: CompetitorBrandStrength,
+): string | null {
+  if (candidate.source === 'serp_live') return 'present in live SERP discovery';
+  if (/\b(category leader|major|very large|public|large global|enterprise-scale|enterprise scale)\b/.test(signalText)) {
+    return 'high category keyword presence (estimated from scale signals)';
+  }
+  if (brandStrength === 'medium' || /\b(known|recognized|large|substantial)\b/.test(signalText)) {
+    return 'moderate category keyword presence (estimated from scale signals)';
+  }
+  return null;
+}
+
+function signalStrength(value: string | null): number {
+  if (!value) return 0;
+  const normalized = value.toLowerCase();
+  if (/\b(very large|1m\+|public|enterprise-scale|enterprise scale|category leader|major|high)\b/.test(normalized)) return 1;
+  if (/\b(large|100k|substantial|global|strong)\b/.test(normalized)) return 0.75;
+  if (/\b(moderate|known|recognized|10k|venture-backed|venture backed)\b/.test(normalized)) return 0.55;
+  if (/\b(consumer|mobile app footprint|some|niche)\b/.test(normalized)) return 0.35;
+  return 0.25;
+}
+
+function fundingScore(level: CompetitorFundingLevel): number {
+  if (level === 'enterprise') return 1;
+  if (level === 'funded') return 0.65;
+  return 0.2;
+}
+
+function brandScore(strength: CompetitorBrandStrength): number {
+  if (strength === 'high') return 1;
+  if (strength === 'medium') return 0.55;
+  return 0.2;
+}
+
+function buildAuthoritySignals(candidate: CompetitorCandidate): CompetitorAuthoritySignals {
+  const signalText = scaleSignalText(candidate);
+  const fundingLevel = inferFundingLevel(signalText);
+  const brandStrength = inferBrandStrength(signalText);
+  return {
+    traffic_estimate: inferTrafficEstimate(candidate, signalText),
+    installs: scaleSignalValue(candidate, 'installs'),
+    reviews: scaleSignalValue(candidate, 'reviews'),
+    funding_level: fundingLevel,
+    search_visibility: inferSearchVisibility(candidate, signalText, brandStrength),
+    brand_strength: brandStrength,
+  };
+}
+
+export function computeCompetitorAuthorityScore(candidate: CompetitorCandidate): {
+  authority_score: number;
+  authority_signals: CompetitorAuthoritySignals;
+} {
+  const authoritySignals = buildAuthoritySignals(candidate);
+  const installsReviewsScore = Math.max(
+    signalStrength(authoritySignals.installs),
+    signalStrength(authoritySignals.reviews),
+  );
+  const score = roundDimension(
+    (0.25 * signalStrength(authoritySignals.traffic_estimate)) +
+    (0.20 * installsReviewsScore) +
+    (0.15 * fundingScore(authoritySignals.funding_level)) +
+    (0.25 * signalStrength(authoritySignals.search_visibility)) +
+    (0.15 * brandScore(authoritySignals.brand_strength)),
+  );
+
+  return {
+    authority_score: score,
+    authority_signals: authoritySignals,
+  };
+}
+
 function candidateSignalText(candidate: CompetitorCandidate, domain: string | null): string {
   return [
     candidate.name,
@@ -349,9 +537,118 @@ function targetLabel(context: CompanyCompetitiveContext): string {
   return cleanText(context.targetCustomer) ?? cleanText(context.idealCustomerProfile) ?? 'target users';
 }
 
+function readableLabel(value: unknown, fallback: string): string {
+  const cleaned = cleanText(value);
+  if (!cleaned) return fallback;
+  return cleaned
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function uniqueNonEmpty(values: string[], max = 3): string[] {
+  const seen = new Set<string>();
+  const results: string[] = [];
+  for (const value of values) {
+    const cleaned = cleanText(value);
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push(cleaned);
+    if (results.length >= max) break;
+  }
+  return results;
+}
+
+function threatLevelForCompetitor(breakdown: CompetitorScoreBreakdown): CompetitorThreatLevel {
+  const lowOverlap = breakdown.problem_overlap < 0.45 || breakdown.icp_overlap < 0.3;
+  if (breakdown.tier === 'Tier 3' || lowOverlap) return 'low';
+  if (breakdown.tier === 'Tier 1' && breakdown.authority_score >= 0.55 && breakdown.icp_overlap >= 0.55) return 'high';
+  if ((breakdown.tier === 'Tier 1' || breakdown.tier === 'Tier 2') && breakdown.authority_score >= 0.35) return 'medium';
+  return 'low';
+}
+
+function buildCompetitorPositioning(
+  candidate: CompetitorCandidate,
+  breakdown: CompetitorScoreBreakdown,
+  context: CompanyCompetitiveContext,
+): CompetitorPositioning {
+  const competitorName = readableLabel(candidate.name, 'This competitor');
+  const companyFocus = readableLabel(context.primaryService ?? context.marketFocus, 'the company core offer');
+  const target = readableLabel(context.targetCustomer ?? context.idealCustomerProfile, 'the target users');
+  const category = readableLabel(breakdown.category, 'the category');
+  const threatLevel = threatLevelForCompetitor(breakdown);
+  const brandStrength = breakdown.authority_signals.brand_strength;
+  const searchVisibility = breakdown.authority_signals.search_visibility ?? `${brandStrength} brand visibility`;
+
+  const strengths = uniqueNonEmpty([
+    breakdown.authority_score >= 0.65
+      ? `${competitorName} has stronger market authority through ${brandStrength} brand strength and ${searchVisibility}.`
+      : '',
+    breakdown.authority_score >= 0.45 && breakdown.authority_score < 0.65
+      ? `${competitorName} has recognizable category authority with an authority score of ${breakdown.authority_score.toFixed(2)}.`
+      : '',
+    breakdown.product_depth >= 0.65
+      ? `${competitorName} shows broader product depth across ${category} workflows.`
+      : '',
+    breakdown.market_overlap >= 0.65 || brandStrength === 'high'
+      ? `${competitorName} has wider market reach for ${target} through ${searchVisibility}.`
+      : '',
+    breakdown.problem_overlap >= 0.68
+      ? `${competitorName} addresses a closely overlapping problem in ${category}.`
+      : '',
+  ]);
+
+  const weaknesses = uniqueNonEmpty([
+    breakdown.icp_overlap < 0.5
+      ? `${competitorName} is less aligned to ${target} than the company's focused ICP.`
+      : '',
+    breakdown.problem_overlap < 0.55
+      ? `${competitorName} is less focused on ${companyFocus} and solves a more adjacent problem.`
+      : '',
+    breakdown.product_depth < 0.45
+      ? `${competitorName} has less visible product depth around ${companyFocus}.`
+      : '',
+    breakdown.tier === 'Tier 2'
+      ? `${competitorName} is a functional alternative, not a fully direct substitute for ${companyFocus}.`
+      : '',
+    breakdown.tier === 'Tier 3'
+      ? `${competitorName} is an indirect substitute, so its pressure is weaker outside broad ${category} demand.`
+      : '',
+    breakdown.tier === 'Tier 1' && breakdown.icp_overlap >= 0.5 && breakdown.problem_overlap >= 0.55
+      ? `${competitorName} is broader than the company's sharper ${companyFocus} focus.`
+      : '',
+  ]);
+
+  const differentiation = (() => {
+    if (breakdown.tier === 'Tier 3') {
+      return `${competitorName} is a broader ${category} substitute, while the company can win on ${companyFocus} for ${target} instead of general-purpose demand.`;
+    }
+    if (threatLevel === 'high') {
+      return `${competitorName} competes directly in ${category} with stronger authority, while the company must differentiate through sharper ${companyFocus} execution for ${target}.`;
+    }
+    if (breakdown.tier === 'Tier 2') {
+      return `${competitorName} overlaps functionally in ${category}, but the company can separate by owning ${companyFocus} for ${target}.`;
+    }
+    return `${competitorName} overlaps on ${category}, while the company can defend through focused ${companyFocus} positioning and clearer ICP fit.`;
+  })();
+
+  return {
+    strengths_vs_company: strengths.length > 0
+      ? strengths
+      : [`${competitorName} has measurable competitive pressure from ${category} relevance.`],
+    weaknesses_vs_company: weaknesses.length > 0
+      ? weaknesses
+      : [`${competitorName} has less specific ownership of ${companyFocus} than the company can claim.`],
+    differentiation,
+    threat_level: threatLevel,
+  };
+}
+
 export function inferCompetitorArchetypeCandidates(
   context: CompanyCompetitiveContext,
-  source: CompetitorSource = 'inferred_keyword_peer',
+  source: CompetitorSource = 'market_substitute',
 ): CompetitorCandidate[] {
   const market = contextLabel(context);
   const target = targetLabel(context);
@@ -457,7 +754,7 @@ export function inferCompetitorArchetypeCandidates(
     );
   }
 
-  if (isMarketingOrSaas || base.length === 0) {
+  if (!isGuidanceOrWellness && (isMarketingOrSaas || base.length === 0)) {
     const product = cleanText(context.primaryService) ?? market;
     base.push(
       {
@@ -511,7 +808,68 @@ export function inferCompetitorArchetypeCandidates(
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
+  }).map((candidate) => withArchetypeEnrichment(candidate));
+}
+
+function inferArchetypeProductType(candidate: CompetitorCandidate): CompetitorProductType {
+  const text = candidateSignalText(candidate, null).toLowerCase();
+  if (/\b(chatbot|chat bot|assistant|ai companion|wellness app)\b/.test(text)) return 'AI chatbot';
+  if (/\b(consultant|consulting|coach|coaching|advisor|therapist|counsellor|counselor|mentor|professional services)\b/.test(text)) return 'human-led';
+  if (/\b(course|education|community|newsletter|creator|content|journal|journaling)\b/.test(text)) return 'content-based';
+  if (/\b(marketplace|platforms?|directory|network)\b/.test(text)) return 'marketplace';
+  if (/\b(software|saas|app|apps|tool|tools|platform)\b/.test(text)) return 'software platform';
+  return 'unknown';
+}
+
+function withArchetypeEnrichment(candidate: CompetitorCandidate): CompetitorCandidate {
+  const productType = candidate.productType ?? inferArchetypeProductType(candidate);
+  const category = normalizeCompetitorCategory(candidate.category, candidateSignalText(candidate, null));
+  const description = cleanText(candidate.description);
+  const businessModel = cleanText(candidate.businessModel);
+  const productSignals = [
+    productType,
+    category,
+    ...(candidate.productSignals ?? []),
+    candidate.useCase,
+  ].filter((item): item is string => Boolean(cleanText(item)));
+  const enrichment: CompetitorEnrichmentProfile = {
+    name: candidate.name,
+    domain: candidate.domain ?? null,
+    category,
+    tags: normalizeCompetitorTags({
+      rawTags: candidate.tags ?? undefined,
+      productType,
+      businessModel,
+      description,
+      category,
+    }),
+    description,
+    icp: {
+      age_group: cleanText(candidate.targetCustomer),
+      use_case: cleanText(candidate.useCase),
+      user_intent: cleanText(candidate.rationale) ?? cleanText(candidate.useCase),
+    },
+    business_model: businessModel,
+    geography: cleanText(candidate.geography),
+    product_type: productType,
+    scale_signals: candidate.scaleSignals ?? {
+      notes: 'category-level substitute derived from company market, problem, and ICP context',
+    },
+    confidence_score: Number(candidate.confidenceScore ?? 0) >= FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE
+      ? Number(candidate.confidenceScore)
+      : 0.72,
+    sources: ['market_substitute_archetype'],
+  };
+
+  return {
+    ...candidate,
+    category,
+    tags: candidate.tags ?? enrichment.tags,
+    productType,
+    productSignals,
+    confidenceScore: enrichment.confidence_score,
+    enrichment,
+  };
 }
 
 function contextTokens(context: CompanyCompetitiveContext): {
@@ -544,19 +902,66 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
   const companyFacts = profile?.report_settings?.company_facts ?? null;
   const marketPulse = profile?.report_settings?.market_pulse ?? null;
   const campaignPurpose = profile?.campaign_purpose_intent ?? null;
-  const primaryService =
+  const classification = profile?.business_classification ?? null;
+  const classificationDomains = Array.isArray(classification?.level_3)
+    ? classification.level_3.map((item) => cleanText(item)).filter((item): item is string => Boolean(item))
+    : [];
+  const solutionDomains = Array.isArray(marketPulse?.solution_domains)
+    ? marketPulse.solution_domains.map((item) => cleanText(item)).filter((item): item is string => Boolean(item))
+    : [];
+  const solutionDomain = solutionDomains[0] ?? null;
+  const providerType = cleanText(marketPulse?.provider_type);
+  const domainRole = cleanText(marketPulse?.domain_role);
+  const operatingModel = cleanText(marketPulse?.operating_model);
+  const domainSignals = [
+    domainRole,
+    providerType,
+    ...solutionDomains,
+  ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
+  const businessModel = [
+    cleanText(classification?.level_1),
+    cleanText(classification?.level_2),
+    cleanText(marketPulse?.business_model),
+    operatingModel,
+    providerType,
+    domainRole,
+  ]
+    .filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index)
+    .join('; ') || null;
+  const primaryOffering =
     firstFromList(profile?.products_services_list) ??
     firstFromList(marketPulse?.core_offerings ?? null) ??
     cleanText(profile?.products_services) ??
     null;
+  const primaryService = [
+    primaryOffering,
+    ...domainSignals,
+  ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index)
+    .join('; ') || null;
+  const brandPositioning = [
+    cleanText(profile?.brand_positioning),
+    cleanText(profile?.unique_value),
+    cleanText(campaignPurpose?.brand_positioning_angle),
+    ...solutionDomains,
+    domainRole,
+  ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index)
+    .join('; ') || null;
+  const idealCustomerProfile = [
+    cleanText(profile?.ideal_customer_profile),
+    ...solutionDomains,
+  ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index)
+    .join('; ') || null;
 
   return {
     marketFocus:
       cleanText(profile?.campaign_focus) ??
       cleanText(profile?.category) ??
       firstFromList(profile?.category_list) ??
+      classificationDomains[0] ??
       cleanText(profile?.industry) ??
       firstFromList(profile?.industry_list) ??
+      solutionDomain ??
+      domainRole ??
       null,
     primaryService,
     targetCustomer:
@@ -564,12 +969,8 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
       cleanText(profile?.target_audience) ??
       firstFromList(profile?.target_audience_list) ??
       null,
-    idealCustomerProfile: cleanText(profile?.ideal_customer_profile),
-    brandPositioning:
-      cleanText(profile?.brand_positioning) ??
-      cleanText(profile?.unique_value) ??
-      cleanText(campaignPurpose?.brand_positioning_angle) ??
-      null,
+    idealCustomerProfile,
+    brandPositioning,
     geography:
       cleanText(profile?.geography) ??
       firstFromList(profile?.geography_list) ??
@@ -579,7 +980,7 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
     foundedYear: cleanText(companyFacts?.founded_year),
     revenueRange: cleanText(companyFacts?.revenue_range),
     businessModel:
-      cleanText(marketPulse?.business_model) ??
+      businessModel ??
       cleanText(profile?.sales_motion) ??
       cleanText(profile?.pricing_model) ??
       null,
@@ -596,7 +997,7 @@ export function extractCompetitiveContextFromResolvedInput(
     profileContext.primaryService ??
     null;
 
-  return {
+  const extractedContext = {
     marketFocus:
       cleanText(context?.marketFocus) ??
       cleanText(resolvedInput?.resolved.businessType) ??
@@ -624,6 +1025,33 @@ export function extractCompetitiveContextFromResolvedInput(
       cleanText(context?.revenueRange) ??
       profileContext.revenueRange,
     businessModel: profileContext.businessModel,
+  };
+
+  const hasSpecificContext = [
+    extractedContext.marketFocus,
+    extractedContext.primaryService,
+    extractedContext.targetCustomer,
+    extractedContext.idealCustomerProfile,
+    extractedContext.brandPositioning,
+    extractedContext.businessModel,
+  ].some((value) => Boolean(cleanText(value)));
+  const sparseGenericContext =
+    !cleanText(extractedContext.primaryService) &&
+    !cleanText(extractedContext.targetCustomer) &&
+    !cleanText(extractedContext.idealCustomerProfile) &&
+    !cleanText(extractedContext.brandPositioning) &&
+    /\b(b2b services|business services|services|business|company)\b/i.test(extractedContext.marketFocus ?? '');
+
+  if (hasSpecificContext && !sparseGenericContext) return extractedContext;
+
+  return {
+    ...extractedContext,
+    marketFocus: 'business software and marketing automation',
+    primaryService: 'marketing automation software',
+    targetCustomer: 'business growth teams and marketers',
+    idealCustomerProfile: 'B2B teams evaluating growth, CRM, and campaign software',
+    brandPositioning: 'software platform for growth and customer acquisition',
+    businessModel: 'B2B SaaS',
   };
 }
 
@@ -665,7 +1093,7 @@ function buildScoringRationale(
 ): string {
   return [
     base,
-    `Competitive scoring: category ${breakdown.category}, tags ${breakdown.tags.join(', ') || 'none'}, problem overlap ${breakdown.problem_overlap.toFixed(2)}, ICP overlap ${breakdown.icp_overlap.toFixed(2)}, market overlap ${breakdown.market_overlap.toFixed(2)}, product depth ${breakdown.product_depth.toFixed(2)}, revenue tier ${breakdown.revenue_tier}; final score ${breakdown.final_score.toFixed(2)} (${breakdown.tier}).`,
+    `Competitive scoring: category ${breakdown.category}, tags ${breakdown.tags.join(', ') || 'none'}, problem overlap ${breakdown.problem_overlap.toFixed(2)}, ICP overlap ${breakdown.icp_overlap.toFixed(2)}, market overlap ${breakdown.market_overlap.toFixed(2)}, product depth ${breakdown.product_depth.toFixed(2)}, authority ${breakdown.authority_score.toFixed(2)}, revenue tier ${breakdown.revenue_tier}; final score ${breakdown.final_score.toFixed(2)} (${breakdown.tier}).`,
   ].join(' ');
 }
 
@@ -686,11 +1114,22 @@ function classificationFromTier(tier: CompetitorTier): CompetitorClassification 
   return 'authority_leader';
 }
 
+function isAuthorityDominatedMismatch(competitor: {
+  authority_score?: number | null;
+  problem_overlap?: number | null;
+  icp_overlap?: number | null;
+}): boolean {
+  return (
+    Number(competitor.authority_score ?? 0) > HIGH_AUTHORITY_MISMATCH_AUTHORITY &&
+    Number(competitor.problem_overlap ?? 0) < HIGH_AUTHORITY_MISMATCH_PROBLEM
+  );
+}
+
 function sourceEvidenceBoost(source: CompetitorSource): number {
   if (source === 'manual' || source === 'user') return 0.55;
-  if (source === 'decision_evidence' || source === 'website' || source === 'social') return 0.45;
+  if (source === 'website' || source === 'social') return 0.45;
   if (source === 'serp_live' || source === 'known_category_dataset') return 0.35;
-  if (source === 'inferred_keyword_peer') return 0.3;
+  if (source === 'market_substitute') return 0.35;
   return 0;
 }
 
@@ -745,16 +1184,18 @@ export function evaluateCompetitorCandidate(
     icpOverlap = roundDimension(Math.max(icpOverlap, 0.58));
   } else if (affinity === 'functional') {
     problemOverlap = roundDimension(Math.max(problemOverlap, 0.58));
-    icpOverlap = roundDimension(Math.max(icpOverlap, 0.35));
+    icpOverlap = roundDimension(Math.max(icpOverlap, FINAL_COMPETITOR_MIN_ICP_OVERLAP));
   }
   const marketOverlap = roundDimension((geographyOverlap * 0.55) + (segmentOverlap * 0.45));
   const productDepth = roundDimension(featureDepth);
   const revenue = revenueAdjustment(companyRevenueTier, competitorRevenueTier);
+  const authority = computeCompetitorAuthorityScore(enrichedCandidate);
   const finalScore = roundDimension(
-    (0.35 * problemOverlap) +
-    (0.25 * icpOverlap) +
+    (0.30 * problemOverlap) +
+    (0.20 * icpOverlap) +
     (0.15 * marketOverlap) +
     (0.15 * productDepth) +
+    (0.10 * authority.authority_score) +
     (0.10 * revenue),
   );
 
@@ -774,6 +1215,8 @@ export function evaluateCompetitorCandidate(
     market_overlap: marketOverlap,
     revenue_tier: competitorRevenueTier,
     product_depth: productDepth,
+    authority_score: authority.authority_score,
+    authority_signals: authority.authority_signals,
     final_score: finalScore,
     tier: classifyCompetitiveTier({ problemOverlap, icpOverlap, affinity }),
   };
@@ -812,9 +1255,11 @@ export function rankCompetitorCandidates(params: {
     .map((candidate) => {
       const enrichedCandidate = enrichCompetitorCandidateSync(candidate);
       const domain = normalizeCompetitorDomain(enrichedCandidate.domain ?? enrichedCandidate.name);
-      const name = cleanText(enrichedCandidate.name) ?? domainToName(domain);
+      const name = cleanText(enrichedCandidate.enrichment?.name) ?? cleanText(enrichedCandidate.name) ?? domainToName(domain);
       if (!name) return null;
       const breakdown = evaluateCompetitorCandidate(enrichedCandidate, params.context);
+      if (isAuthorityDominatedMismatch(breakdown)) return null;
+      const positioning = buildCompetitorPositioning(enrichedCandidate, breakdown, params.context);
       const score = scoreCompetitorCandidate(enrichedCandidate, params.context);
       const trusted = TRUSTED_SOURCES.has(enrichedCandidate.source);
       if (score < minScore && !(allowTrustedBelowThreshold && trusted)) return null;
@@ -831,6 +1276,7 @@ export function rankCompetitorCandidates(params: {
         name,
         domain,
         ...breakdown,
+        positioning,
         relevance_score: score,
         source: enrichedCandidate.source,
         classification: enrichedCandidate.classification ?? null,
@@ -862,34 +1308,246 @@ export function filterProfileCompetitorNames(profile: CompanyProfile, competitor
     context,
     max,
     minScore: 42,
+    includeMarketSubstitutes: false,
   }).map((competitor) => competitor.name);
 }
 
+function normalizeCompetitorEntityName(value: string | null | undefined): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(COMPANY_SUFFIX_PATTERN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function domainRootKey(value: string | null | undefined): string | null {
+  const domain = normalizeCompetitorDomain(value);
+  if (!domain) return null;
+  return normalizeCompetitorEntityName(domain.split('.')[0] ?? domain);
+}
+
 function finalCompetitorKey(candidate: Pick<CompetitorCandidate, 'name' | 'domain'>): string {
-  const domain = normalizeCompetitorDomain(candidate.domain ?? candidate.name);
-  return (domain ?? cleanText(candidate.name) ?? '').toLowerCase();
+  const nameKey = normalizeCompetitorEntityName(cleanText(candidate.name));
+  const domainKey = domainRootKey(candidate.domain ?? candidate.name);
+  return nameKey || domainKey || '';
+}
+
+function candidateDedupeQuality(candidate: Partial<CompetitorCandidate>): number {
+  const confidence = Number(candidate.confidenceScore ?? candidate.enrichment?.confidence_score ?? 0);
+  const knownProfile = findKnownCompetitorProfile(candidate.name, candidate.domain);
+  return (
+    ((knownProfile?.confidence_score ?? 0) * 120) +
+    (Number.isFinite(confidence) ? confidence * 100 : 0) +
+    (candidate.enrichment ? 20 : 0) +
+    (candidate.category ? 8 : 0) +
+    (candidate.description ? 8 : 0) +
+    (candidate.domain ? 6 : 0) +
+    ((candidate.productSignals?.length ?? 0) > 0 ? 5 : 0)
+  );
 }
 
 export function dedupeCompetitorCandidates<T extends Pick<CompetitorCandidate, 'name' | 'domain' | 'source'>>(
   candidates: T[],
 ): T[] {
-  const seen = new Set<string>();
-  const deduped: T[] = [];
+  const byKey = new Map<string, T & { name: string; domain: string | null }>();
 
   for (const candidate of candidates) {
     if (FINAL_BLOCKED_SOURCES.has(candidate.source)) continue;
     const name = cleanText(candidate.name);
     const key = finalCompetitorKey(candidate);
-    if (!name || !key || seen.has(key)) continue;
-    seen.add(key);
-    deduped.push({
+    if (!name || !key) continue;
+    const normalizedCandidate = {
       ...candidate,
       name,
       domain: normalizeCompetitorDomain(candidate.domain ?? candidate.name),
-    });
+    };
+    const existing = byKey.get(key);
+    if (!existing || candidateDedupeQuality(normalizedCandidate) > candidateDedupeQuality(existing)) {
+      byKey.set(key, normalizedCandidate);
+    }
   }
 
-  return deduped;
+  return Array.from(byKey.values());
+}
+
+function detectedCompanyCategories(context: CompanyCompetitiveContext): StandardCompetitorCategory[] {
+  const joinedContext = [
+    context.marketFocus,
+    context.primaryService,
+    context.targetCustomer,
+    context.idealCustomerProfile,
+    context.brandPositioning,
+    context.businessModel,
+  ].filter(Boolean).join(' ');
+  const weightedFields: Array<[string | null, number]> = [
+    [context.marketFocus, 4],
+    [context.primaryService, 4],
+    [context.brandPositioning, 3],
+    [context.targetCustomer, 2],
+    [context.idealCustomerProfile, 2],
+    [context.businessModel, 1],
+  ];
+  const scores = new Map<StandardCompetitorCategory, number>();
+  for (const [value, weight] of weightedFields) {
+    if (!cleanText(value)) continue;
+    const category = normalizeCompetitorCategory(value, joinedContext);
+    scores.set(category, (scores.get(category) ?? 0) + weight);
+  }
+  if (scores.size === 0 && cleanText(joinedContext)) {
+    const category = normalizeCompetitorCategory(null, joinedContext);
+    scores.set(category, 1);
+  }
+  return Array.from(scores.entries())
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 2)
+    .map(([category]) => category);
+}
+
+function competitorEvidenceText(competitor: Partial<RankedCompetitor>): string {
+  return [
+    competitor.name,
+    competitor.domain,
+    competitor.category,
+    competitor.rationale,
+    competitor.enrichment?.category,
+    competitor.enrichment?.description,
+    competitor.enrichment?.business_model,
+    competitor.enrichment?.product_type,
+    competitor.enrichment?.icp?.age_group,
+    competitor.enrichment?.icp?.use_case,
+    competitor.enrichment?.icp?.user_intent,
+  ].filter(Boolean).join(' ');
+}
+
+function hasStrictCategoryFit(
+  competitor: Partial<RankedCompetitor>,
+  context: CompanyCompetitiveContext,
+): boolean {
+  if (UNRELATED_COMPETITOR_TEXT_PATTERN.test(competitorEvidenceText(competitor))) return false;
+  const topCategories = detectedCompanyCategories(context);
+  if (topCategories.length === 0) return true;
+  const competitorCategory = normalizeCompetitorCategory(
+    competitor.category,
+    competitorEvidenceText(competitor),
+  );
+  return topCategories.some((companyCategory) => {
+    if (companyCategory === 'mental_wellness_ai' && competitorCategory === 'ai_companion') {
+      const evidence = competitorEvidenceText(competitor).toLowerCase();
+      const wellnessUseCase =
+        /\b(mental wellness|mental wellbeing|mental health|therapy|therapeutic|clarity|decision[-\s]?making|decision support|self[-\s]?reflection|guided journaling)\b/.test(evidence);
+      const companionUseCase =
+        /\b(companionship|relationship|conversation partner|romantic|friend|connection)\b/.test(evidence);
+      return wellnessUseCase && !companionUseCase;
+    }
+    const affinity = categoryAffinity(companyCategory, competitorCategory);
+    return affinity === 'same' || affinity === 'functional';
+  });
+}
+
+function rankedCompetitorQuality(competitor: RankedCompetitor): number {
+  return (
+    Number(competitor.enrichment_confidence_score ?? competitor.enrichment?.confidence_score ?? 0) * 100 +
+    Number(competitor.final_score ?? 0) * 10 +
+    Number(competitor.problem_overlap ?? 0) * 5 +
+    Number(competitor.icp_overlap ?? 0) * 5
+  );
+}
+
+function dedupeRankedCompetitors(competitors: RankedCompetitor[]): RankedCompetitor[] {
+  const byKey = new Map<string, RankedCompetitor>();
+  for (const competitor of competitors) {
+    const key = finalCompetitorKey(competitor);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (!existing || rankedCompetitorQuality(competitor) > rankedCompetitorQuality(existing)) {
+      byKey.set(key, competitor);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function sortFinalCompetitors(left: RankedCompetitor, right: RankedCompetitor): number {
+  const tierDelta = (TIER_PRIORITY[left.tier] ?? 99) - (TIER_PRIORITY[right.tier] ?? 99);
+  if (tierDelta !== 0) return tierDelta;
+  const finalDelta = Number(right.final_score ?? 0) - Number(left.final_score ?? 0);
+  if (finalDelta !== 0) return finalDelta;
+  const relevanceDelta = Number(right.relevance_score ?? 0) - Number(left.relevance_score ?? 0);
+  if (relevanceDelta !== 0) return relevanceDelta;
+  return left.name.localeCompare(right.name);
+}
+
+function finalCompetitorOutputLimit(max?: number): number {
+  return Math.min(max ?? FINAL_COMPETITOR_MAX_COUNT, FINAL_COMPETITOR_MAX_COUNT);
+}
+
+function finalCompetitorRankingPoolSize(candidateCount: number, max?: number): number {
+  return Math.min(
+    candidateCount,
+    Math.max(max ?? FINAL_COMPETITOR_MAX_COUNT, FINAL_COMPETITOR_MAX_COUNT, FINAL_COMPETITOR_MIN_COUNT * 3),
+  );
+}
+
+function filterFinalCompetitorsWithAudit(params: {
+  competitors: RankedCompetitor[];
+  context: CompanyCompetitiveContext;
+  max?: number;
+  minScore?: number;
+  feedbackMemory?: CompetitorFeedbackMemory | null;
+}): RankedCompetitor[] {
+  const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
+  const audit = {
+    initial_candidates: params.competitors.length,
+    removed_due_to_threshold: 0,
+    removed_due_to_category: 0,
+    removed_due_to_confidence: 0,
+    suppressed_by_feedback: [] as string[],
+    boosted_by_feedback: [] as string[],
+    final_count: 0,
+  };
+  const filtered: RankedCompetitor[] = [];
+
+  for (const competitor of dedupeRankedCompetitors(params.competitors)) {
+    const feedbackDecision = getCompetitorFeedbackDecision(params.feedbackMemory, competitor);
+    if (feedbackDecision?.suppressed) {
+      audit.suppressed_by_feedback.push(competitor.name);
+      continue;
+    }
+    const enrichmentConfidence = Number(
+      competitor.enrichment_confidence_score ?? competitor.enrichment?.confidence_score ?? 0,
+    );
+    if (!Number.isFinite(enrichmentConfidence) || enrichmentConfidence < FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE) {
+      audit.removed_due_to_confidence += 1;
+      continue;
+    }
+    if (!hasStrictCategoryFit(competitor, params.context)) {
+      audit.removed_due_to_category += 1;
+      continue;
+    }
+    if (!hasPassedFinalCompetitorGate(competitor, minScore)) {
+      audit.removed_due_to_threshold += 1;
+      continue;
+    }
+    const boosted = applyCompetitorFeedbackBoost(competitor, feedbackDecision);
+    if (boosted !== competitor) audit.boosted_by_feedback.push(competitor.name);
+    filtered.push(boosted);
+  }
+
+  const finalCompetitors = filtered
+    .sort(sortFinalCompetitors)
+    .filter((competitor, _index, sorted) => {
+      if (competitor.source !== 'market_substitute') return true;
+      return sorted.filter((item) => item.source === 'market_substitute').indexOf(competitor) < MARKET_SUBSTITUTE_MAX_COUNT;
+    })
+    .slice(0, finalCompetitorOutputLimit(params.max));
+  audit.final_count = finalCompetitors.length;
+  console.info('[competitor-final-filter][audit]', audit);
+  console.info('[competitor-feedback][trace]', {
+    suppressed_by_feedback: audit.suppressed_by_feedback,
+    boosted_by_feedback: audit.boosted_by_feedback,
+  });
+  return finalCompetitors;
 }
 
 export function hasPassedFinalCompetitorGate(
@@ -903,20 +1561,116 @@ export function hasPassedFinalCompetitorGate(
   if (!Number.isFinite(competitor.relevance_score) || Number(competitor.relevance_score) < minScore) return false;
   if (!Number.isFinite(competitor.final_score) || Number(competitor.final_score) <= 0) return false;
   if (Math.round(Number(competitor.final_score) * 100) < minScore) return false;
+  if (Number(competitor.problem_overlap ?? 0) < FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP) return false;
+  if (Number(competitor.icp_overlap ?? 0) < FINAL_COMPETITOR_MIN_ICP_OVERLAP) return false;
+  if (Number(competitor.final_score ?? 0) < FINAL_COMPETITOR_MIN_FINAL_SCORE) return false;
+  if (!Number.isFinite(competitor.authority_score) || Number(competitor.authority_score) < 0) return false;
+  if (!competitor.authority_signals || typeof competitor.authority_signals !== 'object') return false;
+  const positioning = competitor.positioning;
+  if (!positioning || typeof positioning !== 'object') return false;
+  if (!['low', 'medium', 'high'].includes(String(positioning.threat_level))) return false;
+  if (!Array.isArray(positioning.strengths_vs_company) || positioning.strengths_vs_company.length === 0) return false;
+  if (!Array.isArray(positioning.weaknesses_vs_company) || positioning.weaknesses_vs_company.length === 0) return false;
+  if (!cleanText(positioning.differentiation)) return false;
+  if (isAuthorityDominatedMismatch(competitor)) return false;
   const enrichmentConfidence = Number(
     competitor.enrichment_confidence_score ?? competitor.enrichment?.confidence_score ?? 0,
   );
-  if (!competitor.enrichment || !Number.isFinite(enrichmentConfidence) || enrichmentConfidence < 0.5) return false;
+  if (
+    !competitor.enrichment ||
+    !Number.isFinite(enrichmentConfidence) ||
+    enrichmentConfidence < FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE
+  ) return false;
   return true;
 }
 
 function toRevalidationCandidate(candidate: CompetitorCandidate): CompetitorCandidate {
+  const preserveInlineEnrichment = candidate.source === 'market_substitute';
   return {
+    ...candidate,
     name: candidate.name,
     domain: normalizeCompetitorDomain(candidate.domain ?? candidate.name),
     source: candidate.source,
     classification: candidate.classification ?? undefined,
+    rationale: preserveInlineEnrichment ? candidate.rationale : undefined,
+    category: preserveInlineEnrichment ? candidate.category : undefined,
+    tags: preserveInlineEnrichment ? candidate.tags : undefined,
+    description: preserveInlineEnrichment ? candidate.description : undefined,
+    targetCustomer: preserveInlineEnrichment ? candidate.targetCustomer : undefined,
+    useCase: preserveInlineEnrichment ? candidate.useCase : undefined,
+    geography: preserveInlineEnrichment ? candidate.geography : undefined,
+    businessModel: preserveInlineEnrichment ? candidate.businessModel : undefined,
+    revenueRange: preserveInlineEnrichment ? candidate.revenueRange : undefined,
+    productSignals: preserveInlineEnrichment ? candidate.productSignals : undefined,
+    productType: preserveInlineEnrichment ? candidate.productType : undefined,
+    scaleSignals: preserveInlineEnrichment ? candidate.scaleSignals : undefined,
+    confidenceScore: preserveInlineEnrichment ? candidate.confidenceScore : undefined,
+    enrichment: preserveInlineEnrichment ? candidate.enrichment : undefined,
   };
+}
+
+function hasHighConfidenceNamedCompetitor(competitors: RankedCompetitor[]): boolean {
+  return competitors.some((competitor) =>
+    competitor.source !== 'market_substitute' &&
+    Number(competitor.relevance_score ?? 0) >= HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE
+  );
+}
+
+function addMarketSubstitutesWhenNeeded(params: {
+  candidates: CompetitorCandidate[];
+  context: CompanyCompetitiveContext;
+  finalCompetitors: RankedCompetitor[];
+  max?: number;
+  includeMarketSubstitutes?: boolean;
+}): CompetitorCandidate[] {
+  if (params.includeMarketSubstitutes !== true) return params.candidates;
+  if (params.finalCompetitors.length === 0) return params.candidates;
+  if (params.finalCompetitors.length >= finalCompetitorOutputLimit(params.max)) return params.candidates;
+  if (hasHighConfidenceNamedCompetitor(params.finalCompetitors)) return params.candidates;
+  if (params.candidates.some((candidate) => candidate.source === 'market_substitute')) return params.candidates;
+  const substitutes = inferCompetitorArchetypeCandidates(params.context, 'market_substitute');
+  if (substitutes.length === 0) return params.candidates;
+  console.info('[competitor-final-filter][market-substitutes-added]', {
+    reason: 'no_named_competitor_at_or_above_90',
+    substitute_count: substitutes.length,
+    substitutes: substitutes.map((candidate) => candidate.name),
+  });
+  return dedupeCompetitorCandidates([...params.candidates, ...substitutes]).map(toRevalidationCandidate);
+}
+
+export function splitRankedCompetitorsForOutput(
+  competitors: RankedCompetitor[],
+  competitorMax = FINAL_COMPETITOR_MAX_COUNT,
+  alternativeMax = MARKET_SUBSTITUTE_MAX_COUNT,
+): { competitors: RankedCompetitor[]; market_alternatives: RankedCompetitor[] } {
+  const sorted = [...competitors].sort(sortFinalCompetitors);
+  return {
+    competitors: sorted
+      .filter((competitor) => competitor.source !== 'market_substitute')
+      .slice(0, competitorMax),
+    market_alternatives: sorted
+      .filter((competitor) => competitor.source === 'market_substitute')
+      .slice(0, alternativeMax),
+  };
+}
+
+export function assertCompetitorOutputPartition(
+  partition: { competitors: Array<{ name?: string | null; source?: string | null }>; market_alternatives?: Array<{ name?: string | null; source?: string | null }> },
+  context = 'competitor_output',
+): void {
+  const substituteCompetitors = partition.competitors
+    .filter((competitor) => competitor.source === 'market_substitute')
+    .map((competitor) => competitor.name || 'unnamed');
+  if (substituteCompetitors.length > 0) {
+    throw new Error(`${context}_market_substitute_in_competitors:${substituteCompetitors.join(',')}`);
+  }
+
+  const nonSubstituteAlternatives = (partition.market_alternatives ?? [])
+    .filter((competitor) => competitor.source !== 'market_substitute')
+    .map((competitor) => competitor.name || 'unnamed');
+  if (nonSubstituteAlternatives.length > 0) {
+    throw new Error(`${context}_named_competitor_in_market_alternatives:${nonSubstituteAlternatives.join(',')}`);
+  }
 }
 
 export async function getFinalCompetitors(params: {
@@ -926,24 +1680,60 @@ export async function getFinalCompetitors(params: {
   minScore?: number;
   useNetwork?: boolean;
   useStoredCache?: boolean;
+  companyId?: string | null;
+  feedbackMemory?: CompetitorFeedbackMemory | null;
+  includeMarketSubstitutes?: boolean;
 }): Promise<RankedCompetitor[]> {
   const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
-  const candidates = dedupeCompetitorCandidates(params.candidates).map(toRevalidationCandidate);
-  if (candidates.length === 0) return [];
+  const feedbackMemory = params.feedbackMemory ?? (params.companyId
+    ? await loadCompetitorFeedbackMemory({
+        companyId: params.companyId,
+        categories: detectedCompanyCategories(params.context),
+      })
+    : null);
+  const candidates = dedupeCompetitorCandidates([
+    ...params.candidates,
+    ...buildFeedbackMissingCompetitorCandidates(feedbackMemory),
+  ]).map(toRevalidationCandidate);
 
-  const enriched = await enrichCompetitorCandidates({
+  const runPipeline = async (pipelineCandidates: CompetitorCandidate[]): Promise<RankedCompetitor[]> => {
+    if (pipelineCandidates.length === 0) return [];
+    const enriched = await enrichCompetitorCandidates({
+      candidates: pipelineCandidates,
+      useNetwork: params.useNetwork,
+      useStoredCache: params.useStoredCache,
+    });
+
+    const ranked = rankCompetitorCandidates({
+      candidates: enriched,
+      context: params.context,
+      max: finalCompetitorRankingPoolSize(enriched.length, params.max),
+      minScore,
+      allowTrustedBelowThreshold: false,
+    });
+    return filterFinalCompetitorsWithAudit({
+      competitors: ranked,
+      context: params.context,
+      max: params.max,
+      minScore,
+      feedbackMemory,
+    });
+  };
+
+  let finalCompetitors = await runPipeline(candidates);
+  const expandedCandidates = addMarketSubstitutesWhenNeeded({
     candidates,
-    useNetwork: params.useNetwork,
-    useStoredCache: params.useStoredCache,
-  });
-
-  return rankCompetitorCandidates({
-    candidates: enriched,
     context: params.context,
+    finalCompetitors,
     max: params.max,
-    minScore,
-    allowTrustedBelowThreshold: false,
-  }).filter((competitor) => hasPassedFinalCompetitorGate(competitor, minScore));
+    includeMarketSubstitutes: params.includeMarketSubstitutes,
+  });
+  if (expandedCandidates.length !== candidates.length) {
+    finalCompetitors = await runPipeline(expandedCandidates);
+  } else if (candidates.length === 0) {
+    finalCompetitors = await runPipeline(expandedCandidates);
+  }
+  return finalCompetitors;
 }
 
 export function getFinalCompetitorsSync(params: {
@@ -951,18 +1741,46 @@ export function getFinalCompetitorsSync(params: {
   context: CompanyCompetitiveContext;
   max?: number;
   minScore?: number;
+  feedbackMemory?: CompetitorFeedbackMemory | null;
+  includeMarketSubstitutes?: boolean;
 }): RankedCompetitor[] {
   const minScore = params.minScore ?? FINAL_COMPETITOR_MIN_SCORE;
-  const candidates = dedupeCompetitorCandidates(params.candidates).map(toRevalidationCandidate);
-  if (candidates.length === 0) return [];
+  const candidates = dedupeCompetitorCandidates([
+    ...params.candidates,
+    ...buildFeedbackMissingCompetitorCandidates(params.feedbackMemory),
+  ]).map(toRevalidationCandidate);
+  const runPipeline = (pipelineCandidates: CompetitorCandidate[]): RankedCompetitor[] => {
+    if (pipelineCandidates.length === 0) return [];
+    const ranked = rankCompetitorCandidates({
+      candidates: pipelineCandidates,
+      context: params.context,
+      max: finalCompetitorRankingPoolSize(pipelineCandidates.length, params.max),
+      minScore,
+      allowTrustedBelowThreshold: false,
+    });
+    return filterFinalCompetitorsWithAudit({
+      competitors: ranked,
+      context: params.context,
+      max: params.max,
+      minScore,
+      feedbackMemory: params.feedbackMemory,
+    });
+  };
 
-  return rankCompetitorCandidates({
+  let finalCompetitors = runPipeline(candidates);
+  const expandedCandidates = addMarketSubstitutesWhenNeeded({
     candidates,
     context: params.context,
+    finalCompetitors,
     max: params.max,
-    minScore,
-    allowTrustedBelowThreshold: false,
-  }).filter((competitor) => hasPassedFinalCompetitorGate(competitor, minScore));
+    includeMarketSubstitutes: params.includeMarketSubstitutes,
+  });
+  if (expandedCandidates.length !== candidates.length) {
+    finalCompetitors = runPipeline(expandedCandidates);
+  } else if (candidates.length === 0) {
+    finalCompetitors = runPipeline(expandedCandidates);
+  }
+  return finalCompetitors;
 }
 
 export function buildCandidatesFromNames(

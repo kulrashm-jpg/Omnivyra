@@ -1,9 +1,11 @@
 import { supabase } from '../db/supabaseClient';
 import { getProfile, saveProfile, type CompanyProfile } from './companyProfileService';
 import {
+  assertCompetitorOutputPartition,
   buildCandidatesFromNames,
   extractCompetitiveContextFromResolvedInput,
   getFinalCompetitors,
+  splitRankedCompetitorsForOutput,
 } from './competitorEngineService';
 
 export type ReportRequestPayload = {
@@ -273,6 +275,8 @@ function getDefaultInputs(profile: CompanyProfile | null): ReportDefaultInputs {
       null,
     business_type:
       normalizeString(storedDefaults.business_type) ??
+      normalizeString(profile?.business_classification?.level_2) ??
+      normalizeString(profile?.business_classification?.level_1) ??
       normalizeString(profile?.category) ??
       normalizeString(profile?.industry) ??
       null,
@@ -289,6 +293,8 @@ function getDefaultInputs(profile: CompanyProfile | null): ReportDefaultInputs {
       ...splitLines(profile?.youtube_url),
       ...splitLines(profile?.tiktok_url),
       ...splitLines(profile?.reddit_url),
+      ...splitLines(profile?.pinterest_url),
+      ...splitLines(profile?.whatsapp_url),
       ...splitLines(profile?.blog_url),
       ...(Array.isArray(profile?.other_social_links)
         ? profile.other_social_links.flatMap((entry) => splitLines(entry?.url))
@@ -488,8 +494,11 @@ export async function resolveReportInput(params: {
     context: extractCompetitiveContextFromResolvedInput(resolvedInput),
     max: 5,
     useNetwork: true,
+    companyId: params.companyId,
   });
-  resolvedInput.resolved.competitors = finalCompetitors.map((competitor) => competitor.name);
+  const splitCompetitors = splitRankedCompetitorsForOutput(finalCompetitors, 5, 0);
+  assertCompetitorOutputPartition(splitCompetitors, 'report_input_resolver_competitor_output');
+  resolvedInput.resolved.competitors = splitCompetitors.competitors.map((competitor) => competitor.name);
 
   return resolvedInput;
 }

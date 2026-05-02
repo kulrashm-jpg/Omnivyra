@@ -6,12 +6,28 @@ import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/s
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
+import { saveDomainRecord, reassignDomain } from '../../../backend/services/domainRecordService';
+import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
+import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
+
+const ALLOWED_OVERRIDE_TYPES = ['no_website', 'domain_exception', 'manual_assignment'] as const;
+type OverrideType = typeof ALLOWED_OVERRIDE_TYPES[number];
+const isAllowedOverrideType = (value: unknown): value is OverrideType =>
+  typeof value === 'string'
+  && (ALLOWED_OVERRIDE_TYPES as readonly string[]).includes(value);
 
 const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
   return !!(await requireSuperAdminUser(req, res));
+};
+
+const resolveSuperAdminActor = async (
+  req: NextApiRequest,
+  res: NextApiResponse,
+): Promise<{ id: string; email?: string | null } | null> => {
+  return requireSuperAdminUser(req, res);
 };
 
 const allowedRoles = ALL_ROLES.filter((role) => role !== Role.SUPER_ADMIN);
@@ -324,22 +340,66 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'POST') {
     try {
-      const { email, companyId, role } = req.body || {};
+      const {
+        email,
+        companyId,
+        role,
+        override_domain,
+        override_reason,
+        override_type,
+        domain,
+        confirm_reassignment,
+      } = req.body || {};
       // Validate required parameters
       if (!email) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'MISSING_REQUIRED_PARAMETER',
           details: 'email is required to invite a user',
           required_fields: ['email', 'companyId']
         });
       }
       if (!companyId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'MISSING_REQUIRED_PARAMETER',
           details: 'companyId is required to invite a user',
           required_fields: ['email', 'companyId']
         });
       }
+
+      // Override flag — additive. When false/absent, behavior is unchanged.
+      // When true, override_reason + override_type are REQUIRED, and a
+      // company_domains row is written via saveDomainRecord with
+      // verification_status='admin_override'. If the input domain is already
+      // claimed by another company, the request must additionally pass
+      // confirm_reassignment=true to authorize moving the domain.
+      const overrideEnabled = override_domain === true;
+      const overrideReasonText =
+        typeof override_reason === 'string' ? override_reason.trim() : '';
+      const overrideTypeValue: OverrideType | null =
+        overrideEnabled && isAllowedOverrideType(override_type)
+          ? override_type
+          : null;
+      const confirmReassignment = confirm_reassignment === true;
+
+      if (overrideEnabled && !overrideReasonText) {
+        return res.status(400).json({
+          error: 'OVERRIDE_REASON_REQUIRED',
+          details: 'override_reason must be a non-empty string when override_domain is true',
+        });
+      }
+      if (overrideEnabled && !overrideTypeValue) {
+        return res.status(400).json({
+          error: 'OVERRIDE_TYPE_REQUIRED',
+          details: 'override_type must be one of: no_website, domain_exception, manual_assignment',
+          allowed: ALLOWED_OVERRIDE_TYPES,
+        });
+      }
+
+      // Resolve actor up-front so audit_log writes never fall back to NULL and
+      // we never risk a second res.* call after side effects have run.
+      const superAdminActor = await resolveSuperAdminActor(req, res);
+      if (!superAdminActor) return;
+      const actorUserId: string = superAdminActor.id || SYSTEM_USER_ID;
 
       const normalizedEmail = String(email).trim().toLowerCase();
       const desiredRole = String(role || Role.COMPANY_ADMIN).toUpperCase();
@@ -385,12 +445,124 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
       });
 
-      await insertAuditLog({
-        actorUserId: null,
+      // Override path: record the override domain on company_domains via the
+      // shared writer. We keep this OUTSIDE the user-creation path so the
+      // existing flow is byte-for-byte preserved when override_domain is false.
+      //
+      // If the domain is already claimed by another company, saveDomainRecord
+      // returns a structured DOMAIN_ALREADY_CLAIMED conflict. We escalate to
+      // reassignDomain ONLY when confirm_reassignment === true; otherwise the
+      // request is rejected so reassignment can never happen silently.
+      let overrideDomainSaved: { ok: boolean; error?: string; id?: string } | null = null;
+      let overrideInputDomain: string | null = null;
+      const affectedCompanyIds: string[] = [];
+
+      if (overrideEnabled) {
+        overrideInputDomain = String(
+          domain || normalizedEmail.split('@')[1] || '',
+        ).trim().toLowerCase();
+
+        if (overrideInputDomain) {
+          const firstAttempt = await saveDomainRecord({
+            company_id:          companyId,
+            input_domain:        overrideInputDomain,
+            final_domain:        overrideInputDomain,
+            redirect_chain:      null,
+            is_forwarding:       false,
+            verification_status: 'admin_override',
+            created_via:         'admin',
+            override_reason:     overrideReasonText,
+            is_primary:          false,
+          });
+
+          if (firstAttempt.ok) {
+            overrideDomainSaved = firstAttempt;
+            affectedCompanyIds.push(companyId);
+          } else if (firstAttempt.conflict?.code === 'DOMAIN_ALREADY_CLAIMED') {
+            const existingCompanyId = firstAttempt.conflict.existing_company_id;
+            affectedCompanyIds.push(existingCompanyId, companyId);
+
+            if (!confirmReassignment) {
+              await insertAuditLogStrict({
+                actorUserId: actorUserId,
+                action: 'SUPER_ADMIN_INVITE_REJECTED',
+                targetUserId: userId,
+                companyId,
+                metadata: {
+                  reason:                'DOMAIN_ALREADY_CLAIMED',
+                  override:              true,
+                  override_type:         overrideTypeValue,
+                  override_reason:       overrideReasonText,
+                  input_domain:          overrideInputDomain,
+                  final_domain:          overrideInputDomain,
+                  affected_company_ids:  affectedCompanyIds,
+                  existing_company_id:   existingCompanyId,
+                },
+              });
+              return res.status(409).json({
+                error: 'DOMAIN_ALREADY_CLAIMED',
+                details:
+                  'This domain is currently claimed by another company. ' +
+                  'Pass confirm_reassignment=true to authorize moving it.',
+                existing_company_id: existingCompanyId,
+                required_field: 'confirm_reassignment',
+              });
+            }
+
+            const reassignResult = await reassignDomain({
+              domain:               overrideInputDomain,
+              from_company_id:      existingCompanyId,
+              to_company_id:        companyId,
+              reason:                overrideReasonText,
+              actor_user_id:         actorUserId,
+              confirm_reassignment:  true,
+            });
+            overrideDomainSaved = reassignResult;
+            if (!reassignResult.ok) {
+              logger.warn('super_admin_users_override_reassign_failed', {
+                companyId,
+                from_company_id: existingCompanyId,
+                input_domain: overrideInputDomain,
+                error: reassignResult.error,
+              });
+            }
+          } else {
+            overrideDomainSaved = firstAttempt;
+            logger.warn('super_admin_users_override_domain_save_failed', {
+              companyId,
+              input_domain: overrideInputDomain,
+              error: firstAttempt.error,
+            });
+          }
+        }
+      }
+
+      // Audit — actor_user_id is guaranteed non-null via insertAuditLogStrict.
+      await insertAuditLogStrict({
+        actorUserId: actorUserId,
         action: 'SUPER_ADMIN_INVITE',
         targetUserId: userId,
         companyId,
-        metadata: { role: desiredRole, invitationId: invitation.id },
+        metadata: {
+          role: desiredRole,
+          invitationId: invitation.id,
+          override: overrideEnabled,
+          override_type:        overrideEnabled ? overrideTypeValue : null,
+          override_reason:      overrideEnabled ? overrideReasonText : null,
+          input_domain:         overrideEnabled ? overrideInputDomain : null,
+          final_domain:         overrideEnabled ? overrideInputDomain : null,
+          affected_company_ids: overrideEnabled ? affectedCompanyIds : null,
+          confirm_reassignment: overrideEnabled ? confirmReassignment : null,
+          domain_record_saved:  overrideDomainSaved?.ok ?? null,
+        },
+      });
+
+      // Soft-enforcement signal — logs when an invitation is issued for a
+      // company whose domain is not yet verified/admin_override. Never blocks.
+      void logDomainUnverifiedUsageForCompany({
+        company_id: companyId,
+        operation:  'super_admin_invite',
+        metadata:   { invitationId: invitation.id, target_user_id: userId, role: desiredRole },
       });
 
       return res.status(201).json({

@@ -108,6 +108,7 @@ async function getValidatedCompetitors(companyId: string, names: string[]) {
     context,
     max: Math.max(1, names.length),
     useNetwork: true,
+    companyId,
   });
 }
 

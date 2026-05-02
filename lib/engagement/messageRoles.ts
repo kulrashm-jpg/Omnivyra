@@ -25,17 +25,57 @@ export function isDmMessageType(messageType: string | null | undefined): boolean
 /** Inputs the role checker accepts. Each field is optional because
  *  callers see different subsets of message metadata. */
 export type AuthorSelfInputs = {
+  /** Platform name. Needed for platform-specific identity inference. */
+  platform?: string | null;
+  /** Native platform message id/URN. LinkedIn DM ids include the mailbox owner. */
+  platform_message_id?: string | null;
   /** engagement_messages.direction column (incoming|outgoing). */
   direction?: string | null;
   /** engagement_messages.raw_payload.author_self boolean. */
   author_self?: boolean | null;
   /** engagement_messages.raw_payload.sender_self boolean (legacy DM ingester). */
   sender_self?: boolean | null;
+  /** Scraped sender username/member id. */
+  sender_username?: string | null;
+  /** Scraped sender profile URL. */
+  sender_profile_url?: string | null;
   /** Message content. LinkedIn's preview rows prefix self-sent messages
    *  with "You: " — we use this as a fallback signal when the boolean
    *  flags aren't populated. */
   content?: string | null;
 };
+
+export function extractLinkedInMailboxProfileId(
+  platformMessageId: string | null | undefined,
+): string | null {
+  const raw = (platformMessageId ?? '').toString();
+  const match = raw.match(/urn:li:msg_message:\(urn:li:fsd_profile:([^,\s)]+)/i);
+  return match?.[1]?.trim() || null;
+}
+
+function normalizeLinkedInIdentityToken(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').toString().trim();
+  if (!trimmed) return null;
+  const profileMatch = trimmed.match(/\/in\/([^/?#]+)/i);
+  return (profileMatch?.[1] ?? trimmed).replace(/\/+$/, '').toLowerCase();
+}
+
+export function isLinkedInMailboxSelfSender(inputs: AuthorSelfInputs): boolean {
+  const platform = (inputs.platform ?? '').toString().trim().toLowerCase();
+  if (platform && platform !== 'linkedin') return false;
+
+  const mailboxProfileId = normalizeLinkedInIdentityToken(
+    extractLinkedInMailboxProfileId(inputs.platform_message_id),
+  );
+  if (!mailboxProfileId) return false;
+
+  const senderTokens = [
+    normalizeLinkedInIdentityToken(inputs.sender_username),
+    normalizeLinkedInIdentityToken(inputs.sender_profile_url),
+  ].filter((token): token is string => Boolean(token));
+
+  return senderTokens.some((token) => token === mailboxProfileId);
+}
 
 /** True when the message in question was authored by the logged-in user.
  *  Combines direction, raw-payload booleans, and the LinkedIn "You:"
@@ -46,6 +86,7 @@ export function isAuthorSelf(inputs: AuthorSelfInputs): boolean {
   if (inputs.sender_self === true) return true;
   const trimmed = (inputs.content ?? '').toString().trim();
   if (/^you\s*:/i.test(trimmed)) return true;
+  if (isLinkedInMailboxSelfSender(inputs)) return true;
   return false;
 }
 
@@ -63,4 +104,13 @@ export function stripSenderColonPrefix(content: string | null | undefined): stri
   const senderMatch = trimmed.match(/^([A-Z][\w'.-]{0,40})\s*:\s*/);
   if (senderMatch) return trimmed.slice(senderMatch[0].length).trim();
   return trimmed;
+}
+
+export function isActionableDmPreview(content: string | null | undefined): boolean {
+  const trimmed = (content || '').toString().replace(/\s+/g, ' ').trim();
+  if (!trimmed) return false;
+  // LinkedIn sometimes exposes notification wrapper text in the inbox list
+  // instead of the actual message body. That is metadata, not a reply target.
+  if (/\bsent the following messages? at\b/i.test(trimmed)) return false;
+  return true;
 }

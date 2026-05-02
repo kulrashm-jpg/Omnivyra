@@ -10,7 +10,18 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getThreads } from '../../../backend/services/engagementThreadService';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { isAuthorSelf, isDmMessageType } from '../../../lib/engagement/messageRoles';
+import { isActionableDmPreview, isAuthorSelf, isDmMessageType } from '../../../lib/engagement/messageRoles';
+import {
+  resolveDmThreadIdentity,
+  type DmIdentityMessage,
+} from '../../../lib/engagement/dmThreadIdentity';
+import { compareMessagesDescending } from '../../../lib/engagement/messageTime';
+import {
+  ACTIONABLE_INBOX_LOOKBACK_DAYS,
+  isNeedsResponseThread,
+  isPeopleReactionThread,
+} from '../../../lib/engagement/queueRules';
+
 
 function normalizeActionTargetId(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -28,6 +39,45 @@ function addActionTarget(
   lookup.set(normalized, existing);
 }
 
+function parseTimeMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeComparableText(value: string | null | undefined): string | null {
+  const normalized = (value ?? '').replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeDisplayNameKey(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized || ['unknown', 'linkedin member', 'member'].includes(normalized)) return null;
+  return normalized;
+}
+
+function actionCoversLatestMessage(
+  actionTime: string | null | undefined,
+  latestMessageTime: string | null | undefined,
+  actionText?: string | null,
+  latestMessageText?: string | null,
+): boolean {
+  const normalizedActionText = normalizeComparableText(actionText);
+  const normalizedLatestText = normalizeComparableText(latestMessageText);
+  if (normalizedActionText && normalizedLatestText && normalizedActionText === normalizedLatestText) {
+    return true;
+  }
+
+  const latestMs = parseTimeMs(latestMessageTime);
+  if (latestMs === null) return true;
+
+  const actionMs = parseTimeMs(actionTime);
+  if (actionMs === null) return false;
+
+  return actionMs >= latestMs;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
@@ -38,7 +88,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     (req.query.organization_id ?? req.query.organizationId ?? req.query.companyId) as string | undefined;
   const platform = (req.query.platform as string)?.trim() || undefined;
   const priority = (req.query.priority ?? req.query.status) as 'high' | 'medium' | 'low' | undefined;
-  const startDate = (req.query.start_date ?? req.query.dateFrom) as string | undefined;
+  const startDateParam = (req.query.start_date ?? req.query.dateFrom) as string | undefined;
+  const startDate =
+    startDateParam || new Date(Date.now() - ACTIONABLE_INBOX_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const endDate = (req.query.end_date ?? req.query.dateTo) as string | undefined;
   const limit = Math.min(500, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
 
@@ -96,6 +148,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const messageTypeByThread = new Map<string, string>();
     const messageDirectionByThread = new Map<string, string | null>();
     const messageAuthorSelfByThread = new Map<string, boolean>();
+    const latestMessageByThread = new Map<string, DmIdentityMessage>();
+    const dmMessagesByThread = new Map<string, DmIdentityMessage[]>();
     // For DM dedup we also need the participant author_id on each thread's
     // latest message — the engagement_authors row is keyed on LinkedIn
     // profile URL, so it's a stable per-person identifier across the
@@ -103,29 +157,87 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // conversation. Display name is intentionally NOT used as the dedup
     // key (two real people sharing a name would collide).
     const messageAuthorIdByThread = new Map<string, string | null>();
+    // Build a lookup from possible community_ai_actions.target_id values
+    // back to UI threads. It includes platform thread ids, participant
+    // identities, and local engagement_messages ids for degraded DM sends.
+    const threadIdsByActionTarget = new Map<string, Set<string>>();
     const latestMessageIds = nonEmptyThreads
       .map((t) => t.latest_message_id)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
     if (latestMessageIds.length > 0) {
       const { data: latestMsgs } = await supabase
         .from('engagement_messages')
-        .select('id, thread_id, message_type, direction, content, author_id, raw_payload')
+        .select('id, thread_id, platform, platform_message_id, message_type, direction, content, author_id, raw_payload')
         .in('id', latestMessageIds);
       (latestMsgs ?? []).forEach(
-        (m: { thread_id: string; message_type: string; direction: string | null; content: string | null; author_id: string | null; raw_payload: Record<string, unknown> | null }) => {
+        (m: { id: string; thread_id: string; platform: string | null; platform_message_id: string | null; message_type: string; direction: string | null; content: string | null; author_id: string | null; raw_payload: Record<string, unknown> | null }) => {
+          addActionTarget(threadIdsByActionTarget, m.id, m.thread_id);
           messageTypeByThread.set(m.thread_id, m.message_type);
           messageDirectionByThread.set(m.thread_id, m.direction ?? null);
           messageAuthorIdByThread.set(m.thread_id, m.author_id ?? null);
+          latestMessageByThread.set(m.thread_id, {
+            platform: m.platform,
+            platform_message_id: m.platform_message_id,
+            message_type: m.message_type,
+            direction: m.direction ?? null,
+            content: m.content,
+            author_id: m.author_id ?? null,
+            raw_payload: m.raw_payload ?? null,
+          });
           const rp = m.raw_payload || {};
           messageAuthorSelfByThread.set(
             m.thread_id,
             isAuthorSelf({
+              platform: m.platform,
+              platform_message_id: m.platform_message_id,
               direction: m.direction,
               author_self: rp.author_self as boolean | null | undefined,
               sender_self: rp.sender_self as boolean | null | undefined,
+              sender_username: rp.sender_username as string | null | undefined,
+              sender_profile_url: rp.sender_profile_url as string | null | undefined,
               content: m.content,
             }),
           );
+        }
+      );
+    }
+
+    if (threadIds.length > 0) {
+      const { data: dmMessages } = await supabase
+        .from('engagement_messages')
+        .select('id, thread_id, platform, platform_message_id, message_type, direction, content, author_id, platform_created_at, created_at, raw_payload')
+        .in('thread_id', threadIds)
+        .order('platform_created_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false, nullsFirst: false })
+        .limit(5000);
+      const orderedDmMessages = [...(dmMessages ?? [])].sort(compareMessagesDescending);
+      orderedDmMessages.forEach(
+        (m: {
+          id?: string | null;
+          thread_id: string;
+          platform?: string | null;
+          platform_message_id?: string | null;
+          message_type: string | null;
+          direction: string | null;
+          content: string | null;
+          author_id: string | null;
+          platform_created_at?: string | null;
+          created_at?: string | null;
+          raw_payload: Record<string, unknown> | null;
+        }) => {
+          if (!isDmMessageType(m.message_type)) return;
+          addActionTarget(threadIdsByActionTarget, m.id, m.thread_id);
+          const list = dmMessagesByThread.get(m.thread_id) ?? [];
+          list.push({
+            platform: m.platform ?? null,
+            platform_message_id: m.platform_message_id ?? null,
+            message_type: m.message_type,
+            direction: m.direction ?? null,
+            content: m.content,
+            author_id: m.author_id ?? null,
+            raw_payload: m.raw_payload ?? null,
+          });
+          dmMessagesByThread.set(m.thread_id, list);
         }
       );
     }
@@ -145,9 +257,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ingested_via: string | null;
       }
     >();
-    // Build a lookup from possible community_ai_actions.target_id values
-    // back to UI threads.
-    const threadIdsByActionTarget = new Map<string, Set<string>>();
+    const threadRawPayloadByThread = new Map<string, Record<string, unknown>>();
+    const platformThreadIdByThread = new Map<string, string | null>();
     // Threads where the LinkedIn list preview was prefixed "You: …" — the
     // DM scraper marks last_message_self=true on the thread row's raw_payload
     // for these. The user already replied directly in LinkedIn (outside
@@ -162,6 +273,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (threadMeta ?? []).forEach(
         (row: { id: string; platform_thread_id: string; raw_payload: Record<string, unknown> | null }) => {
           const rp = row.raw_payload || {};
+          threadRawPayloadByThread.set(row.id, rp);
+          platformThreadIdByThread.set(row.id, row.platform_thread_id ?? null);
+          const platformThreadId = row.platform_thread_id ?? '';
+          const looksLikePostThread = /^urn:li:(activity|share|ugcPost):/i.test(platformThreadId);
+          const lastMessagePreview =
+            typeof rp.last_message_preview === 'string'
+              ? rp.last_message_preview
+              : null;
+          const looksLikeDmThread =
+            !looksLikePostThread &&
+            (
+              (typeof rp.thread_url === 'string' && /\/messaging\//i.test(rp.thread_url))
+              || isActionableDmPreview(lastMessagePreview)
+              || rp.last_message_self === true
+            );
+          if (looksLikeDmThread && !messageTypeByThread.has(row.id)) {
+            messageTypeByThread.set(row.id, 'direct_message');
+            messageDirectionByThread.set(row.id, rp.last_message_self === true ? 'outgoing' : 'incoming');
+            messageAuthorSelfByThread.set(row.id, rp.last_message_self === true);
+          }
           const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
           postMetaByThread.set(row.id, {
             platform_thread_id: row.platform_thread_id ?? null,
@@ -186,21 +317,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
+    const dmIdentityByThread = new Map<string, ReturnType<typeof resolveDmThreadIdentity>>();
+    for (const thread of nonEmptyThreads) {
+      if (!isDmMessageType(messageTypeByThread.get(thread.thread_id))) continue;
+      const identity = resolveDmThreadIdentity({
+        platform: thread.platform,
+        threadId: thread.thread_id,
+        platformThreadId: platformThreadIdByThread.get(thread.thread_id) ?? null,
+        threadRawPayload: threadRawPayloadByThread.get(thread.thread_id) ?? null,
+        latestMessage: latestMessageByThread.get(thread.thread_id) ?? null,
+        messages: dmMessagesByThread.get(thread.thread_id) ?? [],
+      });
+      dmIdentityByThread.set(thread.thread_id, identity);
+      for (const targetId of identity.targetIds) {
+        addActionTarget(threadIdsByActionTarget, targetId, thread.thread_id);
+      }
+    }
+
     // The reply endpoint often queues LinkedIn/DM actions against the
     // counterparty profile URL or display name because extension commands
     // need a browser-resolvable target. Matching only platform_thread_id
     // misses those actions, leaving already-replied conversations in Needs
     // Response until the scraper mirrors the outbound message back.
-    const latestAuthorIds = Array.from(
+    const counterpartyAuthorIds = Array.from(
       new Set(
-        Array.from(messageAuthorIdByThread.values()).filter((id): id is string => Boolean(id))
+        Array.from(dmIdentityByThread.values())
+          .map((identity) => identity.counterpartyAuthorId)
+          .filter((id): id is string => Boolean(id))
       )
     );
-    if (latestAuthorIds.length > 0) {
+    const uniqueAuthorIdByDisplayName = new Map<string, string>();
+    const duplicateDisplayNames = new Set<string>();
+    if (counterpartyAuthorIds.length > 0) {
       const { data: authors } = await supabase
         .from('engagement_authors')
         .select('id, platform_user_id, username, display_name, profile_url')
-        .in('id', latestAuthorIds);
+        .in('id', counterpartyAuthorIds);
       for (const author of authors ?? []) {
         const a = author as {
           id: string;
@@ -209,47 +361,79 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           display_name?: string | null;
           profile_url?: string | null;
         };
-        for (const [threadId, authorId] of messageAuthorIdByThread.entries()) {
-          if (authorId !== a.id) continue;
-          if (messageAuthorSelfByThread.get(threadId) === true) continue;
+        const displayNameKey = normalizeDisplayNameKey(a.display_name);
+        const addUniqueDisplayAlias = (alias: string | null) => {
+          if (!alias) return;
+          const existingAuthorId = uniqueAuthorIdByDisplayName.get(alias);
+          if (existingAuthorId && existingAuthorId !== a.id) {
+            duplicateDisplayNames.add(alias);
+          } else {
+            uniqueAuthorIdByDisplayName.set(alias, a.id);
+          }
+        };
+        if (displayNameKey) {
+          addUniqueDisplayAlias(displayNameKey);
+        }
+        for (const [threadId, identity] of dmIdentityByThread.entries()) {
+          if (identity.counterpartyAuthorId !== a.id) continue;
           addActionTarget(threadIdsByActionTarget, a.platform_user_id, threadId);
           addActionTarget(threadIdsByActionTarget, a.profile_url, threadId);
           addActionTarget(threadIdsByActionTarget, a.username, threadId);
           addActionTarget(threadIdsByActionTarget, a.display_name, threadId);
         }
       }
+      for (const duplicateName of duplicateDisplayNames) {
+        uniqueAuthorIdByDisplayName.delete(duplicateName);
+      }
     }
 
-    // Threads where the user's reply has actually reached the platform
-    // (or been claimed by the extension for delivery) should drop out of
-    // "Needs Response". Earlier this filter also matched plain 'pending'
-    // rows — that turned out wrong: a 'pending' row with no lease is one
-    // the extension never claimed, the user's Send click sits in our
-    // queue undelivered, and dropping the thread silently hides the work.
-    //
-    // Inclusion criteria now:
-    //   - status = executed         → platform confirmed the write
-    //   - status = sent_unverified  → write accepted, no platform id back
-    //   - status = pending AND dispatch_lease_id IS NOT NULL
-    //                              → extension has claimed it, delivery
-    //                                in flight
-    // Pure pending without a lease => still in our queue, NOT delivered,
-    // thread stays in Needs Response so the operator can see something is
-    // actually pending.
+    // A thread drops out of "Needs Response" only after the outbound action
+    // is confirmed as executed. Queued browser actions can fail before
+    // LinkedIn actually receives the message, so pending/sent-unverified
+    // rows must not hide work that still needs the user's attention.
+    const latestMessageTimeByThread = new Map(
+      nonEmptyThreads.map((thread) => [thread.thread_id, thread.latest_message_time ?? null])
+    );
+    const latestMessageTextByThread = new Map(
+      nonEmptyThreads.map((thread) => [thread.thread_id, thread.latest_message ?? null])
+    );
     const respondedThreadIds = new Set<string>();
     if (threadIdsByActionTarget.size > 0) {
       const targetIds = Array.from(threadIdsByActionTarget.keys());
       const { data: actionRows } = await supabase
         .from('community_ai_actions')
-        .select('target_id, status, action_type')
+        .select('target_id, status, action_type, created_at, updated_at, final_text, suggested_text')
         .eq('organization_id', companyId)
         .in('target_id', targetIds)
-        .in('action_type', ['dm', 'reply'])
-        .in('status', ['executed', 'sent_unverified']);
+        .in('action_type', ['dm', 'reply']);
       for (const row of actionRows ?? []) {
-        const target = (row as { target_id: string }).target_id;
+        const action = row as {
+          target_id: string;
+          status?: string | null;
+          created_at?: string | null;
+          updated_at?: string | null;
+          final_text?: string | null;
+          suggested_text?: string | null;
+        };
+        const status = (action.status ?? '').trim().toLowerCase();
+        if (status !== 'executed') {
+          continue;
+        }
+        const target = action.target_id;
         const matchedThreadIds = threadIdsByActionTarget.get(target);
         for (const matchedThreadId of matchedThreadIds ?? []) {
+          const actionTime = action.updated_at ?? action.created_at ?? null;
+          const actionText = action.final_text ?? action.suggested_text ?? null;
+          if (
+            !actionCoversLatestMessage(
+              actionTime,
+              latestMessageTimeByThread.get(matchedThreadId),
+              actionText,
+              latestMessageTextByThread.get(matchedThreadId),
+            )
+          ) {
+            continue;
+          }
           respondedThreadIds.add(matchedThreadId);
         }
       }
@@ -284,6 +468,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // True when a terminal outbound reply/DM exists for this thread.
       // In-flight browser actions are intentionally not counted here because
       // LinkedIn automation can stall before the message is delivered.
+      has_completed_outbound_action: respondedThreadIds.has(t.thread_id),
       has_pending_outbound_action: respondedThreadIds.has(t.thread_id),
       platform_thread_id: postMetaByThread.get(t.thread_id)?.platform_thread_id ?? null,
       post_url: postMetaByThread.get(t.thread_id)?.post_url ?? null,
@@ -296,7 +481,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Used by the dedup pass below — multiple engagement_threads rows
       // for the same LinkedIn conversation (legacy ingester artefact)
       // collapse into a single inbox entry keyed on this id.
-      counterparty_author_id: messageAuthorIdByThread.get(t.thread_id) ?? null,
+      counterparty_author_id:
+        dmIdentityByThread.get(t.thread_id)?.counterpartyAuthorId
+        ?? messageAuthorIdByThread.get(t.thread_id)
+        ?? null,
+      counterparty_identity_key: dmIdentityByThread.get(t.thread_id)?.key ?? null,
     }));
 
     // Collapse legacy-split DM threads. The DM ingestion path historically
@@ -330,10 +519,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const row of dmRows) {
       // Fall back to thread_id when there's no author_id — without an
-      // identifier we can't safely collapse, so each row stays distinct.
-      const groupKey = row.counterparty_author_id
-        ? `${row.platform}:${row.counterparty_author_id}`
-        : `thread:${row.thread_id}`;
+      // author_id alone misses self-latest rows, so this now prefers a
+      // whole-thread counterparty key before falling back to thread_id.
+      const nameOnlyIdentity = String(row.counterparty_identity_key ?? '').startsWith('name:')
+        ? String(row.counterparty_identity_key).slice('name:'.length)
+        : null;
+      const nameAliasAuthorId = nameOnlyIdentity
+        ? (
+            uniqueAuthorIdByDisplayName.get(nameOnlyIdentity)
+          )
+        : null;
+      const groupKey = nameAliasAuthorId
+        ? `${row.platform}:author:${nameAliasAuthorId}`
+        : row.counterparty_identity_key
+          ? `${row.platform}:${row.counterparty_identity_key}`
+          : row.counterparty_author_id
+            ? `${row.platform}:author:${row.counterparty_author_id}`
+            : `thread:${row.thread_id}`;
       const existing = dmGroups.get(groupKey);
       if (!existing) {
         dmGroups.set(groupKey, { ...row, sibling_thread_ids: [] });
@@ -344,23 +546,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           existing.thread_id,
           ...(existing.sibling_thread_ids ?? []),
         ];
-        const hasPendingOutbound =
-          Boolean(existing.has_pending_outbound_action) || Boolean(row.has_pending_outbound_action);
+        const hasCompletedOutbound =
+          Boolean(existing.has_completed_outbound_action)
+          || Boolean(existing.has_pending_outbound_action)
+          || Boolean(row.has_completed_outbound_action)
+          || Boolean(row.has_pending_outbound_action);
         dmGroups.set(groupKey, {
           ...row,
           sibling_thread_ids: carriedSiblings,
           message_count: (existing.message_count ?? 0) + (row.message_count ?? 0),
-          has_pending_outbound_action: hasPendingOutbound,
+          has_completed_outbound_action: hasCompletedOutbound,
+          has_pending_outbound_action: hasCompletedOutbound,
         });
       } else {
         existing.sibling_thread_ids = [...(existing.sibling_thread_ids ?? []), row.thread_id];
         existing.message_count = (existing.message_count ?? 0) + (row.message_count ?? 0);
+        existing.has_completed_outbound_action =
+          Boolean(existing.has_completed_outbound_action)
+          || Boolean(existing.has_pending_outbound_action)
+          || Boolean(row.has_completed_outbound_action)
+          || Boolean(row.has_pending_outbound_action);
         existing.has_pending_outbound_action =
-          Boolean(existing.has_pending_outbound_action) || Boolean(row.has_pending_outbound_action);
+          Boolean(existing.has_completed_outbound_action);
       }
     }
 
-    const items = [...Array.from(dmGroups.values()), ...nonDmRows];
+    const nowMs = Date.now();
+    const items = [...Array.from(dmGroups.values()), ...nonDmRows].map((item) => ({
+      ...item,
+      needs_response_eligible: isNeedsResponseThread(item, nowMs),
+      people_reaction_eligible: isPeopleReactionThread(item, nowMs),
+    }));
 
     return res.status(200).json({ items });
   } catch (err) {

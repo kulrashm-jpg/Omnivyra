@@ -5,7 +5,7 @@ import {
 } from '../../services/snapshotReportService';
 import type { ResolvedReportInput } from '../../services/reportInputResolver';
 import {
-  assertSortedByScoreDesc,
+  assertSortedByTierThenScore,
   assertValidCompetitorList,
 } from '../helpers/assertValidCompetitor';
 
@@ -164,7 +164,7 @@ describe('snapshotReportService', () => {
     expect(report.pipeline_audit.competitor_gap_decisions_added).toBeGreaterThanOrEqual(1);
     expect(report.competitor_intelligence.detected_competitors.length).toBeGreaterThanOrEqual(1);
     assertValidCompetitorList(report.competitor_intelligence.detected_competitors as any[]);
-    assertSortedByScoreDesc(report.competitor_intelligence.detected_competitors as any[]);
+    assertSortedByTierThenScore(report.competitor_intelligence.detected_competitors as any[]);
     expect(report.sections.map((section) => section.section_name)).toEqual([
       'Visibility',
       'Content Strength',
@@ -457,7 +457,7 @@ describe('snapshotReportService', () => {
 
     expect(report.competitor_intelligence.detected_competitors.map((item) => item.name)).toEqual(['Wysa']);
     assertValidCompetitorList(report.competitor_intelligence.detected_competitors as any[]);
-    assertSortedByScoreDesc(report.competitor_intelligence.detected_competitors as any[]);
+    assertSortedByTierThenScore(report.competitor_intelligence.detected_competitors as any[]);
     expect(action.title.length).toBeGreaterThan(5);
     expect(action.reasoning.length).toBeGreaterThan(20);
     expect(action.tactics.length).toBeGreaterThanOrEqual(3);

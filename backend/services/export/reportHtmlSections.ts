@@ -94,6 +94,9 @@ function hasFinalCompetitorProof(item: any): boolean {
     category: item?.category,
     relevance_score: item?.relevanceScore,
     final_score: item?.finalScore,
+    authority_score: item?.authorityScore,
+    authority_signals: item?.authoritySignals,
+    positioning: item?.positioning,
     enrichment: item?.enrichment,
     enrichment_confidence_score: item?.enrichmentConfidenceScore,
   } as any);
@@ -623,8 +626,14 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
     || contextCompetitors.length > 0
     || strongestGap,
   );
+  const hasReportCompetitorStrategy = Boolean(
+    payload.competitiveSnapshot?.competitors?.length
+    || payload.competitivePressureAnalysis?.competitors?.length
+    || payload.competitiveStrategyMap
+    || payload.strategicPosition,
+  );
 
-  if (contextCompetitors.length === 0 || (!hasCompetitorContext && (!radar || !competitorEligible || !visuals))) {
+  if (!hasReportCompetitorStrategy && (contextCompetitors.length === 0 || (!hasCompetitorContext && (!radar || !competitorEligible || !visuals)))) {
     return `<div class="report-section" id="section-4">${sectionHeaderBar(vars.company_name, vars.report_date, { logoUrl: vars.company_logo_url, faviconUrl: vars.company_favicon_url })}<div class="label">Competitive Landscape</div><h2>Competitive Landscape</h2><div class="card-pending no-break">No competitor data available yet. Add competitor domains or competitor profile context to unlock this section.</div></div>`;
   }
 
@@ -649,6 +658,13 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
     tags?: string[];
     tier?: 'Tier 1' | 'Tier 2' | 'Tier 3' | null;
     finalScore?: number | null;
+    authorityScore?: number | null;
+    positioning?: {
+      strengths_vs_company: string[];
+      weaknesses_vs_company: string[];
+      differentiation: string;
+      threat_level: 'low' | 'medium' | 'high';
+    } | null;
     rationale: string;
     standing: 'Behind' | 'At Par' | 'Ahead';
     radarItem: typeof radar extends { competitors: Array<infer T> } ? T | null : null;
@@ -665,7 +681,9 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
       tags: item.tags ?? [],
       tier: item.tier ?? null,
       finalScore: Number.isFinite(item.finalScore) ? item.finalScore : null,
-      rationale: item.rationale,
+      authorityScore: Number.isFinite(item.authorityScore) ? item.authorityScore : null,
+      positioning: item.positioning ?? null,
+      rationale: item.positioning?.differentiation ?? item.rationale,
       standing: item.standing,
       radarItem: radarByName.get(normalizeNameKey(item.name)) ?? null,
     });
@@ -685,20 +703,54 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
     .slice(0, 5);
 
   const tierLabels = {
-    'Tier 1': 'Tier 1 · Direct competitors',
-    'Tier 2': 'Tier 2 · Functional competitors',
-    'Tier 3': 'Tier 3 · Substitute competitors',
+    'Tier 1': 'Tier 1 - Direct competitors',
+    'Tier 2': 'Tier 2 - Functional competitors',
+    'Tier 3': 'Tier 3 - Substitute competitors',
   } as const;
   const groupedCompetitorCards = (['Tier 1', 'Tier 2', 'Tier 3'] as const)
     .map((tier) => {
       const rows = competitorRows.filter((item) => item.tier === tier);
       if (!rows.length) return '';
-      return `<div class="card no-break" style="margin-top:12px;"><div class="label">${escapeHtml(tierLabels[tier])}</div><div class="grid-3" style="margin-top:10px;">${rows.map((item) => `<article class="card card-compact"><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><h3 style="margin:0;">${escapeHtml(item.name)}</h3><span class="badge badge-blue">${escapeHtml(item.category ?? getCompetitorBadgeLabel(item.classification, item.source))}</span><span class="badge badge-gray">${escapeHtml(item.tags?.join(', ') || 'untagged')}</span></div>${item.finalScore != null ? `<div class="label" style="margin-top:8px;">Final score ${escapeHtml(item.finalScore.toFixed(2))}</div>` : ''}<p style="margin-top:8px;">${escapeHtml(item.rationale)}</p></article>`).join('')}</div></div>`;
+      return `<div class="card no-break" style="margin-top:12px;"><div class="label">${escapeHtml(tierLabels[tier])}</div><div class="grid-3" style="margin-top:10px;">${rows.map((item) => `<article class="card card-compact"><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><h3 style="margin:0;">${escapeHtml(item.name)}</h3><span class="badge badge-blue">${escapeHtml(item.category ?? getCompetitorBadgeLabel(item.classification, item.source))}</span><span class="badge badge-gray">${escapeHtml(item.tags?.join(', ') || 'untagged')}</span></div>${item.finalScore != null ? `<div class="label" style="margin-top:8px;">Final score ${escapeHtml(item.finalScore.toFixed(2))}${item.authorityScore != null ? ` - Authority ${escapeHtml(item.authorityScore.toFixed(2))}` : ''}</div>` : ''}<p style="margin-top:8px;">${escapeHtml(item.rationale)}</p></article>`).join('')}</div></div>`;
     })
     .join('');
 
-  const contextCards = competitorRows.length
-    ? groupedCompetitorCards
+  const positioningSummary = competitorContext?.competitiveSummary
+    ? `<div class="card no-break" style="margin-top:12px;"><div class="label">Competitive Positioning</div><h3>${escapeHtml(competitorContext.competitiveSummary.topThreats?.join(' and ') || 'Top threats')}</h3><p>${escapeHtml(competitorContext.competitiveSummary.positioningStatement || competitorContext.summary)}</p><div class="grid-2" style="margin-top:10px;"><div><div class="label">Key Advantage</div><p>${escapeHtml(competitorContext.competitiveSummary.keyAdvantage || 'Focused positioning is the strongest defensible advantage.')}</p></div><div><div class="label">Key Risk</div><p>${escapeHtml(competitorContext.competitiveSummary.keyRisk || 'Competitors may still lead on authority and reach.')}</p></div></div></div>`
+    : '';
+
+  const snapshotCards = payload.competitiveSnapshot
+    ? `<div class="card no-break" style="margin-top:12px;"><div class="label">Competitive Snapshot Summary</div><h3>${escapeHtml(payload.competitiveSnapshot.summary.topThreat)}</h3><p>${escapeHtml(payload.competitiveSnapshot.summary.immediatePositioningAngle)}</p><p style="margin-top:8px;"><strong>Action:</strong> ${escapeHtml(payload.competitiveSnapshot.summary.action)}</p></div><div class="grid-3" style="margin-top:12px;">${payload.competitiveSnapshot.competitors.slice(0, 3).map((item) => `<article class="card card-compact"><div class="label">${escapeHtml(item.tier)}</div><h3>${escapeHtml(item.name)}</h3><div class="tags" style="margin-top:6px;"><span class="badge ${item.threatLevel === 'high' ? 'badge-red' : item.threatLevel === 'medium' ? 'badge-amber' : 'badge-green'}">${escapeHtml(item.threatLevel)} threat</span></div><p style="margin-top:8px;">${escapeHtml(item.differentiation)}</p></article>`).join('')}</div>`
+    : '';
+
+  const pressureCards = payload.competitivePressureAnalysis
+    ? `<div class="card no-break" style="margin-top:12px;"><div class="label">Competitive Pressure Analysis</div><h3>${escapeHtml(payload.competitivePressureAnalysis.summary.highestPressure)}</h3><p>${escapeHtml(payload.competitivePressureAnalysis.summary.primaryRisk)}</p><p style="margin-top:8px;"><strong>Next action:</strong> ${escapeHtml(payload.competitivePressureAnalysis.summary.nextAction)}</p></div><div class="grid-3" style="margin-top:12px;">${payload.competitivePressureAnalysis.competitors.slice(0, 5).map((item) => `<article class="card card-compact"><div class="label">${escapeHtml(item.tier)} - Authority ${escapeHtml(item.authorityScore.toFixed(2))}</div><h3>${escapeHtml(item.name)}</h3><div class="tags" style="margin-top:6px;"><span class="badge ${item.threatLevel === 'high' ? 'badge-red' : item.threatLevel === 'medium' ? 'badge-amber' : 'badge-green'}">${escapeHtml(item.threatLevel)} threat</span>${item.pressureOn.map((area) => `<span class="badge badge-blue">${escapeHtml(area)}</span>`).join('')}</div><p style="margin-top:8px;">${escapeHtml(item.action)}</p></article>`).join('')}</div>`
+    : '';
+
+  const strategyCards = payload.competitiveStrategyMap && payload.strategicPosition
+    ? (() => {
+      const tierBlock = (label: string, items: Array<{ name: string; threatLevel: 'low' | 'medium' | 'high'; differentiation: string }>) =>
+        `<article class="card card-compact"><div class="label">${escapeHtml(label)}</div>${items.length ? items.map((item) => `<div style="margin-top:8px;"><strong>${escapeHtml(item.name)}</strong> <span class="badge ${item.threatLevel === 'high' ? 'badge-red' : item.threatLevel === 'medium' ? 'badge-amber' : 'badge-green'}">${escapeHtml(item.threatLevel)} threat</span><p style="margin-top:4px;">${escapeHtml(item.differentiation)}</p></div>`).join('') : '<p>No final-gated competitors in this tier.</p>'}</article>`;
+      const opportunities = [
+        ...payload.competitiveStrategyMap.opportunityMap.whitespaceOpportunities,
+        ...payload.competitiveStrategyMap.opportunityMap.underexploitedIcpSegments,
+        ...payload.competitiveStrategyMap.opportunityMap.weakCompetitorAreas,
+      ].slice(0, 6);
+      return `<div class="card no-break" style="margin-top:12px;"><div class="label">Your Strategic Position</div><h3>${escapeHtml(payload.strategicPosition.primaryBattlefield)}</h3><p>${escapeHtml(payload.strategicPosition.positioningStatement)}</p><div class="grid-2" style="margin-top:10px;"><div><div class="label">Avoidance Zone</div><p>${escapeHtml(payload.strategicPosition.avoidanceZone)}</p></div><div><div class="label">Messaging Angle</div><p>${escapeHtml(payload.strategicPosition.messagingAngle)}</p></div></div></div><div class="grid-3" style="margin-top:12px;">${tierBlock('Tier 1 - Direct competitors', payload.competitiveStrategyMap.tierBreakdown.tier1)}${tierBlock('Tier 2 - Alternatives', payload.competitiveStrategyMap.tierBreakdown.tier2)}${tierBlock('Tier 3 - Substitutes', payload.competitiveStrategyMap.tierBreakdown.tier3)}</div><div class="card no-break" style="margin-top:12px;"><div class="label">Opportunity Map</div>${opportunities.length ? `<ul>${opportunities.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<p>No opportunity map is available yet.</p>'}</div><div class="grid-3" style="margin-top:12px;"><article class="card card-compact"><h3>How to beat Tier 1</h3><p>${escapeHtml(payload.competitiveStrategyMap.strategicActions.howToBeatTier1)}</p></article><article class="card card-compact"><h3>How to differentiate from Tier 2</h3><p>${escapeHtml(payload.competitiveStrategyMap.strategicActions.howToDifferentiateFromTier2)}</p></article><article class="card card-compact"><h3>How to ignore Tier 3</h3><p>${escapeHtml(payload.competitiveStrategyMap.strategicActions.howToIgnoreTier3)}</p></article></div>`;
+    })()
+    : '';
+
+  const contextCards = payload.reportType === 'snapshot'
+    ? snapshotCards || (competitorRows.length ? `${positioningSummary}${groupedCompetitorCards}` : '')
+    : payload.reportType === 'performance'
+      ? pressureCards || (competitorRows.length ? `${positioningSummary}${groupedCompetitorCards}` : '')
+      : payload.reportType === 'growth'
+        ? strategyCards || (competitorRows.length ? `${positioningSummary}${groupedCompetitorCards}` : '')
+        : competitorRows.length ? `${positioningSummary}${groupedCompetitorCards}` : '';
+
+  const marketAlternativeRows = (competitorContext?.marketAlternatives ?? []).slice(0, 3);
+  const marketAlternativeCards = marketAlternativeRows.length
+    ? `<div class="card no-break" style="margin-top:12px;"><div class="label">Market Alternatives</div><h3>Other ways buyers solve this problem</h3><p>These are not direct competitors. They show adjacent solution paths worth watching for positioning and messaging.</p><div class="grid-3" style="margin-top:12px;">${marketAlternativeRows.map((item) => `<article class="card card-compact"><div class="label">${escapeHtml(item.tier ?? 'Alternative')}</div><h3>${escapeHtml(item.name)}</h3><div class="tags" style="margin-top:6px;"><span class="badge badge-blue">${escapeHtml(item.category ?? 'market alternative')}</span><span class="badge badge-gray">Score ${escapeHtml(item.finalScore.toFixed(2))}</span></div><p style="margin-top:8px;">${escapeHtml(item.rationale)}</p>${item.useCase ? `<p style="margin-top:6px;"><strong>Use case:</strong> ${escapeHtml(item.useCase)}</p>` : ''}</article>`).join('')}</div></div>`
     : '';
 
   const competitorMatrix = competitorRows.length
@@ -795,7 +847,21 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
   // Heading + intro live on their own row so the section can start
   // at the bottom of any page without forcing the summary card to
   // wait for the next page.
-  const headingMarkup = `${sectionHeaderBar(vars.company_name, vars.report_date, { logoUrl: vars.company_logo_url, faviconUrl: vars.company_favicon_url })}<div class="label">Competitive Landscape</div><h2>Competitive Landscape</h2><p style="margin-bottom:12px;">This view shows who is shaping buyer expectations in the market right now, where their pressure is strongest, and how ${escapeHtml(vars.company_name)} is currently stacking up.</p>`;
+  const sectionLabel = payload.reportType === 'snapshot'
+    ? 'Competitive Snapshot'
+    : payload.reportType === 'performance'
+      ? 'Competitive Pressure Analysis'
+      : payload.reportType === 'growth'
+        ? 'Competitive Strategy Map'
+        : 'Competitive Landscape';
+  const sectionIntro = payload.reportType === 'snapshot'
+    ? 'This view keeps the competitor read executive-ready: top threats, their tier, and the immediate positioning angle.'
+    : payload.reportType === 'performance'
+      ? 'This view diagnoses where competitor authority, product depth, and ICP overlap are creating pressure.'
+      : payload.reportType === 'growth'
+        ? 'This view turns competitor tiers into whitespace, strategic actions, and the position to own.'
+        : `This view shows who is shaping buyer expectations in the market right now, where their pressure is strongest, and how ${vars.company_name} is currently stacking up.`;
+  const headingMarkup = `${sectionHeaderBar(vars.company_name, vars.report_date, { logoUrl: vars.company_logo_url, faviconUrl: vars.company_favicon_url })}<div class="label">${escapeHtml(sectionLabel)}</div><h2>${escapeHtml(sectionLabel)}</h2><p style="margin-bottom:12px;">${escapeHtml(sectionIntro)}</p>`;
   const summaryCardMarkup = summaryText
     ? `<div class="card no-break"><h3>How you compare to your market</h3><p>${escapeHtml(summaryText)}</p></div>`
     : '';
@@ -803,9 +869,14 @@ export function renderSection4CompetitorIntelligence(payload: PdfReportPayload, 
   const subsections = [
     renderSubsection(headingMarkup),
     summaryCardMarkup ? renderSubsection(summaryCardMarkup) : '',
-    competitorMatrix ? renderSubsection(competitorMatrix, { flow: true }) : '',
+    payload.reportType === 'snapshot' || payload.reportType === 'performance' || payload.reportType === 'growth'
+      ? ''
+      : competitorMatrix ? renderSubsection(competitorMatrix, { flow: true }) : '',
     contextCards ? renderSubsection(contextCards) : '',
-    influenceCards ? renderSubsection(influenceCards) : '',
+    marketAlternativeCards ? renderSubsection(marketAlternativeCards) : '',
+    payload.reportType === 'snapshot' || payload.competitivePressureAnalysis || payload.competitiveStrategyMap
+      ? ''
+      : influenceCards ? renderSubsection(influenceCards) : '',
     strongestGapCard ? renderSubsection(strongestGapCard) : '',
     movementCard ? renderSubsection(movementCard, { flow: true }) : '',
     radarCard ? renderSubsection(radarCard) : '',

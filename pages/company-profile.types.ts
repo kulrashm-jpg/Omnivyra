@@ -9,6 +9,18 @@ export type CompanyProfile = {
   name?: string;
   industry?: string;
   category?: string;
+  business_classification?: {
+    level_1:
+      | 'product_company'
+      | 'services_company'
+      | 'marketplace'
+      | 'retailer'
+      | 'distributor'
+      | 'manufacturer'
+      | 'hybrid';
+    level_2: string;
+    level_3: string[];
+  } | null;
   website_url?: string;
   logo_url?: string;
   favicon_url?: string;
@@ -32,6 +44,8 @@ export type CompanyProfile = {
   youtube_url?: string;
   tiktok_url?: string;
   reddit_url?: string;
+  pinterest_url?: string;
+  whatsapp_url?: string;
   blog_url?: string;
   other_social_links?: Array<{ label?: string; url?: string }>;
   products_services?: string;
@@ -98,6 +112,34 @@ export type CompanyProfile = {
       target_expansion_markets?: string[] | null;
       named_competitors?: string[] | null;
       business_model?: string | null;
+      provider_type?: string | null;
+      domain_role?: string | null;
+      operating_model?: string | null;
+      solution_domains?: string[] | null;
+      competitor_details?: Array<{
+        name: string;
+        category?: string | null;
+        tier?: string | null;
+        score?: number | null;
+        confidence?: number | null;
+        rationale?: string | null;
+      }> | null;
+      competitor_quality?: {
+        highest_score?: number | null;
+        threshold?: number | null;
+        threshold_met?: boolean | null;
+        detail_mode?: 'high_confidence' | 'expanded_context' | null;
+      } | null;
+      market_alternatives?: Array<{
+        name: string;
+        category?: string | null;
+        tier?: string | null;
+        score?: number | null;
+        confidence?: number | null;
+        rationale?: string | null;
+        use_case?: string | null;
+        business_model?: string | null;
+      }> | null;
       core_offerings?: string[] | null;
       growth_priorities?: string[] | null;
       partnership_priorities?: string[] | null;
@@ -138,6 +180,7 @@ export const emptyProfile: CompanyProfile = {
   name: '',
   industry: '',
   category: '',
+  business_classification: null,
   website_url: '',
   logo_url: '',
   favicon_url: '',
@@ -148,6 +191,8 @@ export const emptyProfile: CompanyProfile = {
   youtube_url: '',
   tiktok_url: '',
   reddit_url: '',
+  pinterest_url: '',
+  whatsapp_url: '',
   blog_url: '',
   other_social_links: [],
   products_services: '',
@@ -201,6 +246,13 @@ export const emptyProfile: CompanyProfile = {
       target_expansion_markets: [],
       named_competitors: [],
       business_model: '',
+      provider_type: '',
+      domain_role: '',
+      operating_model: '',
+      solution_domains: [],
+      competitor_details: [],
+      competitor_quality: null,
+      market_alternatives: [],
       core_offerings: [],
       growth_priorities: [],
       partnership_priorities: [],
@@ -239,6 +291,42 @@ export const joinList = (value?: string[] | null, fallback?: string | null): str
   return fallback || '';
 };
 
+export const normalizeProfileSocialUrl = (value?: string | null): string | null => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const parse = (input: string): string | null => {
+    try {
+      const parsed = new URL(input);
+      parsed.hash = '';
+      parsed.search = '';
+      parsed.hostname = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+      const path = parsed.pathname.replace(/\/+$/, '');
+      parsed.pathname = path || '/';
+      const normalized = parsed.toString().replace(/\/$/, '');
+      return normalized.replace(/^https:\/\/twitter\.com/i, 'https://x.com').toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+  return parse(raw) ?? parse(`https://${raw}`);
+};
+
+export const dedupeSocialProfiles = (
+  profiles?: Array<{ platform: string; url: string; source?: string; confidence?: string }> | null,
+): Array<{ platform: string; url: string; source?: string; confidence?: string }> => {
+  const deduped = new Map<string, { platform: string; url: string; source?: string; confidence?: string }>();
+  (profiles || []).forEach((entry) => {
+    const normalized = normalizeProfileSocialUrl(entry.url);
+    if (!normalized) return;
+    const platform = String(entry.platform || 'social').trim().toLowerCase();
+    const key = `${platform}:${normalized}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, { ...entry, platform, url: normalized });
+    }
+  });
+  return Array.from(deduped.values());
+};
+
 export const buildSocialProfilesFromScalars = (
   profile: CompanyProfile
 ): Array<{ platform: string; url: string; source?: string; confidence?: string }> => {
@@ -250,19 +338,12 @@ export const buildSocialProfilesFromScalars = (
     { platform: 'youtube', url: profile.youtube_url },
     { platform: 'tiktok', url: profile.tiktok_url },
     { platform: 'reddit', url: profile.reddit_url },
+    { platform: 'pinterest', url: profile.pinterest_url },
+    { platform: 'whatsapp', url: profile.whatsapp_url },
     { platform: 'blog', url: profile.blog_url },
   ].filter((entry) => entry.url);
 
-  const merged = [...(profile.social_profiles || []), ...candidates];
-  const deduped = new Map<string, { platform: string; url: string; source?: string; confidence?: string }>();
-  merged.forEach((entry) => {
-    if (!entry.url) return;
-    const key = entry.url.toLowerCase();
-    if (!deduped.has(key)) {
-      deduped.set(key, { ...entry });
-    }
-  });
-  return Array.from(deduped.values());
+  return dedupeSocialProfiles([...(profile.social_profiles || []), ...candidates]);
 };
 export default function CompanyProfileTypesPage() {
   return null;

@@ -16,7 +16,11 @@ import crypto from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { getToken, setToken } from './tokenStore';
 
-const META_GRAPH = 'https://graph.facebook.com/v18.0';
+// Meta deprecates Graph API versions ~24 months after release. Bump together
+// with all other Meta endpoints in the codebase — mismatched versions across
+// OAuth dialog/token-exchange/publish silently break the consent flow.
+export const META_GRAPH_VERSION = 'v22.0';
+const META_GRAPH = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

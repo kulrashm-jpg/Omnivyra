@@ -30,6 +30,7 @@ type CommunityAiAction = {
   risk_level?: 'low' | 'medium' | 'high' | null;
   approved_at?: string | null;
   status?: string | null;
+  metadata?: Record<string, unknown> | null;
   /** When this is a reply *to a specific comment* (not a top-level comment
    *  on a post), this carries the URN of the comment being replied to. The
    *  LinkedIn connector forwards it as `parentComment` in the API body so
@@ -624,18 +625,22 @@ const prepareBrowserDispatch = (chain?: CommandChainStep[]): ExecutionResult & {
 /**
  * DM orchestration — synthesizes a multi-step command chain when the
  * action is a DM and the target appears to be a thread URL/id that the
- * caller has not already opened. Two strategies:
+ * caller has not already opened. Strategies:
  *
- *   - target_id looks like a thread url / thread id → chain is
- *     [open_thread(target), continue_thread(text)].
+ *   - target_id looks like a thread url / thread id → emit
+ *     continue_thread(text, threadUrl/threadId).
+ *   - LinkedIn display-name/profile targets → emit continue_thread(text)
+ *     against the already-open Messaging thread. LinkedIn's start_new_dm
+ *     path is slow and brittle for reply triage because it has to search
+ *     by person name and may not be accepted by the active messaging tab.
  *   - target_id looks like a user handle / profile url → chain is
  *     [start_new_dm(recipient, text)] (single atomic step; the
  *     extension's start_new_dm opens AND sends).
  *
  * Detection is heuristic: we look for thread-url fragments first, then
  * treat anything else as a user identifier. A caller that already
- * opened the thread can bypass the chain by setting
- * action.metadata.dm_thread_ready = true.
+ * opened the thread can force an active-thread continue command by
+ * setting action.metadata.dm_thread_ready = true.
  */
 function buildDmCommandChain(action: CommunityAiAction): CommandChainStep[] | null {
   const actionType = (action.action_type || '').toString().toLowerCase();
@@ -644,13 +649,53 @@ function buildDmCommandChain(action: CommunityAiAction): CommandChainStep[] | nu
   const text = (action.suggested_text || '').toString();
   if (!text.trim()) return null;
 
-  const metadata = (action as any).metadata as Record<string, unknown> | null | undefined;
-  if (metadata && metadata.dm_thread_ready === true) return null;
+  const platform = (action.platform || '').toString().toLowerCase();
+  const metadata = action.metadata;
+  if (metadata && metadata.dm_thread_ready === true) {
+    const metadataThreadUrl =
+      typeof metadata.dm_thread_url === 'string' && metadata.dm_thread_url.trim()
+        ? metadata.dm_thread_url.trim()
+        : null;
+    const metadataThreadId =
+      typeof metadata.dm_thread_id === 'string' && metadata.dm_thread_id.trim()
+        ? metadata.dm_thread_id.trim()
+        : null;
+    const threadPayload = metadataThreadUrl
+      ? { threadUrl: metadataThreadUrl }
+      : metadataThreadId
+        ? { threadId: metadataThreadId }
+        : {};
+    const metadataParticipantName =
+      typeof metadata.dm_participant_name === 'string' && metadata.dm_participant_name.trim()
+        ? metadata.dm_participant_name.trim()
+        : null;
+    const metadataLastMessagePreview =
+      typeof metadata.dm_last_message_preview === 'string' && metadata.dm_last_message_preview.trim()
+        ? metadata.dm_last_message_preview.trim()
+        : null;
+    if (platform === 'linkedin' && (metadataThreadUrl || metadataThreadId)) {
+      return [
+        { action_type: 'open_thread', payload: threadPayload },
+        { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
+      ];
+    }
+    if (platform === 'linkedin' && metadataParticipantName) {
+      const participantPayload = {
+        participantName: metadataParticipantName,
+        ...(metadataLastMessagePreview ? { lastMessagePreview: metadataLastMessagePreview } : {}),
+      };
+      return [
+        { action_type: 'open_thread', payload: participantPayload },
+        { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...participantPayload } },
+      ];
+    }
+    return [
+      { action_type: 'continue_thread', payload: { text, autoSubmit: true, ...threadPayload } },
+    ];
+  }
 
   const target = String(action.target_id || '').trim();
   if (!target) return null;
-
-  const platform = (action.platform || '').toString().toLowerCase();
 
   const threadUrlPatterns = [
     /messenger\.com\/t\//i,
@@ -666,15 +711,38 @@ function buildDmCommandChain(action: CommunityAiAction): CommandChainStep[] | nu
     || (platform === 'linkedin' && /^2-[A-Za-z0-9_\-=]{12,}/.test(target));
 
   if (looksLikeThreadUrl || looksLikeThreadId) {
+    const threadPayload = looksLikeThreadUrl ? { threadUrl: target } : { threadId: target };
+    if (platform === 'linkedin') {
+      return [
+        {
+          action_type: 'open_thread',
+          payload: threadPayload,
+        },
+        {
+          action_type: 'continue_thread',
+          payload: {
+            text,
+            autoSubmit: true,
+            ...threadPayload,
+          },
+        },
+      ];
+    }
     return [
       {
         action_type: 'continue_thread',
         payload: {
           text,
           autoSubmit: true,
-          ...(looksLikeThreadUrl ? { threadUrl: target } : { threadId: target }),
+          ...threadPayload,
         },
       },
+    ];
+  }
+
+  if (platform === 'linkedin') {
+    return [
+      { action_type: 'continue_thread', payload: { text, autoSubmit: true } },
     ];
   }
 

@@ -52,7 +52,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const property = await saveSelectedProperty(company.id, propertyId);
-    return res.status(200).json({ status: 'ok', property });
+    return res.status(200).json({
+      status: 'connected',
+      initial_sync: 'started',
+      property,
+    });
   } catch (error) {
     return res.status(500).json({ status: 'error', message: 'Failed to select Google Analytics property' });
   }

@@ -14,12 +14,6 @@ export interface AIEngagementAssistantProps {
   recommendedThread?: InboxThread | null;
   onSelectThread?: (threadId: string) => void;
   onFilterByAuthor?: (authorName: string, platform: string) => void;
-  onUseSuggestedReply?: (replyText: string, messageId?: string | null) => void;
-  onSendSuggestedReply?: (replyText: string, messageId?: string | null) => Promise<{ mode?: string; platform?: string; message?: string } | void>;
-  /** When set, the assistant generates a suggested reply for THIS specific
-   *  message instead of defaulting to the latest inbound. Drives the
-   *  per-comment AI suggestion behaviour in People Reaction mode. */
-  replyTargetMessageId?: string | null;
   className?: string;
 }
 
@@ -34,17 +28,6 @@ type Strategy = {
   strategy_type: string;
   engagement_score: number;
   confidence_score: number;
-};
-
-type ReplyIntelligence = {
-  sample_reply: string;
-  engagement_score: number;
-};
-
-type Suggestion = {
-  id: string;
-  text: string;
-  explanation_tag?: string;
 };
 
 const ACTIVE_LEADS_ROUTE = '/dashboard/intelligence?intelTab=active-leads';
@@ -87,65 +70,18 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
   organizationId,
   recommendedThread = null,
   onSelectThread,
-  onUseSuggestedReply,
-  onSendSuggestedReply,
-  replyTargetMessageId = null,
   className = '',
 }: AIEngagementAssistantProps) {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
-  const [replies, setReplies] = useState<ReplyIntelligence[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [refinePrompt, setRefinePrompt] = useState('');
-  const [refinedReply, setRefinedReply] = useState<string | null>(null);
-  const [refining, setRefining] = useState(false);
-  const [sendingSuggestedReply, setSendingSuggestedReply] = useState(false);
-  const [suggestedReplyStatus, setSuggestedReplyStatus] = useState<string | null>(null);
 
-  // Post threads (People Reaction) — comments don't auto-suggest. The user
-  // explicitly picks which comment to respond to via Reply. DM threads keep
-  // the latest-inbound default so the operator sees a suggestion immediately
-  // on opening the conversation, which is the expected DM-triage workflow.
-  const isPostThread =
-    thread?.latest_message_type === 'comment' || thread?.latest_message_type === 'reaction';
-
-  const targetMessageId = useMemo(() => {
-    // Caller-supplied target wins. This is what the user explicitly clicked
-    // Reply on — generating against any other message would surface a wrong
-    // suggestion and silently fight the user.
-    if (replyTargetMessageId) {
-      const explicit = messages.find((m) => m.id === replyTargetMessageId);
-      if (explicit) return explicit.id;
-    }
-
-    // For post threads, no explicit target = no suggestion. The user picks.
-    if (isPostThread) return null;
-
-    const sorted = [...messages].sort((a, b) => {
-      const ta = new Date(a.platform_created_at ?? a.created_at ?? 0).getTime();
-      const tb = new Date(b.platform_created_at ?? b.created_at ?? 0).getTime();
-      return tb - ta;
-    });
-
-    const inbound = sorted.find((message) => {
-      const content = (message.content ?? '').trim();
-      if (!content) return false;
-      return !/^you\s*:/i.test(content);
-    });
-
-    return inbound?.id ?? thread?.latest_message_id ?? sorted[0]?.id ?? null;
-  }, [messages, thread?.latest_message_id, replyTargetMessageId, isPostThread]);
-
-  // Two separate fetch paths so changing the reply target doesn't refetch
-  // thread-level context. Clicking Reply on a different comment only
-  // refires the suggestion fetch — opportunities/strategies/replies stay
-  // cached for the duration of the thread.
+  // Right rail is now guidance-only. Reply drafting lives inside the
+  // conversation pane's AI Suggestions block where the operator can pick
+  // and refine one concrete option.
   const fetchThreadContext = useCallback(async () => {
     if (!organizationId || !thread?.thread_id) {
       setOpportunities([]);
-      setReplies([]);
       setStrategies([]);
       return;
     }
@@ -160,11 +96,7 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
         });
         strategyUrl = `/api/engagement/strategies?${params.toString()}`;
       }
-      let replyUrl = `/api/engagement/reply-intelligence?organization_id=${encodeURIComponent(organizationId)}`;
-      if (thread.classification_category) {
-        replyUrl += `&classification_category=${encodeURIComponent(thread.classification_category)}`;
-      }
-      const requests = [apiFetch(opportunityUrl), apiFetch(replyUrl)];
+      const requests = [apiFetch(opportunityUrl)];
       if (strategyUrl) requests.push(apiFetch(strategyUrl));
 
       const responses = await Promise.all(requests);
@@ -173,12 +105,10 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
 
       const payloads = await Promise.all(responses.map((response) => response.json()));
       setOpportunities(payloads[0]?.opportunities ?? []);
-      setReplies(payloads[1]?.replies ?? []);
-      setStrategies(strategyUrl ? payloads[2]?.strategies ?? [] : []);
+      setStrategies(strategyUrl ? payloads[1]?.strategies ?? [] : []);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : 'Failed to load engagement copilot');
       setOpportunities([]);
-      setReplies([]);
       setStrategies([]);
     }
   }, [
@@ -188,107 +118,12 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
     thread?.sentiment,
   ]);
 
-  const fetchSuggestion = useCallback(async () => {
-    if (!organizationId || !targetMessageId) {
-      setSuggestions([]);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const suggestionUrl = `/api/engagement/suggestions?${new URLSearchParams({
-        message_id: targetMessageId,
-        organization_id: organizationId,
-        organizationId: organizationId,
-      }).toString()}`;
-      const response = await apiFetch(suggestionUrl);
-      if (!response.ok) throw new Error(response.statusText || 'Failed to load suggestion');
-      const payload = await response.json();
-      setSuggestions(Array.isArray(payload?.suggestions) ? payload.suggestions : []);
-    } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : 'Failed to load suggestion');
-      setSuggestions([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [organizationId, targetMessageId]);
-
   useEffect(() => {
     void fetchThreadContext();
   }, [fetchThreadContext]);
 
-  useEffect(() => {
-    void fetchSuggestion();
-  }, [fetchSuggestion]);
-
   const topOpportunity = opportunities[0] ?? null;
-  const topReply = replies[0] ?? null;
   const topStrategy = strategies[0] ?? null;
-  const topSuggestion = suggestions[0] ?? null;
-  const displayedReply = refinedReply ?? topSuggestion?.text ?? topReply?.sample_reply ?? null;
-
-  useEffect(() => {
-    setRefinedReply(null);
-    setRefinePrompt('');
-    setSuggestedReplyStatus(null);
-  }, [thread?.thread_id, topSuggestion?.text, topReply?.sample_reply]);
-
-  useEffect(() => {
-    if (!suggestedReplyStatus) return;
-    const timer = window.setTimeout(() => setSuggestedReplyStatus(null), 5000);
-    return () => window.clearTimeout(timer);
-  }, [suggestedReplyStatus]);
-
-  const handleRefineReply = useCallback(async () => {
-    if (!organizationId || !thread?.thread_id || !displayedReply || !refinePrompt.trim()) {
-      return;
-    }
-
-    setRefining(true);
-    setError(null);
-    try {
-      const response = await apiFetch('/api/engagement/refine-suggestion', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          organization_id: organizationId,
-          thread_id: thread.thread_id,
-          draft: displayedReply,
-          instruction: refinePrompt.trim(),
-        }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(body.error || body.message || 'Failed to refine reply');
-      }
-      setRefinedReply(String(body.refined || '').trim());
-    } catch (refineError) {
-      setError(refineError instanceof Error ? refineError.message : 'Failed to refine reply');
-    } finally {
-      setRefining(false);
-    }
-  }, [displayedReply, organizationId, refinePrompt, thread?.thread_id]);
-
-  const handleSendSuggestedReply = useCallback(async () => {
-    if (!displayedReply || !onSendSuggestedReply || sendingSuggestedReply) {
-      return;
-    }
-
-    setSendingSuggestedReply(true);
-    setError(null);
-    setSuggestedReplyStatus(null);
-    try {
-      const result = await onSendSuggestedReply(displayedReply, targetMessageId);
-      const resultMessage = result && typeof result === 'object' ? result.message : null;
-      setSuggestedReplyStatus(
-        resultMessage || 'Suggested reply submitted. It may take a few seconds to reflect on the platform.'
-      );
-    } catch (sendError) {
-      setError(sendError instanceof Error ? sendError.message : 'Failed to send suggested reply');
-    } finally {
-      setSendingSuggestedReply(false);
-    }
-  }, [displayedReply, onSendSuggestedReply, sendingSuggestedReply, targetMessageId]);
 
   const nextAction = useMemo(() => {
     if (!thread) return 'Select a thread to see the next action.';
@@ -326,7 +161,7 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
     <div className={`flex h-full flex-col overflow-hidden border-l border-slate-200 bg-slate-50 ${className}`}>
       <div className="shrink-0 border-b border-slate-200 bg-white p-4">
         <h3 className="text-sm font-semibold text-slate-800">AI Triage Copilot</h3>
-        <p className="mt-1 text-xs text-slate-500">Suggested reply, next action, and why this thread matters.</p>
+        <p className="mt-1 text-xs text-slate-500">Next action and why this thread matters.</p>
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
@@ -363,88 +198,6 @@ export const AIEngagementAssistant = React.memo(function AIEngagementAssistant({
             ) : null}
           </div>
         ) : null}
-
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Suggested Reply</div>
-          {loading ? (
-            <p className="mt-3 text-sm text-slate-500">Loading reply guidance...</p>
-          ) : displayedReply ? (
-            <>
-              <p className="mt-3 text-sm leading-6 text-slate-700">{displayedReply}</p>
-              {refinedReply ? (
-                <p className="mt-2 text-xs text-indigo-600">Refined with AI chat</p>
-              ) : topSuggestion?.explanation_tag ? (
-                <p className="mt-2 text-xs text-slate-500">{topSuggestion.explanation_tag.trim()}</p>
-              ) : topReply?.engagement_score ? (
-                <p className="mt-2 text-xs text-slate-500">Engagement score {topReply.engagement_score.toFixed(1)}</p>
-              ) : null}
-              <div className="mt-4 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  {onUseSuggestedReply ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onUseSuggestedReply(displayedReply, targetMessageId);
-                        setSuggestedReplyStatus('Suggested reply inserted into the composer.');
-                      }}
-                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      Use reply
-                    </button>
-                  ) : null}
-                  {onSendSuggestedReply ? (
-                    <button
-                      type="button"
-                      onClick={() => void handleSendSuggestedReply()}
-                      disabled={sendingSuggestedReply}
-                      className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {sendingSuggestedReply ? 'Sending...' : 'Send now'}
-                    </button>
-                  ) : null}
-                </div>
-                {suggestedReplyStatus ? (
-                  <p className="text-xs text-emerald-700">{suggestedReplyStatus}</p>
-                ) : null}
-                <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                  Refine With AI
-                </label>
-                <textarea
-                  value={refinePrompt}
-                  onChange={(event) => setRefinePrompt(event.target.value)}
-                  placeholder="Example: make this sharper, shorter, more consultative"
-                  rows={2}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleRefineReply()}
-                    disabled={refining || !refinePrompt.trim()}
-                    className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {refining ? 'Refining...' : 'Refine reply'}
-                  </button>
-                  {refinedReply ? (
-                    <button
-                      type="button"
-                      onClick={() => setRefinedReply(null)}
-                      className="text-xs font-medium text-slate-600 hover:text-slate-800"
-                    >
-                      Reset
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            </>
-          ) : (
-            <p className="mt-3 text-sm text-slate-500">
-              {isPostThread
-                ? 'Click Reply on a specific comment to generate a suggestion for it.'
-                : 'No suggested reply yet. Open the reply composer to generate one.'}
-            </p>
-          )}
-        </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Next Action</div>

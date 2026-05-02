@@ -37,6 +37,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { isAuthorSelf } from '../../../lib/engagement/messageRoles';
 
 function normalizeLinkedInProfileUrl(input: string | null | undefined): { url: string; slug: string } | null {
   if (!input) return null;
@@ -180,7 +181,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const ids = threadIds.slice(i, i + CHUNK);
     const { data: msgRows, error: msgFetchErr } = await supabase
       .from('engagement_messages')
-      .select('id, thread_id, direction, raw_payload')
+      .select('id, thread_id, platform, platform_message_id, direction, content, raw_payload')
       .in('thread_id', ids);
     if (msgFetchErr) {
       console.error('[backfill-self-signals] message fetch failed:', msgFetchErr.message);
@@ -189,7 +190,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     for (const row of (msgRows ?? []) as Array<{
       id: string;
       thread_id: string;
+      platform: string | null;
+      platform_message_id: string | null;
       direction: string | null;
+      content: string | null;
       raw_payload: Record<string, unknown> | null;
     }>) {
       const rp = row.raw_payload ?? {};
@@ -197,7 +201,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const senderUsername = typeof rp.sender_username === 'string' ? rp.sender_username : null;
       const matchUrl = senderProfileUrl !== null && senderProfileUrl === selfUrl;
       const matchSlug = senderUsername !== null && senderUsername.toLowerCase() === selfSlug;
-      if (!matchUrl && !matchSlug) continue;
+      const inferredSelf = isAuthorSelf({
+        platform: row.platform,
+        platform_message_id: row.platform_message_id,
+        direction: row.direction,
+        author_self: rp.author_self as boolean | null | undefined,
+        sender_self: rp.sender_self as boolean | null | undefined,
+        sender_username: senderUsername,
+        sender_profile_url: senderProfileUrl,
+        content: row.content,
+      });
+      if (!matchUrl && !matchSlug && !inferredSelf) continue;
 
       const alreadyOutgoing = row.direction === 'outgoing' && rp.author_self === true && rp.sender_self === true;
       if (alreadyOutgoing && !force) continue;
@@ -235,6 +249,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // no DISTINCT ON, so we fetch in chunks and pick the freshest per thread
   // in JS. Reuses the CHUNK constant declared above.
   const latestByThread = new Map<string, {
+    platform: string | null;
+    platform_message_id: string | null;
     direction: string | null;
     content: string | null;
     raw_payload: Record<string, unknown> | null;
@@ -244,7 +260,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const ids = threadsNeedingBackfill.slice(i, i + CHUNK).map((t) => t.id);
     const { data: msgRows, error: msgErr } = await supabase
       .from('engagement_messages')
-      .select('thread_id, direction, content, raw_payload, platform_created_at, created_at')
+      .select('thread_id, platform, platform_message_id, direction, content, raw_payload, platform_created_at, created_at')
       .in('thread_id', ids)
       // platform_created_at DESC NULLS LAST, fall back to created_at DESC
       // for rows where the scraper never stamped a platform timestamp.
@@ -258,6 +274,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     for (const m of (msgRows ?? []) as Array<{
       thread_id: string;
+      platform: string | null;
+      platform_message_id: string | null;
       direction: string | null;
       content: string | null;
       raw_payload: Record<string, unknown> | null;
@@ -267,6 +285,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // thread_id is the latest.
       if (!latestByThread.has(m.thread_id)) {
         latestByThread.set(m.thread_id, {
+          platform: m.platform,
+          platform_message_id: m.platform_message_id,
           direction: m.direction,
           content: m.content,
           raw_payload: m.raw_payload,
@@ -291,11 +311,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       continue;
     }
     const rp = latest.raw_payload ?? {};
-    const isSelf =
-      latest.direction === 'outgoing'
-      || rp.sender_self === true
-      || rp.author_self === true
-      || /^you\s*:/i.test((latest.content ?? '').trim());
+    const isSelf = isAuthorSelf({
+      platform: latest.platform,
+      platform_message_id: latest.platform_message_id,
+      direction: latest.direction,
+      author_self: rp.author_self as boolean | null | undefined,
+      sender_self: rp.sender_self as boolean | null | undefined,
+      sender_username: rp.sender_username as string | null | undefined,
+      sender_profile_url: rp.sender_profile_url as string | null | undefined,
+      content: latest.content,
+    });
 
     const newRawPayload = { ...(t.raw_payload ?? {}), last_message_self: isSelf };
     const { error: updErr } = await supabase

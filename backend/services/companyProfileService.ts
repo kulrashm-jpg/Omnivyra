@@ -91,15 +91,32 @@ import {
 import { refineProblemTransformationAnswers } from './companyProfile/problemTransformation';
 import { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
 import { generateMarketingIntelligenceDraft } from './companyProfile/marketingIntelligence';
+import { classifyCompanyBusiness } from './companyProfile/businessClassification';
 import { buildSavePayload } from './companyProfile/savePayload';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
 import {
+  findKnownCompetitorProfile,
+  listKnownCompetitorProfiles,
+  type CompetitorEnrichmentProfile,
+} from './competitorEnrichmentKnowledge';
+import {
+  assertCompetitorOutputPartition,
   buildCandidatesFromNames,
   extractCompetitiveContextFromProfile,
   getFinalCompetitors,
-  getFinalCompetitorsSync,
-  type CompetitorSource,
+  hasPassedFinalCompetitorGate,
+  HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE,
+  splitRankedCompetitorsForOutput,
+  type CompanyCompetitiveContext,
+  type CompetitorCandidate,
+  type RankedCompetitor,
 } from './competitorEngineService';
+import {
+  discoverCompetitorDomainsFromSerp,
+  domainToName,
+  generateDiscoveryKeywords,
+  normalizeDomain as normalizeCompetitorDiscoveryDomain,
+} from './reportCompetitorIntelligenceServiceHelpers';
 
 const COMPANY_PROFILES_TABLE = 'company_profiles' as const;
 const COMPANY_PROFILE_FALLBACK_COLUMNS = [
@@ -107,6 +124,7 @@ const COMPANY_PROFILE_FALLBACK_COLUMNS = [
   'name',
   'industry',
   'category',
+  'business_classification',
   'website_url',
   'logo_url',
   'favicon_url',
@@ -130,6 +148,8 @@ const COMPANY_PROFILE_FALLBACK_COLUMNS = [
   'youtube_url',
   'tiktok_url',
   'reddit_url',
+  'pinterest_url',
+  'whatsapp_url',
   'blog_url',
   'other_social_links',
   'products_services',
@@ -338,21 +358,360 @@ function fillMissingList(current: string[] | null | undefined, fallback: string[
   return next.length > 0 ? Array.from(new Set(next)).slice(0, 8) : null;
 }
 
-function mapExtractionCompetitorSource(source?: string | null): CompetitorSource {
-  if (source === 'website' || source === 'social' || source === 'user') return source;
-  return 'profile_ai';
+function ensureMinimumDiscoveryKeywords(profile: CompanyProfile, keywords: string[]): string[] {
+  const base = normalizeNonEmptyText(profile.category)
+    ?? normalizeNonEmptyText(profile.products_services)
+    ?? normalizeNonEmptyText(profile.industry)
+    ?? normalizeNonEmptyText(profile.name)
+    ?? 'business software';
+  const merged = [...keywords];
+  [
+    `${base} competitors`,
+    `${base} alternatives`,
+    `${base} tools`,
+    `${base} apps`,
+    `${base} market leaders`,
+  ].forEach((keyword) => {
+    if (!merged.some((item) => item.toLowerCase() === keyword.toLowerCase())) {
+      merged.push(keyword);
+    }
+  });
+  return merged.slice(0, 10);
+}
+
+function expandRefineDiscoveryKeywords(profile: CompanyProfile, keywords: string[]): string[] {
+  const terms = [
+    profile.category,
+    profile.products_services,
+    profile.industry,
+    profile.target_audience,
+    profile.ideal_customer_profile,
+    profile.brand_positioning,
+  ]
+    .flatMap((value) => splitToList(Array.isArray(value) ? value.join(', ') : value))
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const expanded = [...keywords];
+  terms.forEach((term) => {
+    [`best ${term}`, `${term} competitors`, `${term} alternatives`, `${term} platforms`].forEach((query) => {
+      if (!expanded.some((item) => item.toLowerCase() === query.toLowerCase())) {
+        expanded.push(query);
+      }
+    });
+  });
+  return ensureMinimumDiscoveryKeywords(profile, expanded).slice(0, 10);
+}
+
+function knownProfileToCompetitorCandidate(
+  profile: CompetitorEnrichmentProfile,
+  index: number,
+  geography: string | null | undefined,
+): CompetitorCandidate {
+  return {
+    name: profile.name,
+    domain: profile.domain,
+    category: profile.category,
+    tags: profile.tags,
+    classification: index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader',
+    source: 'known_category_dataset',
+    description: profile.description,
+    targetCustomer: profile.icp.age_group,
+    useCase: profile.icp.use_case ?? profile.icp.user_intent,
+    geography: geography ?? profile.geography,
+    businessModel: profile.business_model,
+    productType: profile.product_type,
+    scaleSignals: profile.scale_signals,
+    confidenceScore: profile.confidence_score,
+    productSignals: [profile.product_type, profile.category, ...profile.tags].filter(Boolean),
+    rationale: 'Selected from the known category competitor dataset after refine discovery needed validated candidates.',
+  };
+}
+
+function knownDatasetCompetitorCandidates(geography: string | null | undefined): CompetitorCandidate[] {
+  return listKnownCompetitorProfiles().map((profile, index) => knownProfileToCompetitorCandidate(profile, index, geography));
+}
+
+function knownDatasetCompetitorCandidatesByName(
+  names: string[],
+  geography: string | null | undefined,
+): CompetitorCandidate[] {
+  return names
+    .map((name) => findKnownCompetitorProfile(name))
+    .filter((profile): profile is CompetitorEnrichmentProfile => Boolean(profile))
+    .map((profile, index) => knownProfileToCompetitorCandidate(profile, index, geography));
+}
+
+function buildProfileForCompetitorDiscovery(
+  workingProfile: CompanyProfile,
+  extraction: CompanyProfileExtractionOutput,
+): CompanyProfile {
+  const existingConfidence = workingProfile.field_confidence || {};
+  const industryUpdate = updateArrayField(workingProfile.industry_list ?? splitToList(workingProfile.industry), extraction.industry?.value, extraction.industry?.source, existingConfidence.industry, extraction.industry?.confidence);
+  const categoryUpdate = updateArrayField(workingProfile.category_list ?? splitToList(workingProfile.category), extraction.category?.value, extraction.category?.source, existingConfidence.category, extraction.category?.confidence);
+  const geographyUpdate = updateArrayField(workingProfile.geography_list ?? splitToList(workingProfile.geography), extraction.geography?.value, extraction.geography?.source, existingConfidence.geography, extraction.geography?.confidence);
+  const productsUpdate = updateArrayField(workingProfile.products_services_list ?? splitToList(workingProfile.products_services), extraction.products_services?.value, extraction.products_services?.source, existingConfidence.products_services, extraction.products_services?.confidence);
+  const audienceUpdate = updateArrayField(workingProfile.target_audience_list ?? splitToList(workingProfile.target_audience), extraction.target_audience?.value, extraction.target_audience?.source, existingConfidence.target_audience, extraction.target_audience?.confidence);
+  const classified = classifyCompanyBusiness({
+    ...workingProfile,
+    industry: industryUpdate.value.join(', ') || workingProfile.industry,
+    category: categoryUpdate.value.join(', ') || workingProfile.category,
+    products_services: productsUpdate.value.join(', ') || workingProfile.products_services,
+    target_audience: audienceUpdate.value.join(', ') || workingProfile.target_audience,
+    industry_list: industryUpdate.value,
+    category_list: categoryUpdate.value,
+    products_services_list: productsUpdate.value,
+    target_audience_list: audienceUpdate.value,
+  }, extraction);
+
+  return {
+    ...workingProfile,
+    business_classification: classified.business_classification,
+    industry: classified.industry.join(', '),
+    category: classified.category,
+    geography: geographyUpdate.value.join(', ') || workingProfile.geography,
+    products_services: productsUpdate.value.join(', ') || workingProfile.products_services,
+    target_audience: audienceUpdate.value.join(', ') || workingProfile.target_audience,
+    industry_list: classified.industry,
+    category_list: [classified.category],
+    geography_list: geographyUpdate.value,
+    products_services_list: productsUpdate.value,
+    target_audience_list: audienceUpdate.value,
+    competitors: null,
+    competitors_list: [],
+  };
+}
+
+type RefineCompetitorDiscovery = {
+  candidates: CompetitorCandidate[];
+  fallbackCandidates: CompetitorCandidate[];
+  keywords: string[];
+  serpDomains: string[];
+};
+
+const REFINE_CATEGORY_PROFILES: Array<{
+  key: string;
+  pattern: RegExp;
+  competitorNames: string[];
+  context: Partial<CompanyCompetitiveContext>;
+}> = [
+  {
+    key: 'ai_guided_wellness_and_clarity',
+    pattern: /\b(ai clarity|clarity engine|clarity assistant|personalized guidance|personal guidance|self[- ]?reflection|mental wellness|mental health|mental clarity|personal development|personal growth|decision[- ]?making|decision support|life decision|therapy chatbot|emotional wellbeing|wellbeing)\b/i,
+    competitorNames: ['Wysa', 'Woebot Health', 'Reflectly', 'Replika', 'Headspace', 'Calm'],
+    context: {
+      marketFocus: 'AI mental wellness, guided clarity, and self-reflection support',
+      primaryService: 'AI clarity engine for self-reflection, emotional wellbeing, and life decisions',
+      targetCustomer: 'individuals seeking personal clarity and guided self-reflection',
+      idealCustomerProfile: 'people seeking private emotional support, mental clarity, and structured reflection',
+      brandPositioning: 'AI-guided personal clarity and mental wellness platform',
+      businessModel: 'B2C software platform',
+    },
+  },
+  {
+    key: 'crm_marketing_automation_growth',
+    pattern: /\b(crm|ai marketing|marketing automation|campaign planning|campaign management|campaign intelligence|sales automation|customer operations|revenue operations|lead nurturing|lead generation|seo intelligence|b2b marketing|growth intelligence)\b/i,
+    competitorNames: ['HubSpot', 'Salesforce', 'ActiveCampaign', 'Adobe Marketo Engage', 'Semrush'],
+    context: {
+      marketFocus: 'CRM, marketing automation, and AI growth intelligence',
+      primaryService: 'AI marketing automation and customer growth platform',
+      targetCustomer: 'B2B founders, marketers, and growth teams',
+      idealCustomerProfile: 'lean growth teams managing campaigns and customer acquisition',
+      brandPositioning: 'AI-powered marketing operations and growth intelligence platform',
+      businessModel: 'B2B SaaS',
+    },
+  },
+];
+
+function matchingRefineCategoryProfiles(signalText: string) {
+  return REFINE_CATEGORY_PROFILES.filter((profile) => profile.pattern.test(signalText));
+}
+
+function prioritizedKnownDatasetCompetitorCandidatesForSignal(
+  signalText: string,
+  geography: string | null | undefined,
+): CompetitorCandidate[] {
+  const competitorNames = matchingRefineCategoryProfiles(signalText)
+    .flatMap((profile) => profile.competitorNames);
+  return knownDatasetCompetitorCandidatesByName(Array.from(new Set(competitorNames)), geography);
+}
+
+function profileDiscoverySignalText(profile: CompanyProfile, keywords: string[] = []): string {
+  return [
+    profile.name,
+    profile.website_url,
+    profile.industry,
+    profile.category,
+    profile.products_services,
+    profile.target_audience,
+    profile.goals,
+    profile.content_themes,
+    profile.brand_voice,
+    profile.ideal_customer_profile,
+    profile.brand_positioning,
+    profile.unique_value,
+    ...(profile.industry_list ?? []),
+    ...(profile.category_list ?? []),
+    ...(profile.products_services_list ?? []),
+    ...(profile.target_audience_list ?? []),
+    ...(profile.goals_list ?? []),
+    ...(profile.content_themes_list ?? []),
+    ...(profile.brand_voice_list ?? []),
+    ...keywords,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function competitorValidationContextForProfile(profile: CompanyProfile): CompanyCompetitiveContext {
+  const baseContext = extractCompetitiveContextFromProfile(profile);
+  const signalText = profileDiscoverySignalText(profile);
+  const matchedCategory = matchingRefineCategoryProfiles(signalText)[0];
+  if (matchedCategory) return { ...baseContext, ...matchedCategory.context };
+  return baseContext;
+}
+
+function refineDiscoverySignalText(
+  profile: CompanyProfile,
+  extraction: CompanyProfileExtractionOutput,
+  discovery: RefineCompetitorDiscovery,
+): string {
+  return [
+    profileDiscoverySignalText(profile, discovery.keywords),
+    extraction.industry?.value,
+    extraction.category?.value,
+    extraction.products_services?.value,
+    extraction.target_audience?.value,
+    extraction.goals?.value,
+    extraction.content_themes?.value,
+    extraction.brand_voice?.value,
+    extraction.unique_value_proposition?.value,
+    ...discovery.keywords,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function buildRefineRecoveryContexts(params: {
+  baseContext: CompanyCompetitiveContext;
+  profile: CompanyProfile;
+  extraction: CompanyProfileExtractionOutput;
+  discovery: RefineCompetitorDiscovery;
+}): CompanyCompetitiveContext[] {
+  const signalText = refineDiscoverySignalText(params.profile, params.extraction, params.discovery);
+  const contexts: CompanyCompetitiveContext[] = [];
+  const pushContext = (context: CompanyCompetitiveContext) => {
+    const key = [
+      context.marketFocus,
+      context.primaryService,
+      context.targetCustomer,
+      context.idealCustomerProfile,
+      context.brandPositioning,
+      context.businessModel,
+    ].filter(Boolean).join('|').toLowerCase();
+    if (!key || contexts.some((existing) => [
+      existing.marketFocus,
+      existing.primaryService,
+      existing.targetCustomer,
+      existing.idealCustomerProfile,
+      existing.brandPositioning,
+      existing.businessModel,
+    ].filter(Boolean).join('|').toLowerCase() === key)) return;
+    contexts.push(context);
+  };
+
+  pushContext({
+    ...params.baseContext,
+    marketFocus: [params.baseContext.marketFocus, ...params.discovery.keywords].filter(Boolean).join(', '),
+    primaryService: params.baseContext.primaryService ?? params.discovery.keywords[0] ?? null,
+    brandPositioning: params.baseContext.brandPositioning ?? params.profile.unique_value ?? null,
+  });
+
+  matchingRefineCategoryProfiles(signalText).forEach((categoryProfile) => {
+    pushContext({ ...params.baseContext, ...categoryProfile.context });
+  });
+
+  return contexts;
+}
+
+function buildPrioritizedRefineFallbackCandidates(params: {
+  profile: CompanyProfile;
+  extraction: CompanyProfileExtractionOutput;
+  discovery: RefineCompetitorDiscovery;
+}): CompetitorCandidate[] {
+  const signalText = refineDiscoverySignalText(params.profile, params.extraction, params.discovery);
+  return prioritizedKnownDatasetCompetitorCandidatesForSignal(signalText, params.profile.geography ?? null);
+}
+
+async function discoverRefineCompetitorCandidates(
+  profile: CompanyProfile,
+): Promise<RefineCompetitorDiscovery> {
+  const keywords = ensureMinimumDiscoveryKeywords(profile, generateDiscoveryKeywords(profile));
+  const ownDomain =
+    normalizeCompetitorDiscoveryDomain(profile.website_url)
+    ?? normalizeCompetitorDiscoveryDomain(profile.name)
+    ?? 'current-company.local';
+  const initialDiscovery = await discoverCompetitorDomainsFromSerp({
+    keywords,
+    ownDomain,
+    geography: profile.geography ?? null,
+  });
+  let serpDomains = initialDiscovery.domains;
+
+  if (serpDomains.length === 0) {
+    const retryKeywords = expandRefineDiscoveryKeywords(profile, keywords);
+    const retryDiscovery = await discoverCompetitorDomainsFromSerp({
+      keywords: retryKeywords,
+      ownDomain,
+      geography: profile.geography ?? null,
+    });
+    serpDomains = retryDiscovery.domains;
+  }
+
+  const serpCandidates = serpDomains.map((domain, index) => ({
+    name: domainToName(domain),
+    domain,
+    source: 'serp_live' as const,
+    classification: index === 0 ? 'direct_competitor' as const : index === 1 ? 'seo_competitor' as const : 'authority_leader' as const,
+    rationale: 'Discovered through refine SERP competitor discovery.',
+  }));
+  const prioritizedFallbackCandidates = prioritizedKnownDatasetCompetitorCandidatesForSignal(
+    profileDiscoverySignalText(profile, keywords),
+    profile.geography ?? null,
+  );
+  const fallbackCandidates = prioritizedFallbackCandidates.length > 0
+    ? prioritizedFallbackCandidates
+    : knownDatasetCompetitorCandidates(profile.geography ?? null);
+  const candidates = serpCandidates.length > 0 ? serpCandidates : fallbackCandidates;
+
+  console.info('[refine][competitor-discovery]', {
+    keywords_generated: keywords,
+    serp_domains_found: serpDomains.length,
+    final_candidates_count: candidates.length,
+    fallback_used: serpCandidates.length === 0,
+    fallback_scope: prioritizedFallbackCandidates.length > 0 ? 'category_specific' : 'broad_known_dataset',
+  });
+
+  return {
+    candidates,
+    fallbackCandidates,
+    keywords,
+    serpDomains,
+  };
 }
 
 function inferBusinessModelLabel(input: {
   category?: string | null;
   industry?: string | null;
   productsServices?: string[] | null;
+  uniqueValue?: string | null;
+  brandPositioning?: string | null;
+  contentThemes?: string[] | null;
   websiteUrl?: string | null;
 }): string | null {
   const text = [
     input.category,
     input.industry,
     ...(input.productsServices ?? []),
+    input.uniqueValue,
+    input.brandPositioning,
+    ...(input.contentThemes ?? []),
     input.websiteUrl,
   ]
     .filter(Boolean)
@@ -366,6 +725,155 @@ function inferBusinessModelLabel(input: {
   if (/\bmanufacturer\b|\bmanufacturing\b|\bvehicle\b|\bapparel\b|\bfootwear\b|\bhardware\b/.test(text)) return 'Manufacturer';
   if (/\bsaas\b|\bsoftware\b|\bplatform\b|\bcrm\b|\bautomation\b|\bpayments\b/.test(text)) return 'SaaS';
   return null;
+}
+
+export type CompanyDomainShape = {
+  provider_type: string | null;
+  domain_role: string | null;
+  operating_model: string | null;
+  solution_domains: string[];
+};
+
+type CompanyDomainShapeInput = {
+  category?: string | null;
+  industry?: string | null;
+  productsServices?: string[] | null;
+  goals?: string[] | null;
+  contentThemes?: string[] | null;
+  targetAudience?: string[] | null;
+  uniqueValue?: string | null;
+  brandPositioning?: string | null;
+  campaignFocus?: string | null;
+  coreProblem?: string | null;
+  painSymptoms?: string[] | null;
+  authorityDomains?: string[] | null;
+  websiteUrl?: string | null;
+};
+
+function textFromValue(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((item) => normalizeNonEmptyText(item))
+      .filter((item): item is string => Boolean(item))
+      .join(', ');
+    return normalizeNonEmptyText(joined);
+  }
+  return normalizeNonEmptyText(value);
+}
+
+function normalizeFieldValueList(value: unknown): string[] {
+  if (Array.isArray(value)) return normalizeStringArray(value);
+  const text = textFromValue(value);
+  if (!text) return [];
+  const split = splitToList(text);
+  return split.length > 1 ? split : [text];
+}
+
+function inferSolutionDomainsFromText(text: string, fallbackCategory?: string | null): string[] {
+  const domains = new Set<string>();
+  const add = (pattern: RegExp, label: string) => {
+    if (pattern.test(text)) domains.add(label);
+  };
+
+  add(/\bmental\s+clarity\b|\bclarity\b|\bfocus\b|\bmindfulness\b/, 'mental clarity');
+  add(/\bdecision[-\s]?making\b|\bdecision\b|\bdirection\b|\bguidance\b|\bchoice\b|\bchoices\b/, 'decision support');
+  add(/\bself[-\s]?reflection\b|\breflect(ion|ive|ly)?\b|\bjournal(ing)?\b|\bintrospection\b/, 'self-reflection');
+  add(/\bmental\s+(health|wellness|wellbeing)\b|\btherapy\b|\btherapeutic\b|\banxiety\b|\bstress\b|\bemotional\b|\bwellness\b/, 'mental wellness');
+  add(/\bpersonal\s+growth\b|\bgrowth\b|\bself[-\s]?improvement\b|\bhabits?\b/, 'personal growth');
+  add(/\bcareer\b|\bstudent\b|\bprofessionals?\b|\blife\s+direction\b/, 'career and life guidance');
+  add(/\bcrm\b|\bsales\b|\blead\b|\bpipeline\b|\brevenue\b/, 'sales and CRM automation');
+  add(/\bmarketing\b|\bcampaign\b|\bseo\b|\bcontent\b|\bbrand\b|\bvisibility\b|\bdemand\b/, 'marketing growth');
+  add(/\bcustomer\s+engagement\b|\bengagement\b|\bretention\b|\blifecycle\b/, 'customer engagement');
+  add(/\bconsult(ant|ants|ing|ancy)?\b|\badvisory\b|\badvisor\b|\bexpert[-\s]?led\b/, 'consulting and advisory');
+  add(/\bpayments?\b|\bfintech\b|\bbilling\b|\bcheckout\b/, 'payments and fintech');
+  add(/\bcommerce\b|\becommerce\b|\bretail\b|\bstore\b/, 'commerce');
+
+  if (domains.size === 0) {
+    const fallback = normalizeNonEmptyText(fallbackCategory);
+    if (fallback) domains.add(fallback);
+  }
+
+  return Array.from(domains).slice(0, 6);
+}
+
+export function inferCompanyDomainShape(input: CompanyDomainShapeInput): CompanyDomainShape {
+  const signalText = [
+    input.category,
+    input.industry,
+    ...(input.productsServices ?? []),
+    ...(input.goals ?? []),
+    ...(input.contentThemes ?? []),
+    ...(input.targetAudience ?? []),
+    input.uniqueValue,
+    input.brandPositioning,
+    input.campaignFocus,
+    input.coreProblem,
+    ...(input.painSymptoms ?? []),
+    ...(input.authorityDomains ?? []),
+    input.websiteUrl,
+  ]
+    .map((value) => normalizeNonEmptyText(value))
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .toLowerCase();
+
+  if (!signalText) {
+    return {
+      provider_type: null,
+      domain_role: null,
+      operating_model: null,
+      solution_domains: [],
+    };
+  }
+
+  const hasAi = /\b(ai|artificial intelligence|machine learning|ml|llm|chatbot|assistant|automation|personalized|personalised)\b/.test(signalText);
+  const hasConsulting = /\bconsult(ant|ants|ing|ancy)?\b|\badvisory\b|\badvisor\b|\bagency\b|\bexpert[-\s]?led\b/.test(signalText);
+  const hasMarketplace = /\bmarketplace\b/.test(signalText);
+  const hasCommerce = /\becommerce\b|\bcommerce\b|\bstore\b|\bretail\b/.test(signalText);
+  const hasManufacturing = /\bmanufacturer\b|\bmanufacturing\b|\bhardware\b|\bvehicle\b|\bapparel\b|\bfootwear\b/.test(signalText);
+  const hasSoftware = /\bsaas\b|\bsoftware\b|\bplatform\b|\bapp\b|\btool\b|\bproduct\b|\bdigital\b/.test(signalText);
+  const solutionDomains = inferSolutionDomainsFromText(signalText, input.category);
+
+  let providerType: string | null = null;
+  let operatingModel: string | null = null;
+  let domainRole: string | null = null;
+
+  if (hasConsulting) {
+    providerType = 'Consulting and advisory provider';
+    operatingModel = 'Consulting/advisory service';
+    domainRole = 'Consulting problem-solution provider';
+  } else if (hasAi) {
+    providerType = 'AI-powered solution provider';
+    operatingModel = hasSoftware ? 'AI software platform' : 'AI-enabled service';
+    domainRole = 'AI-powered problem-solution provider';
+  } else if (hasMarketplace) {
+    providerType = 'Marketplace operator';
+    operatingModel = 'Marketplace';
+    domainRole = 'Marketplace solution provider';
+  } else if (hasCommerce) {
+    providerType = 'Commerce operator';
+    operatingModel = 'Commerce';
+    domainRole = 'Commerce solution provider';
+  } else if (hasManufacturing) {
+    providerType = 'Product manufacturer';
+    operatingModel = 'Manufacturing/product business';
+    domainRole = 'Product solution provider';
+  } else if (hasSoftware) {
+    providerType = 'Software platform provider';
+    operatingModel = 'Software platform';
+    domainRole = 'Software solution provider';
+  } else if (/\bservice(s)?\b|\bsupport\b|\bsolution(s)?\b/.test(signalText)) {
+    providerType = 'Service provider';
+    operatingModel = 'Service delivery';
+    domainRole = 'Service solution provider';
+  }
+
+  return {
+    provider_type: providerType,
+    domain_role: domainRole,
+    operating_model: operatingModel,
+    solution_domains: solutionDomains,
+  };
 }
 
 function inferPartnershipPriorities(input: {
@@ -499,6 +1007,45 @@ function withExistingText(existing: string | null | undefined, next: string | nu
   return normalizeNonEmptyText(existing) ?? next ?? null;
 }
 
+function rankedMarketAlternativesForProfile(competitors: RankedCompetitor[]) {
+  return splitRankedCompetitorsForOutput(competitors, 8, 3).market_alternatives.map((competitor) => ({
+    name: competitor.name,
+    category: competitor.category,
+    tier: competitor.tier,
+    score: competitor.final_score,
+    confidence: competitor.enrichment_confidence_score,
+    rationale: competitor.rationale,
+    use_case: competitor.enrichment?.icp?.use_case ?? competitor.fit_signals?.product_service ?? null,
+    business_model: competitor.enrichment?.business_model ?? competitor.fit_signals?.business_model ?? null,
+  }));
+}
+
+function rankedCompetitorDetailsForProfile(competitors: RankedCompetitor[]) {
+  return splitRankedCompetitorsForOutput(competitors, 8, 3).competitors.map((competitor) => ({
+    name: competitor.name,
+    category: competitor.category,
+    tier: competitor.tier,
+    score: competitor.relevance_score,
+    confidence: competitor.enrichment_confidence_score,
+    rationale: competitor.rationale,
+  }));
+}
+
+function rankedCompetitorQualityForProfile(competitors: RankedCompetitor[]) {
+  const namedCompetitors = splitRankedCompetitorsForOutput(competitors, 8, 3).competitors;
+  const highestScore = namedCompetitors.reduce(
+    (max, competitor) => Math.max(max, Number(competitor.relevance_score ?? 0)),
+    0,
+  );
+  const thresholdMet = highestScore >= HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE;
+  return {
+    highest_score: namedCompetitors.length > 0 ? highestScore : null,
+    threshold: HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE,
+    threshold_met: thresholdMet,
+    detail_mode: thresholdMet ? 'high_confidence' as const : 'expanded_context' as const,
+  };
+}
+
 function buildAiMarketPulseSettings(
   workingProfile: CompanyProfile,
   extraction: CompanyProfileExtractionOutput,
@@ -508,38 +1055,93 @@ function buildAiMarketPulseSettings(
   const geography = Array.from(
     new Set([
       ...normalizeStringArray(workingProfile.geography_list),
-      ...normalizeStringArray(extraction.geography?.value),
+      ...normalizeFieldValueList(extraction.geography?.value),
       ...splitToList(workingProfile.geography),
     ]),
   );
   const productsServices = Array.from(
     new Set([
       ...normalizeStringArray(workingProfile.products_services_list),
-      ...normalizeStringArray(extraction.products_services?.value),
+      ...normalizeFieldValueList(extraction.products_services?.value),
       ...splitToList(workingProfile.products_services),
     ]),
   );
   const goals = Array.from(
     new Set([
       ...normalizeStringArray(workingProfile.goals_list),
-      ...normalizeStringArray(extraction.goals?.value),
+      ...normalizeFieldValueList(extraction.goals?.value),
       ...splitToList(workingProfile.goals),
       ...splitToList(workingProfile.growth_priorities),
     ]),
   );
-
-  const businessModel = inferBusinessModelLabel({
-    category: workingProfile.category ?? (Array.isArray(extraction.category?.value) ? extraction.category.value.join(', ') : String(extraction.category?.value || '')),
-    industry: workingProfile.industry ?? (Array.isArray(extraction.industry?.value) ? extraction.industry.value.join(', ') : String(extraction.industry?.value || '')),
+  const contentThemes = Array.from(
+    new Set([
+      ...normalizeStringArray(workingProfile.content_themes_list),
+      ...normalizeFieldValueList(extraction.content_themes?.value),
+      ...splitToList(workingProfile.content_themes),
+    ]),
+  );
+  const targetAudience = Array.from(
+    new Set([
+      ...normalizeStringArray(workingProfile.target_audience_list),
+      ...normalizeFieldValueList(extraction.target_audience?.value),
+      ...splitToList(workingProfile.target_audience),
+    ]),
+  );
+  const categoryText = normalizeNonEmptyText(workingProfile.category)
+    ?? textFromValue(extraction.category?.value)
+    ?? null;
+  const industryText = normalizeNonEmptyText(workingProfile.industry)
+    ?? textFromValue(extraction.industry?.value)
+    ?? null;
+  const uniqueValue = normalizeNonEmptyText(workingProfile.unique_value)
+    ?? textFromValue(extraction.unique_value_proposition?.value)
+    ?? null;
+  const domainShape = inferCompanyDomainShape({
+    category: categoryText,
+    industry: industryText,
     productsServices,
+    goals,
+    contentThemes,
+    targetAudience,
+    uniqueValue,
+    brandPositioning: workingProfile.brand_positioning ?? null,
+    campaignFocus: workingProfile.campaign_focus ?? null,
+    coreProblem: workingProfile.core_problem_statement ?? null,
+    painSymptoms: workingProfile.pain_symptoms ?? null,
+    authorityDomains: workingProfile.authority_domains ?? null,
     websiteUrl: workingProfile.website_url ?? null,
   });
+
+  const businessModel = inferBusinessModelLabel({
+    category: categoryText,
+    industry: industryText,
+    productsServices,
+    uniqueValue,
+    brandPositioning: workingProfile.brand_positioning ?? null,
+    contentThemes,
+    websiteUrl: workingProfile.website_url ?? null,
+  });
+  const categorySignals = [
+    ...productsServices,
+    domainShape.provider_type,
+    domainShape.domain_role,
+    domainShape.operating_model,
+    ...domainShape.solution_domains,
+  ].filter((value): value is string => Boolean(normalizeNonEmptyText(value)));
 
   const next = {
     primary_operating_markets: withExistingList(existing?.primary_operating_markets, geography),
     target_expansion_markets: existing?.target_expansion_markets ?? null,
     named_competitors: null,
     business_model: withExistingText(existing?.business_model, businessModel),
+    provider_type: withExistingText(existing?.provider_type, domainShape.provider_type),
+    domain_role: withExistingText(existing?.domain_role, domainShape.domain_role),
+    operating_model: withExistingText(existing?.operating_model, domainShape.operating_model),
+    solution_domains: withExistingList(existing?.solution_domains, domainShape.solution_domains),
+    competitor_details: null,
+    competitor_quality: null,
+    market_alternatives: null,
     core_offerings: withExistingList(existing?.core_offerings, productsServices),
     growth_priorities: withExistingList(existing?.growth_priorities, goals),
     partnership_priorities: withExistingList(
@@ -571,9 +1173,9 @@ function buildAiMarketPulseSettings(
       existing?.default_categories,
       inferMarketPulseCategories({
         businessModel,
-        category: workingProfile.category ?? null,
+        category: categoryText,
         goals,
-        productsServices,
+        productsServices: categorySignals,
         competitors: [],
       }),
     ),
@@ -596,32 +1198,6 @@ let companyProfileColumnsCache: Set<string> | null = null;
 async function getCompanyProfileColumns(existingProfile?: CompanyProfile | null): Promise<Set<string>> {
   if (companyProfileColumnsCache && companyProfileColumnsCache.size > 0) {
     return new Set(companyProfileColumnsCache);
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('information_schema.columns')
-      .select('column_name')
-      .eq('table_schema', 'public')
-      .eq('table_name', COMPANY_PROFILES_TABLE);
-
-    if (!error && Array.isArray(data) && data.length > 0) {
-      companyProfileColumnsCache = new Set(
-        data
-          .map((row) => String((row as { column_name?: string | null }).column_name ?? '').trim())
-          .filter(Boolean),
-      );
-      return new Set(companyProfileColumnsCache);
-    }
-
-    if (error) {
-      console.warn('Failed to introspect company_profiles columns:', error.message);
-    }
-  } catch (error) {
-    console.warn(
-      'Failed to introspect company_profiles columns:',
-      error instanceof Error ? error.message : String(error),
-    );
   }
 
   if (existingProfile && typeof existingProfile === 'object') {
@@ -653,6 +1229,65 @@ function filterCompanyProfilePayload(
   }
 
   return { safePayload, skippedFields };
+}
+
+function schemaCacheMissingCompanyProfileColumn(error: unknown): string | null {
+  const message = String((error as { message?: unknown } | null)?.message ?? '');
+  const match = message.match(/Could not find the '([^']+)' column of 'company_profiles' in the schema cache/i);
+  return match?.[1] ?? null;
+}
+
+async function upsertCompanyProfilePayload(
+  payload: Record<string, unknown>,
+  existing: CompanyProfile | null,
+  context: string,
+): Promise<{ data: CompanyProfile | null; error: { message?: string } | null; omittedSchemaFields: string[] }> {
+  const remainingPayload: Record<string, unknown> = { ...payload };
+  const omittedSchemaFields: string[] = [];
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const validColumns = await getCompanyProfileColumns(existing);
+    omittedSchemaFields.forEach((field) => validColumns.delete(field));
+    const { safePayload, skippedFields } = filterCompanyProfilePayload(remainingPayload, validColumns);
+    if (skippedFields.length > 0) {
+      console.warn(`Filtered company profile fields before ${context}:`, skippedFields.join(', '));
+    }
+
+    const { data, error } = await supabase
+      .from(COMPANY_PROFILES_TABLE)
+      .upsert(safePayload, { onConflict: 'company_id' })
+      .select('*')
+      .single();
+    if (!error) {
+      const nonPersistedFields = Object.fromEntries(
+        omittedSchemaFields
+          .filter((field) => Object.prototype.hasOwnProperty.call(payload, field))
+          .map((field) => [field, payload[field]]),
+      );
+      return {
+        data: data ? ({ ...(data as CompanyProfile), ...nonPersistedFields } as CompanyProfile) : null,
+        error: null,
+        omittedSchemaFields,
+      };
+    }
+
+    const missingColumn = schemaCacheMissingCompanyProfileColumn(error);
+    if (missingColumn && Object.prototype.hasOwnProperty.call(remainingPayload, missingColumn)) {
+      console.warn(`[company-profile][schema-cache-missing-column] dropping ${missingColumn} during ${context}`);
+      delete remainingPayload[missingColumn];
+      omittedSchemaFields.push(missingColumn);
+      companyProfileColumnsCache?.delete(missingColumn);
+      continue;
+    }
+
+    return { data: null, error, omittedSchemaFields };
+  }
+
+  return {
+    data: null,
+    error: { message: `Exceeded company profile schema-cache retry limit during ${context}` },
+    omittedSchemaFields,
+  };
 }
 
 // ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -732,28 +1367,56 @@ export async function saveProfile(
   const lastRefinedAt = nowIso;
   const confidenceScore = input.confidence_score ?? existing?.confidence_score ?? 0;
 
-  const payload = buildSavePayload(input, existing, companyId, source, lastRefinedAt, nowIso, confidenceScore);
+  const shouldRefreshClassification =
+    source === 'ai_refined' ||
+    !existing?.business_classification ||
+    ['industry', 'industry_list', 'category', 'category_list', 'products_services', 'products_services_list', 'target_audience', 'target_audience_list', 'goals', 'goals_list', 'unique_value', 'content_themes', 'content_themes_list']
+      .some((key) => input[key as keyof CompanyProfile] !== undefined);
+  const classifiedInput = { ...input, company_id: companyId } as Partial<CompanyProfile>;
+  if (shouldRefreshClassification) {
+    const classification = classifyCompanyBusiness({
+      ...(existing ?? {}),
+      ...input,
+      company_id: companyId,
+    } as CompanyProfile);
+    classifiedInput.business_classification = classification.business_classification;
+    classifiedInput.industry = classification.industry.join(', ');
+    classifiedInput.industry_list = classification.industry;
+    classifiedInput.category = classification.category;
+    classifiedInput.category_list = [classification.category];
+  }
+
+  const payload = buildSavePayload(classifiedInput, existing, companyId, source, lastRefinedAt, nowIso, confidenceScore);
+  const hasExplicitCompetitorInput = input.competitors !== undefined || input.competitors_list !== undefined;
   const rawCompetitorInputs = mergeStringArrays(
     [],
-    [
-      ...(Array.isArray(input.competitors_list) ? input.competitors_list : []),
-      ...splitToList(typeof input.competitors === 'string' ? input.competitors : null),
-    ],
+    hasExplicitCompetitorInput
+      ? [
+          ...(Array.isArray(input.competitors_list) ? input.competitors_list : []),
+          ...splitToList(typeof input.competitors === 'string' ? input.competitors : null),
+        ]
+      : [
+          ...(Array.isArray(existing?.competitors_list) ? existing.competitors_list : []),
+          ...splitToList(typeof existing?.competitors === 'string' ? existing.competitors : null),
+        ],
   );
   const finalCompetitors = await getFinalCompetitors({
     candidates: buildCandidatesFromNames(
       rawCompetitorInputs,
-      source === 'user' ? 'manual' : 'profile_ai',
+      hasExplicitCompetitorInput && source === 'user' ? 'manual' : 'profile_ai',
     ),
-    context: extractCompetitiveContextFromProfile({
+    context: competitorValidationContextForProfile({
       ...(existing ?? {}),
-      ...input,
+      ...classifiedInput,
       company_id: companyId,
     } as CompanyProfile),
     max: 8,
     useNetwork: true,
+    companyId,
   });
-  payload.competitors_list = finalCompetitors.map((competitor) => competitor.name);
+  const splitSavedCompetitors = splitRankedCompetitorsForOutput(finalCompetitors, 8, 0);
+  assertCompetitorOutputPartition(splitSavedCompetitors, 'save_profile_competitor_output');
+  payload.competitors_list = splitSavedCompetitors.competitors.map((competitor) => competitor.name);
   payload.competitors = payload.competitors_list.length > 0 ? payload.competitors_list.join(', ') : null;
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);
@@ -776,20 +1439,14 @@ export async function saveProfile(
     payload.last_edited_by = 'user';
   }
 
-  const validColumns = await getCompanyProfileColumns(existing);
-  const { safePayload, skippedFields } = filterCompanyProfilePayload(
+  const { data, error, omittedSchemaFields } = await upsertCompanyProfilePayload(
     payload as Record<string, unknown>,
-    validColumns,
+    existing,
+    'save',
   );
-  if (skippedFields.length > 0) {
-    console.warn('Filtered company profile fields before save:', skippedFields.join(', '));
+  if (omittedSchemaFields.length > 0) {
+    console.warn('Company profile save used non-persisted fields:', omittedSchemaFields.join(', '));
   }
-
-  const { data, error } = await supabase
-    .from(COMPANY_PROFILES_TABLE)
-    .upsert(safePayload, { onConflict: 'company_id' })
-    .select('*')
-    .single();
   if (error) {
     console.warn('Profile save error:', error.message);
     return (existing ?? null) as CompanyProfile;
@@ -898,7 +1555,7 @@ export async function deriveAndStoreStrategyProfile(
 
 export async function getProfile(
   companyId?: string,
-  options?: { autoRefine?: boolean; languageRefine?: boolean }
+  options?: { autoRefine?: boolean; languageRefine?: boolean; includeStoredCompetitors?: boolean }
 ): Promise<CompanyProfile | null> {
   const resolvedCompanyId = normalizeCompanyId(companyId);
   const profile = await fetchProfileRaw(resolvedCompanyId);
@@ -911,7 +1568,47 @@ export async function getProfile(
   if ((options?.languageRefine ?? false) && result) {
     result = await refineProfileForPrompts(result);
   }
-  return sanitizeStoredCompetitorsForRead(result);
+  return options?.includeStoredCompetitors ? await revalidateStoredCompetitorsForProfileRead(result) : sanitizeStoredCompetitorsForRead(result);
+}
+
+function stripCompetitorFieldsFromReportSettings(
+  reportSettings: CompanyProfile['report_settings'] | null | undefined,
+): CompanyProfile['report_settings'] | null | undefined {
+  if (!reportSettings) return reportSettings;
+  const defaultInputs = reportSettings.default_inputs
+    ? (() => {
+        const {
+          competitors: _competitors,
+          competitors_list: _competitorsList,
+          ...rest
+        } = reportSettings.default_inputs as Record<string, unknown>;
+        return { ...rest, competitors: [] } as NonNullable<CompanyProfile['report_settings']>['default_inputs'];
+      })()
+    : reportSettings.default_inputs;
+  const marketPulse = reportSettings.market_pulse
+    ? (() => {
+        const {
+          named_competitors: _namedCompetitors,
+          competitor_details: _competitorDetails,
+          competitor_quality: _competitorQuality,
+          market_alternatives: _marketAlternatives,
+          ...rest
+        } = reportSettings.market_pulse as Record<string, unknown>;
+        return {
+          ...rest,
+          named_competitors: [],
+          competitor_details: null,
+          competitor_quality: null,
+          market_alternatives: null,
+        } as NonNullable<CompanyProfile['report_settings']>['market_pulse'];
+      })()
+    : reportSettings.market_pulse;
+
+  return {
+    ...reportSettings,
+    default_inputs: defaultInputs,
+    market_pulse: marketPulse,
+  };
 }
 
 function sanitizeStoredCompetitorsForRead(profile: CompanyProfile | null): CompanyProfile | null {
@@ -921,27 +1618,71 @@ function sanitizeStoredCompetitorsForRead(profile: CompanyProfile | null): Compa
     ...profile,
     competitors: null,
     competitors_list: [],
-    report_settings: reportSettings
-      ? {
-          ...reportSettings,
-          default_inputs: reportSettings.default_inputs
-            ? {
-                ...reportSettings.default_inputs,
-                competitors: [],
-              }
-            : reportSettings.default_inputs,
-          market_pulse: reportSettings.market_pulse
-            ? {
-                ...reportSettings.market_pulse,
-                named_competitors: [],
-              }
-            : reportSettings.market_pulse,
-        }
-      : reportSettings,
+    report_settings: stripCompetitorFieldsFromReportSettings(reportSettings),
   };
 }
 
 // ─── Language refinement ──────────────────────────────────────────────────────
+
+function storedCompetitorNames(profile: CompanyProfile | null): string[] {
+  if (!profile) return [];
+  return mergeStringArrays(
+    [],
+    [
+      ...(Array.isArray(profile.competitors_list) ? profile.competitors_list : []),
+      ...splitToList(typeof profile.competitors === 'string' ? profile.competitors : null),
+    ],
+  );
+}
+
+function withProfileReadCompetitors(profile: CompanyProfile, names: string[]): CompanyProfile {
+  const reportSettings = profile.report_settings ?? null;
+  const competitorsList = Array.from(new Set(names.map((name) => name.trim()).filter(Boolean))).slice(0, 8);
+  return {
+    ...profile,
+    competitors: competitorsList.length > 0 ? competitorsList.join(', ') : null,
+    competitors_list: competitorsList,
+    report_settings: stripCompetitorFieldsFromReportSettings(reportSettings),
+  };
+}
+
+async function revalidateStoredCompetitorsForProfileRead(profile: CompanyProfile | null): Promise<CompanyProfile | null> {
+  if (!profile) return null;
+  const rawNames = storedCompetitorNames(profile);
+  if (rawNames.length === 0) return withProfileReadCompetitors(profile, []);
+
+  try {
+    const finalCompetitors = await getFinalCompetitors({
+      candidates: buildCandidatesFromNames(rawNames, 'profile_ai'),
+      context: competitorValidationContextForProfile(profile),
+      max: 8,
+      minScore: 42,
+      useNetwork: false,
+      useStoredCache: false,
+      companyId: profile.company_id,
+      includeMarketSubstitutes: false,
+    });
+    const splitReadCompetitors = splitRankedCompetitorsForOutput(finalCompetitors, 8, 0);
+    assertCompetitorOutputPartition(splitReadCompetitors, 'profile_read_competitor_output');
+    const finalNames = splitReadCompetitors.competitors
+      .filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42))
+      .map((competitor) => competitor.name);
+    if (finalNames.length !== rawNames.length || finalNames.some((name, index) => name !== rawNames[index])) {
+      console.info('[company-profile][stored-competitors-revalidated]', {
+        company_id: profile.company_id,
+        stored_count: rawNames.length,
+        validated_count: finalNames.length,
+      });
+    }
+    return withProfileReadCompetitors(profile, finalNames);
+  } catch (error) {
+    console.warn('[company-profile][stored-competitors-cleared]', {
+      company_id: profile.company_id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return withProfileReadCompetitors(profile, []);
+  }
+}
 
 async function refineProfileField(value: string | null | undefined): Promise<string | null> {
   if (value == null || typeof value !== 'string') return value ?? null;
@@ -1073,7 +1814,19 @@ const runProfileRefinement = async (
     catch { console.warn('[refine] Missing-field questionnaire generation failed.'); }
   }
 
-  const baseRefinedPayload = buildRefinedPayload(workingProfile, extraction);
+  const preliminaryClassification = classifyCompanyBusiness(workingProfile, extraction);
+  workingProfile = {
+    ...workingProfile,
+    business_classification: preliminaryClassification.business_classification,
+    industry: preliminaryClassification.industry.join(', '),
+    industry_list: preliminaryClassification.industry,
+    category: preliminaryClassification.category,
+    category_list: [preliminaryClassification.category],
+  };
+
+  const profileForCompetitorDiscovery = buildProfileForCompetitorDiscovery(workingProfile, extraction);
+  const competitorDiscovery = await discoverRefineCompetitorCandidates(profileForCompetitorDiscovery);
+  const baseRefinedPayload = await buildRefinedPayload(workingProfile, extraction, competitorDiscovery);
   const mergedProfileForStrategy = {
     ...workingProfile,
     ...baseRefinedPayload,
@@ -1128,12 +1881,16 @@ const runProfileRefinement = async (
     ? refinedPayload.competitors_list.join(', ')
     : null;
 
-  const { data, error } = await supabase
-    .from('company_profiles')
-    .upsert(refinedPayload, { onConflict: 'company_id' })
-    .select('*')
-    .single();
+  const { data, error, omittedSchemaFields } = await upsertCompanyProfilePayload(
+    refinedPayload as Record<string, unknown>,
+    workingProfile,
+    'refine',
+  );
   if (error) throw new Error(`Failed to refine company profile: ${error.message}`);
+  if (!data) throw new Error('Failed to refine company profile: no profile returned after save');
+  if (omittedSchemaFields.length > 0) {
+    console.warn('Company profile refine used non-persisted fields:', omittedSchemaFields.join(', '));
+  }
 
   const auditDetails: CompanyProfileRefinementDetails = {
     company_id: workingProfile.company_id,
@@ -1151,14 +1908,17 @@ const runProfileRefinement = async (
   return { profile: data, details: auditDetails };
 };
 
-function buildRefinedPayload(workingProfile: CompanyProfile, extraction: CompanyProfileExtractionOutput) {
+async function buildRefinedPayload(
+  workingProfile: CompanyProfile,
+  extraction: CompanyProfileExtractionOutput,
+  competitorDiscovery: RefineCompetitorDiscovery,
+) {
   const existingConfidence = workingProfile.field_confidence || {};
   const marketPulseSettings = buildAiMarketPulseSettings(workingProfile, extraction);
 
   const industryUpdate = updateArrayField(workingProfile.industry_list ?? splitToList(workingProfile.industry), extraction.industry?.value, extraction.industry?.source, existingConfidence.industry, extraction.industry?.confidence);
   const categoryUpdate = updateArrayField(workingProfile.category_list ?? splitToList(workingProfile.category), extraction.category?.value, extraction.category?.source, existingConfidence.category, extraction.category?.confidence);
   const geographyUpdate = updateArrayField(workingProfile.geography_list ?? splitToList(workingProfile.geography), extraction.geography?.value, extraction.geography?.source, existingConfidence.geography, extraction.geography?.confidence);
-  const competitorsUpdate = updateArrayField(workingProfile.competitors_list ?? splitToList(workingProfile.competitors), extraction.competitors?.value, extraction.competitors?.source, existingConfidence.competitors, extraction.competitors?.confidence);
   const themesUpdate = updateArrayField(workingProfile.content_themes_list ?? splitToList(workingProfile.content_themes), extraction.content_themes?.value, extraction.content_themes?.source, existingConfidence.content_themes, extraction.content_themes?.confidence);
   const productsUpdate = updateArrayField(workingProfile.products_services_list ?? splitToList(workingProfile.products_services), extraction.products_services?.value, extraction.products_services?.source, existingConfidence.products_services, extraction.products_services?.confidence);
   const audienceUpdate = updateArrayField(workingProfile.target_audience_list ?? splitToList(workingProfile.target_audience), extraction.target_audience?.value, extraction.target_audience?.source, existingConfidence.target_audience, extraction.target_audience?.confidence);
@@ -1177,8 +1937,33 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
     if (entry.platform === 'youtube' && !workingProfile.youtube_url) workingProfile.youtube_url = entry.url;
     if (entry.platform === 'tiktok' && !workingProfile.tiktok_url) workingProfile.tiktok_url = entry.url;
     if (entry.platform === 'reddit' && !workingProfile.reddit_url) workingProfile.reddit_url = entry.url;
+    if (entry.platform === 'pinterest' && !workingProfile.pinterest_url) workingProfile.pinterest_url = entry.url;
+    if (entry.platform === 'whatsapp' && !workingProfile.whatsapp_url) workingProfile.whatsapp_url = entry.url;
     if (entry.platform === 'blog' && !workingProfile.blog_url) workingProfile.blog_url = entry.url;
   });
+
+  const classificationInputProfile: CompanyProfile = {
+    ...workingProfile,
+    industry: industryUpdate.value.join(', ') || workingProfile.industry,
+    category: categoryUpdate.value.join(', ') || workingProfile.category,
+    products_services: productsUpdate.value.join(', ') || workingProfile.products_services,
+    target_audience: audienceUpdate.value.join(', ') || workingProfile.target_audience,
+    goals: goalsUpdate.value.join(', ') || workingProfile.goals,
+    brand_voice: brandVoiceUpdate.value.join(', ') || workingProfile.brand_voice,
+    unique_value: uniqueUpdate.value ?? workingProfile.unique_value,
+    content_themes: themesUpdate.value.join(', ') || workingProfile.content_themes,
+    industry_list: industryUpdate.value,
+    category_list: categoryUpdate.value,
+    products_services_list: productsUpdate.value,
+    target_audience_list: audienceUpdate.value,
+    goals_list: goalsUpdate.value,
+    brand_voice_list: brandVoiceUpdate.value,
+    content_themes_list: themesUpdate.value,
+  };
+  const businessClassification = classifyCompanyBusiness(classificationInputProfile, extraction);
+  const cleanIndustryList = businessClassification.industry;
+  const cleanCategory = businessClassification.category;
+  const cleanCategoryList = [cleanCategory];
 
   const extractionConfidence = computeConfidenceScore(extraction);
   const locked = new Set<string>(Array.isArray(workingProfile.user_locked_fields) ? workingProfile.user_locked_fields : []);
@@ -1186,44 +1971,147 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
     locked.has(field) ? workingVal : (refinedVal ?? workingVal ?? null) as T;
   const contextForCompetitorFit = extractCompetitiveContextFromProfile({
     ...workingProfile,
-    industry: industryUpdate.value.join(', ') || workingProfile.industry,
-    category: categoryUpdate.value.join(', ') || workingProfile.category,
+    business_classification: businessClassification.business_classification,
+    industry: cleanIndustryList.join(', '),
+    category: cleanCategory,
     geography: geographyUpdate.value.join(', ') || workingProfile.geography,
     products_services: productsUpdate.value.join(', ') || workingProfile.products_services,
     target_audience: audienceUpdate.value.join(', ') || workingProfile.target_audience,
-    industry_list: industryUpdate.value,
-    category_list: categoryUpdate.value,
+    industry_list: cleanIndustryList,
+    category_list: cleanCategoryList,
     geography_list: geographyUpdate.value,
     products_services_list: productsUpdate.value,
     target_audience_list: audienceUpdate.value,
   });
-  const competitorSource = mapExtractionCompetitorSource(extraction.competitors?.source);
-  const rankedCompetitors = getFinalCompetitorsSync({
-    candidates: competitorsUpdate.value.map((name) => ({ name, source: competitorSource })),
+  let rankedCompetitors = await getFinalCompetitors({
+    candidates: competitorDiscovery.candidates,
     context: contextForCompetitorFit,
     max: 8,
     minScore: 42,
+    useNetwork: true,
+    useStoredCache: false,
+    companyId: workingProfile.company_id,
+    includeMarketSubstitutes: true,
   });
-  const competitorValues = rankedCompetitors.length > 0 ? rankedCompetitors.map((item) => item.name) : [];
+
+  if (rankedCompetitors.length < 3 && competitorDiscovery.fallbackCandidates.length > 0) {
+    const prioritizedFallbackCandidates = buildPrioritizedRefineFallbackCandidates({
+      profile: workingProfile,
+      extraction,
+      discovery: competitorDiscovery,
+    });
+    const retryRankedCompetitors = await getFinalCompetitors({
+      candidates: [
+        ...competitorDiscovery.candidates,
+        ...prioritizedFallbackCandidates,
+        ...competitorDiscovery.fallbackCandidates,
+      ],
+      context: contextForCompetitorFit,
+      max: 8,
+      minScore: 42,
+      useNetwork: false,
+      useStoredCache: false,
+      companyId: workingProfile.company_id,
+      includeMarketSubstitutes: true,
+    });
+    if (retryRankedCompetitors.length > rankedCompetitors.length) rankedCompetitors = retryRankedCompetitors;
+  }
+
+  rankedCompetitors = rankedCompetitors.filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42));
+
+  if (rankedCompetitors.length < 3 && competitorDiscovery.fallbackCandidates.length > 0) {
+    const prioritizedFallbackCandidates = buildPrioritizedRefineFallbackCandidates({
+      profile: workingProfile,
+      extraction,
+      discovery: competitorDiscovery,
+    });
+    for (const recoveryContext of buildRefineRecoveryContexts({
+      baseContext: contextForCompetitorFit,
+      profile: workingProfile,
+      extraction,
+      discovery: competitorDiscovery,
+    })) {
+      const recoveryRankedCompetitors = (await getFinalCompetitors({
+        candidates: [
+          ...competitorDiscovery.candidates,
+          ...prioritizedFallbackCandidates,
+          ...competitorDiscovery.fallbackCandidates,
+        ],
+        context: recoveryContext,
+        max: 8,
+        minScore: 42,
+        useNetwork: false,
+        useStoredCache: false,
+        companyId: workingProfile.company_id,
+        includeMarketSubstitutes: true,
+      })).filter((competitor) => hasPassedFinalCompetitorGate(competitor, 42));
+      if (recoveryRankedCompetitors.length > rankedCompetitors.length) {
+        rankedCompetitors = recoveryRankedCompetitors;
+      }
+      if (rankedCompetitors.length >= 3) break;
+    }
+  }
+
+  if (rankedCompetitors.length === 0) {
+    console.warn('[refine][competitor-final-gate-empty]', {
+      keywords_generated: competitorDiscovery.keywords,
+      serp_domains_found: competitorDiscovery.serpDomains.length,
+      final_competitors_count: 0,
+    });
+  }
+
+  if (rankedCompetitors.length > 0 && rankedCompetitors.length < 3) {
+    console.warn('[refine][competitor-final-gate-below-target]', {
+      keywords_generated: competitorDiscovery.keywords,
+      serp_domains_found: competitorDiscovery.serpDomains.length,
+      final_competitors_count: rankedCompetitors.length,
+      target_competitors_count: 3,
+    });
+  }
+
+  console.info('[refine][competitor-final-gate]', {
+    keywords_generated: competitorDiscovery.keywords,
+    serp_domains_found: competitorDiscovery.serpDomains.length,
+    final_competitors_count: rankedCompetitors.length,
+  });
+
+  const splitCompetitorOutput = splitRankedCompetitorsForOutput(rankedCompetitors, 8, 3);
+  assertCompetitorOutputPartition(splitCompetitorOutput, 'refine_profile_competitor_output');
+  const competitorValues = splitCompetitorOutput.competitors.map((item) => item.name);
+  const competitorDetails = rankedCompetitorDetailsForProfile(rankedCompetitors);
+  const competitorQuality = rankedCompetitorQualityForProfile(rankedCompetitors);
+  const marketAlternatives = rankedMarketAlternativesForProfile(rankedCompetitors);
+  const marketPulseWithAlternatives = marketPulseSettings || workingProfile.report_settings?.market_pulse
+    ? {
+        ...(workingProfile.report_settings?.market_pulse ?? {}),
+        ...(marketPulseSettings ?? {}),
+        business_model: businessClassification.business_classification.level_1,
+        provider_type: businessClassification.business_classification.level_2,
+        solution_domains: businessClassification.business_classification.level_3,
+        competitor_details: competitorDetails,
+        competitor_quality: competitorQuality,
+        market_alternatives: marketAlternatives,
+      }
+    : null;
 
   const mergedSourceUrls = Array.from(
     new Set([...(workingProfile.source_urls || [])].map((url) => normalizeUrl(url)).filter((u): u is string => Boolean(u)))
   );
 
   const fieldConfidence = {
-    company_name: nameUpdate.confidence, industry: industryUpdate.confidence,
-    category: categoryUpdate.confidence, geography: geographyUpdate.confidence,
-    competitors: competitorsUpdate.confidence, content_themes: themesUpdate.confidence,
+    company_name: nameUpdate.confidence, industry: 'High',
+    category: 'High', business_classification: 'High', geography: geographyUpdate.confidence,
+    competitors: competitorValues.length > 0 ? 'High' : 'Low', content_themes: themesUpdate.confidence,
     products_services: productsUpdate.confidence, target_audience: audienceUpdate.confidence,
     goals: goalsUpdate.confidence, brand_voice: brandVoiceUpdate.confidence,
     website_url: websiteUpdate.confidence, unique_value_proposition: uniqueUpdate.confidence,
   };
 
-  console.log('MERGED PROFILE:', { industry_list: industryUpdate.value, category_list: categoryUpdate.value });
+  console.log('MERGED PROFILE:', { industry_list: cleanIndustryList, category_list: cleanCategoryList, business_classification: businessClassification.business_classification });
   console.info('Company profile extraction summary', {
     company_id: workingProfile.company_id,
     counts: {
-      industry: industryUpdate.value.length, category: categoryUpdate.value.length,
+      industry: cleanIndustryList.length, category: cleanCategoryList.length,
       geography: geographyUpdate.value.length, social_profiles: mergedSocialProfiles.length,
     },
   });
@@ -1231,8 +2119,9 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
   return {
     company_id: workingProfile.company_id,
     name: pick(nameUpdate.value, workingProfile.name, 'name'),
-    industry: pick(industryUpdate.value.join(', '), workingProfile.industry, 'industry'),
-    category: pick(categoryUpdate.value.join(', '), workingProfile.category, 'category'),
+    industry: cleanIndustryList.join(', '),
+    category: cleanCategory,
+    business_classification: businessClassification.business_classification,
     website_url: pick(websiteUpdate.value, workingProfile.website_url, 'website_url'),
     linkedin_url: workingProfile.linkedin_url ?? null,
     facebook_url: workingProfile.facebook_url ?? null,
@@ -1241,6 +2130,8 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
     youtube_url: workingProfile.youtube_url ?? null,
     tiktok_url: workingProfile.tiktok_url ?? null,
     reddit_url: workingProfile.reddit_url ?? null,
+    pinterest_url: workingProfile.pinterest_url ?? null,
+    whatsapp_url: workingProfile.whatsapp_url ?? null,
     blog_url: workingProfile.blog_url ?? null,
     other_social_links: workingProfile.other_social_links ?? null,
     products_services: pick(productsUpdate.value.join(', '), workingProfile.products_services, 'products_services'),
@@ -1251,8 +2142,8 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
     competitors: competitorValues.length > 0 ? competitorValues.join(', ') : null,
     unique_value: pick(uniqueUpdate.value, workingProfile.unique_value, 'unique_value'),
     content_themes: pick(themesUpdate.value.join(', '), workingProfile.content_themes, 'content_themes'),
-    industry_list: pick(industryUpdate.value, workingProfile.industry_list, 'industry_list'),
-    category_list: pick(categoryUpdate.value, workingProfile.category_list, 'category_list'),
+    industry_list: cleanIndustryList,
+    category_list: cleanCategoryList,
     geography_list: pick(geographyUpdate.value, workingProfile.geography_list, 'geography_list'),
     competitors_list: competitorValues,
     content_themes_list: pick(themesUpdate.value, workingProfile.content_themes_list, 'content_themes_list'),
@@ -1286,7 +2177,7 @@ function buildRefinedPayload(workingProfile: CompanyProfile, extraction: Company
     growth_priorities: workingProfile.growth_priorities ?? null,
     report_settings: {
       ...(workingProfile.report_settings ?? {}),
-      market_pulse: marketPulseSettings ?? workingProfile.report_settings?.market_pulse ?? null,
+      market_pulse: marketPulseWithAlternatives,
     },
   };
 }

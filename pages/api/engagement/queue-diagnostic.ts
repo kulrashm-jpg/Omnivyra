@@ -21,6 +21,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { isAuthorSelf } from '../../../lib/engagement/messageRoles';
+import {
+  isNeedsResponseThread,
+  isPeopleReactionThread,
+} from '../../../lib/engagement/queueRules';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -52,13 +57,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const threadIds = threadList.map((t) => t.id);
   const { data: messages } = await supabase
     .from('engagement_messages')
-    .select('id, thread_id, direction, content, author_id, platform_created_at, created_at, raw_payload')
+    .select('id, thread_id, platform, platform_message_id, message_type, direction, content, author_id, platform_created_at, created_at, raw_payload')
     .in('thread_id', threadIds)
     .order('platform_created_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false, nullsFirst: false });
   const messageList = (messages ?? []) as Array<{
     id: string;
     thread_id: string;
+    platform: string | null;
+    platform_message_id: string | null;
+    message_type: string | null;
     direction: string | null;
     content: string | null;
     author_id: string | null;
@@ -78,6 +86,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const trp = t.raw_payload ?? {};
     const latest = latestByThread.get(t.id);
     const mrp = latest?.raw_payload ?? {};
+    const latestMessageAuthorSelf = latest
+      ? isAuthorSelf({
+          platform: latest.platform,
+          platform_message_id: latest.platform_message_id,
+          direction: latest.direction,
+          author_self: mrp.author_self as boolean | null | undefined,
+          sender_self: mrp.sender_self as boolean | null | undefined,
+          sender_username: mrp.sender_username as string | null | undefined,
+          sender_profile_url: mrp.sender_profile_url as string | null | undefined,
+          content: latest.content,
+        })
+      : false;
+    const queueSignals = {
+      latest_message_type: latest?.message_type ?? null,
+      latest_message_direction: latest?.direction ?? null,
+      latest_message_author_self: latestMessageAuthorSelf,
+      latest_message_time: latest?.platform_created_at ?? latest?.created_at ?? null,
+      has_completed_outbound_action: false,
+      has_pending_outbound_action: false,
+    };
     return {
       thread_id: t.id,
       platform_thread_id: t.platform_thread_id,
@@ -90,8 +118,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       latest_message: latest ? {
         id: latest.id,
+        platform: latest.platform,
+        platform_message_id: latest.platform_message_id,
+        message_type: latest.message_type,
         direction: latest.direction,
         author_id: latest.author_id,
+        author_self_inferred: latestMessageAuthorSelf,
         platform_created_at: latest.platform_created_at,
         created_at_db: latest.created_at,
         content_preview: (latest.content ?? '').slice(0, 80),
@@ -101,6 +133,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sender_self: mrp.sender_self ?? null,
         author_self: mrp.author_self ?? null,
       } : null,
+      eligibility: {
+        needs_response: isNeedsResponseThread(queueSignals),
+        people_reaction: isPeopleReactionThread(queueSignals),
+      },
     };
   });
 

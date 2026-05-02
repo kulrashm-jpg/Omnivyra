@@ -11,7 +11,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getValidAccessToken } from '../auth/metaAuthService';
 
-const META_GRAPH = 'https://graph.facebook.com/v18.0';
+const META_GRAPH = 'https://graph.facebook.com/v22.0';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

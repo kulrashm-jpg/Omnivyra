@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
+import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 function readBody(req: NextApiRequest): Record<string, unknown> {
   return req.method === 'GET'
@@ -17,6 +18,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
+  }
+
+  // The Omnivyra Chrome extension fires this endpoint on every Facebook page
+  // load, including when the user is not signed in to Omnivyra. Without this
+  // guard, resolveUserContext falls back to a dev-only context and the
+  // downstream enforceCompanyAccess crashes with a 500. Return 401 cleanly
+  // so the extension can no-op instead of spamming the error log.
+  const { user: authedUser } = await getSupabaseUserFromRequest(req);
+  if (!authedUser?.id) {
+    return res.status(401).json({ success: false, error: 'Not authenticated' });
   }
 
   const user = await resolveUserContext(req);

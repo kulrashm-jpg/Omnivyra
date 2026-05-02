@@ -135,8 +135,23 @@ export interface ReportData {
       marketOverlap?: number;
       revenueTier?: 'startup' | 'growth' | 'scale' | 'enterprise' | null;
       productDepth?: number;
+      authorityScore?: number;
+      authoritySignals?: {
+        traffic_estimate?: string | null;
+        installs?: string | null;
+        reviews?: string | null;
+        funding_level?: 'bootstrap' | 'funded' | 'enterprise';
+        search_visibility?: string | null;
+        brand_strength?: 'low' | 'medium' | 'high';
+      } | null;
       finalScore?: number;
       tier?: 'Tier 1' | 'Tier 2' | 'Tier 3' | null;
+      positioning?: {
+        strengths_vs_company: string[];
+        weaknesses_vs_company: string[];
+        differentiation: string;
+        threat_level: 'low' | 'medium' | 'high';
+      } | null;
       enrichmentConfidenceScore?: number;
       enrichment?: {
         category?: string | null;
@@ -156,6 +171,23 @@ export interface ReportData {
       rationale: string;
       standing: 'Behind' | 'At Par' | 'Ahead';
     }[];
+    marketAlternatives?: {
+      name: string;
+      category?: string | null;
+      tier?: 'Tier 1' | 'Tier 2' | 'Tier 3' | null;
+      relevanceScore: number;
+      finalScore: number;
+      authorityScore: number;
+      rationale: string;
+      useCase?: string | null;
+      businessModel?: string | null;
+    }[];
+    competitiveSummary?: {
+      topThreats: string[];
+      keyAdvantage: string;
+      keyRisk: string;
+      positioningStatement: string;
+    } | null;
     strongestGaps: {
       gapType: string;
       title: string;
@@ -402,6 +434,57 @@ export interface ReportData {
     }[];
     competitivePosition: 'leader' | 'competitive' | 'lagging';
     confidence: 'high' | 'medium' | 'low';
+  } | null;
+  competitiveSnapshot?: {
+    competitors: Array<{
+      name: string;
+      tier: 'Tier 1' | 'Tier 2' | 'Tier 3';
+      threatLevel: 'low' | 'medium' | 'high';
+      differentiation: string;
+    }>;
+    summary: {
+      topThreat: string;
+      immediatePositioningAngle: string;
+      action: string;
+    };
+  } | null;
+  competitivePressureAnalysis?: {
+    competitors: Array<{
+      name: string;
+      tier: 'Tier 1' | 'Tier 2' | 'Tier 3';
+      threatLevel: 'low' | 'medium' | 'high';
+      authorityScore: number;
+      pressureOn: string[];
+      action: string;
+    }>;
+    summary: {
+      highestPressure: string;
+      primaryRisk: string;
+      nextAction: string;
+    };
+  } | null;
+  competitiveStrategyMap?: {
+    tierBreakdown: {
+      tier1: Array<{ name: string; tier: 'Tier 1'; threatLevel: 'low' | 'medium' | 'high'; differentiation: string }>;
+      tier2: Array<{ name: string; tier: 'Tier 2'; threatLevel: 'low' | 'medium' | 'high'; differentiation: string }>;
+      tier3: Array<{ name: string; tier: 'Tier 3'; threatLevel: 'low' | 'medium' | 'high'; differentiation: string }>;
+    };
+    opportunityMap: {
+      whitespaceOpportunities: string[];
+      underexploitedIcpSegments: string[];
+      weakCompetitorAreas: string[];
+    };
+    strategicActions: {
+      howToBeatTier1: string;
+      howToDifferentiateFromTier2: string;
+      howToIgnoreTier3: string;
+    };
+  } | null;
+  strategicPosition?: {
+    positioningStatement: string;
+    primaryBattlefield: string;
+    avoidanceZone: string;
+    messagingAngle: string;
   } | null;
   seoVisuals?: {
     seoCapabilityRadar: {

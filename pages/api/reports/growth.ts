@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { composeGrowthReport } from '../../../backend/services/growthReportService';
+import { resolveAnalyticsReportInput } from '../../../backend/services/analyticsInputResolver';
 
 type GrowthReportApiResponse = {
   report_type?: 'growth';
@@ -10,6 +11,8 @@ type GrowthReportApiResponse = {
     value: null;
     label: null;
   };
+  competitive_strategy_map?: unknown;
+  strategic_position?: unknown;
   sections?: Array<{
     section_name: string;
     IU_ids: string[];
@@ -77,7 +80,11 @@ export default async function handler(
       });
     }
 
-    const growthReport = await composeGrowthReport(companyId);
+    const resolvedInput = await resolveAnalyticsReportInput({
+      companyId,
+      reportCategory: 'growth',
+    });
+    const growthReport = await composeGrowthReport(companyId, { resolvedInput });
     return res.status(200).json(growthReport);
   } catch (error) {
     console.error('[reports/growth] error:', error);

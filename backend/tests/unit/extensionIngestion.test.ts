@@ -6,6 +6,7 @@ import {
   normalizeScrapedMessageContent,
   resolvePlatformUserId,
 } from '../../../lib/engagement/extensionIngestion';
+import { isActionableDmPreview } from '../../../lib/engagement/messageRoles';
 
 describe('extension ingestion normalization', () => {
   it('normalizes platform aliases used by browser/RPA scrapers', () => {
@@ -52,5 +53,23 @@ describe('extension ingestion normalization', () => {
       isSelf: true,
       prefixDetected: false,
     });
+
+    expect(normalizeScrapedMessageContent({
+      platform: 'linkedin',
+      platform_message_id: 'urn:li:msg_message:(urn:li:fsd_profile:ACoAAABHLfMBdcFeqSWF3MEmltNWsdKyACDMcic,2-thread)',
+      sender_username: 'ACoAAABHLfMBdcFeqSWF3MEmltNWsdKyACDMcic',
+      content: 'Plain message without You prefix',
+    })).toEqual({
+      content: 'Plain message without You prefix',
+      isSelf: true,
+      prefixDetected: false,
+    });
+  });
+
+  it('rejects LinkedIn notification wrapper previews as DM reply targets', () => {
+    expect(isActionableDmPreview('Rajesh: Hi Kuldeep, hope you are doing well')).toBe(true);
+    expect(isActionableDmPreview('You: Thanks, I will check')).toBe(true);
+    expect(isActionableDmPreview('Kuldeep Rawat sent the following message at 2:04 AM')).toBe(false);
+    expect(isActionableDmPreview('Kuldeep Rawat sent the following messages at 11:16 AM')).toBe(false);
   });
 });

@@ -82,7 +82,7 @@ export const buildExtractionPrompt = (
     '- company_name\n- industry_list\n- category_list\n- geography_list\n' +
     '- products_services\n- target_audience\n- brand_voice\n- goals\n' +
     '- competitors_list\n- unique_value_proposition\n- content_themes_list\n- website_url\n' +
-    '- social_profiles (object with linkedin, facebook, instagram, x, youtube, tiktok, reddit, blog)\n\n' +
+    '- social_profiles (object with linkedin, facebook, instagram, x, youtube, tiktok, reddit, pinterest, whatsapp, blog)\n\n' +
     'Important:\n' +
     '- category_list should reflect what the company does (product/service categories), not just industry.\n' +
     '- Prefer 3-7 concise categories when evidence supports it.\n' +
@@ -97,6 +97,76 @@ export const buildExtractionPrompt = (
   return { systemPrompt, userPrompt };
 };
 
+type MissingFieldQuestion = {
+  field?: unknown;
+  question?: unknown;
+  options?: unknown;
+  allow_multiple?: unknown;
+};
+
+const ALLOWED_MISSING_QUESTION_FIELDS = [
+  'industry',
+  'category',
+  'categories',
+  'geography',
+  'geographic',
+  'geographical',
+  'target_audience',
+  'brand_voice',
+  'goals',
+  'unique_value',
+  'unique_value_proposition',
+  'content_themes',
+  'products_services',
+];
+
+const BLOCKED_MISSING_QUESTION_TOKENS = [
+  'competitor',
+  'competitors',
+  'social',
+  'linkedin',
+  'facebook',
+  'instagram',
+  'twitter',
+  'youtube',
+  'tiktok',
+  'reddit',
+  'blog',
+  'website',
+  'url',
+  'link',
+];
+
+const normalizeQuestionKey = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const isAllowedMissingFieldQuestion = (entry: MissingFieldQuestion) => {
+  const field = typeof entry.field === 'string' ? entry.field : '';
+  const question = typeof entry.question === 'string' ? entry.question : '';
+  if (!field || !question) return false;
+
+  const normalized = normalizeQuestionKey(`${field} ${question}`);
+  if (BLOCKED_MISSING_QUESTION_TOKENS.some((token) => normalized.includes(token))) {
+    return false;
+  }
+
+  return ALLOWED_MISSING_QUESTION_FIELDS.some((fieldKey) =>
+    normalized.includes(normalizeQuestionKey(fieldKey))
+  );
+};
+
+const sanitizeMissingFieldQuestion = (entry: MissingFieldQuestion) => ({
+  field: String(entry.field || '').trim(),
+  question: String(entry.question || '').trim(),
+  options: Array.isArray(entry.options)
+    ? entry.options.map((option) => String(option || '').trim()).filter(Boolean).slice(0, 8)
+    : [],
+  allow_multiple: Boolean(entry.allow_multiple),
+});
+
 export const generateMissingFieldQuestions = async (
   companyId: string | null,
   extraction: CompanyProfileExtractionOutput
@@ -104,14 +174,32 @@ export const generateMissingFieldQuestions = async (
   const systemPrompt =
     'From the Company Profile output and missing_fields list, generate a user questionnaire. ' +
     'For each missing or low-confidence field: write a clear question, provide dropdown-style options, ' +
-    'allow multiple selections where relevant. Return JSON array only.';
+    'allow multiple selections where relevant. Return JSON array only.\n\n' +
+    'Do NOT generate questions for competitors, competitor names, social profile accounts, website URLs, ' +
+    'blog presence, or link availability. Those are captured by dedicated fields or the competitor engine. ' +
+    'Only ask questions that map directly to the allowed profile fields.';
 
   const userPrompt = JSON.stringify({
     extraction,
     missing_fields: extraction.missing_fields || [],
     fields_to_cover: [
       'industry', 'category', 'geography', 'target_audience', 'brand_voice',
-      'goals', 'competitors', 'unique_value_proposition', 'content_themes', 'products_services',
+      'goals', 'unique_value_proposition', 'content_themes', 'products_services',
+    ],
+    blocked_fields: [
+      'competitors',
+      'social_profiles',
+      'linkedin_url',
+      'facebook_url',
+      'instagram_url',
+      'x_url',
+      'youtube_url',
+      'tiktok_url',
+      'reddit_url',
+      'pinterest_url',
+      'whatsapp_url',
+      'blog_url',
+      'website_url',
     ],
     format: [
       {
@@ -138,5 +226,10 @@ export const generateMissingFieldQuestions = async (
 
   const raw = result.output?.trim() || '{}';
   const parsed = JSON.parse(raw);
-  return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.questions) ? parsed.questions : [];
+  const questions = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.questions) ? parsed.questions : [];
+  return questions
+    .filter(isAllowedMissingFieldQuestion)
+    .map(sanitizeMissingFieldQuestion)
+    .filter((question) => question.options.length > 0)
+    .slice(0, 8);
 };

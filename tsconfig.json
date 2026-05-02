@@ -42,6 +42,7 @@
     "tmp_*",
     "artifacts",
     "backend/tests",
+    "supabase/functions",
     "**/*.test.ts",
     "**/*.spec.ts",
   ]

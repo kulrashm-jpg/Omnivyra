@@ -243,6 +243,17 @@ export const ONBOARDING_COMPLETE_LIMIT: RateLimitConfig = {
   windowSecs: 60 * 60,
 };
 
+/**
+ * 10 domain canonical-resolutions per IP per minute.
+ * Each resolution makes outbound HTTP requests, so this caps the cost AND
+ * the SSRF-probing surface a single IP can exercise.
+ */
+export const DOMAIN_RESOLUTION_LIMIT: RateLimitConfig = {
+  keyPrefix: 'rl:domain_resolution',
+  limit: 10,
+  windowSecs: 60,
+};
+
 // ── Post-auth UID-based limiters ──────────────────────────────────────────────
 // Applied AFTER Firebase token verification, keyed by firebaseUid.
 // Prevents rotating-proxy abuse: a single user cannot exceed these regardless

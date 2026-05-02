@@ -38,6 +38,12 @@ type Template =
       prospectEmail: string;
       companyName: string | null;
       supportEmail: string;
+    }
+  | {
+      type: "domain_verification_reminder";
+      recipientEmail: string;
+      finalDomain: string;
+      dashboardUrl: string;
     };
 
 type Envelope = { to: string; subject: string; html: string };
@@ -115,23 +121,60 @@ function render(t: Template): Envelope {
         ),
       };
     }
+
+    case "domain_verification_reminder": {
+      const body =
+        `You're almost done setting up <strong>${t.finalDomain}</strong>.<br/><br/>` +
+        `To complete setup:<br/>` +
+        `1. Add your verification record<br/>` +
+        `2. Click verify in your dashboard<br/><br/>` +
+        `If you've already verified your domain, you can ignore this message.`;
+      return {
+        to: t.recipientEmail,
+        subject: "Verify your domain to unlock full access",
+        html: actionLayout(
+          "Verify your domain",
+          body,
+          "Go to dashboard",
+          t.dashboardUrl,
+        ),
+      };
+    }
   }
 }
 
 async function sendViaSES(envelope: Envelope): Promise<void> {
-  const from = Deno.env.get("EMAIL_FROM");
-  const region = Deno.env.get("AWS_SES_REGION");
-  const accessKeyId = Deno.env.get("AWS_ACCESS_KEY_ID");
+  // Region is sourced EXCLUSIVELY from AWS_SES_REGION. No fallback to
+  // AWS_REGION, no hardcoded default, no `||` chain. If unset, fail loud.
+  // .trim() defends against whitespace pasted into the Supabase secrets UI.
+  const from            = Deno.env.get("EMAIL_FROM");
+  const region          = Deno.env.get("AWS_SES_REGION")?.trim();
+  const accessKeyId     = Deno.env.get("AWS_ACCESS_KEY_ID");
   const secretAccessKey = Deno.env.get("AWS_SECRET_ACCESS_KEY");
 
-  if (!from || !region || !accessKeyId || !secretAccessKey) {
+  if (!region) {
+    throw new Error("AWS_SES_REGION is missing or empty");
+  }
+
+  if (!from || !accessKeyId || !secretAccessKey) {
     throw new Error(
-      "SES_NOT_CONFIGURED: EMAIL_FROM, AWS_SES_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY all required",
+      "SES_NOT_CONFIGURED: EMAIL_FROM, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY all required",
     );
   }
 
+  // ───── TEMPORARY DIAGNOSTIC ────────────────────────────────────────────
+  // Logs the exact region string that will be passed to SESClient AND
+  // hard-fails if it doesn't match the expected eu-north-1 — proves
+  // whether the runtime is still seeing the wrong value despite the
+  // secret being set correctly. Remove the assertion once verified.
+  console.log("FINAL REGION USED:", region);
+  if (region !== "eu-north-1") {
+    throw new Error(`REGION MISMATCH: Expected eu-north-1 but got ${region}`);
+  }
+  // ───── END TEMPORARY DIAGNOSTIC ────────────────────────────────────────
+
   const client = new SESClient({
-    region,
+    region: region,
     credentials: { accessKeyId, secretAccessKey },
   });
 
@@ -148,6 +191,17 @@ async function sendViaSES(envelope: Envelope): Promise<void> {
 }
 
 Deno.serve(async (req) => {
+  // ───── TEMPORARY ENV DEBUG ─────────────────────────────────────────────
+  // Diagnoses the SES wrong-region bug. Remove once region drift is
+  // resolved. Logs once per request so we capture state even on warm
+  // invocations (cold-start-only logging would miss most events).
+  console.log("ENV DEBUG START");
+  console.log("AWS_SES_REGION:",     Deno.env.get("AWS_SES_REGION"));
+  console.log("AWS_REGION:",         Deno.env.get("AWS_REGION"));
+  console.log("AWS_DEFAULT_REGION:", Deno.env.get("AWS_DEFAULT_REGION"));
+  console.log("ENV DEBUG END");
+  // ───── END TEMPORARY ENV DEBUG ─────────────────────────────────────────
+
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
@@ -178,6 +232,24 @@ Deno.serve(async (req) => {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
+  }
+
+  // Fail loudly on unknown template types — render() falls through to
+  // undefined for an unrecognized string, which would otherwise reach SES
+  // with a half-built envelope. Keep the allowlist in sync with Template.
+  const KNOWN_TYPES = new Set([
+    "team_invite",
+    "company_referral",
+    "inbound_signup_notice",
+    "domain_verification_reminder",
+  ]);
+  const requestedType = (body as { type?: string }).type;
+  if (!requestedType || !KNOWN_TYPES.has(requestedType)) {
+    console.error("EMAIL_TEMPLATE_NOT_FOUND", { type: requestedType ?? null });
+    return new Response(
+      JSON.stringify({ error: "EMAIL_TEMPLATE_NOT_FOUND", type: requestedType ?? null }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
   }
 
   try {

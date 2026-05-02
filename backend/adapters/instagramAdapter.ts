@@ -66,7 +66,7 @@ async function uploadImageToInstagram(
   token: Token
 ): Promise<{ container_id: string }> {
   // Step 1: Create media container for image
-  const containerUrl = `https://graph.facebook.com/v18.0/${instagramAccountId}/media`;
+  const containerUrl = `https://graph.facebook.com/v22.0/${instagramAccountId}/media`;
   
   const containerResponse = await axios.post(containerUrl, {
     image_url: imageUrl,
@@ -100,7 +100,7 @@ async function uploadVideoToInstagram(
   token: Token
 ): Promise<{ container_id: string }> {
   // Step 1: Create media container for video
-  const containerUrl = `https://graph.facebook.com/v18.0/${instagramAccountId}/media`;
+  const containerUrl = `https://graph.facebook.com/v22.0/${instagramAccountId}/media`;
   
   const containerResponse = await axios.post(containerUrl, {
     media_type: 'REELS', // or 'VIDEO' for regular posts
@@ -125,7 +125,7 @@ async function uploadVideoToInstagram(
   while (status === 'IN_PROGRESS' && attempts < maxAttempts) {
     await new Promise(resolve => setTimeout(resolve, 10000)); // Wait 10 seconds
     
-    const statusUrl = `https://graph.facebook.com/v18.0/${containerId}`;
+    const statusUrl = `https://graph.facebook.com/v22.0/${containerId}`;
     const statusResponse = await axios.get(statusUrl, {
       params: {
         fields: 'status_code',
@@ -162,7 +162,7 @@ async function publishInstagramContainer(
   instagramAccountId: string,
   token: Token
 ): Promise<{ id: string }> {
-  const publishUrl = `https://graph.facebook.com/v18.0/${instagramAccountId}/media_publish`;
+  const publishUrl = `https://graph.facebook.com/v22.0/${instagramAccountId}/media_publish`;
   
   const response = await axios.post(publishUrl, {
     creation_id: containerId,
