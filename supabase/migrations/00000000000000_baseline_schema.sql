@@ -778,3 +778,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_supabase_uid_key ON public.users (supaba
 -- End of baseline.
 
 -- trigger CI
+
+-- rerun trigger
