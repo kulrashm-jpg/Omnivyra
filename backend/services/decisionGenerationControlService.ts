@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const HOUR_MS = 60 * 60 * 1000;
 

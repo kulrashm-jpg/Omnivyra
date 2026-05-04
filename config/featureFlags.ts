@@ -3,7 +3,7 @@
  *
  * This file is imported by both server and browser code — it must NOT import
  * the server-side config module (@/config) which validates server-only env vars
- * (SUPABASE_SERVICE_ROLE_KEY, REDIS_URL, etc.) and crashes in the browser.
+ * (Supabase service credential, REDIS_URL, etc.) and crashes in the browser.
  *
  * Rules:
  *   - NEXT_PUBLIC_* vars: read process.env directly (Next.js exposes these to the browser)

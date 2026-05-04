@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import CommunityAiLayout from '../components/community-ai/CommunityAiLayout';
 import SectionCard from '../components/community-ai/SectionCard';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { PendingAction } from '../components/community-ai/types';
 import {
   validateActionAgainstPlaybook,
@@ -82,7 +82,7 @@ export function useCommunityActions() {
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/community-ai/actions?tenant_id=${encodeURIComponent(
           tenantId
         )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -226,7 +226,7 @@ export function useCommunityActions() {
     setExecutingActionId(action.action_id);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/actions/execute', {
+      const response = await apiFetch('/api/community-ai/actions/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -264,7 +264,7 @@ export function useCommunityActions() {
     setExecutingActionId(action.action_id);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/actions/approve', {
+      const response = await apiFetch('/api/community-ai/actions/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -323,7 +323,7 @@ export function useCommunityActions() {
     setExecutingActionId(manualAction.action_id);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/actions/execute', {
+      const response = await apiFetch('/api/community-ai/actions/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -389,7 +389,7 @@ export function useCommunityActions() {
     setExecutingActionId(platformViewAction.action_id);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/actions/execute', {
+      const response = await apiFetch('/api/community-ai/actions/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -431,7 +431,7 @@ export function useCommunityActions() {
     if (!tenantId || executingActionId) return;
     setExecutingActionId(action.action_id);
     setErrorMessage(null);
-    fetchWithAuth('/api/community-ai/actions', {
+    apiFetch('/api/community-ai/actions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -471,7 +471,7 @@ export function useCommunityActions() {
     setExecutingActionId(action.action_id);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/actions', {
+      const response = await apiFetch('/api/community-ai/actions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -512,7 +512,7 @@ export function useCommunityActions() {
     }
     setHistoryLoading(true);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/community-ai/actions/history?tenant_id=${encodeURIComponent(
           tenantId
         )}&organization_id=${encodeURIComponent(tenantId)}&action_id=${encodeURIComponent(

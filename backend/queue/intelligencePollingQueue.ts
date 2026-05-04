@@ -37,6 +37,8 @@ export type IntelligencePollingJobPayload = {
   apiSourceId: string;
   companyId?: string | null;
   purpose?: string;
+  window?: string;
+  trigger_source?: string;
 };
 
 const DEFAULT_JOB_OPTIONS = {

@@ -1,7 +1,8 @@
+﻿// AUTH EXEMPT: OAuth callback handles external provider redirect
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 /**
- * GET /api/community-ai/connectors/instagram/callback  (legacy — redirects to Meta unified callback)
+ * GET /api/community-ai/connectors/instagram/callback  (legacy â€” redirects to Meta unified callback)
  *
  * Instagram is connected via the unified Meta OAuth flow.
  * Canonical callback: /api/community-ai/connectors/meta/callback
@@ -13,3 +14,4 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
   const qs = req.url?.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
   return res.redirect(301, `/api/community-ai/connectors/meta/callback${qs}`);
 }
+

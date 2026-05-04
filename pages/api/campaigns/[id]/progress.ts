@@ -1,10 +1,12 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * Campaign Progress API
  * GET /api/campaigns/[id]/progress
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { ALL_ROLES } from '../../../../backend/services/rbacService';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
@@ -106,4 +108,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALL_ROLES);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, ALL_ROLES));

@@ -18,7 +18,8 @@ jest.mock('../../services/intelligenceExecutionContext', () => ({
 
 jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   composeCampaignOptimizationView,
   composeDecisionIntelligence,

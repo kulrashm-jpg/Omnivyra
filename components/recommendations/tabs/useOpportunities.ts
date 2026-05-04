@@ -6,7 +6,7 @@ type FetchWithAuth = (input: RequestInfo, init?: RequestInit) => Promise<Respons
 export function useOpportunities(
   companyId: string | null,
   type: string,
-  fetchWithAuth: FetchWithAuth,
+  apiFetch: FetchWithAuth,
   options?: { getRegions?: () => string[] | null | undefined }
 ) {
   const [opportunities, setOpportunities] = useState<OpportunityWithPayload[]>([]);
@@ -20,7 +20,7 @@ export function useOpportunities(
     setLoading(true);
     setError('');
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/opportunities?companyId=${encodeURIComponent(companyId)}&type=${encodeURIComponent(type)}`
       );
       if (!res.ok) {
@@ -34,13 +34,13 @@ export function useOpportunities(
       if (count < 10) {
         const regions = options?.getRegions?.();
         const regionsList = Array.isArray(regions) && regions.length ? regions : undefined;
-        const postRes = await fetchWithAuth('/api/opportunities', {
+        const postRes = await apiFetch('/api/opportunities', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ companyId, type, ...(regionsList ? { regions: regionsList } : {}) }),
         });
         if (postRes.ok) {
-          const refetchRes = await fetchWithAuth(
+          const refetchRes = await apiFetch(
             `/api/opportunities?companyId=${encodeURIComponent(companyId)}&type=${encodeURIComponent(type)}`
           );
           if (refetchRes.ok) {
@@ -55,7 +55,7 @@ export function useOpportunities(
     } finally {
       setLoading(false);
     }
-  }, [companyId, type, fetchWithAuth]);
+  }, [companyId, type, apiFetch]);
 
   const refetchGetOnly = useCallback(async () => {
     if (!companyId) return;
@@ -63,7 +63,7 @@ export function useOpportunities(
     setLoading(true);
     setError('');
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/opportunities?companyId=${encodeURIComponent(companyId)}&type=${encodeURIComponent(type)}`
       );
       if (!res.ok) {
@@ -79,7 +79,7 @@ export function useOpportunities(
     } finally {
       setLoading(false);
     }
-  }, [companyId, type, fetchWithAuth]);
+  }, [companyId, type, apiFetch]);
 
   return { opportunities, loading, error, runEngine, hasRun, refetch: runEngine, refetchGetOnly };
 }

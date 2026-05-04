@@ -11,7 +11,8 @@
  *   - Post-campaign learning distillation
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generateNextCampaign, getAutonomousSettings } from './autonomousCampaignAgent';
 import { distilCampaignLearnings } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';

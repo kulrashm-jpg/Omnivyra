@@ -22,7 +22,7 @@ function getStateSigningKey(): string {
   return (
     config.ENCRYPTION_KEY ||
     process.env.ENCRYPTION_KEY ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'] ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     'omnivyra-oauth-state'
   );

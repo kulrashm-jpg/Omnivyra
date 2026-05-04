@@ -3,7 +3,8 @@
  * Closes evaluation window for metrics older than 24 hours.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordMetric } from '../services/systemHealthMetricsService';
 import { executeWithRetry } from '../services/workerRetryService';
 

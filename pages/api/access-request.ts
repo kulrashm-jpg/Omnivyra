@@ -1,26 +1,28 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/access-request
  *
- * Public endpoint — no auth required. Allows users with public email domains
+ * Public endpoint â€” no auth required. Allows users with public email domains
  * (Gmail, Yahoo, etc.) to request access to the platform.
  *
  * These users cannot self-serve because their email domain is not eligible
  * for free credits. A super admin reviews and approves/rejects the request.
  *
  * Body:
- *   email       — required
- *   name        — required (person or brand name)
- *   website_url — optional
- *   job_title   — optional
+ *   email       â€” required
+ *   name        â€” required (person or brand name)
+ *   website_url â€” optional
+ *   job_title   â€” optional
  *
  * Idempotent: returns the existing request if one is already pending or approved.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
@@ -41,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!domain) return res.status(400).json({ error: 'Invalid email address' });
 
 
-  // ── Idempotent: return existing pending or approved request ────────────────
+  // â”€â”€ Idempotent: return existing pending or approved request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: existing } = await supabase
     .from('access_requests')
     .select('id, status')
@@ -53,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ requestId: existing.id, status: existing.status });
   }
 
-  // ── Insert new request ─────────────────────────────────────────────────────
+  // â”€â”€ Insert new request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: inserted, error } = await supabase
     .from('access_requests')
     .insert({
@@ -76,3 +78,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(201).json({ requestId: inserted.id, status: 'pending' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

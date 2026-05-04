@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -17,7 +18,7 @@ function validateFields(fields: unknown): fields is FormField[] {
   );
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     typeof req.query.company_id === 'string' ? req.query.company_id :
     typeof req.body?.company_id === 'string' ? req.body.company_id : null;
@@ -26,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
 
-  // GET — any company member can list forms
+  // GET â€” any company member can list forms
   if (req.method === 'GET') {
     try {
       const forms = await getForms(companyId);
@@ -36,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // POST — admin only
+  // POST â€” admin only
   if (req.method === 'POST') {
     const roleGate = await enforceRole({
       req, res, companyId,
@@ -72,3 +73,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

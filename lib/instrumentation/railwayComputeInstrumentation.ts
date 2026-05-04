@@ -10,7 +10,8 @@
  */
 
 import { redis } from '../../backend/queue/redis';
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Types ──────────────────────────────────────────────────────────────────
 

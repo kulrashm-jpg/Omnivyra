@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
- * PUT    /api/provider-accounts/[id]  — update credentials, limits, priority
- * DELETE /api/provider-accounts/[id]  — soft delete (is_active = false)
+ * PUT    /api/provider-accounts/[id]  â€” update credentials, limits, priority
+ * DELETE /api/provider-accounts/[id]  â€” soft delete (is_active = false)
  *
  * SUPER_ADMIN only. No tenant access.
  */
@@ -14,9 +15,10 @@ import {
   deactivateProviderAccount,
 } from '../../../backend/services/providerAccountService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-// ── Auth guard ─────────────────────────────────────────────────────────────────
+// â”€â”€ Auth guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function requireSuperAdmin(
   req: NextApiRequest,
@@ -37,9 +39,9 @@ async function requireSuperAdmin(
   return null;
 }
 
-// ── Handler ────────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Account ID required' });
@@ -62,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: 'Account not found' });
   }
 
-  // ── DELETE (soft) ──────────────────────────────────────────────────────────
+  // â”€â”€ DELETE (soft) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'DELETE') {
     try {
       await deactivateProviderAccount(id);
@@ -72,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── PUT: update ────────────────────────────────────────────────────────────
+  // â”€â”€ PUT: update â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'PUT') {
     const {
       account_name,
@@ -147,3 +149,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

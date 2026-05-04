@@ -62,7 +62,8 @@ import runPreplanningHandler from '../../../pages/api/campaigns/run-preplanning'
 import updateDurationHandler from '../../../pages/api/campaigns/update-duration';
 import regenerateBlueprintHandler from '../../../pages/api/campaigns/regenerate-blueprint';
 import { recordGovernanceEvent } from '../../services/GovernanceEventService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { PrePlanningRequiredError, getResolvedCampaignPlanContext } from '../../services/campaignBlueprintService';
 import { runPrePlanning } from '../../services/CampaignPrePlanningService';
 

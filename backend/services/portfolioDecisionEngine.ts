@@ -10,7 +10,8 @@
  * Persists decisions to `portfolio_decision_log`.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { evaluateCampaignDecision } from './campaignDecisionEngine';
 import { getAutonomousSettings } from './autonomousCampaignAgent';

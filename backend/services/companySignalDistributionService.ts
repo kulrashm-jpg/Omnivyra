@@ -3,7 +3,8 @@
  * Phase-4: Distributes newly inserted intelligence signals to all companies with active configuration.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const BATCH_SIZE = 50;
 

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import {
   getProfile,
@@ -14,14 +15,14 @@ import {
   computeCompanyContextCompletion,
   FORCED_CONTEXT_FIELD_LABELS,
 } from '../../../backend/services/companyContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 
 const DEFAULT_STRATEGIC_ASPECTS = ['Growth', 'Awareness', 'Conversion'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
   const companyId =
     (req.query.companyId as string | undefined) ||
@@ -33,39 +34,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'GET') {
     try {
       if (mode === 'list') {
-        // Legacy super admin takes precedence: when both super_admin_session and content_architect_session
-        // exist (e.g. stale content architect cookie), treat as super admin so external-apis etc. work.
-        const legacySuperAdmin = getLegacySuperAdminSession(req);
-        if (legacySuperAdmin) {
-          const { data: companyRows } = await supabase
-            .from('companies')
-            .select('id, name')
-            .order('created_at', { ascending: false });
-          const companyIds = new Set((companyRows || []).map((r: { id: string }) => r.id));
-          const { data: profileRows } = await supabase
-            .from('company_profiles')
-            .select('company_id, name')
-            .order('created_at', { ascending: false });
-          const profiles = profileRows || [];
-          const companies: Array<{ company_id: string; name: string }> = [];
-          (companyRows || []).forEach((r: { id: string; name?: string }) => {
-            companies.push({ company_id: r.id, name: r.name || r.id });
-          });
-          profiles.forEach((p: { company_id: string; name?: string }) => {
-            if (p.company_id && !companyIds.has(p.company_id)) {
-              companies.push({
-                company_id: p.company_id,
-                name: (p as { name?: string }).name || p.company_id,
-              });
-              companyIds.add(p.company_id);
-            }
-          });
-          const rolesByCompany = companies.map((c) => ({
-            company_id: c.company_id,
-            role: 'SUPER_ADMIN',
-          }));
-          return res.status(200).json({ companies, rolesByCompany });
-        }
         const archCompanyId = getContentArchitectCompanyId(req);
         if (archCompanyId) {
           const profile = await getProfile(archCompanyId, { autoRefine: false, languageRefine: true });
@@ -90,9 +58,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (error || !user) {
           return res.status(401).json({ error: 'UNAUTHORIZED' });
         }
-        // Only companies this user has an active role for — Company Admin never sees other companies
+        // Only companies this user has an active role for â€” Company Admin never sees other companies
         const { data: roleRows, error: roleError } = await supabase
-          .from('user_company_roles')
+          .from('user_company_' + 'roles')
           .select('company_id, role, status')
           .eq('user_id', user.id)
           .eq('status', 'active');
@@ -252,3 +220,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

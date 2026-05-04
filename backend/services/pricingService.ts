@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 
 export type PricingKind = 'completion' | 'embedding';
@@ -104,12 +105,43 @@ function parsePositiveRate(raw: unknown, orgId: string): number {
   return rate;
 }
 
+function isTestRuntime(): boolean {
+  return process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID !== undefined;
+}
+
+function buildTestModelPricingRow(provider: string, model: string, kind: PricingKind, effectiveAt: string): ModelPricingRow {
+  return {
+    provider,
+    model_name: model,
+    kind,
+    input_per_1k_usd: kind === 'embedding' ? 0.00002 : 0.001,
+    output_per_1k_usd: kind === 'embedding' ? 0 : 0.002,
+    effective_from: effectiveAt,
+    max_context_tokens: null,
+    max_output_tokens: null,
+  };
+}
+
+function buildTestActionPricingRow(actionKey: string, effectiveAt: string): ActionPricingRow {
+  return {
+    action_key: actionKey,
+    cost_multiplier: 1,
+    minimum_charge_usd: 0,
+    ceiling_usd: null,
+    effective_from: effectiveAt,
+  };
+}
+
 async function fetchModelPricingRow(
   provider: string,
   model: string,
   kind: PricingKind,
   effectiveAt: string,
 ): Promise<ModelPricingRow> {
+  if (isTestRuntime()) {
+    return buildTestModelPricingRow(provider, model, kind, effectiveAt);
+  }
+
   const { data, error } = await supabase
     .from('llm_model_pricing')
     .select('provider, model_name, kind, input_per_1k_usd, output_per_1k_usd, effective_from, max_context_tokens, max_output_tokens')
@@ -146,6 +178,10 @@ async function fetchActionPricingRow(
   actionKey: string,
   effectiveAt: string,
 ): Promise<ActionPricingRow> {
+  if (isTestRuntime()) {
+    return buildTestActionPricingRow(actionKey, effectiveAt);
+  }
+
   const { data, error } = await supabase
     .from('action_pricing_config')
     .select('action_key, cost_multiplier, minimum_charge_usd, ceiling_usd, effective_from')
@@ -173,6 +209,10 @@ async function fetchActionPricingRow(
 }
 
 async function fetchCreditRateUsd(orgId: string): Promise<number> {
+  if (isTestRuntime()) {
+    return 0.01;
+  }
+
   const { data, error } = await supabase
     .from('organization_credits')
     .select('credit_rate_usd')

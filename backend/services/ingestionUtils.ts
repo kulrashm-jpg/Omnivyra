@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export function normalizeUrl(rawUrl: string): string {
   const url = new URL(rawUrl);

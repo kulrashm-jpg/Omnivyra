@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/governance/verify-snapshot
- * Stage 30 — Verify snapshot integrity.
+ * Stage 30 â€” Verify snapshot integrity.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -23,4 +24,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json(result);
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]));
+

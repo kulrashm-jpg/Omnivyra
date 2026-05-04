@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 import { recognizePatterns, type CampaignRecord } from '../../../backend/lib/campaigns/patternRecognitionEngine';
 import { getReportReadinessSummary } from '../../../backend/services/reportReadinessService';
@@ -428,7 +430,7 @@ function deriveKnowledgeGraphStatus(input: {
   return 'emerging';
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<SnapshotResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<SnapshotResponse | { error: string }>) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -1103,3 +1105,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to build intelligence snapshot' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

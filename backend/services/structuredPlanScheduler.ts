@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceService';
 import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
 import { processBlockSchedule } from './boltScheduleBlockProcessor';
@@ -15,6 +16,9 @@ import { getContentQueue } from '../queue/contentGenerationQueues';
 import type { BoltContentJobData } from '../queue/jobProcessors/boltContentJobProcessor';
 import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
+import { createHash } from 'crypto';
+import { getJobRegistryEntry } from '../jobs/jobRegistry';
+import { claimIdempotencyKey } from '../jobs/idempotencyService';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -1581,6 +1585,7 @@ export async function scheduleStructuredPlan(
   if (!campaign.start_date) {
     throw new Error('Campaign start date is required for scheduling');
   }
+
   // Reject scheduling for campaigns whose start_date is in the past.
   // Compare on date-only basis (YYYY-MM-DD) so "today" is always valid,
   // regardless of current UTC hour vs campaign midnight-UTC parsing.
@@ -1616,7 +1621,7 @@ export async function scheduleStructuredPlan(
   let effectiveUserId: string | null = (campaign as any).user_id ?? null;
   if (!effectiveUserId && companyId) {
     const { data: companyUser } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id')
       .eq('company_id', companyId)
       .eq('status', 'active')
@@ -1743,6 +1748,9 @@ export async function scheduleStructuredPlan(
         already_scheduled_count: 0,
       };
     }
+    if (!options?.run_id) {
+      throw new Error('execution_intent_id is required for campaign scheduling');
+    }
     // ── QUEUE PATH: run_id present → queue jobs for async processing ────────
     // Required for large campaigns (10+ platforms × 5+ content types × 3+/week)
     // where in-process generation would exceed HTTP timeout limits.
@@ -1778,6 +1786,7 @@ export async function scheduleStructuredPlan(
     }
 
     // ── INLINE BLOCK PROCESSOR: no run_id → process synchronously ───────────
+    throw new Error('Campaign execution jobs were not queued');
     // Used for small campaigns or when BullMQ is unavailable.
     try {
       options?.onProgress?.('schedule-creating-content');
@@ -1863,6 +1872,30 @@ export async function scheduleStructuredPlan(
     };
   }
 
+  const planHash = createHash('sha256').update(JSON.stringify(plan)).digest('hex').slice(0, 24);
+  const executionIntentId = options?.run_id ?? `intent_${campaignId}_${planHash}`;
+  const registry = getJobRegistryEntry('campaign_schedule');
+  const idempotencyKey = registry.idempotency_key_builder({
+    campaignId,
+    execution_intent_id: executionIntentId,
+    plan_hash: planHash,
+  });
+  const claimed = await claimIdempotencyKey(idempotencyKey, 30 * 24 * 3600, {
+    job_id: 'campaign_schedule',
+    campaignId,
+    execution_intent_id: executionIntentId,
+    plan_hash: planHash,
+  });
+  if (!claimed) {
+    console.info(JSON.stringify({ event: 'job_skipped_locked', job_id: 'campaign_schedule', campaign_id: campaignId }));
+    return {
+      scheduled_count: 0,
+      skipped_count: scheduledPosts.length,
+      skipped_platforms: skippedPlatforms,
+      already_scheduled_count: scheduledPosts.length,
+    };
+  }
+
   // Skip posts whose (platform, date) are already scheduled for this campaign
   let postsToInsert = scheduledPosts;
   let alreadyScheduledCount = 0;
@@ -1892,6 +1925,12 @@ export async function scheduleStructuredPlan(
       already_scheduled_count: alreadyScheduledCount,
     };
   }
+
+  postsToInsert = postsToInsert.map((post: any) => ({
+    ...post,
+    execution_intent_id: executionIntentId,
+    idempotency_key: idempotencyKey,
+  }));
 
   const { data: insertedPosts, error: insertError } = await supabase
     .from('scheduled_posts')

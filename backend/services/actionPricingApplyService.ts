@@ -11,7 +11,8 @@
  * known action_keys should do that at the API boundary before calling.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { refreshPricingCache } from './pricingService';
 import { logger } from './logger';
 

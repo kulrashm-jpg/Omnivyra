@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/engagement/queue-diagnostic?organization_id=<uuid>
  *
@@ -8,26 +9,27 @@
  *
  * For each thread:
  *   - thread_id
- *   - platform_thread_id (LinkedIn's URN — same value = same conversation
+ *   - platform_thread_id (LinkedIn's URN â€” same value = same conversation
  *     on LinkedIn, different values = different conversations)
  *   - participant_name + participant_profile_url + participant_username
- *     (from engagement_threads.raw_payload — set by the new scraper)
+ *     (from engagement_threads.raw_payload â€” set by the new scraper)
  *   - latest_message: direction, sender_self/author_self, sender_name,
  *     sender_profile_url, sender_username (from engagement_messages.raw_payload)
- *   - counterparty_author_id (the dedup key — same value across threads
+ *   - counterparty_author_id (the dedup key â€” same value across threads
  *     means they collapse into one queue row)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isAuthorSelf } from '../../../lib/engagement/messageRoles';
 import {
   isNeedsResponseThread,
   isPeopleReactionThread,
 } from '../../../lib/engagement/queueRules';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -146,3 +148,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     items,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

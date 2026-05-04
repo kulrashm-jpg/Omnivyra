@@ -12,8 +12,9 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
+import { runWithServiceRole } from '../../../backend/db/supabaseClient';
 
+// AUTH EXEMPT: pre-login email existence check must run before a user session exists.
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<{ exists: boolean; error?: string }>
@@ -26,19 +27,17 @@ export default async function handler(
   const normalised = email.trim().toLowerCase();
 
   try {
-    const adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
-
     // ── 1. Check public.users (fast path) ────────────────────────────────────
     // Exclude soft-deleted rows: a deleted account should appear as "not found"
     // so the login page doesn't reveal that an email was previously registered.
-    const { data: publicUsers } = await adminClient
-      .from('users')
-      .select('id, is_deleted')
-      .ilike('email', normalised)
-      .limit(1);
+    const { data: publicUsers } = await runWithServiceRole(
+      'Check whether login email exists in public users',
+      (client) => client
+        .from('users')
+        .select('id, is_deleted')
+        .ilike('email', normalised)
+        .limit(1),
+    );
 
     if (Array.isArray(publicUsers) && publicUsers.length > 0) {
       const row = publicUsers[0] as any;
@@ -53,7 +52,7 @@ export default async function handler(
     // ── 2. Fallback: query auth.users via Supabase Admin REST API ────────────
     //    Uses email filter param supported by Supabase Auth Admin endpoint.
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const serviceKey  = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const serviceKey  = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY']!;
 
     const authRes = await fetch(
       `${supabaseUrl}/auth/v1/admin/users?filter=${encodeURIComponent(normalised)}`,

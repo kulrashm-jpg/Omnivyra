@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockdownService';
 import { scheduleStructuredPlan, ScheduleEligibilityError } from '../../../../backend/services/structuredPlanScheduler';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
@@ -12,6 +14,7 @@ import { acquireSchedulerLock, releaseSchedulerLock, SchedulerLockError } from '
 import { checkAndCompleteCampaignIfEligible } from '../../../../backend/services/CampaignCompletionService';
 import { recordGovernanceEvent } from '../../../../backend/services/GovernanceEventService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { transitionCampaignState } from '../../../../backend/services/campaignStateService';
 
 const isScheduleEligibilityError = (error: unknown): error is ScheduleEligibilityError => {
   return typeof ScheduleEligibilityError === 'function' && error instanceof ScheduleEligibilityError;
@@ -27,7 +30,7 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
   return (data as any)?.company_id ?? null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -44,10 +47,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Campaign ID is required' });
   }
 
-  const { plan } = req.body || {};
+  const { plan, execution_intent_id } = req.body || {};
   if (!plan || !Array.isArray(plan.weeks)) {
     return res.status(400).json({ error: 'Structured plan is required' });
   }
+  const providedExecutionIntentId =
+    typeof execution_intent_id === 'string' && execution_intent_id.trim().length > 0
+      ? execution_intent_id.trim()
+      : null;
+  const effectiveExecutionIntentId =
+    providedExecutionIntentId ?? `intent:${id}:${JSON.stringify(plan).length}`;
 
   let lockId: string | null = null;
   try {
@@ -131,19 +140,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn('[schedule-structured-plan] Failed to persist committed blueprint, continuing:', persistErr);
     }
 
-    const result = await scheduleStructuredPlan(plan, id);
+    const result = providedExecutionIntentId
+      ? await scheduleStructuredPlan(plan, id, { run_id: effectiveExecutionIntentId })
+      : await scheduleStructuredPlan(plan, id);
 
-    // Update campaign status to reflect committed/scheduled state
     try {
       await supabase
         .from('campaigns')
         .update({
-          status: 'active',
           current_stage: 'schedule',
-          blueprint_status: 'ACTIVE',
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);
+      await transitionCampaignState(id, 'scheduled', { execution_intent_id: effectiveExecutionIntentId });
     } catch (updateErr) {
       console.warn('[schedule-structured-plan] Failed to update campaign row, continuing:', updateErr);
     }
@@ -310,3 +319,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

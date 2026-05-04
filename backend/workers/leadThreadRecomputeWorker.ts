@@ -5,7 +5,8 @@
  * Dynamic batch sizing based on queue depth.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { computeThreadLeadScore } from '../services/leadThreadScoring';
 
 const MIN_BATCH = 20;

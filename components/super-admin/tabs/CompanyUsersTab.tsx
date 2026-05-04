@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import RbacTab from './RbacTab';
 import CompaniesTable from './CompaniesTable';
-import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface CompanyUsersTabProps {
   authError: string | null;
@@ -37,12 +37,12 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const companiesResponse = await fetchWithAuth('/api/super-admin/companies');
+      const companiesResponse = await apiFetch('/api/super-admin/companies');
       if (companiesResponse.ok) {
         const data = await companiesResponse.json();
         setCompanies(data.companies || []);
       }
-      const usersResponse = await fetchWithAuth('/api/super-admin/users');
+      const usersResponse = await apiFetch('/api/super-admin/users');
       if (usersResponse.ok) {
         const data = await usersResponse.json();
         setAppUsers(data.users || []);
@@ -66,7 +66,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     }
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/companies', {
+      const response = await apiFetch('/api/super-admin/companies', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: companyForm.name, website: companyForm.website, industry: companyForm.industry }),
@@ -94,7 +94,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     }
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      const response = await apiFetch('/api/super-admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: companyAdminForm.email, companyId: companyAdminForm.companyId, role: companyAdminForm.role }),
@@ -119,7 +119,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Are you sure you want to mark this company as ${nextStatus}?`)) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/companies', {
+      const response = await apiFetch('/api/super-admin/companies', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId, status: nextStatus }),
@@ -138,7 +138,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm('Delete this company and all its user roles? This cannot be undone.')) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/companies', {
+      const response = await apiFetch('/api/super-admin/companies', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId }),
@@ -158,7 +158,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Are you sure you want to mark this user as ${nextStatus}?`)) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      const response = await apiFetch('/api/super-admin/users', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, companyId, status: nextStatus }),
@@ -177,7 +177,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(`Change this user's role to ${nextRole}?`)) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      const response = await apiFetch('/api/super-admin/users', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, companyId, role: nextRole }),
@@ -200,7 +200,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     if (!confirm(confirmMsg)) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      const response = await apiFetch('/api/super-admin/users', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, companyId }),

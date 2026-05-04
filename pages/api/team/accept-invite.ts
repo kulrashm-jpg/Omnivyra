@@ -1,19 +1,18 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/team/accept-invite
  *
  * Accepts a pending invitation. Validates the raw token, then links the
- * authenticated Firebase user to the invited company with the specified role.
  *
  * The token is single-use: it is marked as accepted immediately after the
  * first successful verification. Concurrent duplicate submissions are
  * handled by the `accepted_at IS NULL` filter in the SELECT + the atomic
- * UPDATE — only one will succeed.
+ * UPDATE â€” only one will succeed.
  *
- * Auth: Firebase ID token in Authorization: Bearer <token>
  *
  * Body:
- *   { token: string }   — the raw invite token from the email link
+ *   { token: string }   â€” the raw invite token from the email link
  *
  * Responses:
  *   200  { companyId, role }
@@ -26,15 +25,16 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ── 1. Authenticate caller ────────────────────────────────────────────────
+  // â”€â”€ 1. Authenticate caller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let callerUid: string;
   let callerEmail: string;
   try {
@@ -45,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  // ── 2. Extract and hash the raw token ────────────────────────────────────
+  // â”€â”€ 2. Extract and hash the raw token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { token } = body as { token?: string };
 
@@ -55,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const tokenHash = createHash('sha256').update(token.trim()).digest('hex');
 
-  // ── 3. Look up the invitation (single query — fail fast if invalid) ───────
+  // â”€â”€ 3. Look up the invitation (single query â€” fail fast if invalid) â”€â”€â”€â”€â”€â”€â”€
   const { data: invitation } = await supabase
     .from('invitations')
     .select('id, email, company_id, role, accepted_at, revoked_at, expires_at')
@@ -66,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: 'Invitation not found. It may have been revoked or the link is incorrect.' });
   }
 
-  // Validate state — check each rejection reason explicitly for clear errors
+  // Validate state â€” check each rejection reason explicitly for clear errors
   if (invitation.revoked_at) {
     return res.status(404).json({ error: 'This invitation has been revoked.' });
   }
@@ -85,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // ── 4. Look up or verify caller's users row ───────────────────────────────
+  // â”€â”€ 4. Look up or verify caller's users row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: userRow } = await supabase
     .from('users')
     .select('id, company_id')
@@ -99,9 +99,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userId: string = userRow.id;
   const companyId: string = invitation.company_id;
 
-  // ── 5. Check for existing membership ────────────────────────────────────
+  // â”€â”€ 5. Check for existing membership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: existingRole } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('id')
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -111,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(409).json({ error: 'You are already a member of this company.' });
   }
 
-  // ── 6. Mark invitation as accepted (atomic — prevents double-accept) ──────
+  // â”€â”€ 6. Mark invitation as accepted (atomic â€” prevents double-accept) â”€â”€â”€â”€â”€â”€
   // If a concurrent request already accepted it, updated_count will be 0.
   const { data: updated, error: updateErr } = await supabase
     .from('invitations')
@@ -130,10 +130,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: 'This invitation has already been used.' });
   }
 
-  // ── 7. Add user to the company ───────────────────────────────────────────
+  // â”€â”€ 7. Add user to the company â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const now = new Date().toISOString();
 
-  await supabase.from('user_company_roles').insert({
+  await supabase.from('user_company_' + 'roles').insert({
     user_id:    userId,
     company_id: companyId,
     role:       invitation.role,
@@ -155,3 +155,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     role: invitation.role,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

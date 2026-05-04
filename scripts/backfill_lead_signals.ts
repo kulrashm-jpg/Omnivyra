@@ -4,7 +4,8 @@ import * as path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { upsertCanonicalLeadSignal } from '../backend/services/canonicalLeadSignalService';
 
 type BackfillResult = { processed: number; inserted: number; skipped_duplicates: number; errors: number };

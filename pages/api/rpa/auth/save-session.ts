@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/rpa/auth/save-session
  *
  * Accepts a captured Playwright storageState blob and persists it to the
  * rpa_sessions table (DB canonical) + local fs (legacy fallback). The
- * caller MUST provide the session_token issued at /api/rpa/auth/start —
+ * caller MUST provide the session_token issued at /api/rpa/auth/start â€”
  * the token scopes the write to (organization_id, platform) and prevents
  * a cross-org save.
  *
@@ -37,7 +38,7 @@ function looksLikeStorageState(v: unknown): boolean {
   return Array.isArray(obj.cookies) || Array.isArray(obj.origins);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -79,3 +80,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (err as Error)?.message || 'Failed to save RPA session' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

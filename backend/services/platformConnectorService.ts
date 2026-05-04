@@ -6,7 +6,8 @@
  * Existing community_ai_platform_tokens and social_accounts remain functional.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { validatePlatformKey } from './platformRegistryService';
 
 export type PlatformConnectorConfig = {

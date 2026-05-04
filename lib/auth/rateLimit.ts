@@ -1,28 +1,24 @@
-/**
+﻿/**
  * Sliding-window rate limiter for authentication endpoints.
  *
  * Uses Redis MULTI/EXEC for atomicity. All counts are per key (typically
  * per-IP or per-UID) over a rolling time window.
  *
- * ─────────────────────────────────────────────────────────────────────────
- * SECURITY DECISION RECORD — Fail-Open Behaviour
- * ─────────────────────────────────────────────────────────────────────────
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+ * SECURITY DECISION RECORD â€” Fail-Open Behaviour
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * Decision:  When Redis is unavailable, rate limiting is bypassed (fail-open)
  *            rather than blocking all auth requests (fail-closed).
  *
  * Rationale:
- *   1. Firebase Admin SDK verification is the PRIMARY security gate.
- *      Every request still requires a valid RS256 Firebase ID token.
  *      An attacker cannot bypass token verification even if rate limiting
- *      is down — they still need a signed token from Firebase's servers.
  *
  *   2. Rate limiting is a SECONDARY, abuse-mitigation control, not an
  *      authentication control. Its purpose is to slow automated credential
- *      stuffing and brute-force attempts — neither of which is relevant
- *      when Firebase ID tokens are required (they cannot be brute-forced).
+ *      stuffing and brute-force attempts â€” neither of which is relevant
  *
  *   3. Fail-closed during a Redis outage would deny service to ALL
- *      legitimate users — a self-inflicted DoS. The expected blast radius
+ *      legitimate users â€” a self-inflicted DoS. The expected blast radius
  *      of a Redis outage (several minutes of unlimited-rate but still
  *      token-authenticated traffic) is vastly smaller than the business
  *      impact of a complete auth blackout.
@@ -30,17 +26,15 @@
  *   4. Compensating controls active during Redis unavailability:
  *      - Every bypass is logged as a WARNING (RATE_LIMIT_REDIS_DOWN) with
  *        the request IP and endpoint, enabling anomaly detection.
- *      - Firebase console shows active sessions; revocation still works.
- *      - Supabase DB writes are idempotent — duplicate onboarding calls
+ *      - Supabase DB writes are idempotent â€” duplicate onboarding calls
  *        cannot grant credits twice (UNIQUE constraint on free_credit_claims).
  *      - PagerDuty/alerting fires on sustained Redis connectivity failures.
  *
  * Residual risk: An attacker who knows Redis is down AND who has a valid
- * Firebase token could make unlimited requests. Accepted — the token
  * requirement is not bypassed.
  *
  * Review date: 2026-09-01  Owner: platform-security
- * ─────────────────────────────────────────────────────────────────────────
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  */
 
 import IORedis from 'ioredis';
@@ -50,9 +44,9 @@ import { createInstrumentedClient } from '../redis/instrumentation';
 import { getRateLimitAdminConfig, getRateLimitOverride } from '../../backend/services/adminRuntimeConfig';
 import { logger } from '../../backend/services/logger';
 
-// ── In-memory fallback limiter ────────────────────────────────────────────────
+// â”€â”€ In-memory fallback limiter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Used ONLY when Redis is unavailable (fail-open path).
-// Provides a last-resort guardrail — not a replacement for Redis rate limiting.
+// Provides a last-resort guardrail â€” not a replacement for Redis rate limiting.
 // Per-process, non-distributed: an attacker who routes requests across multiple
 // instances can exceed the cap. Accepted trade-off (Redis down is temporary;
 // fail-closed would self-DoS all legitimate users).
@@ -67,12 +61,12 @@ function fallbackRateLimit(key: string, config: RateLimitConfig, resetAt: number
     fallbackMap.set(key, bucket);
   }
   bucket.count++;
-  const allowed = bucket.count <= 50; // generous cap — stops flooding, not legitimate bursts
+  const allowed = bucket.count <= 50; // generous cap â€” stops flooding, not legitimate bursts
   if (!allowed) recordAnomalyEvent('rate_limit_triggered');
   return { allowed, remaining: Math.max(0, 50 - bucket.count), resetAt, bypassed: true };
 }
 
-// ── Dedicated rate-limit Redis client ─────────────────────────────────────────
+// â”€â”€ Dedicated rate-limit Redis client â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Separate from the BullMQ client so queue and rate-limit failures are isolated.
 let _rl: IORedis | null = null;
 
@@ -87,7 +81,7 @@ function getRlRedis(): IORedis {
     lazyConnect: true,
   });
   raw.on('error', () => {
-    // Suppress unhandled error events — failures are handled per-call below
+    // Suppress unhandled error events â€” failures are handled per-call below
   });
   _rl = createInstrumentedClient(raw, 'rate_limit') as IORedis;
   return _rl;
@@ -101,7 +95,7 @@ export function shutdownRateLimitRedis(): void {
   }
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface RateLimitConfig {
   /** Redis key prefix, e.g. "rl:login" */
@@ -119,7 +113,7 @@ export interface RateLimitResult {
   bypassed: boolean; // true when Redis was unavailable (fail-open path)
 }
 
-// ── Sliding window implementation (Redis MULTI/EXEC) ─────────────────────────
+// â”€â”€ Sliding window implementation (Redis MULTI/EXEC) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Check and increment the rate limit counter for `key`.
@@ -159,8 +153,8 @@ export async function checkRateLimit(
     const results = await pipeline.exec();
 
     if (!results) {
-      // MULTI/EXEC returned null — Redis transaction aborted (e.g. WATCH conflict).
-      // Rare; treat same as Redis unavailable — use in-memory fallback.
+      // MULTI/EXEC returned null â€” Redis transaction aborted (e.g. WATCH conflict).
+      // Rare; treat same as Redis unavailable â€” use in-memory fallback.
       logBypass(identifier, config.keyPrefix, 'transaction_aborted');
       return fallbackRateLimit(key, config, resetAt);
     }
@@ -185,7 +179,7 @@ export async function checkRateLimit(
       bypassed: false,
     };
   } catch (err: any) {
-    // Redis unavailable — fall back to in-memory limiter (see SDR above).
+    // Redis unavailable â€” fall back to in-memory limiter (see SDR above).
     // Still enforces a generous per-process cap instead of allowing unlimited requests.
     logBypass(identifier, config.keyPrefix, err?.message ?? 'redis_error');
     // Emit a CRITICAL anomaly (persisted to system_anomalies, Slack alert sent)
@@ -206,7 +200,7 @@ function logBypass(identifier: string, prefix: string, reason: string) {
   });
 }
 
-// ── Pre-configured limiters for auth endpoints ────────────────────────────────
+// â”€â”€ Pre-configured limiters for auth endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** 10 login attempts per IP per 15 minutes */
 export const LOGIN_LIMIT: RateLimitConfig = {
@@ -254,12 +248,11 @@ export const DOMAIN_RESOLUTION_LIMIT: RateLimitConfig = {
   windowSecs: 60,
 };
 
-// ── Post-auth UID-based limiters ──────────────────────────────────────────────
-// Applied AFTER Firebase token verification, keyed by firebaseUid.
+// â”€â”€ Post-auth UID-based limiters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Prevents rotating-proxy abuse: a single user cannot exceed these regardless
 // of how many IP addresses they use.
 
-/** 3 onboarding completions per UID per hour — tighter than the IP limit */
+/** 3 onboarding completions per UID per hour â€” tighter than the IP limit */
 export const ONBOARDING_UID_LIMIT: RateLimitConfig = {
   keyPrefix: 'rl:uid:onboarding',
   limit: 3,

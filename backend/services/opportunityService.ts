@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { StrategicPayload } from './opportunityGenerators';
 
 export const MAX_SLOTS_PER_TYPE = 10;

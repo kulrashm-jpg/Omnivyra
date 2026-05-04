@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { PLATFORM_OPTIONS, PLATFORM_LABELS } from '../../backend/constants/platforms';
 import {
   CREATOR_DEPENDENT_PLANNING_LABELS,
@@ -35,13 +35,13 @@ export function useCampaignAiPlanningCatalog({
     if (resolvedCompanyId) catalogParams.set('companyId', resolvedCompanyId);
 
     const fetches: Promise<unknown>[] = [
-      fetchWithAuth(`/api/platform-intelligence/catalog?${catalogParams.toString()}`).then((r) => (r.ok ? r.json() : null)),
+      apiFetch(`/api/platform-intelligence/catalog?${catalogParams.toString()}`).then((r) => (r.ok ? r.json() : null)),
     ];
     if (resolvedCompanyId) {
       fetches.push(
-        fetchWithAuth(`/api/company/platform-config?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
-        fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
-        fetchWithAuth(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
+        apiFetch(`/api/company/platform-config?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
+        apiFetch(`/api/company-profile?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
+        apiFetch(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(resolvedCompanyId)}`).then((r) => (r.ok ? r.json() : null)),
       );
     } else {
       setCompanyConfiguredPlatforms(null);

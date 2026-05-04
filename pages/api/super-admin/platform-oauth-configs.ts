@@ -1,15 +1,18 @@
 
 /**
- * GET  /api/super-admin/platform-oauth-configs  — list all platforms with config status
- * POST /api/super-admin/platform-oauth-configs  — upsert OAuth credentials for a platform
- * DELETE /api/super-admin/platform-oauth-configs?platform=xxx — remove config
+ * GET  /api/super-admin/platform-oauth-configs  â€” list all platforms with config status
+ * POST /api/super-admin/platform-oauth-configs  â€” upsert OAuth credentials for a platform
+ * DELETE /api/super-admin/platform-oauth-configs?platform=xxx â€” remove config
  * Super admin or company admin only.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerClient } from '@supabase/ssr';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { encryptCredential, decryptCredential } from '../../../backend/auth/credentialEncryption';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /** Resolve user from Supabase SSR cookies (no Bearer token needed). */
 async function getUserFromCookies(req: NextApiRequest) {
@@ -39,43 +42,14 @@ async function getUserFromCookies(req: NextApiRequest) {
 }
 
 async function requireAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  // 1. Cookie-based super-admin sessions
-  if (req.cookies?.super_admin_session === '1') return true;
+  // Content-architect has its own auth surface â€” preserve bypass.
   if (req.cookies?.content_architect_session === '1') return true;
-
-  // 2. Bearer token (Authorization header)
-  let user: { id: string } | null = null;
-  const { user: bearerUser, error } = await getSupabaseUserFromRequest(req);
-  if (!error && bearerUser?.id) user = bearerUser;
-
-  // 3. Supabase SSR cookies (set by @supabase/ssr createBrowserClient on login)
-  if (!user) user = await getUserFromCookies(req);
-
-  if (!user?.id) {
-    res.status(403).json({ error: 'Not authenticated — please log in and try again.' });
-    return false;
+  const ctx = await requireAdminScope(req, res, 'config:oauth');
+  if (!ctx) return false;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/platform-oauth-configs', 'config:oauth');
   }
-
-  // Check super_admins table
-  const { data: sa } = await supabase
-    .from('super_admins')
-    .select('id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
-  if (sa) return true;
-
-  // Check admin role in user_company_roles
-  const { data: roleRows } = await supabase
-    .from('user_company_roles')
-    .select('role')
-    .eq('user_id', user.id)
-    .limit(5);
-  const adminRoles = ['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN', 'company_admin', 'super_admin', 'admin'];
-  if ((roleRows || []).some((r: any) => adminRoles.includes(r.role))) return true;
-
-  res.status(403).json({ error: 'Admin role required to manage OAuth credentials.' });
-  return false;
+  return true;
 }
 
 const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenUrl: string; scopes: string[] }> = {
@@ -83,7 +57,7 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
   linkedin:  { label: 'LinkedIn',  authUrl: 'https://www.linkedin.com/oauth/v2/authorization', tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken', scopes: ['openid','profile','email','w_member_social'] },
   x:         { label: 'X', authUrl: 'https://twitter.com/i/oauth2/authorize', tokenUrl: 'https://api.twitter.com/2/oauth2/token', scopes: ['tweet.read','tweet.write','users.read','like.write','follows.write','offline.access'] },
   youtube:   { label: 'YouTube',   authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', scopes: ['openid','email','profile','https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.force-ssl'] },
-  facebook:  { label: 'Meta (Facebook · Instagram · WhatsApp)', authUrl: 'https://www.facebook.com/v22.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token', scopes: ['pages_show_list','pages_read_engagement','pages_manage_posts','pages_manage_engagement','instagram_basic','instagram_manage_comments','instagram_manage_insights','instagram_content_publish','whatsapp_business_management','whatsapp_business_messaging','public_profile'] },
+  facebook:  { label: 'Meta (Facebook Â· Instagram Â· WhatsApp)', authUrl: 'https://www.facebook.com/v22.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token', scopes: ['pages_show_list','pages_read_engagement','pages_manage_posts','pages_manage_engagement','instagram_basic','instagram_manage_comments','instagram_manage_insights','instagram_content_publish','whatsapp_business_management','whatsapp_business_messaging','public_profile'] },
   tiktok:    { label: 'TikTok',   authUrl: 'https://www.tiktok.com/auth/authorize/', tokenUrl: 'https://open-api.tiktok.com/oauth/access_token/', scopes: ['user.info.basic','video.list'] },
   pinterest: { label: 'Pinterest', authUrl: 'https://www.pinterest.com/oauth/', tokenUrl: 'https://api.pinterest.com/v5/oauth/token', scopes: ['boards:read','pins:read','pins:write'] },
   reddit:        { label: 'Reddit',         authUrl: 'https://www.reddit.com/api/v1/authorize', tokenUrl: 'https://www.reddit.com/api/v1/access_token', scopes: ['identity','submit','read'] },
@@ -97,7 +71,7 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
   quora:         { label: 'Quora',          authUrl: '', tokenUrl: '', scopes: [] },
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res);
   if (!allowed) return;
 
@@ -111,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let clientIdPreview = '';
       try {
         const dec = row.oauth_client_id_encrypted ? decryptCredential(row.oauth_client_id_encrypted) : '';
-        clientIdPreview = dec ? dec.slice(0, 6) + '…' : '';
+        clientIdPreview = dec ? dec.slice(0, 6) + 'â€¦' : '';
       } catch { /* bad key */ }
       configMap[row.platform] = {
         ...row,
@@ -143,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Invalid platform' });
     }
 
-    // If no client_id supplied, check if credentials already exist — allow enabled-only toggle
+    // If no client_id supplied, check if credentials already exist â€” allow enabled-only toggle
     if (!client_id) {
       const { data: existing } = await supabase
         .from('platform_oauth_configs')
@@ -155,7 +129,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'client_id required' });
       }
 
-      // Credentials exist — just update the enabled flag
+      // Credentials exist â€” just update the enabled flag
       const { error: updateErr } = await supabase
         .from('platform_oauth_configs')
         .update({ enabled: Boolean(enabled), updated_at: new Date().toISOString() })
@@ -206,3 +180,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

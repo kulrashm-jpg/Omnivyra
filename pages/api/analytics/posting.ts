@@ -1,8 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // API Endpoint for Posting Statistics
 import { NextApiRequest, NextApiResponse } from 'next';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
     return res.status(405).json({ error: 'Method not allowed' });
@@ -36,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         {
           id: 'post_1',
           platform: 'linkedin',
-          content: 'Exciting news about our latest product launch! 🚀',
+          content: 'Exciting news about our latest product launch! ðŸš€',
           engagement: 8.5,
           reach: 4500,
           publishedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
@@ -44,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         {
           id: 'post_2',
           platform: 'instagram',
-          content: 'Behind the scenes of our creative process 📸',
+          content: 'Behind the scenes of our creative process ðŸ“¸',
           engagement: 7.2,
           reach: 3800,
           publishedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
@@ -82,3 +83,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

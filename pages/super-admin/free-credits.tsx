@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
+import { apiFetch } from '../../lib/apiFetch';
 import Link from 'next/link';
 import {
   ArrowLeft, Gift, ClipboardList, Zap, Activity, Users,
@@ -163,7 +164,7 @@ export default function FreeCreditsPage() {
 
   // ── Auth check ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/api/super-admin/session')
+    apiFetch('/api/super-admin/session')
       .then(r => r.json())
       .then(d => {
         if (!d.isSuperAdmin) router.replace('/super-admin/login');
@@ -175,7 +176,7 @@ export default function FreeCreditsPage() {
   // ── Data fetchers ───────────────────────────────────────────────────────────
   const fetchSummary = useCallback(async () => {
     setSummaryLoading(true);
-    const r = await fetch('/api/super-admin/free-credits/summary');
+    const r = await apiFetch('/api/super-admin/free-credits/summary');
     if (r.ok) {
       const d = await r.json();
       setSummary(d.summary);
@@ -188,14 +189,14 @@ export default function FreeCreditsPage() {
   const fetchRequests = useCallback(async () => {
     setReqLoading(true);
     const params = new URLSearchParams({ status: reqStatus, limit: '100', search: reqSearch });
-    const r = await fetch(`/api/super-admin/free-credits/requests?${params}`);
+    const r = await apiFetch(`/api/super-admin/free-credits/requests?${params}`);
     if (r.ok) { const d = await r.json(); setRequests(d.requests ?? []); setReqTotal(d.total ?? 0); }
     setReqLoading(false);
   }, [reqStatus, reqSearch]);
 
   const fetchActivity = useCallback(async () => {
     setActivityLoading(true);
-    const r = await fetch(`/api/super-admin/free-credits/activity?source=${activitySource}&limit=200`);
+    const r = await apiFetch(`/api/super-admin/free-credits/activity?source=${activitySource}&limit=200`);
     if (r.ok) { const d = await r.json(); setActivity(d.activity ?? []); }
     setActivityLoading(false);
   }, [activitySource]);
@@ -203,7 +204,7 @@ export default function FreeCreditsPage() {
   const fetchProfiles = useCallback(async () => {
     setProfilesLoading(true);
     const params = new URLSearchParams({ limit: '100', search: profileSearch });
-    const r = await fetch(`/api/super-admin/free-credits/profiles?${params}`);
+    const r = await apiFetch(`/api/super-admin/free-credits/profiles?${params}`);
     if (r.ok) { const d = await r.json(); setProfiles(d.profiles ?? []); setProfilesTotal(d.total ?? 0); }
     setProfilesLoading(false);
   }, [profileSearch]);
@@ -220,7 +221,7 @@ export default function FreeCreditsPage() {
     if (orgSearchTimer.current) clearTimeout(orgSearchTimer.current);
     orgSearchTimer.current = setTimeout(async () => {
       setGrantOrgLoading(true);
-      const r = await fetch(`/api/super-admin/companies?search=${encodeURIComponent(grantOrgSearch)}&limit=10`);
+      const r = await apiFetch(`/api/super-admin/companies?search=${encodeURIComponent(grantOrgSearch)}&limit=10`);
       if (r.ok) { const d = await r.json(); setGrantOrgs(d.companies ?? d.data ?? []); }
       setGrantOrgLoading(false);
     }, 400);
@@ -232,7 +233,7 @@ export default function FreeCreditsPage() {
   async function handleReqAction(action: 'approve' | 'reject' | 'delete', req: AccessRequest) {
     if (action !== 'delete') { setSelectedReq(req); setReqModal(action); setApproveCredits(300); setApproveWhitelist(true); return; }
     if (!confirm('Soft-delete this request?')) return;
-    await fetch('/api/super-admin/free-credits/requests', {
+    await apiFetch('/api/super-admin/free-credits/requests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'delete', requestId: req.id }),
@@ -243,7 +244,7 @@ export default function FreeCreditsPage() {
   async function submitReqAction() {
     if (!selectedReq || !reqModal) return;
     setReqActionLoading(true);
-    await fetch('/api/super-admin/free-credits/requests', {
+    await apiFetch('/api/super-admin/free-credits/requests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(
@@ -262,7 +263,7 @@ export default function FreeCreditsPage() {
     e.preventDefault();
     if (!grantOrgId || !grantReason.trim()) return;
     setGrantLoading(true);
-    const r = await fetch('/api/super-admin/free-credits/grant', {
+    const r = await apiFetch('/api/super-admin/free-credits/grant', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

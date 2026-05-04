@@ -6,7 +6,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/utils/supabaseClient';
+import { supabase as browserSupabase } from '@/utils/supabaseClient';
+const supabase = browserSupabase;
 import type { CategoryUsage } from '@/components/ui/CreditMeter';
 
 export interface CreditsState {

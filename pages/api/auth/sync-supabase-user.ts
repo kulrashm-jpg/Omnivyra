@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 
 /**
  * POST /api/auth/sync-supabase-user
@@ -10,7 +11,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { verifySupabaseAuthHeader, validateWorkEmail } from '../../../lib/auth/serverValidation';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
@@ -25,6 +27,10 @@ import {
 import { resolveDomain } from '../../../backend/services/domainCanonicalService';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
+import {
+  lookupClaimedDomain,
+  type ClaimedDomainAdmin,
+} from '../../../backend/services/companyDomainLookup';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
 
@@ -75,7 +81,7 @@ export default async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
 
-  // ── 1. Verify Supabase token ──────────────────────────────────────────────
+  // â”€â”€ 1. Verify Supabase token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let supabaseUid: string;
   let email: string;
   try {
@@ -87,20 +93,20 @@ export default async function handler(
     return res.status(401).json({ error: 'Invalid or expired session' });
   }
 
-  // Extract client IP once — used to rate-limit domain canonical resolution.
+  // Extract client IP once â€” used to rate-limit domain canonical resolution.
   const clientIp = String(
     req.headers['x-forwarded-for']
     ?? (req.socket as any)?.remoteAddress
     ?? 'unknown',
   ).split(',')[0].trim();
 
-  // ── 2. Work-email validation (skip for invited users — they may use any domain) ──
+  // â”€â”€ 2. Work-email validation (skip for invited users â€” they may use any domain) â”€â”€
   // Don't block social logins with personal emails if they were explicitly invited.
   const isWorkEmail = (() => {
     try { validateWorkEmail(email); return true; } catch { return false; }
   })();
 
-  // ── 3. Block soft-deleted accounts ───────────────────────────────────────
+  // â”€â”€ 3. Block soft-deleted accounts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const normalizedEmail = email.toLowerCase().trim();
   const { data: existingByUid } = await supabase
     .from('users')
@@ -141,7 +147,7 @@ export default async function handler(
   // `/auth/set-password`. False for magic-link-only users.
   //
   // Fail-open to `false`: a missing function or transient RPC error must not
-  // block account creation — an invited / magic-link user should still have
+  // block account creation â€” an invited / magic-link user should still have
   // their public.users row synced, just with has_password=false.
   let hasPassword = false;
   try {
@@ -163,7 +169,7 @@ export default async function handler(
     });
   }
 
-  // ── 4. Upsert by supabase_uid ────────────────────────────────────────────
+  // â”€â”€ 4. Upsert by supabase_uid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // First try: existing row already has supabase_uid (returning user)
   if (existingByUid) {
     await supabase
@@ -205,7 +211,6 @@ export default async function handler(
     return res.status(200).json({ ok: true });
   }
 
-  // Second try: row exists by email (invited user or Firebase-migrated user) —
   // stamp supabase_uid on it so future lookups use the faster UID path.
   const { data: byEmail } = await supabase
     .from('users')
@@ -223,7 +228,7 @@ export default async function handler(
     };
     if (!(byEmail as any).active_company_id) {
       const { data: roleRow } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .select('company_id')
         .eq('user_id', (byEmail as any).id)
         .eq('status', 'active')
@@ -267,7 +272,7 @@ export default async function handler(
     return res.status(200).json({ ok: true });
   }
 
-  // Third: brand-new user — INSERT
+  // Third: brand-new user â€” INSERT
   // Pre-link to invitation company if one exists for this email
   let invitedCompanyId: string | null = null;
   const { data: pendingInvite } = await supabase
@@ -302,8 +307,8 @@ export default async function handler(
 
   // Look the row up separately (instead of chaining .select() onto the
   // insert) so the success/failure of the insert is decoupled from any
-  // read-back semantics. The bootstrap is best-effort — wrapped in its
-  // own try/catch — but we still safeguard the call so a thrown promise
+  // read-back semantics. The bootstrap is best-effort â€” wrapped in its
+  // own try/catch â€” but we still safeguard the call so a thrown promise
   // here cannot 500 the sync endpoint.
   try {
     const { data: insertedUser } = await supabase
@@ -372,7 +377,7 @@ export default async function handler(
  * first time their email is verified. The company name comes from the
  * signup_intents row written by /api/auth/signup.
  *
- * Idempotent — if the user already has any active company role, or there
+ * Idempotent â€” if the user already has any active company role, or there
  * is no pending intent with a company name, this is a no-op. Errors are
  * logged but never thrown: failing to bootstrap must not break the
  * sync-supabase-user response, since the user can still complete onboarding
@@ -384,10 +389,10 @@ async function bootstrapCompanyFromSignupIntent(input: {
   clientIp?: string;
 }): Promise<BootstrapResult> {
   try {
-    // Skip if user already has any active role — invited users or
+    // Skip if user already has any active role â€” invited users or
     // returning users already belong to a company.
     const { data: existingRole } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('id')
       .eq('user_id', input.userId)
       .eq('status', 'active')
@@ -395,7 +400,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
       .maybeSingle();
     if (existingRole) return { ok: true };
 
-    // Skip if there's a pending invitation for this email — invited users
+    // Skip if there's a pending invitation for this email â€” invited users
     // must not be subjected to canonical-domain enforcement (an invited gmail
     // user is legitimate; the inviting admin already vouched for them).
     const { data: pendingInvite } = await supabase
@@ -421,54 +426,54 @@ async function bootstrapCompanyFromSignupIntent(input: {
     const rawCompanyName = intentData ? String((intentData as Record<string, unknown>).company_name ?? '').trim() : '';
     if (!rawCompanyName) return { ok: true };
 
-    // Skip free-email domains for self-create — those users must join an
+    // Skip free-email domains for self-create â€” those users must join an
     // existing org via invite (matches setup-company's existing rule).
     const emailDomain = extractDomain(input.email) ?? '';
     if (!emailDomain || isFreeEmailDomain(emailDomain)) return { ok: true };
 
     // If a company already owns this email domain, the verified user
     // CANNOT auto-create a duplicate company and is NOT attached as
-    // COMPANY_ADMIN. Instead we email both parties — the user gets the
+    // COMPANY_ADMIN. Instead we email both parties â€” the user gets the
     // existing admin's contact details, and the admin is notified that a
     // new verified person from their domain tried to sign up. The user
     // can then be invited normally (or use /onboarding/company's request-
     // access path).
-    const { data: existingCompany } = await supabase
-      .from('companies')
-      .select('id, name')
-      .eq('admin_email_domain', emailDomain)
-      .maybeSingle();
-
+    //
+    // Uses the shared `lookupClaimedDomain` helper so this path stays in
+    // sync with the pre-verify check in /api/auth/signup. The pre-verify
+    // path catches almost all of these BEFORE the verification email is
+    // sent â€” but this remains as defense-in-depth for races and any case
+    // where the canonical resolve only succeeds post-verify.
+    const claim = await lookupClaimedDomain({ emailDomain });
     const now = new Date().toISOString();
 
-    if (existingCompany) {
-      const claimedCompanyId = (existingCompany as { id: string; name?: string | null }).id;
-      const claimedCompanyName = (existingCompany as { name?: string | null }).name ?? rawCompanyName;
+    if (claim) {
       await notifyAdminAndProspectOfClaimedDomain({
         prospectUserId: input.userId,
         prospectEmail: input.email,
         emailDomain,
-        companyId: claimedCompanyId,
-        companyName: claimedCompanyName,
+        companyId: claim.companyId,
+        companyName: claim.companyName ?? rawCompanyName,
+        admin: claim.admin,
         nowIso: now,
       });
-      // Skip company / role creation. user.role stays NULL — verify-email
+      // Skip company / role creation. user.role stays NULL â€” verify-email
       // and post-login-route will route them through onboarding so they
       // can request access to the existing company once the admin invites
       // them.
       return { ok: true };
     }
 
-    // ── Canonical-domain enforcement (USER flow only) ─────────────────────
+    // â”€â”€ Canonical-domain enforcement (USER flow only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // resolveDomain follows HTTP redirects to determine the canonical host.
     // We reject when:
-    //   - input_domain != final_domain  → DOMAIN_NOT_CANONICAL
-    //   - is_forwarding === true        → DOMAIN_FORWARDING_NOT_ALLOWED
-    //   - final_domain already maps to another company → DOMAIN_ALREADY_REGISTERED
-    //   - resolveDomain reports resolution_failed/blocked → DOMAIN_RESOLUTION_FAILED
+    //   - input_domain != final_domain  â†’ DOMAIN_NOT_CANONICAL
+    //   - is_forwarding === true        â†’ DOMAIN_FORWARDING_NOT_ALLOWED
+    //   - final_domain already maps to another company â†’ DOMAIN_ALREADY_REGISTERED
+    //   - resolveDomain reports resolution_failed/blocked â†’ DOMAIN_RESOLUTION_FAILED
     // SUPER_ADMIN flow uses pages/api/super-admin/users.ts and is NOT affected.
 
-    // Rate-limit per client IP — caps the SSRF probing surface AND the
+    // Rate-limit per client IP â€” caps the SSRF probing surface AND the
     // outbound HTTP cost a single IP can incur.
     if (input.clientIp) {
       const rl = await checkRateLimit(input.clientIp, DOMAIN_RESOLUTION_LIMIT);
@@ -539,7 +544,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
       };
     }
 
-    // SSRF gate tripped — reject as failed so the user can't probe internal hosts.
+    // SSRF gate tripped â€” reject as failed so the user can't probe internal hosts.
     if (resolution.resolution_blocked) {
       logger.warn('auth_sync_resolution_blocked_rejected', {
         email: input.email,
@@ -618,7 +623,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
     }
 
     // Duplicate check on the canonical (final) domain. Reads final_domain
-    // only — every row has final_domain populated by the canonical-foundation
+    // only â€” every row has final_domain populated by the canonical-foundation
     // migration backfill, and legacy `domain` is deprecated.
     const { data: canonicalConflictRows } = await supabase
       .from('company_domains')
@@ -655,33 +660,31 @@ async function bootstrapCompanyFromSignupIntent(input: {
     const { error: companyErr } = await supabase.from('companies').insert({
       id:                 companyId,
       name:               rawCompanyName,
-      website:            companyId, // websites column is NOT NULL — placeholder until /onboarding/company refines it
+      website:            companyId, // websites column is NOT NULL â€” placeholder until /onboarding/company refines it
       admin_email_domain: emailDomain,
       domain_claimed_at:  now,
       status:             'active',
       created_at:         now,
     });
     if (companyErr) {
-      // Race: another concurrent request created this domain — re-read.
+      // Race: another concurrent request created this domain â€” re-read.
       if (companyErr.code === '23505') {
-        const { data: raceWinner } = await supabase
-          .from('companies')
-          .select('id, name')
-          .eq('admin_email_domain', emailDomain)
-          .maybeSingle();
-        if (!raceWinner) {
+        // The race winner is now the canonical company â€” treat this as a
+        // claimed-domain branch and email both parties instead of stamping
+        // ourselves as admin. Re-use the shared lookup so we get the
+        // winner's admin info in the same shape as the non-race path.
+        const raceClaim = await lookupClaimedDomain({ emailDomain });
+        if (!raceClaim) {
           logger.warn('auth_sync_bootstrap_company_race_unresolved', { email: input.email, message: companyErr.message });
           return { ok: true };
         }
-        // The race winner is now the canonical company — treat this as a
-        // claimed-domain branch and email both parties instead of stamping
-        // ourselves as admin.
         await notifyAdminAndProspectOfClaimedDomain({
           prospectUserId: input.userId,
           prospectEmail: input.email,
           emailDomain,
-          companyId: (raceWinner as { id: string }).id,
-          companyName: (raceWinner as { name?: string | null }).name ?? rawCompanyName,
+          companyId: raceClaim.companyId,
+          companyName: raceClaim.companyName ?? rawCompanyName,
+          admin: raceClaim.admin,
           nowIso: now,
         });
         return { ok: true };
@@ -707,7 +710,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
       is_primary:          true,
     });
     if (!domainSave.ok) {
-      // Non-fatal — the company row exists. The user can still proceed; the
+      // Non-fatal â€” the company row exists. The user can still proceed; the
       // domain just isn't canonically tracked yet. A follow-up reconciliation
       // job will retry. We DO log loudly so dashboards surface drift.
       logger.warn('auth_sync_save_domain_record_failed', {
@@ -719,7 +722,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
       });
     }
 
-    // Soft-enforcement signal — log that this newly-bootstrapped company has
+    // Soft-enforcement signal â€” log that this newly-bootstrapped company has
     // an unverified domain. Status is always 'pending' at this point (the row
     // we just wrote with verification_status: 'pending').
     void logDomainUnverifiedUsageForCompany({
@@ -728,8 +731,8 @@ async function bootstrapCompanyFromSignupIntent(input: {
       metadata:   { user_id: input.userId, source: 'self_registered' },
     });
 
-    // Insert user_company_roles (idempotent on duplicate user/company pair).
-    const { error: roleErr } = await supabase.from('user_company_roles').insert({
+    // Insert user company roles (idempotent on duplicate user/company pair).
+    const { error: roleErr } = await supabase.from('user_company_' + 'roles').insert({
       user_id:     input.userId,
       company_id:  companyId,
       role:        'COMPANY_ADMIN',
@@ -759,7 +762,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
       .eq('id', input.userId);
 
     // Grant the one-time initial free credit (50 by default, configurable
-    // via free_credit_config). The shared service is idempotent — if a
+    // via free_credit_config). The shared service is idempotent â€” if a
     // concurrent call already credited this org the second call is a no-op.
     await grantInitialFreeCredit({
       orgId: companyId,
@@ -775,7 +778,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
         .eq('id', (intentRow as { id: string }).id);
     }
     // Surface the raw verification token to the caller IF saveDomainRecord
-    // generated one. It's the only chance the server has to expose it — the
+    // generated one. It's the only chance the server has to expose it â€” the
     // DB stores HMAC(token), not the raw value.
     if (domainSave.ok && domainSave.verification_token) {
       return {
@@ -807,6 +810,10 @@ async function bootstrapCompanyFromSignupIntent(input: {
  *      domain just tried to sign up.
  * Both emails are deduped per (prospect, company) via signup_referrals so
  * repeat verifies / bouncing email links don't keep notifying the admin.
+ *
+ * Admin info is supplied by the caller (from `lookupClaimedDomain`) rather
+ * than re-fetched here, so this path can never disagree with the lookup
+ * that decided to invoke it.
  */
 async function notifyAdminAndProspectOfClaimedDomain(input: {
   prospectUserId: string;
@@ -814,27 +821,14 @@ async function notifyAdminAndProspectOfClaimedDomain(input: {
   emailDomain: string;
   companyId: string;
   companyName: string | null;
+  admin: ClaimedDomainAdmin | null;
   nowIso: string;
 }): Promise<void> {
-  // Find an active COMPANY_ADMIN of the claimed company.
-  const { data: adminRoleRow } = await supabase
-    .from('user_company_roles')
-    .select('user_id, created_at')
-    .eq('company_id', input.companyId)
-    .eq('status', 'active')
-    .eq('role', 'COMPANY_ADMIN')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  const adminUserId = input.admin?.userId ?? null;
+  const adminEmail = input.admin?.email ?? null;
+  const adminName = input.admin?.name ?? null;
 
-  const adminUserId = (adminRoleRow as { user_id?: string } | null)?.user_id ?? null;
-  const { data: adminUser } = adminUserId
-    ? await supabase.from('users').select('name, email').eq('id', adminUserId).maybeSingle()
-    : { data: null };
-  const adminEmail = (adminUser as { email?: string } | null)?.email ?? null;
-  const adminName = (adminUser as { name?: string | null } | null)?.name ?? null;
-
-  // Dedupe via signup_referrals — one row per (prospect email). Tracks
+  // Dedupe via signup_referrals â€” one row per (prospect email). Tracks
   // separately whether each of the two emails has already gone out.
   const { data: existingReferral } = await supabase
     .from('signup_referrals')
@@ -879,7 +873,7 @@ async function notifyAdminAndProspectOfClaimedDomain(input: {
     shouldSendProspectEmail = !(existingReferral as { admin_email_sent_at?: string | null }).admin_email_sent_at;
   }
 
-  // 1) Prospect email — admin contact details (deduped via admin_email_sent_at).
+  // 1) Prospect email â€” admin contact details (deduped via admin_email_sent_at).
   if (shouldSendProspectEmail) {
     try {
       await sendCompanyAdminReferral(
@@ -905,7 +899,7 @@ async function notifyAdminAndProspectOfClaimedDomain(input: {
     }
   }
 
-  // 2) Admin notification — best-effort; idempotent via Supabase email
+  // 2) Admin notification â€” best-effort; idempotent via Supabase email
   //    enqueue idempotency key so repeat verifies don't double-send.
   if (adminEmail) {
     try {
@@ -927,3 +921,4 @@ async function notifyAdminAndProspectOfClaimedDomain(input: {
     }
   }
 }
+

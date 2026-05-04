@@ -18,7 +18,8 @@
  *   if (!isValid) return res.status(403).json({ error: 'Session expired' });
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { config } from '@/config';
 import { logAuditEvent } from './auditLoggingService';
 import { createHash, randomBytes } from 'crypto';

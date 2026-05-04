@@ -5,7 +5,8 @@
  * Manual/safe-call only. No auto-run on publish. No planner or strategy mutation.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestStrategicFeedback } from './strategicFeedbackService';
 import { getWeeklyStrategyIntelligence } from './weeklyStrategyIntelligenceService';
 import { getStrategyAwareness } from './strategyAwarenessService';

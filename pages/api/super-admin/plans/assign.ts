@@ -1,26 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { createCredit, makeIdempotencyKey } from '../../../../backend/services/creditExecutionService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'plans:assign');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/plans/assign', 'plans:assign');
+  }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const organizationId = body.organization_id ?? body.organizationId;
@@ -54,9 +48,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (upsertErr) return res.status(500).json({ error: upsertErr.message });
 
-    // ── STEP 5: Grant plan credits if plan includes them ─────────────────────
-    // Idempotent on (orgId, planId) — re-assigning the same plan is a no-op.
-    // Upgrading to a different plan uses a different planId → new grant.
+    // â”€â”€ STEP 5: Grant plan credits if plan includes them â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Idempotent on (orgId, planId) â€” re-assigning the same plan is a no-op.
+    // Upgrading to a different plan uses a different planId â†’ new grant.
     const creditsIncluded = (plan as any).credits_included ?? 0;
     let creditsGranted = 0;
     if (creditsIncluded > 0) {
@@ -67,13 +61,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           category:       'paid',
           referenceType:  'plan_assignment',
           referenceId:    plan.id,
-          note:           `Plan credits — ${planKey} (${creditsIncluded} credits included)`,
+          note:           `Plan credits â€” ${planKey} (${creditsIncluded} credits included)`,
           performedBy:    organizationId,
           idempotencyKey: makeIdempotencyKey(organizationId, 'plan_credit_grant', plan.id),
         });
         creditsGranted = creditsIncluded;
       } catch (creditErr: any) {
-        // Non-fatal — assignment succeeded; credit grant may already exist (idempotent key)
+        // Non-fatal â€” assignment succeeded; credit grant may already exist (idempotent key)
         console.warn('[plans/assign] credit grant skipped or already done:', creditErr.message);
       }
     }
@@ -88,3 +82,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

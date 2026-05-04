@@ -3,7 +3,8 @@
  * Aggregates response_performance_metrics into response_reply_intelligence.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   classifyReplyCategory,
   normalizeReplyPattern,

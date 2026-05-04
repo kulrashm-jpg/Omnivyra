@@ -18,7 +18,7 @@ export interface ActivityDiscussionTabProps {
   campaignId: string;
   activityId: string;
   currentUserId: string;
-  fetchWithAuth: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  apiFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
 }
 
 function formatTime(iso: string): string {
@@ -36,7 +36,7 @@ export default function ActivityDiscussionTab({
   campaignId,
   activityId,
   currentUserId,
-  fetchWithAuth,
+  apiFetch,
 }: ActivityDiscussionTabProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +48,7 @@ export default function ActivityDiscussionTab({
     if (!activityId || !campaignId) return;
     setLoading(true);
     try {
-      const r = await fetchWithAuth(
+      const r = await apiFetch(
         `/api/activity/messages?activityId=${encodeURIComponent(activityId)}&campaignId=${encodeURIComponent(campaignId)}`
       );
       const data = r.ok ? await r.json() : [];
@@ -58,7 +58,7 @@ export default function ActivityDiscussionTab({
     } finally {
       setLoading(false);
     }
-  }, [activityId, campaignId, fetchWithAuth]);
+  }, [activityId, campaignId, apiFetch]);
 
   useEffect(() => {
     load();
@@ -73,7 +73,7 @@ export default function ActivityDiscussionTab({
     if (!text || sending) return;
     setSending(true);
     try {
-      const r = await fetchWithAuth('/api/activity/messages', {
+      const r = await apiFetch('/api/activity/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ activityId, campaignId, message_text: text }),

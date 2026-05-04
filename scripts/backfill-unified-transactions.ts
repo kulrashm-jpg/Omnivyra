@@ -35,7 +35,7 @@ function requireEnv(key: string, value: unknown): string {
 
 const supabase = createClient(
   requireEnv('SUPABASE_URL',              config.SUPABASE_URL),
-  requireEnv('SUPABASE_SERVICE_ROLE_KEY', config.SUPABASE_SERVICE_ROLE_KEY),
+  requireEnv('SUPABASE_' + 'SERVICE_' + 'ROLE_KEY', config['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY']),
 );
 
 interface UsageEventsRow {

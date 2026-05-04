@@ -13,7 +13,8 @@ jest.mock('../../services/contentGenerationPipeline', () => ({
   buildPlatformVariantsFromMaster: jest.fn(),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { updateActivity } from '../../services/executionPlannerPersistence';
 import {
   generateMasterContentFromIntent,

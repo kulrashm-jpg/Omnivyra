@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { X, Send, Copy, Check, Sparkles, Loader2, RefreshCw } from 'lucide-react';
 import PlatformIcon from '../ui/PlatformIcon';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 const PLATFORM_HINTS: Record<string, { limit: string; tone: string; format: string }> = {
   linkedin:  { limit: '3000 chars',     tone: 'Professional, insight-led',   format: 'Hook → Value → CTA' },
@@ -76,7 +76,7 @@ export default function ActivityWorkspaceDrawer({ group, onClose, initialVariant
     setGenerating(true);
     setGenerateError(null);
     try {
-      const res = await fetchWithAuth('/api/planner/generate-workspace-content', {
+      const res = await apiFetch('/api/planner/generate-workspace-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

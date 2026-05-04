@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 
 // In-memory storage for demo purposes
@@ -5,7 +6,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 let campaignMessages: { [campaignId: string]: any[] } = {};
 let campaignLearnings: any[] = [];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     // Get messages for a campaign
     const { campaignId } = req.query;
@@ -37,3 +38,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(405).json({ error: 'Method not allowed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

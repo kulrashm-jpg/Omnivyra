@@ -4,7 +4,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import CampaignAIChat from '../components/CampaignAIChat.dynamic';
 
 export default function AIChatPage() {
@@ -27,10 +27,10 @@ export default function AIChatPage() {
     (async () => {
       try {
         const [campRes, weeklyRes] = await Promise.all([
-          fetchWithAuth(
+          apiFetch(
             `/api/campaigns?type=campaign&campaignId=${encodeURIComponent(campaignId)}&companyId=${encodeURIComponent(selectedCompanyId)}`
           ),
-          fetchWithAuth(
+          apiFetch(
             `/api/campaigns/get-weekly-plans?campaignId=${encodeURIComponent(campaignId)}&companyId=${encodeURIComponent(selectedCompanyId)}`
           ),
         ]);

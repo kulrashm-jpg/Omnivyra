@@ -23,7 +23,8 @@
  * try/catch will swallow it. That's intentional — soft enforcement.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 
 export interface SendDomainVerificationReminderInput {

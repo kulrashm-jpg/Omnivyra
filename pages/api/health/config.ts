@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Configuration Health Check Endpoint
@@ -40,14 +41,14 @@ interface HealthResponse {
   critical_issues: string[];
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<HealthResponse>
 ) {
   const timestamp = new Date().toISOString();
   const criticalIssues: string[] = [];
   
-  // ── Config validation ──────────────────────────────────────────────────────
+  // â”€â”€ Config validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   let configValid = false;
   let configError: string | undefined;
@@ -77,7 +78,7 @@ export default async function handler(
     }
   }
   
-  // ── Redis connection ───────────────────────────────────────────────────────
+  // â”€â”€ Redis connection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   let redisConnected = false;
   let redisError: string | undefined;
@@ -102,7 +103,7 @@ export default async function handler(
     criticalIssues.push('Redis connection check failed');
   }
   
-  // ── Determine overall status ───────────────────────────────────────────────
+  // â”€â”€ Determine overall status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
   
@@ -112,7 +113,7 @@ export default async function handler(
     status = 'degraded';
   }
   
-  // ── Build response ─────────────────────────────────────────────────────────
+  // â”€â”€ Build response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   const response: HealthResponse = {
     status,
@@ -133,3 +134,8 @@ export default async function handler(
   const statusCode = status === 'healthy' ? 200 : status === 'degraded' ? 503 : 500;
   res.status(statusCode).json(response);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

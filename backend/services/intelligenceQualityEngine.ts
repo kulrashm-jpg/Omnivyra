@@ -4,7 +4,8 @@
  * Safeguard: Metric integrity via (company_id, metric_type, created_at::date) uniqueness
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type QualityMetrics = {
   signal_accuracy: number;

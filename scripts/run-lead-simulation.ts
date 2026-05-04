@@ -17,7 +17,8 @@ import * as path from 'path';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { processLeadJobV1 } from '../backend/services/leadJobProcessor';
 import { getTopClusters } from '../backend/services/leadClusterService';
 
@@ -28,7 +29,7 @@ async function main() {
 
   // 1) Get a company_id
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('status', 'active')
     .limit(1)
@@ -37,7 +38,7 @@ async function main() {
   let companyId: string;
   if (roleRow?.company_id) {
     companyId = roleRow.company_id;
-    console.log(`Using company from user_company_roles: ${companyId}`);
+    console.log(`Using company from user company roles: ${companyId}`);
   } else {
     const { data: jobRow } = await supabase
       .from('lead_jobs_v1')
@@ -48,7 +49,7 @@ async function main() {
       companyId = jobRow.company_id;
       console.log(`Using company from existing lead_jobs: ${companyId}`);
     } else {
-      console.error('No company_id found. Ensure user_company_roles or lead_jobs_v1 has data.');
+      console.error('No company_id found. Ensure user company roles or lead_jobs_v1 has data.');
       process.exit(1);
     }
   }

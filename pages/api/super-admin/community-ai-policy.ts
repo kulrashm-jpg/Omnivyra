@@ -1,7 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 type PolicyInput = {
   execution_enabled?: boolean;
@@ -13,17 +14,9 @@ const requireSuperAdmin = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<{ userId: string; email: string | null } | null> => {
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (isAdmin) return { userId: user.id, email: user.email || null };
-  }
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    return { userId: 'super_admin_session', email: 'superadmin' };
-  }
-  res.status(401).json({ error: 'UNAUTHORIZED' });
-  return null;
+  const ctx = await requireAdminScope(req, res, 'analytics:community-ai-policy');
+  if (!ctx) return null;
+  return { userId: ctx.id, email: ctx.email ?? null };
 };
 
 const fetchCurrentPolicy = async () => {
@@ -46,14 +39,14 @@ const resolveUpdatedByEmail = async (userId?: string | null) => {
   return data?.email || null;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const admin = await requireSuperAdmin(req, res);
   if (!admin) return;
 
   if (req.method === 'GET') {
     const { policy, error } = await fetchCurrentPolicy();
     if (error) {
-      // Table may not exist yet — return null policy rather than 500
+      // Table may not exist yet â€” return null policy rather than 500
       console.warn('[community-ai-policy] DB error (table may not be migrated):', error?.message);
       return res.status(200).json({ policy: null, updated_by_email: null });
     }
@@ -99,7 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : existing?.require_human_approval ?? false,
   };
 
-  const updatedBy = admin.userId === 'super_admin_session' ? null : admin.userId;
+  const updatedBy = admin.userId;
   let savedPolicy = null;
   if (existing?.id) {
     const { data, error } = await supabase
@@ -154,3 +147,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const updatedByEmail = await resolveUpdatedByEmail(savedPolicy?.updated_by);
   return res.status(200).json({ policy: savedPolicy, updated_by_email: updatedByEmail });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

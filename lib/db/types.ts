@@ -11,7 +11,8 @@
  *
  * Usage:
  *   import type { DbOnlyClient } from '@/lib/db/types';
- *   import { supabase } from '@/backend/db/supabaseClient';
+ *   import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
  *   const db = supabase as unknown as DbOnlyClient;
  *
  * Or cast at call site:

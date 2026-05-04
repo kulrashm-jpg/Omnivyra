@@ -8,7 +8,7 @@
  * {
  *   company_id:      string,
  *   action:          'apply' | 'remove',
- *   duration_hours?: number,   // default 48 — only for action=apply
+ *   duration_hours?: number,   // default 48 â€” only for action=apply
  *   job_types?:      string[], // default = all job types
  * }
  *
@@ -16,17 +16,17 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getAllGlobalConfigs,
   applyNewAccountBoost,
   upsertCompanyOverride,
   getCompanyOverride,
 } from '../../../../backend/services/intelligenceConfigService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 
 async function resolveUser(req: NextApiRequest): Promise<string> {
   const { getSupabaseUserFromRequest } = await import('../../../../backend/services/supabaseAuthService');
@@ -34,11 +34,14 @@ async function resolveUser(req: NextApiRequest): Promise<string> {
   return user?.email ?? user?.id ?? 'super_admin';
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const ctx = await requireAdminScope(req, res, 'intelligence:scheduler-boost');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/intelligence/scheduler-boost', 'intelligence:scheduler-boost');
+  }
 
   const { company_id, action, duration_hours = 48, job_types } = req.body ?? {};
 
@@ -56,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const hours = Math.min(168, Math.max(1, Number(duration_hours) || 48)); // cap at 1 week
 
       if (Array.isArray(job_types) && job_types.length > 0) {
-        // Selective boost — only specified job types
+        // Selective boost â€” only specified job types
         const globals = await getAllGlobalConfigs();
         const boostUntil = new Date(Date.now() + hours * 3_600_000).toISOString();
 
@@ -68,12 +71,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               boost_until:             boostUntil,
               boost_priority:          1,
               boost_frequency_minutes: Math.max(5, Math.floor(global.frequency_minutes / 2)),
-              reason:                  `Selective boost — ${hours}h (applied by ${updatedBy})`,
+              reason:                  `Selective boost â€” ${hours}h (applied by ${updatedBy})`,
             }, updatedBy);
           }),
         );
       } else {
-        // Full boost — all job types
+        // Full boost â€” all job types
         await applyNewAccountBoost(company_id, updatedBy, hours);
       }
 
@@ -85,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // action === 'remove' — clear boost fields
+    // action === 'remove' â€” clear boost fields
     const targets = Array.isArray(job_types) && job_types.length > 0
       ? job_types as string[]
       : (await getAllGlobalConfigs()).map(g => g.job_type);
@@ -94,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       targets.map(async (jt: string) => {
         const existing = await getCompanyOverride(company_id, jt);
         if (!existing) return;
-        // Clear boost fields only — leave other overrides intact
+        // Clear boost fields only â€” leave other overrides intact
         await upsertCompanyOverride(company_id, jt, {
           boost_until:             null,
           boost_priority:          null,
@@ -108,3 +111,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Boost operation failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

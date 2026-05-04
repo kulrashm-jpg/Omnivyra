@@ -11,24 +11,24 @@ type StrategySignals = {
 
 type Props = {
   companyId: string | null;
-  fetchWithAuth?: ((input: RequestInfo, init?: RequestInit) => Promise<Response>) | null;
+  apiFetch?: ((input: RequestInfo, init?: RequestInit) => Promise<Response>) | null;
 };
 
-export default function StrategySignalsWidget({ companyId, fetchWithAuth }: Props) {
+export default function StrategySignalsWidget({ companyId, apiFetch }: Props) {
   const router = useRouter();
   const [data, setData] = useState<StrategySignals | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (!companyId || !fetchWithAuth) {
+    if (!companyId || !apiFetch) {
       setData(null);
       setError(false);
       return;
     }
     setLoading(true);
     setError(false);
-    fetchWithAuth(`/api/recommendations/strategy-signals?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/recommendations/strategy-signals?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => {
         if (!res.ok) throw new Error('Failed to load strategy signals');
         return res.json();
@@ -47,7 +47,7 @@ export default function StrategySignalsWidget({ companyId, fetchWithAuth }: Prop
         setError(true);
       })
       .finally(() => setLoading(false));
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   if (!companyId) return null;
 

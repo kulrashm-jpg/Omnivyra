@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/engagement/like
@@ -16,7 +17,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole } from '../../../backend/services/rbacService';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { executeAction } from '../../../backend/services/communityAiActionExecutor';
 import { incrementReplyLike } from '../../../backend/services/responsePerformanceService';
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
@@ -28,7 +30,7 @@ type LikeBody = {
   platform?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -39,7 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = (req.body || {}) as LikeBody;
     const organizationId = (body.organization_id ?? user?.defaultCompanyId) as string | undefined;
     const messageId = body.message_id;
-    // Normalize 'x' → 'twitter' on entry so downstream paths never see the alias.
+    // Normalize 'x' â†’ 'twitter' on entry so downstream paths never see the alias.
     const rawPlatform = (body.platform ?? '').toString().trim().toLowerCase();
     const platform = rawPlatform === 'x' ? 'twitter' : rawPlatform;
 
@@ -103,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: 'Message thread not found or access denied' });
     }
 
-    // Reject Like on placeholder seed rows — their platform_message_id is
+    // Reject Like on placeholder seed rows â€” their platform_message_id is
     // synthetic ("urn:li:activity:...#demo-comment-N") and LinkedIn rejects
     // it with "TargetUrn ... is not valid". Mirrors the same guard in
     // reply.ts so the operator sees a clean error instead of a 502 chain.
@@ -111,14 +113,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (messageRawPayload?.placeholder === true) {
       return res.status(409).json({
         error:
-          'This is a demo seed row — likes require a real LinkedIn comment URN. ' +
+          'This is a demo seed row â€” likes require a real LinkedIn comment URN. ' +
           'Visit the LinkedIn post to let the extension scrape real comment IDs, then like those.',
         code: 'PLACEHOLDER_TARGET',
         platform,
       });
     }
 
-    // comment_likes is upserted only after the platform confirms — same
+    // comment_likes is upserted only after the platform confirms â€” same
     // invariant as reply: local state only reflects platform-acknowledged
     // actions. Upsert is idempotent so this is safe on retry.
     const actionId = crypto.randomUUID();
@@ -179,3 +181,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

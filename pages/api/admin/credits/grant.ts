@@ -23,11 +23,11 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
 import {
   requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
+  requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import {
   grantAdminCreditExtension,
@@ -43,10 +43,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:credits_grant', 20, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
+  const ctx = await requireAdminScope(req, res, 'credits:grant');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/credits/grant', 'credits:grant');
   }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
@@ -96,14 +96,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       credits:     credits as number,
       reason:      reason.trim(),
       reasonType:  reasonType as AdminGrantReasonType,
-      actorUserId: user.id,
+      actorUserId: ctx.id,
       expiryDays,
       allowOverLimit,
       clientKey,
       metadata,
     });
   } catch (err: any) {
-    logger.error('admin_credit_grant_failed', { actor: user.id, message: err?.message });
+    logger.error('admin_credit_grant_failed', { actor: ctx.id, message: err?.message });
     return res.status(500).json({ error: 'Internal server error' });
   }
 
@@ -118,7 +118,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   try {
     await recordAdminAudit({
-      actorUserId:    user.id,
+      actorUserId:    ctx.id,
       action:         'ADMIN_CREDITS_EXTEND_FREE',
       targetType:     'organization',
       targetId:       organizationId,
@@ -132,7 +132,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       idempotencyKey: result.idempotencyKey,
     });
   } catch (err: any) {
-    logger.error('admin_credit_grant_audit_failed', { actor: user.id, message: err?.message });
+    logger.error('admin_credit_grant_audit_failed', { actor: ctx.id, message: err?.message });
   }
   return res.status(200).json({
     ok:             true,
@@ -142,4 +142,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withIdempotency(handler, { scope: 'admin-credits-grant', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(withIdempotency(handler, { scope: 'admin-credits-grant', methods: ['POST'] }));

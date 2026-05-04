@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
- * GET  /api/whatsapp/broadcasts        — list broadcasts for a company
- * POST /api/whatsapp/broadcasts        — create + optionally enqueue
+ * GET  /api/whatsapp/broadcasts        â€” list broadcasts for a company
+ * POST /api/whatsapp/broadcasts        â€” create + optionally enqueue
  *
  * Query params (GET): company_id, status (optional filter), limit, offset
  * Body (POST): CreateBroadcastInput + contacts[] + enqueue? (bool) + plan?
@@ -9,7 +10,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   createBroadcast,
   expandRecipients,
@@ -18,8 +20,8 @@ import {
   type ContactInput,
 } from '../../../../backend/services/whatsappBroadcastService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // ── GET: list broadcasts ───────────────────────────────────────────────────
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // â”€â”€ GET: list broadcasts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { company_id, status, limit = '20', offset = '0' } = req.query as Record<string, string>;
 
@@ -43,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ broadcasts: data ?? [], total: count ?? 0 });
   }
 
-  // ── POST: create broadcast ─────────────────────────────────────────────────
+  // â”€â”€ POST: create broadcast â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const {
       company_id,
@@ -127,3 +129,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/activity-workspace/creator-asset
@@ -6,7 +7,8 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { updateActivity, insertActivity } from '@/backend/services/executionPlannerService';
 import {
@@ -111,7 +113,7 @@ function validateCreatorAssetOverride(input: {
   return null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -363,3 +365,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

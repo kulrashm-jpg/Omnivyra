@@ -9,7 +9,8 @@
  * Does not modify post_comments or break existing pipelines.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordMetric } from './systemHealthMetricsService';
 import { getConversationMemoryRebuildQueue } from '../queue/bullmqClient';
 

@@ -14,7 +14,8 @@
  *   6. replies      — community reply generation (nice-to-have)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCreditCost, type CreditAction } from './creditDeductionService';
 import { getEfficiencyDiscount } from './creditEfficiencyEngine';
 

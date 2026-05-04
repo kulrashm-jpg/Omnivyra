@@ -21,7 +21,8 @@
  */
 
 import type { Job } from 'bullmq';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { buildDeterministicWeeklySkeleton } from '../../services/deterministicWeeklySkeleton';
 import { mapStrategyToSkeleton } from '../../services/strategyMapper';
 import { generateCampaignStrategy } from '../../services/campaignStrategyEngine';

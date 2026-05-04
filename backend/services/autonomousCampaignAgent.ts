@@ -13,7 +13,8 @@
  * The plan schema matches the existing campaign creation contract.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generatePerformanceInsights } from './performanceInsightGenerator';
 import { rankPlatformsByPerformance } from './platformPerformanceRanker';
 import { generateEngagementInsights } from './engagementInsightService';

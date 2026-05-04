@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/social-accounts/verify-config?platform=linkedin
  *
@@ -10,7 +11,8 @@
  * Regular users test their own account only.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { getOAuthCredentialsForPlatform } from '@/backend/auth/oauthCredentialResolver';
 import { refreshTwitterTokenIfNeeded } from '@/backend/auth/tokenRefresh';
@@ -177,7 +179,7 @@ async function testToken(platform: string, accessToken: string): Promise<TokenTe
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -198,8 +200,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let account_name: string | null = null;
   let live_check_supported = supportsLiveTokenCheck(platform);
 
-  const isSuperAdmin = req.cookies?.super_admin_session === '1';
   const { user } = await getSupabaseUserFromRequest(req).catch(() => ({ user: null, error: '' }));
+  const { isPlatformSuperAdmin } = await import('../../../backend/services/rbacService');
+  const isSuperAdmin = user?.id ? await isPlatformSuperAdmin(user.id) : false;
   const platformAliases = getPlatformAliases(platform);
 
   let accountId: string | null = null;
@@ -221,7 +224,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } else if (user?.id) {
     // Order by updated_at desc so a fresh reconnect (which bumps updated_at)
-    // wins over any legacy duplicate row — e.g. an old platform='twitter' row
+    // wins over any legacy duplicate row â€” e.g. an old platform='twitter' row
     // alongside the new platform='x' row. Without this, the unordered query
     // could pick the stale row and test its expired token, making the badge
     // read "Token invalid" indefinitely after a successful reconnect.
@@ -316,7 +319,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } else {
     // Note: the previous "connector-originated org token" fallback was removed
     // when community_ai_platform_tokens stopped storing tokens. There is now
-    // only one token source — social_accounts — and if no row was found above,
+    // only one token source â€” social_accounts â€” and if no row was found above,
     // there is no token to verify.
     token_detail = credentials_ok
       ? live_check_supported
@@ -336,3 +339,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     checked_at,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

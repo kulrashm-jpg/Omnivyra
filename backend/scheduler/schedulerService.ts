@@ -8,11 +8,14 @@
  * for a scheduled_post_id with status 'pending' or 'processing'.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getQueue, getEngagementPollingQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { getCampaignReadiness } from '../services/campaignReadinessService';
 import { addIntelligencePollingJob } from '../queue/intelligencePollingQueue';
+import { getJobRegistryEntry } from '../jobs/jobRegistry';
+import { claimIdempotencyKey } from '../jobs/idempotencyService';
 import { INTELLIGENCE_POLLER_USER_ID, isApiSourceExecutable } from '../services/externalApiService';
 import { clusterRecentSignals } from '../services/signalClusterEngine';
 import { generateSignalIntelligence } from '../services/signalIntelligenceEngine';
@@ -97,6 +100,7 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
   let skipped = 0;
 
   const queue = getQueue();
+  const publishRegistry = getJobRegistryEntry('publish');
 
   // Process each due post
   for (const post of duePosts || []) {
@@ -137,6 +141,21 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
     }
 
     try {
+      const idempotencyKey = publishRegistry.idempotency_key_builder({
+        scheduled_post_id: post.id,
+        trigger_source: 'scheduler_scan',
+      });
+      const claimed = await claimIdempotencyKey(idempotencyKey, 7 * 24 * 3600, {
+        job_id: 'publish',
+        scheduled_post_id: post.id,
+        trigger_source: 'scheduler_scan',
+      });
+      if (!claimed) {
+        console.log(`[findDuePostsAndEnqueue] duplicate idempotency key for post ${post.id}`);
+        skipped++;
+        continue;
+      }
+
       // Create queue_jobs row with priority from scheduled_post
       const queueJobId = await createQueueJob({
         scheduled_post_id: post.id,
@@ -153,6 +172,8 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
           scheduled_post_id: post.id,
           social_account_id: post.social_account_id,
           user_id: post.user_id,
+          idempotency_key: idempotencyKey,
+          trigger_source: 'scheduler_scan',
         },
         {
           jobId: queueJobId, // Use DB UUID as BullMQ job ID for consistency
@@ -225,6 +246,19 @@ export async function enqueueScheduledPostAt(
     return 'past';
   }
 
+  const publishRegistry = getJobRegistryEntry('publish');
+  const idempotencyKey = publishRegistry.idempotency_key_builder({
+    scheduled_post_id: scheduledPostId,
+    scheduled_for: scheduledFor,
+    trigger_source: 'schedule_api',
+  });
+  const claimed = await claimIdempotencyKey(idempotencyKey, 7 * 24 * 3600, {
+    job_id: 'publish',
+    scheduled_post_id: scheduledPostId,
+    trigger_source: 'schedule_api',
+  });
+  if (!claimed) return 'duplicate';
+
   const queueJobId = await createQueueJob({
     scheduled_post_id: scheduledPostId,
     job_type: 'publish',
@@ -240,6 +274,8 @@ export async function enqueueScheduledPostAt(
       scheduled_post_id: scheduledPostId,
       social_account_id: socialAccountId,
       user_id: userId,
+      idempotency_key: idempotencyKey,
+      trigger_source: 'schedule_api',
     },
     {
       jobId: queueJobId,
@@ -260,7 +296,13 @@ export async function enqueueScheduledPostAt(
  */
 export async function enqueueEngagementPolling(): Promise<void> {
   const queue = getEngagementPollingQueue();
-  await queue.add('poll', {}, { jobId: `engagement-poll-${Date.now()}` });
+  const registry = getJobRegistryEntry('engagement_polling');
+  const window = new Date().toISOString().slice(0, 16);
+  await queue.add(
+    'poll',
+    { window, trigger_source: 'cron' },
+    { jobId: registry.idempotency_key_builder({ window }) },
+  );
   console.log('✅ Engagement polling job enqueued');
 }
 
@@ -400,9 +442,19 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
 
     try {
       const purpose = useGlobalFallback ? 'global_intelligence_polling' : 'intelligence_polling';
+      const window = new Date().toISOString().slice(0, 13);
+      const registry = getJobRegistryEntry('intelligence_polling');
       await addIntelligencePollingJob(
-        { apiSourceId: source.id, companyId: null, purpose },
-        { priority }
+        { apiSourceId: source.id, companyId: null, purpose, window, trigger_source: 'cron' } as any,
+        {
+          priority,
+          jobId: registry.idempotency_key_builder({
+            apiSourceId: source.id,
+            companyId: null,
+            purpose,
+            window,
+          }),
+        }
       );
       enqueued++;
     } catch (err: any) {

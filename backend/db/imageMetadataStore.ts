@@ -12,7 +12,8 @@
  * because the DB store is unavailable.
  */
 
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { NormalizedImage, ImageSearchResult } from '@/backend/services/imageService';
 
 // Cache TTL stored in DB (24 hours) — queries older than this are re-fetched

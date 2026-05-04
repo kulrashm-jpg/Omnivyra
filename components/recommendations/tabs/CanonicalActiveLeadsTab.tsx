@@ -126,7 +126,7 @@ function groupSignals(signals: LeadSignal[]): SignalGroup[] {
 
 export default function CanonicalActiveLeadsTab({
   companyId,
-  fetchWithAuth,
+  apiFetch,
 }: OpportunityTabProps) {
   const router = useRouter();
   const [sourceType, setSourceType] = useState<'all' | SourceType>('all');
@@ -180,7 +180,7 @@ export default function CanonicalActiveLeadsTab({
         if (debouncedFilters.dateFrom) params.set('date_from', debouncedFilters.dateFrom);
         if (debouncedFilters.dateTo) params.set('date_to', debouncedFilters.dateTo);
 
-        const response = await fetchWithAuth(`/api/leads/signals?${params.toString()}`, {
+        const response = await apiFetch(`/api/leads/signals?${params.toString()}`, {
           cache: 'no-store',
         });
         const body = (await response.json().catch(() => ({}))) as Partial<SignalsResponse> & { error?: string };
@@ -198,7 +198,7 @@ export default function CanonicalActiveLeadsTab({
         setLoading(false);
       }
     },
-    [companyId, debouncedFilters, fetchWithAuth]
+    [companyId, debouncedFilters, apiFetch]
   );
 
   useEffect(() => {
@@ -241,7 +241,7 @@ export default function CanonicalActiveLeadsTab({
           params.set('source_id', selectedGroup.latestSignal.source_id);
         }
 
-        const response = await fetchWithAuth(`/api/leads/signals?${params.toString()}`, {
+        const response = await apiFetch(`/api/leads/signals?${params.toString()}`, {
           cache: 'no-store',
         });
         const body = (await response.json().catch(() => ({}))) as Partial<SignalsResponse> & { error?: string };
@@ -258,7 +258,7 @@ export default function CanonicalActiveLeadsTab({
     };
 
     void fetchDetails();
-  }, [companyId, fetchWithAuth, selectedGroup]);
+  }, [companyId, apiFetch, selectedGroup]);
 
   if (!companyId) {
     return <div className="py-4 text-sm text-gray-500">Select a company to view lead signals.</div>;

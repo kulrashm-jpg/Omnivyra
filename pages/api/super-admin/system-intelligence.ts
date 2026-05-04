@@ -2,7 +2,7 @@
 /**
  * GET /api/super-admin/system-intelligence
  *
- * Unified system intelligence endpoint — metrics + cost + projection + trends
+ * Unified system intelligence endpoint â€” metrics + cost + projection + trends
  * + dynamic baselines + actionable insights.
  *
  * v2 additions:
@@ -19,8 +19,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest }   from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin }         from '../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getSystemMetrics, ensureTrackingActive } from '../../../lib/instrumentation/systemMetrics';
 import { estimateCost }                 from '../../../lib/instrumentation/costEngine';
 import { deriveInsights }               from '../../../lib/instrumentation/insightsEngine';
@@ -29,22 +28,9 @@ import { projectCost }                  from '../../../lib/instrumentation/costP
 import { querySnapshots }               from '../../../lib/instrumentation/metricsPersistence';
 import { getSharedRedisClient }         from '../../../backend/queue/bullmqClient';
 import { parseRedisInfoMemory }         from '../../../lib/redis/instrumentation';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  } catch {
-    // Auth service unavailable — deny access
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-// ── Trend summary ─────────────────────────────────────────────────────────────
+// â”€â”€ Trend summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildTrends(metrics: Awaited<ReturnType<typeof getSystemMetrics>>) {
   return {
@@ -63,7 +49,6 @@ function buildTrends(metrics: Awaited<ReturnType<typeof getSystemMetrics>>) {
         ? metrics.supabase.errors / (metrics.supabase.reads + metrics.supabase.writes)
         : null,
     },
-    // Firebase removed: using Supabase auth exclusively
     api: {
       callsPerMin:  metrics.api?.callsPerMin  ?? 0,
       errorRate:    metrics.api?.errorRate    ?? null,
@@ -77,21 +62,25 @@ function buildTrends(metrics: Awaited<ReturnType<typeof getSystemMetrics>>) {
   };
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'system-intelligence:view');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/system-intelligence', 'system-intelligence:view');
+  }
 
   ensureTrackingActive();
 
   const errors: Record<string, string> = {};
 
-  // ── 1. Live metrics ────────────────────────────────────────────────────────
+  // â”€â”€ 1. Live metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const metrics = await getSystemMetrics();
   Object.assign(errors, metrics.errors);
 
-  // ── 1b. Redis storage (INFO memory) — injected into metrics.redis ─────────
+  // â”€â”€ 1b. Redis storage (INFO memory) â€” injected into metrics.redis â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Upstash charges $0.25/GB/month above the 256 MB free tier.
   // redis.info() is a one-shot call; failure is non-fatal.
   try {
@@ -102,10 +91,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       metrics.redis.storageBytesUsed = storageBytesUsed;
     }
   } catch {
-    // Redis INFO unavailable — storage cost will show $0
+    // Redis INFO unavailable â€” storage cost will show $0
   }
 
-  // ── 2. Cost estimate ───────────────────────────────────────────────────────
+  // â”€â”€ 2. Cost estimate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let cost = null;
   try {
     cost = estimateCost(metrics);
@@ -113,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     errors['cost'] = String((err as Error)?.message ?? err);
   }
 
-  // ── 3. Historical snapshots for baselines + projection ────────────────────
+  // â”€â”€ 3. Historical snapshots for baselines + projection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   //   7-day window for baselines, 24h for cost projection
   //   Both are best-effort: Redis unavailability returns empty arrays.
   const MS_24H = 24 * 60 * 60 * 1_000;
@@ -128,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     querySnapshots(getRedis, now - MS_24H, now).catch(() => []),
   ]);
 
-  // ── 4. Dynamic baselines (7-day history) ──────────────────────────────────
+  // â”€â”€ 4. Dynamic baselines (7-day history) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let baselines = null;
   try {
     baselines = snaps7d.length >= 12 ? computeBaselines(snaps7d) : null;
@@ -136,7 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     errors['baselines'] = String((err as Error)?.message ?? err);
   }
 
-  // ── 5. Cost projection (24h trend) ────────────────────────────────────────
+  // â”€â”€ 5. Cost projection (24h trend) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let projection = null;
   try {
     projection = projectCost(snaps24h.length >= 3 ? snaps24h : snaps7d);
@@ -144,12 +133,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     errors['projection'] = String((err as Error)?.message ?? err);
   }
 
-  // ── 6. Actionable insights ────────────────────────────────────────────────
+  // â”€â”€ 6. Actionable insights â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let insights = [];
   try {
     insights = deriveInsights(metrics, cost, projection, baselines);
   } catch {
-    // Non-critical — omit rather than fail
+    // Non-critical â€” omit rather than fail
   }
 
   const trends = buildTrends(metrics);
@@ -167,3 +156,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     errors:         Object.keys(errors).length > 0 ? errors : undefined,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

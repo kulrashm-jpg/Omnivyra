@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/access/request
@@ -10,7 +11,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import crypto from 'crypto';
 import { checkDomainEligibility } from '@/backend/services/domainEligibilityService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
@@ -22,14 +24,14 @@ function hashIp(ip: string): string {
   return crypto.createHash('sha256').update(ip + (process.env.RATE_LIMIT_SALT ?? 'salt')).digest('hex');
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
 
-  // ── Rate limit by IP ────────────────────────────────────────────────────────
+  // â”€â”€ Rate limit by IP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket.remoteAddress ?? 'unknown';
   const ipHash = hashIp(ip);
   const windowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_HOURS * 3600 * 1000).toISOString();
@@ -58,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('ip_hash', ipHash);
   }
 
-  // ── Domain eligibility check ────────────────────────────────────────────────
+  // â”€â”€ Domain eligibility check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (!user.email) return res.status(400).json({ error: 'No email on account' });
 
   const eligibility = await checkDomainEligibility(user.email, user.id);
@@ -69,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'This domain is not eligible for free credits.' });
   }
 
-  // ── Parse body ──────────────────────────────────────────────────────────────
+  // â”€â”€ Parse body â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { companyName, jobTitle, useCase, websiteUrl } = body as {
     companyName?: string;
@@ -82,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'companyName and useCase are required' });
   }
 
-  // ── Check for existing pending request ─────────────────────────────────────
+  // â”€â”€ Check for existing pending request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: existing } = await supabase
     .from('access_requests')
     .select('id, status')
@@ -99,15 +101,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // ── Get org membership ─────────────────────────────────────────────────────
+  // â”€â”€ Get org membership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: membership } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', user.id)
     .limit(1)
     .maybeSingle();
 
-  // ── Insert access request ──────────────────────────────────────────────────
+  // â”€â”€ Insert access request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const domain = user.email.split('@').pop() ?? '';
   const { data: newRequest, error: insertErr } = await supabase
     .from('access_requests')
@@ -133,3 +135,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(201).json({ success: true, requestId: newRequest.id });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

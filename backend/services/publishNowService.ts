@@ -8,7 +8,8 @@
  * @see docs/CANONICAL-SOCIAL-PLATFORM-OPERATIONS-DESIGN.md
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getScheduledPost,
   updateScheduledPostOnPublish,

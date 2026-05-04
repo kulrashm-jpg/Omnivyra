@@ -11,7 +11,8 @@
  * Called by: cron job or campaign completion webhook.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 
 export type PredictionAccuracyResult = {

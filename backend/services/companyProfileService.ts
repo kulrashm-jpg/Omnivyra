@@ -7,7 +7,8 @@
 import { randomUUID } from 'crypto';
 import { runCompletionWithOperation } from './aiGateway';
 import { refineLanguageOutput } from './languageRefinementService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ─── Re-export everything public so existing imports continue to work ─────────
 export type {

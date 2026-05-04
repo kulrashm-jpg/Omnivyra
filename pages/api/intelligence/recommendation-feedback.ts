@@ -1,8 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/intelligence/recommendation-feedback
  *
  * Records the outcome of a recommendation that was previously shown
- * via /api/intelligence/context. Idempotent — replaying with the
+ * via /api/intelligence/context. Idempotent â€” replaying with the
  * same (organization_id, pattern_type, target_id) is safe because
  * the service only flips rows whose accepted_at AND rejected_at are
  * both null.
@@ -36,7 +37,7 @@ type Body = {
   execution_correlation_id?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -72,3 +73,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (err as Error)?.message || 'Failed to record outcome' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

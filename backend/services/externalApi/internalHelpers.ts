@@ -4,7 +4,8 @@
  * Shared private constants and utility helpers used across externalApi sub-modules.
  * NOT re-exported from the externalApiService.ts facade — internal use only.
  */
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isRateLimited as redisIsRateLimited } from '../redisExternalApiCache';
 import { getProfile } from '../companyProfileService';
 import type { ExternalApiSource } from './types';

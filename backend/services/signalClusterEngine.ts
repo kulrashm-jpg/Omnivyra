@@ -5,7 +5,8 @@
  * Operates on intelligence_signals; does not modify ingestion or polling.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   generateTopicEmbedding,
   cosineSimilarity,
@@ -299,7 +300,7 @@ async function createClusterAndAssign(
     if (!(globalThis as any).__signal_clusters_schema_hint_shown) {
       (globalThis as any).__signal_clusters_schema_hint_shown = true;
       console.warn(
-        'signal_clusters: source_api_id or topic_embedding column missing. Run database/signal_clusters_source_api_id.sql and database/add_signal_embeddings.sql. Clustering will continue with minimal schema.'
+        'Schema mismatch: signal_clusters.source_api_id or topic_embedding column missing. Apply migration 20260504010002_fix_signal_intelligence_schema.sql. Clustering will continue with minimal schema.'
       );
     }
     result = await supabase.from('signal_clusters').insert(baseRow).select('cluster_id').single();

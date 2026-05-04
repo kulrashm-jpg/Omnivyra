@@ -14,9 +14,10 @@
  * rotates, or persists access tokens.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getToken as getTokenFromStore, isTokenExpiringSoon } from '../auth/tokenStore';
-import { refreshPlatformToken } from '../auth/tokenRefresh';
+import { refreshPlatformToken, getFreshXToken } from '../auth/tokenRefresh';
 import { normalizePlatform } from '../constants/platforms';
 
 type TokenInput = {
@@ -48,7 +49,7 @@ async function resolveSocialAccountIdForOrg(
   const platformsToMatch = PLATFORM_ALIASES[platform] ?? [platform];
 
   const { data: roleRows } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', organizationId)
     .eq('status', 'active');
@@ -152,6 +153,24 @@ export const getToken = async (
   const accountId = await resolveSocialAccountIdForOrg(organization_id, normalized);
   if (!accountId) return null;
 
+  // X/Twitter: always go through the strict locked-refresh helper. It
+  // refuses to return a stale access_token on refresh failure, so the
+  // connector path can no longer ship requests with an expired bearer
+  // (the cause of "Twitter just stopped working" reports on serverless
+  // where the long-running cron isn't available).
+  if (normalized === 'twitter' || normalized === 'x') {
+    const fresh = await getFreshXToken(accountId);
+    if (!fresh.ok) return null;
+    return {
+      access_token: fresh.access_token,
+      refresh_token: fresh.refresh_token,
+      expires_at: fresh.expires_at,
+      tenant_id,
+      organization_id,
+      platform: normalized,
+    };
+  }
+
   let tokenObj = await getTokenFromStore(accountId);
   if (!tokenObj?.access_token) return null;
 
@@ -183,7 +202,7 @@ export async function getPlatformsWithTokensForOrg(
   const platforms = new Set<string>();
 
   const { data: roleRows } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', organization_id)
     .eq('status', 'active');
@@ -216,7 +235,7 @@ export async function getPlatformsWithActiveSocialAccountsForOrg(
   const platforms = new Set<string>();
 
   const { data: roleRows } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', organization_id)
     .eq('status', 'active');

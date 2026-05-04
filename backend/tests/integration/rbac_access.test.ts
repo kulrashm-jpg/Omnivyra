@@ -27,7 +27,7 @@ const createMockRes = () => {
 
 const mockRoleLookup = (rowsByCompany: Record<string, string | null>, anyRoles: string[] = []) => {
   (supabase.from as jest.Mock).mockImplementation((table: string) => {
-    if (table !== 'user_company_roles') {
+    if (table !== 'user company roles') {
       return {
         select: jest.fn().mockReturnThis(),
         eq: jest.fn().mockReturnThis(),

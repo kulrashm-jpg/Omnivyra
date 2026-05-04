@@ -1,10 +1,9 @@
-/**
- * OrgServiceDrilldown — slide-over panel
+﻿/**
+ * OrgServiceDrilldown â€” slide-over panel
  *
  * Per-service view with:
  * - Service-specific columns (LLM calls+tokens, API errors, Redis ops, Supabase
- *   queries, Vercel invocations, Firebase MAU — not generic LLM/API for all)
- * - Plan analysis: current spend vs plan limit, month-end prediction, 15% headroom
+ *   queries and Vercel invocations.`r`n * - Plan analysis: current spend vs plan limit, month-end prediction, 15% headroom
  * - Spike detection: opsPerMin vs baseline, WARNING/CRITICAL with remediation tips
  * - Built-in month/year selector + expandable org rows
  */
@@ -15,12 +14,11 @@ import {
 } from 'lucide-react';
 import { getAuthToken } from '../../utils/getAuthToken';
 
-// ── External types (subset of IntelligenceData) ────────────────────────────────
+// â”€â”€ External types (subset of IntelligenceData) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface IntelMetrics {
   redis?:    { totalOps: number; opsPerMin: number; peakOpsPerMin: number; storageBytesUsed: number; topFeatures: {feature:string;total:number;pct:number}[] } | null;
   supabase?: { reads: number; writes: number; errors: number; queriesPerMin: number; avgReadLatency: number|null; avgWriteLatency: number|null } | null;
-  firebase?: { tokenVerifications: number; revokedChecks: number; authErrors: number; signIns: number; verificationsPerMin: number; avgVerifyLatencyMs: number|null } | null;
   api?:      { totalCalls: number; callsPerMin: number; errors4xx: number; errors5xx: number; errorRate: number; avgLatencyMs: number|null; p95LatencyMs: number|null } | null;
 }
 interface IntelCostEntry {
@@ -34,7 +32,7 @@ export interface DrilldownIntel {
   cost: { breakdown: Record<string, IntelCostEntry | undefined> } | null;
 }
 
-// ── API response types ─────────────────────────────────────────────────────────
+// â”€â”€ API response types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface OrgActivity {
   posts_total:        number;
@@ -60,9 +58,9 @@ interface BreakdownData {
   totals:  { llm_cost_usd: number; api_cost_usd: number; total_cost_usd: number; posts_total: number; org_count: number };
 }
 
-// ── Public types ───────────────────────────────────────────────────────────────
+// â”€â”€ Public types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export type ServiceKey = 'llm' | 'api' | 'redis' | 'supabase' | 'railway' | 'vercel' | 'cdn' | 'firebase';
+export type ServiceKey = 'llm' | 'api' | 'redis' | 'supabase' | 'railway' | 'vercel' | 'cdn';
 
 interface Props {
   serviceKey:     ServiceKey;
@@ -74,7 +72,7 @@ interface Props {
   onClose:        () => void;
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -90,10 +88,10 @@ const PLATFORM_TEXT: Record<string, string> = {
 const SERVICE_COLOR: Record<ServiceKey, string> = {
   llm: 'text-emerald-400', api: 'text-amber-400', redis: 'text-emerald-400',
   supabase: 'text-green-400', railway: 'text-purple-400', vercel: 'text-blue-400',
-  cdn: 'text-cyan-400', firebase: 'text-yellow-400',
+  cdn: 'text-cyan-400',
 };
 
-// ── Plan definitions ──────────────────────────────────────────────────────────
+// â”€â”€ Plan definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface PlanDef {
   name: string;
@@ -109,14 +107,14 @@ const PLAN_DEFS: Partial<Record<ServiceKey, PlanDef>> = {
   redis: {
     name: 'Upstash Pay-as-you-go',
     baseCostUsd: 0,
-    limitLabel: '10 K ops/day free · 256 MB storage free',
+    limitLabel: '10 K ops/day free Â· 256 MB storage free',
     freeUntil: 10000,
-    overageLabel: 'Ops: $0.20/100 K above free · Storage: $0.25/GB above 256 MB',
+    overageLabel: 'Ops: $0.20/100 K above free Â· Storage: $0.25/GB above 256 MB',
     remediation: [
       'Enable AI-response caching (TTL 300 s) to reduce ops',
       'Batch Redis pipeline operations',
       'Add TTL jitter to prevent cache stampede',
-      'Add TTL to all keys — orphaned keys grow storage unbounded',
+      'Add TTL to all keys â€” orphaned keys grow storage unbounded',
       'Run SCAN + DEL for stale queue job keys periodically',
       'Review cache invalidation hot paths',
     ],
@@ -124,8 +122,8 @@ const PLAN_DEFS: Partial<Record<ServiceKey, PlanDef>> = {
   supabase: {
     name: 'Supabase Pro',
     baseCostUsd: 25,
-    limitLabel: '8 GB DB · 250 K MAU · 100 GB bandwidth',
-    nextPlan: { name: 'Supabase Team', baseCostUsd: 599, limitLabel: '100 GB DB · unlimited MAU' },
+    limitLabel: '8 GB DB Â· 250 K MAU Â· 100 GB bandwidth',
+    nextPlan: { name: 'Supabase Team', baseCostUsd: 599, limitLabel: '100 GB DB Â· unlimited MAU' },
     remediation: [
       'Add indexes on frequently queried columns (EXPLAIN ANALYZE)',
       'Enable PgBouncer connection pooling',
@@ -137,7 +135,7 @@ const PLAN_DEFS: Partial<Record<ServiceKey, PlanDef>> = {
   railway: {
     name: 'Railway Pro',
     baseCostUsd: 20,
-    limitLabel: 'Usage-based · $20 credit included',
+    limitLabel: 'Usage-based Â· $20 credit included',
     nextPlan: { name: 'Railway Enterprise', baseCostUsd: 500, limitLabel: 'Custom resources' },
     remediation: [
       'Enable auto-sleep on non-prod environments',
@@ -172,22 +170,9 @@ const PLAN_DEFS: Partial<Record<ServiceKey, PlanDef>> = {
       'Consolidate JS bundles to reduce request count',
     ],
   },
-  firebase: {
-    name: 'Firebase Blaze (PAYG)',
-    baseCostUsd: 0,
-    limitLabel: '50 K MAU free · $0.0055 per MAU above',
-    freeUntil: 50000,
-    overageLabel: '$0.0055 per active user above 50 K MAU',
-    remediation: [
-      'Cache verified Firebase tokens in secure session cookie',
-      'Reduce token re-verification frequency per request',
-      'Implement client-side token refresh (avoid server hits)',
-      'Batch auth state checks where possible',
-    ],
-  },
 };
 
-// ── Spike detection config ─────────────────────────────────────────────────────
+// â”€â”€ Spike detection config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SpikeConfig {
   getRatePerMin: (m: IntelMetrics) => number | null;
@@ -202,11 +187,10 @@ const SPIKE_CONFIGS: Partial<Record<ServiceKey, SpikeConfig>> = {
   supabase: { getRatePerMin: m => m.supabase?.queriesPerMin ?? null, unit: 'queries/min',  normalBaseline: 50,  warnAt: 1.5, critAt: 2.5 },
   vercel:   { getRatePerMin: m => m.api?.callsPerMin   ?? null, unit: 'invocations/min',   normalBaseline: 20,  warnAt: 1.5, critAt: 2.5 },
   cdn:      { getRatePerMin: m => m.api?.callsPerMin   ?? null, unit: 'requests/min',      normalBaseline: 50,  warnAt: 1.5, critAt: 2.5 },
-  firebase: { getRatePerMin: m => m.firebase?.verificationsPerMin ?? null, unit: 'verifs/min', normalBaseline: 5, warnAt: 1.5, critAt: 2.5 },
   api:      { getRatePerMin: m => m.api?.callsPerMin   ?? null, unit: 'calls/min',         normalBaseline: 20,  warnAt: 1.5, critAt: 2.5 },
 };
 
-// ── Service metric columns ─────────────────────────────────────────────────────
+// â”€â”€ Service metric columns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // For infra services: the "secondary metric" column shows a proportion of global metric
 interface MetricColDef {
@@ -253,17 +237,9 @@ const METRIC_COLS: Partial<Record<ServiceKey, MetricColDef>> = {
     },
     format: v => v.toLocaleString(),
   },
-  firebase: {
-    header: 'Est. MAU',
-    getValue: (w, intel) => {
-      const total = intel?.metrics.firebase?.tokenVerifications;
-      return total != null ? Math.round(total * w) : null;
-    },
-    format: v => v.toLocaleString(),
-  },
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const fmtUsd  = (n: number) => `$${n.toFixed(4)}`;
 const fmtUsd2 = (n: number) => `$${n.toFixed(2)}`;
@@ -275,7 +251,7 @@ type SortKey =
   | 'llm_calls' | 'llm_cost' | 'api_calls' | 'api_cost'
   | 'posts' | 'credits';
 
-// ── Plan Analysis Panel ────────────────────────────────────────────────────────
+// â”€â”€ Plan Analysis Panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function PlanAnalysisPanel({
   serviceKey, serviceCostUsd, intel, year, month, totals,
@@ -327,27 +303,27 @@ function PlanAnalysisPanel({
   }
 
   if (plan.baseCostUsd === 0) {
-    // PAYG — no hard cap, just cost growth awareness
+    // PAYG â€” no hard cap, just cost growth awareness
     status    = 'payg';
-    statusLabel = 'Pay-as-you-go — no hard limit';
+    statusLabel = 'Pay-as-you-go â€” no hard limit';
     recommendation = predictedEnd > 10
       ? `At this pace: ${fmtUsd2(predictedEnd)}/mo. Consider caching to reduce ops.`
       : `Spend is nominal (${fmtUsd2(predictedEnd)}/mo est.).`;
   } else if (predictedEnd > plan.baseCostUsd) {
     status    = 'critical';
-    statusLabel = `Over plan — ${fmtUsd2(predictedEnd - plan.baseCostUsd)} in overages`;
+    statusLabel = `Over plan â€” ${fmtUsd2(predictedEnd - plan.baseCostUsd)} in overages`;
     recommendation = plan.nextPlan
-      ? `Upgrade to ${plan.nextPlan.name} (${fmtUsd2(plan.nextPlan.baseCostUsd)}/mo) — cheaper than current overages.`
+      ? `Upgrade to ${plan.nextPlan.name} (${fmtUsd2(plan.nextPlan.baseCostUsd)}/mo) â€” cheaper than current overages.`
       : 'Contact vendor for custom pricing or optimise usage.';
   } else if (marginPct !== null && marginPct < 15) {
     status    = 'warning';
-    statusLabel = `${fmtPct(marginPct)} headroom — below 15% safety margin`;
+    statusLabel = `${fmtPct(marginPct)} headroom â€” below 15% safety margin`;
     recommendation = plan.nextPlan
       ? `Consider upgrading to ${plan.nextPlan.name} before capacity is exhausted.`
       : 'Optimise usage to maintain 15% headroom.';
   } else {
     status    = 'ok';
-    statusLabel = marginPct !== null ? `${fmtPct(marginPct)} headroom — within plan` : 'Within plan';
+    statusLabel = marginPct !== null ? `${fmtPct(marginPct)} headroom â€” within plan` : 'Within plan';
     recommendation = 'Continue monitoring. No action required.';
   }
 
@@ -399,7 +375,7 @@ function PlanAnalysisPanel({
         const storageMB   = r.storageBytesUsed > 0 ? r.storageBytesUsed / (1024 * 1024) : null;
         const storagePct  = storageMB != null ? Math.min(100, (storageMB / 256) * 100) : null;
         const monthlyOps  = Math.round(r.opsPerMin * 60 * 24 * 30);
-        const freeTierOps = 300_000; // 10K/day × 30
+        const freeTierOps = 300_000; // 10K/day Ã— 30
         const opsPct      = Math.min(100, (monthlyOps / freeTierOps) * 100);
         return (
           <div className="mb-2 space-y-2">
@@ -430,7 +406,7 @@ function PlanAnalysisPanel({
                     style={{ width: `${Math.max(2, storagePct)}%` }} />
                 </div>
                 {storagePct > 70 && (
-                  <p className="text-yellow-600 mt-0.5">Storage growing — add TTL to all keys to prevent unbounded growth.</p>
+                  <p className="text-yellow-600 mt-0.5">Storage growing â€” add TTL to all keys to prevent unbounded growth.</p>
                 )}
               </div>
             )}
@@ -479,7 +455,7 @@ function PlanAnalysisPanel({
   );
 }
 
-// ── Spike Detection Panel ──────────────────────────────────────────────────────
+// â”€â”€ Spike Detection Panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function SpikePanel({ serviceKey, intel, planDef }: {
   serviceKey: ServiceKey;
@@ -509,10 +485,10 @@ function SpikePanel({ serviceKey, intel, planDef }: {
       <div className="flex items-center gap-2 mb-2">
         <AlertTriangle className={`w-4 h-4 ${color.text}`} />
         <span className={`font-semibold ${color.text}`}>
-          {isCritical ? 'CRITICAL' : 'WARNING'} — Spike Detected
+          {isCritical ? 'CRITICAL' : 'WARNING'} â€” Spike Detected
         </span>
         <span className={`ml-auto px-2 py-0.5 rounded-full text-xs font-medium ${color.badge}`}>
-          {multiplier.toFixed(1)}× normal
+          {multiplier.toFixed(1)}Ã— normal
         </span>
       </div>
       <p className="text-gray-400 mb-2">
@@ -533,7 +509,7 @@ function SpikePanel({ serviceKey, intel, planDef }: {
   );
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+// â”€â”€ Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function OrgServiceDrilldown({
   serviceKey, serviceLabel, serviceCostUsd, initialYear, initialMonth, intel, onClose,
@@ -577,7 +553,7 @@ export default function OrgServiceDrilldown({
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  // ── Per-org computed fields ───────────────────────────────────────────────
+  // â”€â”€ Per-org computed fields â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const totalAllCost = data?.totals.total_cost_usd ?? 0;
 
   const getWeight      = (row: OrgRow) => totalAllCost > 0 ? row.total_cost_usd / totalAllCost : 0;
@@ -593,7 +569,7 @@ export default function OrgServiceDrilldown({
     return metricCol.getValue(getWeight(row), intel);
   };
 
-  // ── Sort + filter ─────────────────────────────────────────────────────────
+  // â”€â”€ Sort + filter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortKey(k); setSortDir('desc'); }
@@ -630,7 +606,7 @@ export default function OrgServiceDrilldown({
   const maxSvcCost       = Math.max(1, ...rows.map(r => r._serviceCost));
   const yearOptions      = Array.from({ length: 3 }, (_, i) => new Date().getFullYear() - i);
 
-  // ── Column definitions for the table header ───────────────────────────────
+  // â”€â”€ Column definitions for the table header â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // LLM mode: Org | LLM Calls | LLM Cost | Posts | Credits
   // API mode: Org | API Calls | Errors | API Cost | Posts | Credits
   // Infra:    Org | Alloc. $ | [Metric] | Weight % | Posts | Credits
@@ -650,7 +626,7 @@ export default function OrgServiceDrilldown({
             <p className="text-xs text-gray-500 mt-0.5">
               {isDirectMode
                 ? `Per-organisation ${serviceKey.toUpperCase()} spend`
-                : `Proportional allocation · ${fmtUsd2(serviceCostUsd)}/mo estimated total`}
+                : `Proportional allocation Â· ${fmtUsd2(serviceCostUsd)}/mo estimated total`}
             </p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors mt-0.5">
@@ -669,7 +645,7 @@ export default function OrgServiceDrilldown({
             className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-violet-500">
             {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search org…"
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search orgâ€¦"
             className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-1.5 placeholder-gray-600 focus:outline-none focus:border-violet-500 w-44" />
           <button onClick={load} className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors ml-auto">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -679,7 +655,7 @@ export default function OrgServiceDrilldown({
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto">
 
-          {/* ── Plan analysis ── */}
+          {/* â”€â”€ Plan analysis â”€â”€ */}
           <PlanAnalysisPanel
             serviceKey={serviceKey}
             serviceCostUsd={serviceCostUsd}
@@ -689,14 +665,14 @@ export default function OrgServiceDrilldown({
             totals={data?.totals}
           />
 
-          {/* ── Spike alert ── */}
+          {/* â”€â”€ Spike alert â”€â”€ */}
           <SpikePanel serviceKey={serviceKey} intel={intel} planDef={plan} />
 
-          {/* ── Summary strip ── */}
+          {/* â”€â”€ Summary strip â”€â”€ */}
           {data && (
             <div className="flex items-center gap-4 px-6 py-2 bg-gray-900/40 border-b border-gray-800 text-xs mt-3 flex-wrap">
               <span className="text-gray-500">{data.totals.org_count} orgs</span>
-              <span className="text-gray-700">·</span>
+              <span className="text-gray-700">Â·</span>
               {isDirectMode ? (
                 <span className="text-gray-400">
                   {serviceKey === 'llm' ? 'Total LLM' : 'Total API'}: <span className="text-white font-medium">
@@ -709,15 +685,15 @@ export default function OrgServiceDrilldown({
                   {' '}<span className="text-gray-600">(est. {fmtUsd2(serviceCostUsd)})</span>
                 </span>
               )}
-              <span className="text-gray-700">·</span>
+              <span className="text-gray-700">Â·</span>
               <span className="text-gray-400">Posts: <span className="text-white font-medium">{data.totals.posts_total.toLocaleString()}</span></span>
             </div>
           )}
 
-          {/* ── Table ── */}
+          {/* â”€â”€ Table â”€â”€ */}
           {loading && !data ? (
             <div className="flex items-center justify-center h-40 text-gray-500 text-sm">
-              <RefreshCw className="w-4 h-4 animate-spin mr-2" /> Loading…
+              <RefreshCw className="w-4 h-4 animate-spin mr-2" /> Loadingâ€¦
             </div>
           ) : error ? (
             <div className="flex items-center gap-2 text-red-400 p-6 text-sm">
@@ -734,7 +710,7 @@ export default function OrgServiceDrilldown({
                   <tr className="text-xs text-gray-500 border-b border-gray-800">
                     <Th k="org_name" label="Organisation" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
 
-                    {/* ── LLM mode ── */}
+                    {/* â”€â”€ LLM mode â”€â”€ */}
                     {serviceKey === 'llm' && <>
                       <Th k="llm_calls" label="LLM Calls" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right />
                       <Th k="service_cost" label="LLM Cost" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right highlight />
@@ -742,7 +718,7 @@ export default function OrgServiceDrilldown({
                       <Th k="credits" label="Credits" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right />
                     </>}
 
-                    {/* ── API mode ── */}
+                    {/* â”€â”€ API mode â”€â”€ */}
                     {serviceKey === 'api' && <>
                       <Th k="api_calls" label="API Calls" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right />
                       <Th k="service_cost" label="API Cost" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right highlight />
@@ -750,7 +726,7 @@ export default function OrgServiceDrilldown({
                       <Th k="credits" label="Credits" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right />
                     </>}
 
-                    {/* ── Infra mode ── */}
+                    {/* â”€â”€ Infra mode â”€â”€ */}
                     {!isDirectMode && <>
                       <Th k="service_cost" label={`${serviceLabel.split(' ')[0]} Cost`} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right highlight />
                       {metricCol && <Th k="metric_value" label={metricCol.header} sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} right />}
@@ -773,12 +749,12 @@ export default function OrgServiceDrilldown({
                           {/* Org name */}
                           <td className="px-3 py-2.5 text-white font-medium">
                             <div className="flex items-center gap-2">
-                              <span className="text-gray-600 text-xs">{isExpanded ? '▼' : '▶'}</span>
-                              {r.org_name ?? <span className="font-mono text-xs text-gray-500">{r.organization_id.slice(0, 8)}…</span>}
+                              <span className="text-gray-600 text-xs">{isExpanded ? 'â–¼' : 'â–¶'}</span>
+                              {r.org_name ?? <span className="font-mono text-xs text-gray-500">{r.organization_id.slice(0, 8)}â€¦</span>}
                             </div>
                           </td>
 
-                          {/* ── LLM columns ── */}
+                          {/* â”€â”€ LLM columns â”€â”€ */}
                           {serviceKey === 'llm' && <>
                             <td className="px-3 py-2.5 text-right text-gray-300 text-xs">{fmtK(r.llm_calls)}</td>
                             <td className="px-3 py-2.5 text-right min-w-[110px]">
@@ -789,11 +765,11 @@ export default function OrgServiceDrilldown({
                             </td>
                             <td className="px-3 py-2.5 text-right text-gray-300 text-xs">{r.activities.posts_total}</td>
                             <td className={`px-3 py-2.5 text-right text-xs ${r.credit_balance != null && r.credit_balance < 100 ? 'text-red-400' : 'text-yellow-400'}`}>
-                              {r.credit_balance != null ? r.credit_balance.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+                              {r.credit_balance != null ? r.credit_balance.toLocaleString(undefined, { maximumFractionDigits: 0 }) : 'â€”'}
                             </td>
                           </>}
 
-                          {/* ── API columns ── */}
+                          {/* â”€â”€ API columns â”€â”€ */}
                           {serviceKey === 'api' && <>
                             <td className="px-3 py-2.5 text-right text-gray-300 text-xs">{fmtK(r.api_calls)}</td>
                             <td className="px-3 py-2.5 text-right min-w-[110px]">
@@ -804,11 +780,11 @@ export default function OrgServiceDrilldown({
                             </td>
                             <td className="px-3 py-2.5 text-right text-gray-300 text-xs">{r.activities.posts_total}</td>
                             <td className={`px-3 py-2.5 text-right text-xs ${r.credit_balance != null && r.credit_balance < 100 ? 'text-red-400' : 'text-yellow-400'}`}>
-                              {r.credit_balance != null ? r.credit_balance.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+                              {r.credit_balance != null ? r.credit_balance.toLocaleString(undefined, { maximumFractionDigits: 0 }) : 'â€”'}
                             </td>
                           </>}
 
-                          {/* ── Infra columns ── */}
+                          {/* â”€â”€ Infra columns â”€â”€ */}
                           {!isDirectMode && <>
                             <td className="px-3 py-2.5 text-right min-w-[110px]">
                               <span className={`font-bold text-xs ${svcColor}`}>{fmtUsd(r._serviceCost)}</span>
@@ -818,7 +794,7 @@ export default function OrgServiceDrilldown({
                             </td>
                             {metricCol && (
                               <td className="px-3 py-2.5 text-right text-gray-400 text-xs">
-                                {r._metricValue != null ? metricCol.format(r._metricValue) : '—'}
+                                {r._metricValue != null ? metricCol.format(r._metricValue) : 'â€”'}
                               </td>
                             )}
                             <td className="px-3 py-2.5 text-right text-gray-500 text-xs">{fmtPct(r._weightPct)}</td>
@@ -959,9 +935,9 @@ export default function OrgServiceDrilldown({
         {/* Footer */}
         <div className="px-6 py-3 border-t border-gray-800 text-xs text-gray-600 shrink-0">
           {isDirectMode
-            ? `Exact ${serviceKey.toUpperCase()} cost per org · ${MONTH_NAMES[month - 1]} ${year}`
-            : `Infra allocated proportionally by org LLM+API spend · ${MONTH_NAMES[month - 1]} ${year} · [est]`}
-          {' · '}15% capacity margin applied to plan thresholds
+            ? `Exact ${serviceKey.toUpperCase()} cost per org Â· ${MONTH_NAMES[month - 1]} ${year}`
+            : `Infra allocated proportionally by org LLM+API spend Â· ${MONTH_NAMES[month - 1]} ${year} Â· [est]`}
+          {' Â· '}15% capacity margin applied to plan thresholds
         </div>
 
       </div>
@@ -969,7 +945,7 @@ export default function OrgServiceDrilldown({
   );
 }
 
-// ── Table header helper ────────────────────────────────────────────────────────
+// â”€â”€ Table header helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Th({ k, label, sortKey, sortDir, onSort, right, highlight }: {
   k: SortKey; label: string; sortKey: SortKey; sortDir: 'asc' | 'desc';
@@ -990,3 +966,4 @@ function Th({ k, label, sortKey, sortDir, onSort, right, highlight }: {
     </th>
   );
 }
+

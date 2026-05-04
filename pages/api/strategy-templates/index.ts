@@ -1,10 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import {
   createStrategyTemplate,
   listStrategyTemplates,
 } from '../../../backend/services/strategyTemplateService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
     try {
       const { user_id, company_id, is_public } = req.query;
@@ -48,3 +49,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

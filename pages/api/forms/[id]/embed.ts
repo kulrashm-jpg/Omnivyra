@@ -1,13 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Public endpoint — no auth required.
+ * Public endpoint â€” no auth required.
  * Returns minimal form config for the embeddable JS snippet.
  * CORS enabled so external sites can fetch form config.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getForm } from '../../../../backend/services/leadService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -30,3 +31,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     brand: form.brand || {},
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

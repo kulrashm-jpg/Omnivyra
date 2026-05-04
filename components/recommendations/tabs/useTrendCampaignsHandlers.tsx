@@ -110,7 +110,7 @@ export function useTrendCampaignsHandlers(core: CoreState) {
     executionFieldKeyToLabel,
     executionSectionRefs,
     fastLoadingCardId,
-    fetchWithAuth,
+    apiFetch,
     firstCardRef,
     focusedModules,
     frequencyPerWeek,
@@ -310,7 +310,7 @@ export function useTrendCampaignsHandlers(core: CoreState) {
   };
   const handleViewIntelligence = async (id: string) => {
     try {
-      const res = await fetchWithAuth(`/api/recommendations/job/${id}`);
+      const res = await apiFetch(`/api/recommendations/job/${id}`);
       if (!res.ok) return;
       const data = await res.json();
       setConsolidatedResult(data.consolidated_result ?? null);
@@ -321,7 +321,7 @@ export function useTrendCampaignsHandlers(core: CoreState) {
   };
   const fetchProfile = async (): Promise<Record<string, unknown> | null> => {
     if (!companyId) return null;
-    const res = await fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`);
+    const res = await apiFetch(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data?.profile ?? null;
@@ -489,7 +489,7 @@ export function useTrendCampaignsHandlers(core: CoreState) {
         (payload.execution_config as { campaign_duration: number }).campaign_duration <= 12
           ? (payload.execution_config as { campaign_duration: number }).campaign_duration
           : 12;
-      const recRes = await fetchWithAuth('/api/recommendations/generate', {
+      const recRes = await apiFetch('/api/recommendations/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -527,7 +527,7 @@ export function useTrendCampaignsHandlers(core: CoreState) {
         // Create a campaign when themes are generated so "Build Campaign Blueprint" saves the card to this campaign.
         try {
           const newCampaignId = crypto.randomUUID();
-          const createRes = await fetchWithAuth('/api/campaigns', {
+          const createRes = await apiFetch('/api/campaigns', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

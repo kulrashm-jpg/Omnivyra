@@ -4,7 +4,8 @@
  * Does NOT modify enrichment or alignment logic.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enrichRecommendation, type RecommendationEnrichmentInput } from './campaignEnrichmentService';
 import { normalizeDurationWeeks } from './campaignEnrichmentService';
 

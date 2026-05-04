@@ -3,7 +3,8 @@
  * Phase 7: Predicts outcome probability for recommendations.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type ImpactForecast = {
   recommendation_id: string;

@@ -1,7 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -231,3 +232,8 @@ function getSystemPrompt(context: string): string {
 
   return prompts.general;
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

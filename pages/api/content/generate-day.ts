@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import {
@@ -119,4 +120,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.CONTENT_CREATOR, Role.CONTENT_MANAGER]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.CONTENT_CREATOR, Role.CONTENT_MANAGER]));
+

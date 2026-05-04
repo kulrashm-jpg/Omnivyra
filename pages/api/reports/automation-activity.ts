@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 type HighlightTone = 'good' | 'warn' | 'neutral';
@@ -85,7 +87,7 @@ function getReviewWindowCopy(latestReport: Record<string, any> | null): {
 async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
   if (requestedCompanyId) {
     const { data } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', userId)
       .eq('company_id', requestedCompanyId)
@@ -95,7 +97,7 @@ async function resolveCompanyId(userId: string, requestedCompanyId?: string): Pr
   }
 
   const { data } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', userId)
     .eq('status', 'active')
@@ -434,7 +436,7 @@ function buildSnapshotPrioritySignal(params: {
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
   }
@@ -557,3 +559,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     showSection,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -5,13 +5,12 @@
  * runtime. The Edge runtime never sees this file, so it is safe to import
  * Redis, IORedis, workers, cron, and any other Node-only modules here.
  *
- * Runs when the server starts. Auto-starts workers and cron scheduler so the
- * intelligence pipeline runs without manual npm run start:workers / start:cron.
+ * Runs when the server starts. Auto-starts workers when enabled.
  *
  * Workers are DISABLED by default so the app (home page, etc.) loads reliably.
  * Set ENABLE_AUTO_WORKERS=1 to auto-start workers (requires Redis).
  *
- * Or run workers separately: npm run start:workers & npm run start:cron
+ * Cron execution is handled by Vercel cron routes.
  */
 
 export async function register() {
@@ -21,8 +20,12 @@ export async function register() {
   try {
     const { getVerificationSecret } = await import('./backend/services/verificationSecret');
     getVerificationSecret();
+    const { assertExecutionEngineSchemaReady } = await import('./backend/jobs/startupSchemaCheck');
+    await assertExecutionEngineSchemaReady();
+    const { assertExecutionObservabilityReady } = await import('./backend/jobs/observabilityCheck');
+    assertExecutionObservabilityReady();
   } catch (err) {
-    console.error('VERIFICATION_SECRET_MISSING', {
+    console.error('STARTUP_INVARIANT_FAILED', {
       message: (err as Error)?.message ?? String(err),
     });
     // Hard exit — Next.js' supervisor will restart and surface the failure.
@@ -85,10 +88,7 @@ export async function register() {
 
   try {
     const { startWorkers } = await import('./backend/queue/startWorkers');
-    const { startCron } = await import('./backend/scheduler/cron');
-
     await startWorkers();
-    startCron().catch((err) => console.error('[startup] cron failed:', err));
   } catch (err) {
     console.error('[startup] workers failed to start:', (err as Error)?.message ?? err);
   }

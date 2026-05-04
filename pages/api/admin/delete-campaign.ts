@@ -1,27 +1,14 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCompanyCampaignIds } from '../../../backend/db/campaignVersionStore';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import {
-  isSuperAdmin,
-  getUserRole,
-  getCompanyRoleIncludingInvited,
-  Role,
-} from '../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { Role } from '../../../backend/services/rbacPrimitives';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const { user, error: authError } = await getSupabaseUserFromRequest(req);
-  if (authError || !user) {
-    const message = authError === 'MISSING_AUTH'
-      ? 'No auth token provided. Please sign in and try again.'
-      : authError === 'INVALID_AUTH'
-        ? 'Invalid or expired session. Please refresh the page and sign in again.'
-        : 'Unauthorized';
-    return res.status(401).json({ error: message, code: authError || 'UNAUTHORIZED' });
   }
 
   try {
@@ -29,26 +16,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const companyId = (req.query.companyId as string) || req.body.companyId;
 
     if (!campaignId) {
-      return res.status(400).json({ 
-        error: 'Missing required field: campaignId' 
+      return res.status(400).json({
+        error: 'Missing required field: campaignId'
       });
     }
 
-    const superAdmin = await isSuperAdmin(user.id);
-    let isCompanyAdmin = false;
-    if (companyId) {
-      const { role } = await getUserRole(user.id, companyId);
-      if (role === Role.COMPANY_ADMIN || role === Role.ADMIN) isCompanyAdmin = true;
-      if (!isCompanyAdmin) {
-        const fallback = await getCompanyRoleIncludingInvited(user.id, companyId);
-        isCompanyAdmin =
-          fallback === Role.COMPANY_ADMIN || fallback === Role.ADMIN;
-      }
+    const ctx = await requireAdminScope(req, res, 'campaigns:delete', { companyId });
+    if (!ctx) return;
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[ADMIN_SCOPE]', '/api/admin/delete-campaign', 'campaigns:delete');
     }
-
-    if (!superAdmin && !isCompanyAdmin) {
-      return res.status(403).json({ error: 'Forbidden: Only super admins or company admins can delete campaigns.' });
-    }
+    const user = { id: ctx.id };
+    const superAdmin = ctx.role === Role.SUPER_ADMIN;
+    const isCompanyAdmin = ctx.role === Role.COMPANY_ADMIN;
 
     if (isCompanyAdmin && !superAdmin) {
       const companyCampaignIds = await getCompanyCampaignIds(companyId);
@@ -125,3 +105,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

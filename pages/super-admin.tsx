@@ -33,7 +33,7 @@ import CompanyUsersTab from '../components/super-admin/tabs/CompanyUsersTab';
 import AnalyticsTab from '../components/super-admin/tabs/AnalyticsTab';
 import PlansTab from '../components/super-admin/tabs/PlansTab';
 import CommunityAiTab from '../components/super-admin/tabs/CommunityAiTab';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 export default function SuperAdminPanel() {
   const router = useRouter();
@@ -75,7 +75,7 @@ export default function SuperAdminPanel() {
 
 
   useEffect(() => {
-    fetchWithAuth('/api/super-admin/platform-oauth-configs')
+    apiFetch('/api/super-admin/platform-oauth-configs')
       .then((r) => { if (r.status === 403) window.location.href = '/super-admin/login'; })
       .catch(() => { window.location.href = '/super-admin/login'; });
     loadSuperAdminData();
@@ -87,14 +87,14 @@ export default function SuperAdminPanel() {
     setIsLoadingAnalytics(true);
     setIsLoadingCampaignHealth(true);
     try {
-      const auditResponse = await fetchWithAuth('/api/admin/audit-logs');
+      const auditResponse = await apiFetch('/api/admin/audit-logs');
       if (auditResponse.ok) {
         const auditData = await auditResponse.json();
         setAuditLogs(auditData.logs || []);
         setIsSuperAdminSession(true);
       }
 
-      const analyticsResponse = await fetchWithAuth('/api/super-admin/analytics-summary');
+      const analyticsResponse = await apiFetch('/api/super-admin/analytics-summary');
       if (analyticsResponse.ok) {
         setAnalyticsSummary(await analyticsResponse.json() || null);
         setIsSuperAdminSession(true);
@@ -102,7 +102,7 @@ export default function SuperAdminPanel() {
         setAnalyticsSummary(null);
       }
 
-      const healthResponse = await fetchWithAuth('/api/super-admin/campaign-health');
+      const healthResponse = await apiFetch('/api/super-admin/campaign-health');
       if (healthResponse.ok) {
         setCampaignHealth(await healthResponse.json() || null);
         setIsSuperAdminSession(true);
@@ -111,7 +111,7 @@ export default function SuperAdminPanel() {
       }
 
       // Load companies (needed for AnalyticsTab campaign-health company name lookup)
-      const companiesResponse = await fetchWithAuth('/api/super-admin/companies');
+      const companiesResponse = await apiFetch('/api/super-admin/companies');
       if (companiesResponse.ok) {
         const companiesData = await companiesResponse.json();
         setCompanies(companiesData.companies || []);
@@ -121,13 +121,13 @@ export default function SuperAdminPanel() {
         setAuthError('Session expired or not authorised. Please log in via the Super Admin login page.');
       }
 
-      const communityResponse = await fetchWithAuth('/api/super-admin/community-ai-metrics');
+      const communityResponse = await apiFetch('/api/super-admin/community-ai-metrics');
       if (communityResponse.ok) {
         setCommunityMetrics(await communityResponse.json() || null);
         setIsSuperAdminSession(true);
       }
 
-      const policyResponse = await fetchWithAuth('/api/super-admin/community-ai-policy');
+      const policyResponse = await apiFetch('/api/super-admin/community-ai-policy');
       if (policyResponse.ok) {
         const policyData = await policyResponse.json();
         setCommunityPolicy(policyData?.policy || null);
@@ -135,11 +135,11 @@ export default function SuperAdminPanel() {
         setIsSuperAdminSession(true);
       }
 
-      const healthRes = await fetchWithAuth('/api/external-apis/health-summary');
+      const healthRes = await apiFetch('/api/external-apis/health-summary');
       if (healthRes.ok) setExternalApisHealth(await healthRes.json());
       else setExternalApisHealth(null);
 
-      const plansRes = await fetchWithAuth('/api/super-admin/plans/list');
+      const plansRes = await apiFetch('/api/super-admin/plans/list');
       if (plansRes.ok) {
         const plansData = await plansRes.json();
         setPricingPlans(plansData.plans || []);
@@ -190,7 +190,7 @@ export default function SuperAdminPanel() {
     if (!pendingPolicy) return;
     setIsSavingPolicy(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/community-ai-policy', {
+      const response = await apiFetch('/api/super-admin/community-ai-policy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -233,7 +233,7 @@ export default function SuperAdminPanel() {
         if (v == null || String(v).trim() === '') { limits[key] = null; }
         else { const n = parseInt(String(v).trim(), 10); limits[key] = Number.isFinite(n) ? n : null; }
       }
-      const response = await fetchWithAuth('/api/super-admin/plans/create', {
+      const response = await apiFetch('/api/super-admin/plans/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan_key: plan.plan_key, name: plan.name, description: plan.description ?? null, monthly_price: plan.monthly_price ?? null, limits }),
@@ -289,7 +289,7 @@ export default function SuperAdminPanel() {
               <button
                 onClick={async () => {
                   setIsLoggingOut(true);
-                  await fetchWithAuth('/api/super-admin/logout', { method: 'POST' });
+                  await apiFetch('/api/super-admin/logout', { method: 'POST' });
                   window.location.href = '/super-admin/login';
                 }}
                 disabled={isLoggingOut}

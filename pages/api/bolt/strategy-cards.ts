@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/bolt/strategy-cards
  *
@@ -28,7 +29,7 @@ export interface BoltStrategyCard {
   campaignGoals: string[];    // individual goals array
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -58,17 +59,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const weeks = Math.max(1, Math.min(12, Number(duration) || 4));
     const cleanTopic = topic.trim();
 
-    // ── Compact topic label for template substitution.
-    // Templates insert {topic} verbatim — a long, question-like, or preamble topic
+    // â”€â”€ Compact topic label for template substitution.
+    // Templates insert {topic} verbatim â€” a long, question-like, or preamble topic
     // produces unreadable titles like "What Teams Get Wrong About To Assist You".
     // Strategy:
     //  0. Strip AI clarification preambles ("To assist you, could you clarify your X").
-    //  0b. Strip infinitive openers ("To improve our X" → "our X" → strip "our" → "X").
+    //  0b. Strip infinitive openers ("To improve our X" â†’ "our X" â†’ strip "our" â†’ "X").
     //  1. Extract a quoted phrase if present (often the real campaign title).
     //  2. Stop at the first clause-break comma/conjunction.
     //  3. Hard-cap at 45 chars on a word boundary.
     // Words that must never be the LAST word of a topic fed into a title template
-    // ("Why Most Teams Struggle With {topic}") — they leave the sentence hanging.
+    // ("Why Most Teams Struggle With {topic}") â€” they leave the sentence hanging.
     // Covers conjunctions, prepositions, articles, auxiliary/linking verbs, and
     // possessives. Compared case-insensitively; trailing punctuation is stripped
     // before the lookup.
@@ -88,21 +89,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     function stripDanglingTrailingWords(s: string): string {
       const parts = s.trim().split(/\s+/).filter(Boolean);
       while (parts.length > 1) {
-        const last = parts[parts.length - 1]!.replace(/[.,;:!?\-—]+$/, '').toLowerCase();
+        const last = parts[parts.length - 1]!.replace(/[.,;:!?\-â€”]+$/, '').toLowerCase();
         if (DANGLING_TRAILING_WORDS.has(last)) {
           parts.pop();
         } else {
           break;
         }
       }
-      return parts.join(' ').replace(/[.,;:!?\-—]+$/, '').trim();
+      return parts.join(' ').replace(/[.,;:!?\-â€”]+$/, '').trim();
     }
 
     function compactTopic(t: string): string {
       let s = t.trim();
 
       // 0. Strip AI clarification preambles with an extractable topic after them.
-      //    e.g. "To better assist you, could you clarify your SaaS launch?" → "SaaS launch"
+      //    e.g. "To better assist you, could you clarify your SaaS launch?" â†’ "SaaS launch"
       const aiPreamble = s.match(
         /^(?:to\s+[\w\s]{2,25}you[,.]?\s+)?could\s+you\s+(?:please\s+)?(?:clarify|specify|describe|explain|provide|share)\s+(?:your|the|a\s+)?([\w\s,''"-]{4,})/i
       );
@@ -117,7 +118,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // 0c. Strip bare infinitive opener ("To [verb] [some words],")
       //     leaving the meaningful noun phrase that follows
-      //     e.g. "To improve our SaaS pipeline" → "our SaaS pipeline" → strip "our" → "SaaS pipeline"
+      //     e.g. "To improve our SaaS pipeline" â†’ "our SaaS pipeline" â†’ strip "our" â†’ "SaaS pipeline"
       const infOpener = s.match(/^To\s+\w+\s+([\w\s,''"-]{4,})/i);
       if (infOpener?.[1] && infOpener[1].length >= 4 && !aiPreamble) {
         const rest = infOpener[1].replace(/^(?:our|your|my|their|the|a|an)\s+/i, '').trim();
@@ -127,13 +128,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // If after stripping the string still starts like a question, it had no real topic.
       // Derive a fallback from goals / audience rather than produce garbage titles.
       if (/^(could|can|would|should)\s+you\b|^clarify\b/i.test(s) || s.length < 4) {
-        s = t.trim(); // revert — handled below via effectiveTopic fallback
+        s = t.trim(); // revert â€” handled below via effectiveTopic fallback
       }
 
       // 1. Quoted phrase extraction (handles ' " " ' delimiters)
       const quotedMatch = s.match(/['"'\u2018\u2019\u201C\u201D]([^\u2018\u2019\u201C\u201D'"]{5,80})['"'\u2018\u2019\u201C\u201D]/);
       if (quotedMatch?.[1]) {
-        const q = quotedMatch[1].split(':')[0].split('—')[0].trim();
+        const q = quotedMatch[1].split(':')[0].split('â€”')[0].trim();
         if (q.length >= 5) {
           const quoted = q.length <= 45
             ? q
@@ -145,9 +146,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const clauseBreak = s.search(/,\s*(consider|including|focusing|this could|this includes|which|where|among|for the|for all)/i);
       const base = clauseBreak > 10 ? s.slice(0, clauseBreak).trim() : s;
       // 3. Soft cap at ~45 chars. Cut on a word boundary, strip trailing dangling
-      //    words (of/and/to/the/…) so the phrase reads as a complete thought.
+      //    words (of/and/to/the/â€¦) so the phrase reads as a complete thought.
       //    If stripping drops the phrase to <2 real words, extend past 45 to the
-      //    next word boundary (up to ~70 chars) and try again — better to go a bit
+      //    next word boundary (up to ~70 chars) and try again â€” better to go a bit
       //    longer than produce titles like "The Future Belongs to Promoting New
       //    Feature Of Creating And".
       if (base.length <= 45) return stripDanglingTrailingWords(base);
@@ -168,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return candidate;
     }
 
-    // Detect if a compacted topic is still a question / fragment — not usable in templates.
+    // Detect if a compacted topic is still a question / fragment â€” not usable in templates.
     function looksLikeQuestionOrFragment(t: string): boolean {
       return (
         /^(to\s+\w+\s+(you|me|us)|could\s+you|can\s+you|would\s+you|should\s+you|please\s+clarify)/i.test(t) ||
@@ -188,9 +189,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return 'Your Campaign';
     })();
 
-    // ── 3 fundamentally different strategic archetypes ──────────────────────
+    // â”€â”€ 3 fundamentally different strategic archetypes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Each archetype defines a distinct phase progression, card framing, and
-    // week-theme approach so the 3 cards are genuinely different strategies —
+    // week-theme approach so the 3 cards are genuinely different strategies â€”
     // not seed-shifted variations of the same sequence.
     const STRATEGY_ARCHETYPES = [
       {
@@ -218,15 +219,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Phase metadata for objectives and content focus
     const PHASE_META: Record<string, { objective: string; content_focus: string; cta: string }> = {
-      Awareness:   { objective: 'Build brand visibility and introduce your topic to a new audience',   content_focus: 'Educational content, industry insights, thought leadership',   cta: 'Follow · Subscribe' },
-      Education:   { objective: 'Establish authority and teach your audience key concepts',             content_focus: 'How-to guides, frameworks, deep-dives',                          cta: 'Save · Share' },
-      Problem:     { objective: 'Amplify pain points and spark recognition in your audience',           content_focus: 'Pain point stories, misconception-busting content',              cta: 'Comment · Engage' },
-      Solution:    { objective: 'Position your offering as the clear answer to the problem',            content_focus: 'Solution reveals, product walkthroughs, comparisons',            cta: 'Learn More · Sign Up' },
-      Proof:       { objective: 'Build trust through evidence, results, and social proof',              content_focus: 'Case studies, testimonials, data results',                       cta: 'Book a Call · Start Trial' },
-      Conversion:  { objective: 'Drive decisive action and close the consideration loop',               content_focus: 'Offers, urgency plays, objection handling',                      cta: 'Buy Now · Schedule Demo' },
+      Awareness:   { objective: 'Build brand visibility and introduce your topic to a new audience',   content_focus: 'Educational content, industry insights, thought leadership',   cta: 'Follow Â· Subscribe' },
+      Education:   { objective: 'Establish authority and teach your audience key concepts',             content_focus: 'How-to guides, frameworks, deep-dives',                          cta: 'Save Â· Share' },
+      Problem:     { objective: 'Amplify pain points and spark recognition in your audience',           content_focus: 'Pain point stories, misconception-busting content',              cta: 'Comment Â· Engage' },
+      Solution:    { objective: 'Position your offering as the clear answer to the problem',            content_focus: 'Solution reveals, product walkthroughs, comparisons',            cta: 'Learn More Â· Sign Up' },
+      Proof:       { objective: 'Build trust through evidence, results, and social proof',              content_focus: 'Case studies, testimonials, data results',                       cta: 'Book a Call Â· Start Trial' },
+      Conversion:  { objective: 'Drive decisive action and close the consideration loop',               content_focus: 'Offers, urgency plays, objection handling',                      cta: 'Buy Now Â· Schedule Demo' },
     };
 
-    // Generate week themes for each archetype in parallel — each uses a different
+    // Generate week themes for each archetype in parallel â€” each uses a different
     // diversity_seed AND a different phase progression, ensuring distinct results.
     const [setA, setB, setC] = await Promise.all(
       STRATEGY_ARCHETYPES.map((arch, i) =>
@@ -265,7 +266,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const uniquePhases = Array.from(new Set(phaseLabels));
 
       const title = generateThemeFromTopic(titleTopic, undefined, arch.titleAngle);
-      const angle = uniquePhases.slice(0, 4).join(' → ') || cleanTopic;
+      const angle = uniquePhases.slice(0, 4).join(' â†’ ') || cleanTopic;
       const summary = arch.summary(titleTopic, weeks);
 
       return {
@@ -273,7 +274,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         title,
         angle,
         summary,
-        contentFocus: themes.map((t) => t.title).join(' → '),
+        contentFocus: themes.map((t) => t.title).join(' â†’ '),
         phaseLabels: uniquePhases.slice(0, 4),
         weekThemes: themes,
         contentFormat: typeof contentFormat === 'string' ? contentFormat : 'post',
@@ -296,3 +297,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

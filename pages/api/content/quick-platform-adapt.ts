@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { processContent, PLATFORM_CHAR_LIMITS } from '@/backend/services/unifiedContentProcessor';
@@ -31,7 +32,7 @@ function buildCompanyContextBlock(profile: CompanyProfile | null): CompanyContex
       if (!value || typeof value !== 'string') return null;
       const trimmed = value.trim();
       if (!trimmed) return null;
-      const compact = trimmed.length > 280 ? `${trimmed.slice(0, 277).trimEnd()}…` : trimmed;
+      const compact = trimmed.length > 280 ? `${trimmed.slice(0, 277).trimEnd()}â€¦` : trimmed;
       return `- ${label}: ${compact}`;
     })
     .filter((line): line is string => line !== null);
@@ -70,11 +71,11 @@ type PlatformSpec = {
   rules: string[];
   /** Native word-count range that reads well on this surface. */
   wordRange: [number, number];
-  /** Emoji guidance — count + role. Empty string disables emoji use. */
+  /** Emoji guidance â€” count + role. Empty string disables emoji use. */
   emoji: string;
   /** Hard platform conventions the model must respect. */
   conventions: string[];
-  /** Native CTA style for this platform — what the close should look like. */
+  /** Native CTA style for this platform â€” what the close should look like. */
   cta: string;
 };
 
@@ -84,7 +85,7 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       'Lead with one sharp point or contrarian insight.',
       'Use short punchy lines, not paragraphs.',
       'Make it feel native to fast-moving social conversation.',
-      'End cleanly with a complete sentence — never trailing filler or ellipses.',
+      'End cleanly with a complete sentence â€” never trailing filler or ellipses.',
     ],
     wordRange: [25, 45],
     emoji: 'Use 1-2 emojis, placed where they punctuate a beat (not decorating every line).',
@@ -93,14 +94,14 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       'No more than 2 hashtags; place them at the very end on their own line.',
       'Do not @-mention people unless the source explicitly references them.',
     ],
-    cta: 'End with a single low-friction CTA that fits inside the 280-char budget — examples: "Learn more →", "Try it free", "DM us", "Reply with X", or a one-line question that invites a quote-tweet. If a website is supplied in the company context, you may close with a short "Learn more: <url>" instead.',
+    cta: 'End with a single low-friction CTA that fits inside the 280-char budget â€” examples: "Learn more â†’", "Try it free", "DM us", "Reply with X", or a one-line question that invites a quote-tweet. If a website is supplied in the company context, you may close with a short "Learn more: <url>" instead.',
   },
   twitter: {
     rules: [
       'Lead with one sharp point or contrarian insight.',
       'Use short punchy lines, not paragraphs.',
       'Make it feel native to fast-moving social conversation.',
-      'End cleanly with a complete sentence — never trailing filler or ellipses.',
+      'End cleanly with a complete sentence â€” never trailing filler or ellipses.',
     ],
     wordRange: [25, 45],
     emoji: 'Use 1-2 emojis, placed where they punctuate a beat (not decorating every line).',
@@ -109,7 +110,7 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       'No more than 2 hashtags; place them at the very end on their own line.',
       'Do not @-mention people unless the source explicitly references them.',
     ],
-    cta: 'End with a single low-friction CTA that fits inside the 280-char budget — examples: "Learn more →", "Try it free", "DM us", "Reply with X", or a one-line question that invites a quote-tweet. If a website is supplied in the company context, you may close with a short "Learn more: <url>" instead.',
+    cta: 'End with a single low-friction CTA that fits inside the 280-char budget â€” examples: "Learn more â†’", "Try it free", "DM us", "Reply with X", or a one-line question that invites a quote-tweet. If a website is supplied in the company context, you may close with a short "Learn more: <url>" instead.',
   },
   instagram: {
     rules: [
@@ -123,9 +124,9 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
     conventions: [
       '2,200-character cap; the first 125 characters must work as a standalone preview.',
       '5-10 hashtags, grouped together at the end of the caption.',
-      'Avoid clickable links inline (Instagram does not hyperlink them) — point to bio or stickers instead.',
+      'Avoid clickable links inline (Instagram does not hyperlink them) â€” point to bio or stickers instead.',
     ],
-    cta: 'End with an action prompt that respects Instagram\'s no-clickable-link reality — e.g. "Link in bio 👆", "Save this for later", "Tag a friend who needs this", "Tap the sticker", or a comment-prompt question. Place it on its own line just before the hashtag block.',
+    cta: 'End with an action prompt that respects Instagram\'s no-clickable-link reality â€” e.g. "Link in bio ðŸ‘†", "Save this for later", "Tag a friend who needs this", "Tap the sticker", or a comment-prompt question. Place it on its own line just before the hashtag block.',
   },
   facebook: {
     rules: [
@@ -135,13 +136,13 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       'Close with a natural engagement prompt or next step.',
     ],
     wordRange: [60, 110],
-    emoji: 'Use 2-4 emojis to add warmth — never more than one per line.',
+    emoji: 'Use 2-4 emojis to add warmth â€” never more than one per line.',
     conventions: [
       'Keep paragraphs to 1-2 sentences; long blocks get truncated by the "See more" fold.',
       '0-3 hashtags; Facebook hashtag culture is light.',
       'Inline links work; place the link at the end so the hook reads first.',
     ],
-    cta: 'End with a warm next-step CTA — e.g. "See how it works →", "Comment below if this resonates", "Send us a message", or, when the company context supplies a website, a "Read more: <url>" line at the very end.',
+    cta: 'End with a warm next-step CTA â€” e.g. "See how it works â†’", "Comment below if this resonates", "Send us a message", or, when the company context supplies a website, a "Read more: <url>" line at the very end.',
   },
   tiktok: {
     rules: [
@@ -151,13 +152,13 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       'End with a low-friction CTA.',
     ],
     wordRange: [15, 35],
-    emoji: 'Use 2-3 emojis — one on the hook line, the rest sparingly.',
+    emoji: 'Use 2-3 emojis â€” one on the hook line, the rest sparingly.',
     conventions: [
       '2,200-character cap, but the strongest TikTok captions stay under 150.',
       '3-5 hashtags including 1-2 broad trend tags and 1-2 niche tags.',
-      'No inline URLs — TikTok strips most link preview behavior.',
+      'No inline URLs â€” TikTok strips most link preview behavior.',
     ],
-    cta: 'End with a creator-native action prompt — e.g. "Follow for part 2", "Save this", "Try it and duet me", "Comment YES if you want the breakdown". Do not use formal "Learn more" corporate phrasing here. No links.',
+    cta: 'End with a creator-native action prompt â€” e.g. "Follow for part 2", "Save this", "Try it and duet me", "Comment YES if you want the breakdown". Do not use formal "Learn more" corporate phrasing here. No links.',
   },
   pinterest: {
     rules: [
@@ -167,13 +168,13 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       'Keep it concise and keyword-friendly.',
     ],
     wordRange: [20, 40],
-    emoji: 'Use 1-2 emojis only — Pinterest copy is search-driven, not decorative.',
+    emoji: 'Use 1-2 emojis only â€” Pinterest copy is search-driven, not decorative.',
     conventions: [
       '500-character cap; first 100 characters carry the searchable terms.',
       'Treat it as a Pin description: keyword-rich, no hashtag spam (2-3 max).',
-      'Avoid emoji-only openings — start with a real word search engines can index.',
+      'Avoid emoji-only openings â€” start with a real word search engines can index.',
     ],
-    cta: 'End with a benefit-led CTA aligned to a search action — e.g. "Save for later", "Click to read the full guide", "Get the free checklist". When the company context supplies a website, close with "→ <url>".',
+    cta: 'End with a benefit-led CTA aligned to a search action â€” e.g. "Save for later", "Click to read the full guide", "Get the free checklist". When the company context supplies a website, close with "â†’ <url>".',
   },
   reddit: {
     rules: [
@@ -186,10 +187,10 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
     emoji: '',
     conventions: [
       'No hashtags; Reddit does not use them.',
-      'No emojis or formal corporate tone — the post should feel written by a real user.',
+      'No emojis or formal corporate tone â€” the post should feel written by a real user.',
       'Lead with substance; do not link out without contributing the insight in the body.',
     ],
-    cta: 'Do NOT use a marketing CTA on Reddit — Reddit users punish promotional closes. Replace the CTA with a genuine discussion prompt, e.g. "Curious how others have handled this — what worked for you?" or "Has anyone here tried a different angle?".',
+    cta: 'Do NOT use a marketing CTA on Reddit â€” Reddit users punish promotional closes. Replace the CTA with a genuine discussion prompt, e.g. "Curious how others have handled this â€” what worked for you?" or "Has anyone here tried a different angle?".',
   },
   linkedin: {
     rules: [
@@ -199,13 +200,13 @@ const PLATFORM_SPECS: Record<string, PlatformSpec> = {
       'End with a clear CTA, takeaway, or reflective question.',
     ],
     wordRange: [120, 220],
-    emoji: 'Use 0-2 emojis sparingly. Professional tone — emojis should reinforce a point, not decorate.',
+    emoji: 'Use 0-2 emojis sparingly. Professional tone â€” emojis should reinforce a point, not decorate.',
     conventions: [
       '3,000-character cap; the first 210 characters appear above the "see more" fold.',
       '3-5 hashtags placed at the end on their own line.',
       'Avoid all-caps shouting and excessive line breaks between every sentence.',
     ],
-    cta: 'End with a credible professional CTA — e.g. a reflective question to invite comments, "DM me to compare notes", "Curious how your team handles this — drop a thought below", or, when the company context supplies a website, a single "Learn more: <url>" line. Place the CTA on its own line just before the hashtag block.',
+    cta: 'End with a credible professional CTA â€” e.g. a reflective question to invite comments, "DM me to compare notes", "Curious how your team handles this â€” drop a thought below", or, when the company context supplies a website, a single "Learn more: <url>" line. Place the CTA on its own line just before the hashtag block.',
   },
 };
 
@@ -223,7 +224,7 @@ function buildPlatformRewritePrompt(
     'Keep the meaning intact but change pacing, tone, and structure for the channel.',
   ];
 
-  // Tight-format platforms (X, TikTok, Pinterest) — treat the source as RESEARCH
+  // Tight-format platforms (X, TikTok, Pinterest) â€” treat the source as RESEARCH
   // material and write a brand-new native post from the strongest single idea.
   // Without this clause the model defaults to mechanical compression of the
   // long-form input, which produces a shrunken LinkedIn post instead of a
@@ -238,11 +239,11 @@ function buildPlatformRewritePrompt(
   const lines: Array<string | null> = [
     `You are a senior ${platformLabel} social copywriter.`,
     isTightFormat
-      ? `The text below is SOURCE MATERIAL — a long-form piece written for a different channel. Do NOT shorten it line-by-line. Treat it as research: extract the single sharpest insight, contrarian take, or surprising data point, and write a brand-new ${platformLabel} ${contentType} around that idea.`
+      ? `The text below is SOURCE MATERIAL â€” a long-form piece written for a different channel. Do NOT shorten it line-by-line. Treat it as research: extract the single sharpest insight, contrarian take, or surprising data point, and write a brand-new ${platformLabel} ${contentType} around that idea.`
       : `Repurpose the source ${contentType} into a native ${platformLabel} ${contentType}.`,
     'Do not summarize mechanically and do not simply shorten the original.',
     isTightFormat
-      ? `The output should read like it was written natively for ${platformLabel} from the start — not like a compressed version of the source. Lead with the hook in the first line; do not echo the source's opening sentence.`
+      ? `The output should read like it was written natively for ${platformLabel} from the start â€” not like a compressed version of the source. Lead with the hook in the first line; do not echo the source's opening sentence.`
       : 'Rewrite it so it feels created for that platform from the start.',
     companyContext ? '' : null,
     companyContext ? '## Company / product / market context' : null,
@@ -254,10 +255,10 @@ function buildPlatformRewritePrompt(
     companyContext ? '### Naming rules (HARD CONSTRAINT)' : null,
     companyContext ? allowedNamesClause : null,
     companyContext
-      ? 'DO NOT invent, coin, or extrapolate any new product names, sub-brands, feature names, suite names, or platform names — even if they sound plausible or rhyme with the real name. Examples of forbidden behavior: turning "Omnivyra" into "Omniverse", "OmniSuite", "Omnivyra AI"; turning "Acme" into "Acme Pro" or "AcmeX". If a name is not explicitly listed, do not write it.'
+      ? 'DO NOT invent, coin, or extrapolate any new product names, sub-brands, feature names, suite names, or platform names â€” even if they sound plausible or rhyme with the real name. Examples of forbidden behavior: turning "Omnivyra" into "Omniverse", "OmniSuite", "Omnivyra AI"; turning "Acme" into "Acme Pro" or "AcmeX". If a name is not explicitly listed, do not write it.'
       : null,
     companyContext
-      ? 'If the source material describes a capability, refer to it using ONLY a listed product name plus a plain-English description of the capability — never a made-up product label.'
+      ? 'If the source material describes a capability, refer to it using ONLY a listed product name plus a plain-English description of the capability â€” never a made-up product label.'
       : null,
     companyContext
       ? 'Do not invent statistics, customer names, integration partners, awards, or quotes. Only use facts present in the source material or this context block.'
@@ -268,7 +269,7 @@ function buildPlatformRewritePrompt(
     '',
     `## ${platformLabel} length target`,
     spec
-      ? `Aim for ${spec.wordRange[0]}-${spec.wordRange[1]} words — that is the natural reading length on ${platformLabel}. Going shorter feels thin; going longer feels awkward and gets truncated by the platform UI.`
+      ? `Aim for ${spec.wordRange[0]}-${spec.wordRange[1]} words â€” that is the natural reading length on ${platformLabel}. Going shorter feels thin; going longer feels awkward and gets truncated by the platform UI.`
       : 'Aim for a length that reads naturally on this platform.',
     targetLimit ? `Hard character cap: ${targetLimit} characters before hashtags. Aim ~10% under that cap.` : null,
     '',
@@ -280,12 +281,12 @@ function buildPlatformRewritePrompt(
     '',
     `## Call to action`,
     spec?.cta ?? 'Close the post with a single, low-friction next step appropriate to the platform.',
-    'The CTA must feel native to the platform and to the brand voice in the company context — never bolt on a generic "Click here" or "Learn more" if it does not match the surrounding tone.',
-    'EXACTLY ONE CTA per post. Do not stack a conversational CTA ("Let\'s chat", "Curious how your team handles this?") together with a link CTA ("Read more: <url>", "Learn more →") — pick one. Two CTAs make the post feel pushy and dilute the action you want.',
+    'The CTA must feel native to the platform and to the brand voice in the company context â€” never bolt on a generic "Click here" or "Learn more" if it does not match the surrounding tone.',
+    'EXACTLY ONE CTA per post. Do not stack a conversational CTA ("Let\'s chat", "Curious how your team handles this?") together with a link CTA ("Read more: <url>", "Learn more â†’") â€” pick one. Two CTAs make the post feel pushy and dilute the action you want.',
     'If a website URL is supplied in the company context and the platform allows links, prefer the link CTA over a conversational one ONLY when there is a clear destination worth driving to; otherwise keep the conversational one and omit the URL entirely.',
     '',
     'Preserve the core business meaning and strongest insight from the source.',
-    'Return plain text only — no markdown, no labels, no preamble.',
+    'Return plain text only â€” no markdown, no labels, no preamble.',
   ];
 
   return lines.filter((line): line is string => line !== null).join('\n');
@@ -342,7 +343,7 @@ function requiresTrueRewrite(platform: string) {
   return ['x', 'twitter', 'instagram', 'facebook', 'tiktok', 'pinterest', 'reddit'].includes(platform);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -455,3 +456,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

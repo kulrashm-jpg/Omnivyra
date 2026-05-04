@@ -10,7 +10,8 @@
  * Thresholds: loaded from decision_engine_config (admin-tunable).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getDecisionConfig } from './configService';
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { logDecision } from './autonomousDecisionLogger';

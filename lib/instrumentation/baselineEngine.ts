@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Dynamic baseline engine.
  *
  * Replaces hard-coded thresholds with learned baselines derived from
@@ -10,8 +10,8 @@
  *   - p95    : 95th percentile (used for latency baselines)
  *
  * Thresholds are then:
- *   warn     = mean × WARN_MULTIPLIER     (1.5×)
- *   critical = mean × CRITICAL_MULTIPLIER (2.5×)
+ *   warn     = mean Ã— WARN_MULTIPLIER     (1.5Ã—)
+ *   critical = mean Ã— CRITICAL_MULTIPLIER (2.5Ã—)
  *
  * When fewer than MIN_SAMPLES are available, baselines are null and callers
  * fall back to static thresholds.
@@ -19,23 +19,23 @@
 
 import type { SlimSnapshot } from './metricsPersistence';
 
-// ── Constants ──────────────────────────────────────────────────────────────────
+// â”€â”€ Constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const WARN_MULTIPLIER     = 1.5;
 export const CRITICAL_MULTIPLIER = 2.5;
 
-/** Minimum snapshots before baselines are considered reliable (≈ 1 hour). */
+/** Minimum snapshots before baselines are considered reliable (â‰ˆ 1 hour). */
 const MIN_SAMPLES = 12;
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface Baseline {
   mean:    number;
   stddev:  number;
   p95:     number;
   samples: number;
-  warnAt:     number;   // mean × WARN_MULTIPLIER
-  criticalAt: number;   // mean × CRITICAL_MULTIPLIER
+  warnAt:     number;   // mean Ã— WARN_MULTIPLIER
+  criticalAt: number;   // mean Ã— CRITICAL_MULTIPLIER
 }
 
 export interface SystemBaselines {
@@ -57,7 +57,7 @@ export interface AnomalyCheck {
   level:    'warn' | 'critical';
 }
 
-// ── Statistics helpers ─────────────────────────────────────────────────────────
+// â”€â”€ Statistics helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildBaseline(values: number[]): Baseline | null {
   const clean = values.filter(v => Number.isFinite(v));
@@ -85,7 +85,7 @@ function pluck(snapshots: SlimSnapshot[], fn: (s: SlimSnapshot) => number | null
   return snapshots.map(fn).filter((v): v is number => v != null && Number.isFinite(v));
 }
 
-// ── Main export ────────────────────────────────────────────────────────────────
+// â”€â”€ Main export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Compute baselines from a historical snapshot window.
@@ -98,8 +98,8 @@ export function computeBaselines(snapshots: SlimSnapshot[]): SystemBaselines {
     apiCpm:           buildBaseline(pluck(snapshots, s => s.api?.cpm)),
     apiErrorRate:     buildBaseline(pluck(snapshots, s => s.api?.errRate)),
     apiP95Ms:         buildBaseline(pluck(snapshots, s => s.api?.p95Ms)),
+    authVerifyPerMin: buildBaseline([]),
     externalCalls:    buildBaseline(pluck(snapshots, s => s.external?.totalCalls)),
-    authVerifyPerMin: buildBaseline([]), // firebase removed — Supabase auth has no equivalent metric
     monthlyCost:      buildBaseline(pluck(snapshots, s => s.cost?.total)),
   };
 }

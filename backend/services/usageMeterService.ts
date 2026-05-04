@@ -3,7 +3,8 @@
  * Not billing. Not enforcement. Does not block execution or depend on ledger success.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { evaluateUsageThresholds } from './usageAlertService';
 
 function currentYearMonth(): { year: number; month: number } {

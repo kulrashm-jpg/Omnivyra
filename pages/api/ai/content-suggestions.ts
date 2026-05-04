@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * AI Content Improvement Suggestions
  * Analyzes a content brief and returns actionable improvement suggestions
@@ -7,7 +8,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -138,7 +139,7 @@ function buildFallbackSuggestions(ctx: {
       title: 'Add a clear call-to-action',
       description: 'Content with a specific CTA drives 3x more conversions.',
       before: ctx.cta || 'No CTA defined',
-      after: platform === 'linkedin' ? 'Comment your biggest challenge with this topic 👇' : 'Save this for later and share with your team',
+      after: platform === 'linkedin' ? 'Comment your biggest challenge with this topic ðŸ‘‡' : 'Save this for later and share with your team',
       impact: 'high',
       applyField: 'cta',
     });
@@ -187,3 +188,8 @@ function buildFallbackSuggestions(ctx: {
     quickWins: ['Add hook', 'Clarify CTA', 'Add hashtags'],
   };
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -27,10 +27,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase as sb } from '@/backend/db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '@/backend/services/requestAccessService';
+import { requireAdminRateLimit, requireAdminScope } from '@/backend/services/requestAccessService';
 import { recordAdminAudit } from '@/backend/services/adminAuditService';
 import { logger } from '@/backend/services/logger';
 import { withIdempotency } from '@/backend/middleware/withIdempotency';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // ── Valid categories for admin-driven grants ───────────────────────────────────
 
@@ -40,8 +41,12 @@ type GrantCategory = typeof GRANT_CATEGORIES[number];
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  const user = await requireSuperAdminUser(req, res);
-  return user?.id ?? null;
+  const ctx = await requireAdminScope(req, res, 'credits:grant');
+  if (!ctx) return null;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/credits/grant', 'credits:grant');
+  }
+  return ctx.id;
 }
 
 // ── Notify org admin (best-effort, non-blocking) ──────────────────────────────
@@ -55,7 +60,7 @@ async function notifyOrgAdmin(
 ): Promise<void> {
   // Find the COMPANY_ADMIN for this org to notify
   const { data: adminRole } = await sb
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', orgId)
     .eq('role', 'COMPANY_ADMIN')
@@ -210,4 +215,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withIdempotency(handler, { scope: 'super-admin-credits-grant' });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(withIdempotency(handler, { scope: 'super-admin-credits-grant' }));

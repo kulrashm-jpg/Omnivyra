@@ -12,7 +12,8 @@
  * NEXT request is gated.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createAlert } from './alertService';
 import { logger } from './logger';
 

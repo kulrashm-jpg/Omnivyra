@@ -1,4 +1,5 @@
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import { createHash } from 'crypto';
 import { getCreatorSystemPrompt } from '../../prompts/creatorContentPromptsV1';

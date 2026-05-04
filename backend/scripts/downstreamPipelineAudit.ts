@@ -4,7 +4,8 @@
  * Counts: intelligence_signals → signal_clusters → signal_intelligence → strategic_themes → company_intelligence_signals
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function count(table: string): Promise<number> {
   const { count: n, error } = await supabase

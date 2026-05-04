@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type AutoRule = {
   id: string;
@@ -39,7 +39,7 @@ export default function CommunityAiAutoRules() {
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/community-ai/auto-rules?tenant_id=${encodeURIComponent(
           tenantId
         )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -72,7 +72,7 @@ export default function CommunityAiAutoRules() {
       return;
     }
     try {
-      const response = await fetchWithAuth('/api/community-ai/auto-rules', {
+      const response = await apiFetch('/api/community-ai/auto-rules', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -98,7 +98,7 @@ export default function CommunityAiAutoRules() {
   const handleToggle = async (rule: AutoRule) => {
     if (!tenantId) return;
     try {
-      const response = await fetchWithAuth('/api/community-ai/auto-rules', {
+      const response = await apiFetch('/api/community-ai/auto-rules', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -121,7 +121,7 @@ export default function CommunityAiAutoRules() {
   const handleDelete = async (ruleId: string) => {
     if (!tenantId) return;
     try {
-      const response = await fetchWithAuth('/api/community-ai/auto-rules', {
+      const response = await apiFetch('/api/community-ai/auto-rules', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

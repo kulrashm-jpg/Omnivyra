@@ -1,14 +1,16 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isSuperAdmin } from '../../../backend/services/rbacService';
 import { getScheduledPost } from '../../../backend/db/queries';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
 import { publishNow } from '../../../backend/services/publishNowService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -59,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: 'Forbidden: you do not own this post' });
     }
 
-    // Resolve social_account_id — fall back to user's connected account for this platform
+    // Resolve social_account_id â€” fall back to user's connected account for this platform
     let socialAccountId: string | null = post.social_account_id || null;
     if (!socialAccountId) {
       const platformNorm = post.platform === 'x' ? 'twitter' : post.platform;
@@ -76,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!socialAccountId) {
       return res.status(422).json({
-        error: `No connected ${post.platform} account found. Please connect your account in Settings → Social Accounts.`,
+        error: `No connected ${post.platform} account found. Please connect your account in Settings â†’ Social Accounts.`,
       });
     }
 
@@ -135,3 +137,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: error?.message || 'Failed to publish scheduled post' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

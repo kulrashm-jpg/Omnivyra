@@ -11,16 +11,16 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getAllGlobalConfigs,
   updateGlobalConfig,
   getRecentExecutionLogs,
 } from '../../../../backend/services/intelligenceConfigService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 
 async function resolveUser(req: NextApiRequest): Promise<string> {
   const { getSupabaseUserFromRequest } = await import('../../../../backend/services/supabaseAuthService');
@@ -28,12 +28,14 @@ async function resolveUser(req: NextApiRequest): Promise<string> {
   return user?.email ?? user?.id ?? 'super_admin';
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'intelligence:scheduler-config');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/intelligence/scheduler-config', 'intelligence:scheduler-config');
   }
 
-  // ── GET — full global config listing ──────────────────────────────────────
+  // â”€â”€ GET â€” full global config listing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     try {
       const [configs, logs] = await Promise.all([
@@ -58,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── PUT — update a single global config ───────────────────────────────────
+  // â”€â”€ PUT â€” update a single global config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'PUT') {
     const body = req.body ?? {};
     const { job_type, ...rest } = body as Record<string, unknown>;
@@ -91,3 +93,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

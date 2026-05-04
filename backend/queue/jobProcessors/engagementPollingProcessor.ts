@@ -6,7 +6,8 @@
  * No evaluation/action/notification changes — ingestion only.
  */
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { ingestComments } from '../../services/engagementIngestionService';
 
 const BATCH_SIZE = 50;

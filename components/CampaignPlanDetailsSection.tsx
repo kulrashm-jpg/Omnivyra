@@ -22,7 +22,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import CampaignAIChat from '../components/CampaignAIChat';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import AIContentIntegration from '../components/AIContentIntegration';
 import ContentCreationPanel from '../components/ContentCreationPanel';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';

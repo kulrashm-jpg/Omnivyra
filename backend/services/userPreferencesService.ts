@@ -6,7 +6,8 @@
  * - command_center_pinned: whether to show/hide command center
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export interface UserPreferences {
   id: string;

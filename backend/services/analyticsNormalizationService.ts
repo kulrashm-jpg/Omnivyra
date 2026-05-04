@@ -8,7 +8,8 @@
  * All writes use upsert to be idempotent — safe to re-run.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { RawPostMetrics, AccountGrowthMetrics } from './platformAnalyticsIngester';
 
 // ─────────────────────────────────────────────────────────────────────────────

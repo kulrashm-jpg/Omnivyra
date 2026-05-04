@@ -339,7 +339,7 @@ async function main() {
   }
 
   // 3. Start cron (skipped when ENABLE_AUTO_WORKERS=0)
-  const enableCron = enableWorkers;
+  const enableCron = false;
   if (enableCron) {
     console.log('3️⃣  Starting cron scheduler...');
     const cron = spawnProcess(

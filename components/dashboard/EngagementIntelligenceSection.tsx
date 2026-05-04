@@ -53,12 +53,12 @@ type InsightsResponse = {
 
 type EngagementIntelligenceSectionProps = {
   companyId: string;
-  fetchWithAuth: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  apiFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
 };
 
 export default function EngagementIntelligenceSection({
   companyId,
-  fetchWithAuth,
+  apiFetch,
 }: EngagementIntelligenceSectionProps) {
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [kpis, setKpis] = useState<ContentKpiResponse | null>(null);
@@ -75,10 +75,10 @@ export default function EngagementIntelligenceSection({
     try {
       const tenantQuery = `tenant_id=${encodeURIComponent(companyId)}&organization_id=${encodeURIComponent(companyId)}`;
       const [dashboardRes, kpiRes, trendsRes, insightsRes] = await Promise.all([
-        fetchWithAuth(`/api/community-ai/dashboard?${tenantQuery}`),
-        fetchWithAuth(`/api/community-ai/content-kpis?${tenantQuery}`),
-        fetchWithAuth(`/api/community-ai/trends?${tenantQuery}`),
-        fetchWithAuth(`/api/community-ai/insights?${tenantQuery}`),
+        apiFetch(`/api/community-ai/dashboard?${tenantQuery}`),
+        apiFetch(`/api/community-ai/content-kpis?${tenantQuery}`),
+        apiFetch(`/api/community-ai/trends?${tenantQuery}`),
+        apiFetch(`/api/community-ai/insights?${tenantQuery}`),
       ]);
 
       const failed = [dashboardRes, kpiRes, trendsRes, insightsRes].find((res) => !res.ok);
@@ -101,7 +101,7 @@ export default function EngagementIntelligenceSection({
     } finally {
       setLoading(false);
     }
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
     void load();

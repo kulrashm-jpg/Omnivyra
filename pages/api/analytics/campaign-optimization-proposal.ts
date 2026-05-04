@@ -1,12 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/analytics/campaign-optimization-proposal
- * Stage 36 — Structured optimization proposal. Advisory only. RBAC: COMPANY_ADMIN+
+ * Stage 36 â€” Structured optimization proposal. Advisory only. RBAC: COMPANY_ADMIN+
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { listDecisionObjects } from '../../../backend/services/decisionObjectService';
 import { runInApiReadContext } from '../../../backend/services/intelligenceExecutionContext';
 import type { OptimizationProposal } from '../../../backend/types/CampaignOptimization';
@@ -90,4 +92,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ proposal });
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]));
+

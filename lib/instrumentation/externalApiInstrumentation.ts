@@ -1,14 +1,14 @@
-/**
+﻿/**
  * External API call instrumentation.
  *
  * This module only owns the service-detection table, counters, and snapshot
  * logic.  Fetch interception is handled exclusively by fetchInstrumentation.ts,
  * which calls recordExternalCall() here.  There is NO globalThis.fetch patch
- * in this file — the previous design caused double-counting when supabase and
+ * in this file â€” the previous design caused double-counting when supabase and
  * external modules both wrapped fetch independently.
  */
 
-// ── Service detection table ───────────────────────────────────────────────────
+// â”€â”€ Service detection table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const SERVICE_PREFIXES: Array<{ prefix: string; name: string }> = [
   { prefix: 'https://api.openai.com',                  name: 'openai'      },
@@ -19,14 +19,11 @@ const SERVICE_PREFIXES: Array<{ prefix: string; name: string }> = [
   { prefix: 'https://graph.facebook.com',              name: 'facebook'    },
   { prefix: 'https://graph.instagram.com',             name: 'instagram'   },
   { prefix: 'https://www.googleapis.com',              name: 'google'      },
-  { prefix: 'https://identitytoolkit.googleapis.com',  name: 'firebase'    },
-  { prefix: 'https://securetoken.googleapis.com',      name: 'firebase'    },
-  { prefix: 'https://fcm.googleapis.com',              name: 'firebase'    },
   { prefix: 'https://hooks.slack.com',                 name: 'slack'       },
   { prefix: 'https://api.stripe.com',                  name: 'stripe'      },
   // Outbound transactional email goes through the Supabase Edge Function
   // `send-transactional-email`, which calls SES from inside Supabase's
-  // infrastructure — those calls don't traverse this app's fetch and so
+  // infrastructure â€” those calls don't traverse this app's fetch and so
   // aren't instrumented here. The SES prefix is kept in case the Edge
   // Function is ever inlined back into the Next.js runtime.
   { prefix: 'https://email.amazonaws.com',             name: 'ses'         },
@@ -36,7 +33,7 @@ const SERVICE_PREFIXES: Array<{ prefix: string; name: string }> = [
 
 /**
  * Exported so fetchInstrumentation.ts can use it as `serviceDetector`.
- * Returns null for unrecognised URLs → those calls are not tracked.
+ * Returns null for unrecognised URLs â†’ those calls are not tracked.
  */
 export function detectExternalService(url: string): string | null {
   for (const { prefix, name } of SERVICE_PREFIXES) {
@@ -45,7 +42,7 @@ export function detectExternalService(url: string): string | null {
   return null;
 }
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// â”€â”€ State â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface ServiceStats {
   calls:              number;
@@ -57,7 +54,7 @@ interface ServiceStats {
 
 const serviceMap = new Map<string, ServiceStats>();
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface ExternalServiceMetrics {
   service:            string;
@@ -75,7 +72,7 @@ export interface ExternalApiMetrics {
   topServices:        ExternalServiceMetrics[];
 }
 
-// ── Public recorder (called by fetchInstrumentation.ts) ───────────────────────
+// â”€â”€ Public recorder (called by fetchInstrumentation.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function recordExternalCall(
   service: string,
@@ -97,7 +94,7 @@ export function recordExternalCall(
   s.estimatedTokensOut += tokensOut;
 }
 
-// ── Snapshot ──────────────────────────────────────────────────────────────────
+// â”€â”€ Snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function avgLatency(s: ServiceStats): number | null {
   if (s.latencies.length === 0) return null;

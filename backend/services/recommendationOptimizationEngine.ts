@@ -4,7 +4,8 @@
  * Safeguards: confidence_range [0,1], ranking_score_range [0,1]
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export const CONFIDENCE_MIN = 0;
 export const CONFIDENCE_MAX = 1;

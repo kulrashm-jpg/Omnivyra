@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/credits/estimate
@@ -10,7 +11,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { estimateCampaignCost, type CampaignCostPlan } from '../../../backend/services/campaignCostEstimator';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
   try {
@@ -24,3 +25,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

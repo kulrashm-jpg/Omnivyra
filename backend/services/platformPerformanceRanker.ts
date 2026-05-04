@@ -5,7 +5,8 @@
  * Used by: decision engine, next campaign planning.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type PlatformRank = {
   platform: string;

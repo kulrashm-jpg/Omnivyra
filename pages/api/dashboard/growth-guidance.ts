@@ -1,8 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 import { generateGrowthGuidanceAlertsWithActions } from '../../../backend/services/growthGuidanceService';
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
@@ -41,3 +42,8 @@ export default async function handler(
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

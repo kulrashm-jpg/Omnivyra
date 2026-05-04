@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/track/hot?account_id=xxx
  *
  * Real-time hot content detection.
- * Returns slugs where views in the last hour are ≥2× the average hourly rate.
+ * Returns slugs where views in the last hour are â‰¥2Ã— the average hourly rate.
  *
  * Response:
  * {
@@ -12,7 +13,8 @@
  * }
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export interface HotSlug {
@@ -22,10 +24,10 @@ export interface HotSlug {
   spike_ratio:     number;  // views_last_hour / avg_hourly
 }
 
-const SPIKE_THRESHOLD = 2.0;   // 2× the hourly average = "hot"
+const SPIKE_THRESHOLD = 2.0;   // 2Ã— the hourly average = "hot"
 const MIN_VIEWS       = 3;     // ignore single accidental hits
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const accountId = typeof req.query.account_id === 'string' ? req.query.account_id.trim() : null;
@@ -79,3 +81,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ hot, has_trending: hot.length > 0 });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

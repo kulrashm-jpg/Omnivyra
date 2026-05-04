@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/engagement/opportunity-radar
@@ -13,12 +14,13 @@ import {
   type OpportunityRadarItem,
 } from '../../../backend/services/opportunityRadarService';
 import { generateCampaignSuggestions } from '../../../backend/services/plannerOpportunityAdvisor';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const MAX_WINDOW_HOURS = 168; // 7 days
 const DEFAULT_WINDOW_HOURS = 24;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -101,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (err) {
     const message = (err as Error)?.message ?? 'Failed to fetch opportunity radar';
     console.error('[engagement/opportunity-radar]', err);
-    // Return empty response instead of 500 when possible — UI shows "No opportunity insights" instead of error
+    // Return empty response instead of 500 when possible â€” UI shows "No opportunity insights" instead of error
     return res.status(200).json({
       items: [],
       competitor_complaints: 0,
@@ -112,3 +114,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -37,4 +37,4 @@ ENV NODE_ENV=production
 ENV CRON_INTERVAL_SECONDS=60
 
 # Cron has no HTTP server — Railway uses exit-code monitoring instead
-CMD ["node", "dist/backend/scheduler/cron.js"]
+CMD ["node", "-e", "console.log('Cron worker disabled: use Vercel cron routes only')"]

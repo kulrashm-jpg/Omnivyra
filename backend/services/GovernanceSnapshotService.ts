@@ -3,7 +3,8 @@
  * Snapshot and restore governance layer only. No evaluation, scheduler, or state machine changes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 import { GOVERNANCE_POLICY_VERSION, getGovernancePolicyHash } from '../governance/GovernancePolicy';
 import { computeGovernanceEventHash } from '../governance/GovernanceLedger';

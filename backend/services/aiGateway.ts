@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
 import { getCompanyLlmConfig, resolveCompanyApiKey, getActiveProviders, getModelsByProvider } from './llmProviderService';
 import { incrementUsageMeter } from './usageMeterService';

@@ -10,7 +10,8 @@ jest.mock('../../db/supabaseClient', () => ({
 
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
 import { recordGovernanceEvent, recordCampaignCompletedEvent } from '../../services/GovernanceEventService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const CAMPAIGN_ID = 'campaign-auto-123';
 const COMPANY_ID = 'company-auto-456';

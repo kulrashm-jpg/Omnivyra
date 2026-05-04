@@ -1,36 +1,19 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-const requireSuperAdminAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
-    return true;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:campaign-health');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/campaign-health', 'analytics:campaign-health');
+  }
 
   try {
     const { data: campaigns, error: campaignsError } = await supabase
@@ -38,7 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .select('id, company_id, status');
 
     if (campaignsError) {
-      // Table may not exist yet — return empty health rather than 500
+      // Table may not exist yet â€” return empty health rather than 500
       console.warn('[campaign-health] campaigns query failed (table may not be migrated):', campaignsError.message);
       return res.status(200).json({
         total_campaigns: 0,
@@ -55,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .select('id, campaign_id, status, created_at');
 
     if (versionsError) {
-      // Table may not exist yet — continue with empty versions
+      // Table may not exist yet â€” continue with empty versions
       console.warn('[campaign-health] campaign_versions query failed (table may not be migrated):', versionsError.message);
     }
 
@@ -134,3 +117,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: error?.message || 'FAILED_TO_BUILD_CAMPAIGN_HEALTH' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

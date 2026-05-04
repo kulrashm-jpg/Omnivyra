@@ -11,7 +11,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
@@ -346,7 +346,7 @@ export default function BoltCombinedStrategyPage() {
   useEffect(() => {
     if (!companyId) return;
     setSuggestionsLoading(true);
-    fetchWithAuth('/api/planner/suggest-campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId }) })
+    apiFetch('/api/planner/suggest-campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId }) })
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.suggestions) setSuggestions(data.suggestions as Suggestion[]); })
       .catch(() => {})
@@ -447,7 +447,7 @@ export default function BoltCombinedStrategyPage() {
     };
 
     try {
-      const execRes = await fetchWithAuth('/api/bolt/execute', {
+      const execRes = await apiFetch('/api/bolt/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId, sourceStrategicTheme, executionConfig, outcomeView, title: card.title, description: card.summary }),
@@ -472,7 +472,7 @@ export default function BoltCombinedStrategyPage() {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
         if (!mounted) return;
 
-        const progRes = await fetchWithAuth(`/api/bolt/progress?run_id=${encodeURIComponent(runId)}`);
+        const progRes = await apiFetch(`/api/bolt/progress?run_id=${encodeURIComponent(runId)}`);
         if (!progRes.ok) continue;
 
         const prog = await progRes.json().catch(() => ({})) as {

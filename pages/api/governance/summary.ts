@@ -1,14 +1,15 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/governance/summary
- * Governance observability — real-time metrics per company.
+ * Governance observability â€” real-time metrics per company.
  * Stage 10. Read-only.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getGovernanceSummary } from '../../../backend/services/GovernanceMetricsService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -32,3 +33,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -7,16 +7,13 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createClient } from '@supabase/supabase-js';
 import { getDecisionLog } from '@/backend/services/autonomousDecisionLogger';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import type { AutonomousDecisionType } from '@/backend/services/autonomousDecisionLogger';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-
-  const { user } = await getSupabaseUserFromRequest(req);
-  if (!user) return res.status(401).json({ error: 'Invalid token' });
 
   const companyId    = req.query.company_id as string;
   const limit        = Math.min(200, parseInt(req.query.limit as string) || 50);
@@ -25,7 +22,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!companyId) return res.status(400).json({ error: 'company_id required' });
 
+  const ctx = await requireAdminScope(req, res, 'autonomous:decisions', { companyId });
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/autonomous/decisions', 'autonomous:decisions');
+  }
+
   const decisions = await getDecisionLog(companyId, { limit, decision_type: decisionType, campaign_id: campaignId });
 
   return res.status(200).json({ success: true, data: decisions });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -4,7 +4,8 @@
  * Never throws (log only).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { tryAcquireRebuildLock, releaseRebuildLock } from './GovernanceRateLimiter';
 
 export interface GovernanceEventRow {

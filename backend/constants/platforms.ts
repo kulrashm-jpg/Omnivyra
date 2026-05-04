@@ -1,11 +1,10 @@
 /**
  * Canonical platform taxonomy.
  * UI and backend must import this constant to ensure consistency.
- * Aligned with platform_registry table (database/platform_registry.sql).
  */
 export const CANONICAL_PLATFORMS = [
   'linkedin',
-  'twitter',
+  'x',
   'youtube',
   'reddit',
   'facebook',
@@ -33,8 +32,8 @@ export const PLATFORM_LABELS: Record<string, string> = {
 
 /** Normalize a platform string to its canonical lowercase form. */
 const PLATFORM_ALIASES: Record<string, string> = {
-  li: 'linkedin', fb: 'facebook', ig: 'instagram', tw: 'twitter',
-  x: 'twitter', meta: 'facebook', 'twitter/x': 'twitter',
+  li: 'linkedin', fb: 'facebook', ig: 'instagram', tw: 'x',
+  twitter: 'x', meta: 'facebook', 'twitter/x': 'x',
 };
 
 export function normalizePlatform(platform: string | null | undefined): string {

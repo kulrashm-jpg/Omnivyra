@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Enhanced health endpoint - Full resilience observability
@@ -10,7 +11,7 @@
  * 5. Recent alerts (what happened)
  * 6. System health (integration check)
  *
- * 🎯 THIS IS YOUR SINGLE SOURCE OF TRUTH FOR SYSTEM RESILIENCE
+ * ðŸŽ¯ THIS IS YOUR SINGLE SOURCE OF TRUTH FOR SYSTEM RESILIENCE
  *
  * ENDPOINTS:
  * GET /api/health/resilience - Full report
@@ -105,7 +106,7 @@ interface ResilienceReport {
 /**
  * Handler function
  */
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ResilienceReport | Partial<ResilienceReport> | { error: string }>
 ) {
@@ -328,3 +329,8 @@ async function buildResilienceReport(): Promise<ResilienceReport> {
     recommendations,
   };
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

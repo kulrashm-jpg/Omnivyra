@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/track
@@ -9,7 +10,8 @@
  * New in v4: referrer_source, intent_meta stored per event.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const MAX_TIME  = 7200;
 const MAX_BATCH = 20;
@@ -44,7 +46,7 @@ function domainAllowed(origin: string, referer: string, allowed: string, allowSu
   return check(origin) || check(referer);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -103,3 +105,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(204).end();
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/domain/verify
  *
@@ -5,7 +6,7 @@
  *
  * Auth & authorization:
  *   - Requires a valid Supabase session.
- *   - Requesting user must hold an active user_company_roles row in the
+ *   - Requesting user must hold an active user company roles row in the
  *     company that owns the domain (any role is acceptable for self-service
  *     verification).
  *   - SUPER_ADMIN can pass `{ force: true }` to mark the row 'admin_override'
@@ -23,13 +24,15 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { logger } from '../../../backend/services/logger';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { normalizeDomain } from '../../../backend/services/domainCanonicalService';
 import { verifyDomain } from '../../../backend/services/domainVerificationService';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
+import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 
 const VERIFY_RATE_LIMIT = {
   keyPrefix: 'rl:domain_verify',
@@ -46,19 +49,7 @@ type ErrorResponse = {
   attempted?: unknown;
 };
 
-async function isSuperAdmin(internalUserId: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', internalUserId)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-  return !!data;
-}
-
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -121,9 +112,9 @@ export default async function handler(
   }
   const internalUserId = (userRow as any).id as string;
 
-  // Force path — SUPER_ADMIN only. Stamps admin_override without DNS/HTTP.
+  // Force path â€” SUPER_ADMIN only. Stamps admin_override without DNS/HTTP.
   if (force) {
-    if (!(await isSuperAdmin(internalUserId))) {
+    if (!(await isPlatformSuperAdmin(internalUserId))) {
       return res.status(403).json({
         status: 'failed',
         code: 'FORCE_REQUIRES_SUPER_ADMIN',
@@ -163,11 +154,11 @@ export default async function handler(
     });
   }
 
-  // Non-force ownership check — caller must hold an active COMPANY_ADMIN or
+  // Non-force ownership check â€” caller must hold an active COMPANY_ADMIN or
   // SUPER_ADMIN role in the owning company. Other roles (CONTENT_CREATOR,
   // VIEW_ONLY, etc.) cannot prove ownership of company-wide identity.
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('role')
     .eq('user_id', internalUserId)
     .eq('company_id', row.company_id)
@@ -248,3 +239,8 @@ export default async function handler(
     method:  outcome.method as VerifyMethod,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

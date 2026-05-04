@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import axios from 'axios';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { hashKey, safeNumber, todayIsoDate } from './ingestionUtils';
 
 export interface AdsCampaignRow {

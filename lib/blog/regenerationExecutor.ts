@@ -22,7 +22,8 @@
 
 import { newId } from './blockUtils';
 import { runCompletionWithOperation } from '../../backend/services/aiGateway';
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type {
   ContentBlock,
   SummaryBlock,

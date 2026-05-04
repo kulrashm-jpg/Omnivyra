@@ -3,7 +3,8 @@
  * Phase 7: Simulates recommendation impact using historical outcomes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type SimulatedRecommendationImpact = {
   recommendation_id: string | null;

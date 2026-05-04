@@ -3,7 +3,8 @@
  * Routes by insight_source: api (DB aggregation only), llm (per-region LLM), hybrid (both).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generateMarketPulseForRegion, type MarketPulseContextPayload } from './opportunityGenerators';
 import { consolidateMarketPulseResults } from './marketPulseConsolidator';
 import { aggregateMarketPulseFromDb, type AggregatedPulseSignal } from './marketPulseAggregationService';

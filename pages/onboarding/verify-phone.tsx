@@ -1,17 +1,16 @@
-'use client';
+﻿'use client';
 
 /**
  * /onboarding/verify-phone
  *
  * Phone OTP verification for returning users arriving via login magic link.
- * Does NOT grant credits — this is identity verification only.
+ * Does NOT grant credits â€” this is identity verification only.
  *
  * Flow:
- *  1. Require Supabase session (redirect → /login if absent)
+ *  1. Require Supabase session (redirect â†’ /login if absent)
  *  2. Fetch stored phone from /api/auth/get-stored-phone
- *     - null phone → redirect /onboarding/phone (incomplete account)
- *  3. Show masked phone, send Firebase OTP on button press
- *  4. User enters 6-digit code → confirm → redirect /dashboard
+ *     - null phone â†’ redirect /onboarding/phone (incomplete account)
+ *  4. User enters 6-digit code â†’ confirm â†’ redirect /dashboard
  */
 
 import { useState, useEffect, useRef } from 'react';
@@ -35,7 +34,7 @@ export default function VerifyPhonePage() {
 
   const confirmationRef = useRef<any>(null);
 
-  // ── 1. Require Supabase session, then fetch stored phone ─────────────────
+  // â”€â”€ 1. Require Supabase session, then fetch stored phone â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     const init = async () => {
       const { data } = await getSupabaseBrowser().auth.getSession();
@@ -73,7 +72,7 @@ export default function VerifyPhonePage() {
     void init();
   }, [router]);
 
-  // ── 2. Send Supabase OTP ──────────────────────────────────────────────────
+  // â”€â”€ 2. Send Supabase OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function handleSendOtp() {
     setLoading(true);
     setErrorMsg(null);
@@ -89,7 +88,7 @@ export default function VerifyPhonePage() {
     }
   }
 
-  // ── 3. Confirm OTP ────────────────────────────────────────────────────────
+  // â”€â”€ 3. Confirm OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function handleVerifyOtp(e: React.FormEvent) {
     e.preventDefault();
     if (!otp.trim() || otp.length < 6) { setErrorMsg('Enter the 6-digit code.'); return; }
@@ -136,23 +135,23 @@ export default function VerifyPhonePage() {
         <main className="flex flex-1 items-center justify-center px-6 py-12">
           <div className="w-full max-w-md">
 
-            {/* ── Loading ──────────────────────────────────────────────── */}
+            {/* â”€â”€ Loading â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'loading' && (
               <div className="flex flex-col items-center gap-4 text-center animate-fadeIn">
                 <svg className="h-8 w-8 animate-spin text-[#0A66C2]" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                <p className="text-sm text-[#6B7C93]">Loading your account…</p>
+                <p className="text-sm text-[#6B7C93]">Loading your accountâ€¦</p>
               </div>
             )}
 
-            {/* ── Send OTP ─────────────────────────────────────────────── */}
+            {/* â”€â”€ Send OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'send' && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
                   <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-2xl shadow-lg">
-                    📱
+                    ðŸ“±
                   </div>
                   <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
                     One more step
@@ -197,7 +196,7 @@ export default function VerifyPhonePage() {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
-                      Sending…
+                      Sendingâ€¦
                     </span>
                   ) : 'Send verification code'}
                 </button>
@@ -211,19 +210,19 @@ export default function VerifyPhonePage() {
                       </svg>
                     </div>
                     <p className="text-xs leading-relaxed text-[#6B7C93]">
-                      This step confirms it's really you. Your email link verified your identity — now we confirm your phone before granting access.
+                      This step confirms it's really you. Your email link verified your identity â€” now we confirm your phone before granting access.
                     </p>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* ── OTP entry ────────────────────────────────────────────── */}
+            {/* â”€â”€ OTP entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'otp' && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
                   <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#EBF3FD] text-2xl">
-                    🔐
+                    ðŸ”
                   </div>
                   <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
                     Enter the code
@@ -267,7 +266,7 @@ export default function VerifyPhonePage() {
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                         </svg>
-                        Verifying…
+                        Verifyingâ€¦
                       </span>
                     ) : 'Verify & sign in'}
                   </button>
@@ -277,17 +276,17 @@ export default function VerifyPhonePage() {
                     onClick={() => { setStep('send'); setOtp(''); setErrorMsg(null); }}
                     className="w-full text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors"
                   >
-                    ← Resend code
+                    â† Resend code
                   </button>
                 </form>
               </div>
             )}
 
-            {/* ── Error state ──────────────────────────────────────────── */}
+            {/* â”€â”€ Error state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'error' && (
               <div className="animate-fadeIn text-center">
                 <div className="mb-6 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-2xl">
-                  ⚠️
+                  âš ï¸
                 </div>
                 <h2 className="text-xl font-bold text-[#0B1F33]">Something went wrong</h2>
                 <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">{errorMsg}</p>

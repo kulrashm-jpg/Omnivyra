@@ -3,7 +3,8 @@
  * Records operational health metrics for the engagement system.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export async function recordMetric(
   component: string,

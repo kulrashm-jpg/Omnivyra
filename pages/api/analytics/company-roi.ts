@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/analytics/company-roi
- * Stage 34 — Company ROI Overview. Read-only. RBAC: COMPANY_ADMIN+
+ * Stage 34 â€” Company ROI Overview. Read-only. RBAC: COMPANY_ADMIN+
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -29,4 +30,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]));
+

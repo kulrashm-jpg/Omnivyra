@@ -1,10 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireManageConnectors } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
 import { encodeOAuthState } from '../../../../../backend/auth/oauthState';
 import { getBaseUrl } from '../../../../../backend/auth/getBaseUrl';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -57,3 +58,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   return res.redirect(oauthUrl);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

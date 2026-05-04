@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 
 /**
  * POST /api/auth/login
@@ -10,7 +11,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 
 type SuccessResponse = { proceed: true };
@@ -40,7 +42,7 @@ export default async function handler(
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  // ── 1. Check user exists in public.users ──────────────────────────────────
+  // â”€â”€ 1. Check user exists in public.users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: userRow } = await supabase
     .from('users')
     .select('id, is_deleted, has_password')
@@ -72,6 +74,7 @@ export default async function handler(
     });
   }
 
-  // ── 2. Return proceed — frontend calls signInWithPassword() ───────────────
+  // â”€â”€ 2. Return proceed â€” frontend calls signInWithPassword() â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return res.status(200).json({ proceed: true });
 }
+

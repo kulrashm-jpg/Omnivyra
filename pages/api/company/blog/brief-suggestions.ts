@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { getProfile } from '@/backend/services/companyProfileService';
@@ -50,7 +51,7 @@ function resolveSuggestionRange(
 }
 
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { company_id, topic, reason, brief, currentValues, count: rawCount } = req.body ?? {};
@@ -137,3 +138,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json(EMPTY);
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

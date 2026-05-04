@@ -3,7 +3,8 @@
  * End-to-end flow: intent -> policy -> generate -> format -> execute/suggest.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { resolveResponsePolicy } from './responsePolicyEngine';
 import { generateResponse } from './responseGenerationService';
 import { formatForPlatform } from './platformResponseFormatter';

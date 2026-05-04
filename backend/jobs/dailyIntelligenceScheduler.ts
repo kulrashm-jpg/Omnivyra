@@ -4,7 +4,8 @@
  * Reuses existing engines; does not duplicate logic.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getTrendSnapshots } from '../db/campaignVersionStore';
 import { getLatestApprovedCampaignVersion } from '../db/campaignApprovedVersionStore';
 import { getLatestPlatformExecutionPlan } from '../db/platformExecutionStore';

@@ -49,7 +49,8 @@ import {
 } from '../../services/SchedulerLockService';
 import { recordGovernanceEvent } from '../../services/GovernanceEventService';
 import { scheduleStructuredPlan } from '../../services/structuredPlanScheduler';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const CAMPAIGN_ID = 'campaign-lock-123';
 const COMPANY_ID = 'company-lock-456';

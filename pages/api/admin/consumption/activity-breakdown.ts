@@ -4,33 +4,28 @@
  *
  * Returns cost and activity distribution broken down by:
  *  - system_costs   : platform-level LLM/API usage (organization_id IS NULL)
- *  - by_feature_area: cost per product feature (Campaign Builder, Daily Plan, …)
+ *  - by_feature_area: cost per product feature (Campaign Builder, Daily Plan, â€¦)
  *  - by_process_type: cost per internal process
  *  - by_platform    : scheduled-post counts per social platform
- *  - by_platform_content: counts per platform × content_type
+ *  - by_platform_content: counts per platform Ã— content_type
  *
  * Auth: super_admin_session cookie OR Supabase SUPER_ADMIN role
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  } catch { /* deny */ }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const r6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'consumption:activity-breakdown');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/consumption/activity-breakdown', 'consumption:activity-breakdown');
+  }
 
   const now = new Date();
   const year  = req.query.year  ? parseInt(req.query.year  as string, 10) : now.getUTCFullYear();
@@ -39,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const startDate = new Date(Date.UTC(year, month - 1, 1)).toISOString();
   const endDate   = new Date(Date.UTC(year, month,     1)).toISOString();
 
-  // ── 1. System-level costs (no org) ──────────────────────────────────────────
+  // â”€â”€ 1. System-level costs (no org) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: sysEvents } = await supabase
     .from('usage_events')
     .select('source_type, total_tokens, total_cost')
@@ -57,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── 2. Feature-area cost breakdown (org events only) ────────────────────────
+  // â”€â”€ 2. Feature-area cost breakdown (org events only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: featureEvents } = await supabase
     .from('usage_events')
     .select('feature_area, total_tokens, total_cost')
@@ -79,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .map(([feature_area, v]) => ({ feature_area, ...v, total_cost_usd: r6(v.total_cost_usd) }))
     .sort((a, b) => b.total_cost_usd - a.total_cost_usd);
 
-  // ── 3. Process-type breakdown ────────────────────────────────────────────────
+  // â”€â”€ 3. Process-type breakdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: processEvents } = await supabase
     .from('usage_events')
     .select('process_type, total_cost')
@@ -100,7 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .sort((a, b) => b.total_cost_usd - a.total_cost_usd)
     .slice(0, 20);
 
-  // ── 4. Platform × content_type post distribution ─────────────────────────────
+  // â”€â”€ 4. Platform Ã— content_type post distribution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Each scheduled post = one unit of "activity" on that platform/content type.
   const { data: posts } = await supabase
     .from('scheduled_posts')
@@ -144,3 +139,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     by_platform_content,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

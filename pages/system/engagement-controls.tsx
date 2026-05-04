@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { Settings2, RefreshCw, AlertCircle, Check } from 'lucide-react';
+import { apiFetch } from '../../lib/apiFetch';
 
 type EngagementControls = {
   auto_reply_enabled: boolean;
@@ -51,7 +52,7 @@ export default function EngagementControlsPage() {
 
   const fetchCompanies = useCallback(async () => {
     try {
-      const res = await fetch('/api/super-admin/companies', { credentials: 'include' });
+      const res = await apiFetch('/api/super-admin/companies');
       if (!res.ok) {
         if (res.status === 403) throw new Error('Access denied');
         throw new Error(res.statusText);

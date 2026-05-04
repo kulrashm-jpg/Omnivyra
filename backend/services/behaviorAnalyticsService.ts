@@ -11,7 +11,8 @@
  * is authoritative for event-scoped aggregates.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const DEFAULT_WINDOW_DAYS = 30;
 const TOP_PAGES_LIMIT     = 20;

@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
-import { supabase } from '../utils/supabaseClient';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { supabase as browserSupabase } from '../utils/supabaseClient';
+const supabase = browserSupabase;
+import { apiFetch } from '@/lib/apiFetch';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';
 import {
   buildTrendSourceCounts,
@@ -230,7 +231,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
         <section className="flex flex-col lg:flex-row gap-6">
           {selectedCompanyId && (
             <aside className="lg:w-56 shrink-0 order-first">
-              <StrategySignalsWidget companyId={selectedCompanyId} fetchWithAuth={fetchWithAuth} />
+              <StrategySignalsWidget companyId={selectedCompanyId} apiFetch={apiFetch} />
               {selectedCampaignId && (
                 <NextStrategicDirection
                   campaignId={selectedCampaignId}
@@ -244,7 +245,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-3">
             <h2 className="text-xl font-semibold text-gray-900">Recommendation Hub</h2>
             {selectedCompanyId && (
-              <RecommendationStatusWidget companyId={selectedCompanyId} fetchWithAuth={fetchWithAuth} />
+              <RecommendationStatusWidget companyId={selectedCompanyId} apiFetch={apiFetch} />
             )}
           </div>
           <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-3 mb-3">
@@ -285,7 +286,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
                 engineRecommendations={(engineResult?.trends_used as Array<Record<string, unknown>> | undefined) ?? []}
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
-                fetchWithAuth={fetchWithAuth}
+                apiFetch={apiFetch}
                 overrideText={engineOverrides['TREND'] ?? ''}
                 onOverrideChange={(v) => setEngineOverride('TREND', v)}
                 strategicIntents={trendStrategicIntents}
@@ -301,7 +302,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
                 companyId={selectedCompanyId}
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
-                fetchWithAuth={fetchWithAuth}
+                apiFetch={apiFetch}
                 onSwitchTab={setActiveOpportunityTab}
                 overrideText={engineOverrides['LEAD'] ?? ''}
                 onOverrideChange={(v) => setEngineOverride('LEAD', v)}
@@ -317,7 +318,7 @@ export default function RecommendationsContent({ d }: { d: RecState }) {
                 }
                 onPromote={handleOpportunityPromote}
                 onAction={handleOpportunityAction}
-                fetchWithAuth={fetchWithAuth}
+                apiFetch={apiFetch}
                 onSwitchTab={setActiveOpportunityTab}
                 overrideText={engineOverrides['PULSE'] ?? ''}
                 onOverrideChange={(v) => setEngineOverride('PULSE', v)}

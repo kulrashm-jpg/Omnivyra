@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getPlatformConfigs,
   getExternalApiRuntimeSnapshot,
@@ -118,7 +120,7 @@ const parseUsageUserId = (value: string) => {
   return { kind: 'unknown' as const, feature: null, companyId: null, userId: value };
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (req.query?.companyId as string | undefined) ||
     (req.body?.companyId as string | undefined);
@@ -185,7 +187,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             .in('api_source_id', apiIds)
         : { data: [] };
 
-      // Account counts per API (platform-scope only — tenant view doesn't need this)
+      // Account counts per API (platform-scope only â€” tenant view doesn't need this)
       const { data: accountRows } = (platformScopeRequested && !companyId && apiIds.length)
         ? await supabase
             .from('api_provider_accounts')
@@ -492,12 +494,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: validation.message || 'Invalid platform config' });
     }
 
-    // ── Category validation (SuperAdmin paths only — tenant path is forced below) ──
+    // â”€â”€ Category validation (SuperAdmin paths only â€” tenant path is forced below) â”€â”€
     const resolvedCategory: string | null = (() => {
       if (platformScopeRequested && !companyId) {
         // SuperAdmin creating a platform-level API
         if (category && !VALID_API_CATEGORIES.includes(category as any)) {
-          return null; // signals invalid — handled below
+          return null; // signals invalid â€” handled below
         }
         return category || null;
       }
@@ -633,3 +635,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

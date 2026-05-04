@@ -9,7 +9,7 @@ type IntelligenceWorkspaceProps = {
   companyId: string | null;
   activeView: IntelligenceWorkspaceView;
   onViewChange: (view: IntelligenceWorkspaceView) => void;
-  fetchWithAuth: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  apiFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
 };
 
 const WORKSPACE_TABS: Array<{
@@ -36,7 +36,7 @@ export default function IntelligenceWorkspace({
   companyId,
   activeView,
   onViewChange,
-  fetchWithAuth,
+  apiFetch,
 }: IntelligenceWorkspaceProps) {
   const [engineOverrides, setEngineOverrides] = useState<Record<IntelligenceWorkspaceView, string>>({
     'market-pulse': '',
@@ -110,7 +110,7 @@ export default function IntelligenceWorkspace({
           companyId={companyId}
           onPromote={handleOpportunityPromote}
           onAction={handleOpportunityAction}
-          fetchWithAuth={fetchWithAuth}
+          apiFetch={apiFetch}
           overrideText={engineOverrides['market-pulse']}
           onOverrideChange={(value) => setEngineOverride('market-pulse', value)}
         />
@@ -121,7 +121,7 @@ export default function IntelligenceWorkspace({
           companyId={companyId}
           onPromote={handleOpportunityPromote}
           onAction={handleOpportunityAction}
-          fetchWithAuth={fetchWithAuth}
+          apiFetch={apiFetch}
           overrideText={engineOverrides['active-leads']}
           onOverrideChange={(value) => setEngineOverride('active-leads', value)}
         />

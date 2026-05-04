@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { PendingAction } from '../../components/community-ai/types';
 import {
   validateActionAgainstPlaybook,

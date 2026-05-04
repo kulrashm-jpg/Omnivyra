@@ -1,7 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('post_events')
@@ -17,3 +19,8 @@ export default async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

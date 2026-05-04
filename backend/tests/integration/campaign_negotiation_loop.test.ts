@@ -21,7 +21,8 @@ import { createMockRes } from '../utils/setupApiTest';
 import negotiateDurationHandler from '../../../pages/api/campaigns/negotiate-duration';
 import { recordGovernanceEvent } from '../../services/GovernanceEventService';
 import { runPrePlanning } from '../../services/CampaignPrePlanningService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const COMPANY_ID = 'company-123';
 const CAMPAIGN_ID = 'campaign-456';

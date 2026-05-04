@@ -13,7 +13,8 @@
  *   Callers use this stack to decide what to run next and in what order.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

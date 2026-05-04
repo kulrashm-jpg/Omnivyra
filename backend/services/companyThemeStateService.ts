@@ -7,7 +7,8 @@
  * DISMISSED = user dismissed
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generateThemeKey } from './themeKeyService';
 
 function normalizeThemeTopic(topic: string): string {

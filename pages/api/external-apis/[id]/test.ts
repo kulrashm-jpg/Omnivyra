@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { buildExternalApiRequest, executeExternalApiRequest } from '../../../../backend/services/externalApiService';
 import { buildCacheKey, getCacheStats, getCachedResponse, setCachedResponse } from '../../../../backend/services/redisExternalApiCache';
 import { updateApiHealth } from '../../../../backend/services/externalApiHealthService';
@@ -180,7 +182,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default async function wrappedHandler(req: NextApiRequest, res: NextApiResponse) {
+async function wrappedHandler(req: NextApiRequest, res: NextApiResponse) {
   const platformScopeRequested = req.query?.scope === 'platform';
   const companyId =
     (req.query?.companyId as string | undefined) ||
@@ -192,3 +194,8 @@ export default async function wrappedHandler(req: NextApiRequest, res: NextApiRe
   }
   return withRBAC(handler, [Role.SUPER_ADMIN])(req, res);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(wrappedHandler);
+

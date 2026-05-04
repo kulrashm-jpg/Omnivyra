@@ -7,7 +7,7 @@
 
 import React, { useState } from 'react';
 import { BarChart3, Lock, RefreshCw, Loader2, Camera, ShieldCheck, Sparkles } from 'lucide-react';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface GovernanceCampaignAnalyticsData {
   campaignId: string;
@@ -160,7 +160,7 @@ export function GovernanceAnalyticsCard({
     if (!companyId || !isSuperAdmin) return;
     setSnapshotLoading(true);
     try {
-      const res = await fetchWithAuth('/api/governance/snapshot', {
+      const res = await apiFetch('/api/governance/snapshot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId, snapshotType: 'FULL' }),
@@ -178,7 +178,7 @@ export function GovernanceAnalyticsCard({
     setVerifyLoading(true);
     setVerifyResult(null);
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/governance/verify-snapshot?snapshotId=${encodeURIComponent(latestSnapshotId)}`
       );
       if (res.ok) {
@@ -197,7 +197,7 @@ export function GovernanceAnalyticsCard({
     setSimulateLoading(true);
     setSimulateResult(null);
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/governance/simulate-policy?campaignId=${encodeURIComponent(campaignId)}&companyId=${encodeURIComponent(companyId)}&policyVersion=${encodeURIComponent(analytics.currentPolicyVersion)}`
       );
       if (res.ok) {

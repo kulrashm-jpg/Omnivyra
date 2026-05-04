@@ -8,7 +8,8 @@
  * preserved for forward compatibility with any future refresh source.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const X_PLATFORM_ALIASES = ['x', 'twitter'];
 

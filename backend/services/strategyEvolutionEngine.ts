@@ -13,7 +13,8 @@
  * Changes are logged to `strategy_evolution_log` for audit and rollback.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { rankPlatformsByPerformance } from './platformPerformanceRanker';
 import { evaluateMarketPosition } from './marketPositioningEngine';
 import { getEffectiveLearnings } from './learningDecayService';

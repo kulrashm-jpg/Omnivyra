@@ -18,4 +18,24 @@ afterAll(async () => {
     const { stopInstrumentation } = await import('../../lib/redis/instrumentation');
     stopInstrumentation();
   } catch { /* not imported in this test suite */ }
+
+  try {
+    const { closeConnections } = await import('../queue/bullmqClient');
+    await closeConnections();
+  } catch { /* not imported in this test suite */ }
+
+  try {
+    const { closeIntelligencePollingQueue } = await import('../queue/intelligencePollingQueue');
+    await closeIntelligencePollingQueue();
+  } catch { /* not imported in this test suite */ }
+
+  try {
+    const { closeIdempotencyService } = await import('../jobs/idempotencyService');
+    await closeIdempotencyService();
+  } catch { /* not imported in this test suite */ }
+
+  try {
+    const { closeJobLockService } = await import('../jobs/lockService');
+    await closeJobLockService();
+  } catch { /* not imported in this test suite */ }
 });

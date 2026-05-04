@@ -5,7 +5,8 @@
  * Rate-limited per platform.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkRateLimit } from '../utils/rateLimiter';
 
 export type SignalType =

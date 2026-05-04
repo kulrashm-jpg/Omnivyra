@@ -1,15 +1,17 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Public endpoint — no auth required.
+ * Public endpoint â€” no auth required.
  * Returns all published blog posts for a company (for embedding a blog feed).
  * CORS enabled so external sites can fetch the feed.
  *
  * Response: { blogs: BlogListing[] }
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -57,3 +59,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

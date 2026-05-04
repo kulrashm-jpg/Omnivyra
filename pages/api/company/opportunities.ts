@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/company/opportunities
  * Fetches trend signals, engagement health, strategic insights, inbox signals
@@ -51,4 +52,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALLOWED_ROLES);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, ALLOWED_ROLES));
+

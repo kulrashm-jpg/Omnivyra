@@ -16,7 +16,8 @@
  *     add a row in users with this id later if we want FK enforcement.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 
 /**

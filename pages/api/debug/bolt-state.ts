@@ -1,14 +1,16 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/debug/bolt-state?companyId=<id>
  *
- * Diagnostic endpoint — shows what daily_content_plans and scheduled_posts
+ * Diagnostic endpoint â€” shows what daily_content_plans and scheduled_posts
  * actually contain for the most recent BOLT campaign.
  * Remove this file after debugging.
  */
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = typeof req.query.companyId === 'string' ? req.query.companyId.trim() : '';
   if (!companyId) return res.status(400).json({ error: 'companyId required' });
 
@@ -89,3 +91,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     posts: postSummary,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

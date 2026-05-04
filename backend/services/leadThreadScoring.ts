@@ -3,7 +3,8 @@
  * Computes thread-level lead score from signals, question intent, and depth.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLeadThreadRecomputeQueue } from '../queue/bullmqClient';
 
 const DEBOUNCE_SECONDS = 5;

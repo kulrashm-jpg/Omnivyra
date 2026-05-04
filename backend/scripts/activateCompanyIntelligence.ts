@@ -8,7 +8,8 @@
  * 4. Outputs verification report
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { distributeSignalsToCompanies } from '../services/companySignalDistributionService';
 
 const DEFAULT_TOPICS = ['AI', 'marketing automation', 'SaaS tools'];

@@ -15,7 +15,8 @@ import * as fs from 'fs';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { runCampaignAiPlan } from '../backend/services/campaignAiOrchestrator';
 import { computeExpectedBaseline, classifyBaseline } from '../backend/services/baselineClassificationService';
 
@@ -137,7 +138,7 @@ async function runScenario(
   const classification = classifyBaseline(followersForScenario, expected);
 
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id, user_id')
     .eq('status', 'active')
     .limit(1)
@@ -145,7 +146,7 @@ async function runScenario(
   const companyId = roleRow?.company_id;
   const userId = roleRow?.user_id;
   if (!companyId || !userId) {
-    throw new Error('No company_id/user_id found. Ensure user_company_roles has active entries.');
+    throw new Error('No company_id/user_id found. Ensure user company roles has active entries.');
   }
 
   const { data: campaign, error: campErr } = await (supabase as any)

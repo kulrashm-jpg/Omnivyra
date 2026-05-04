@@ -13,7 +13,8 @@
 import type { Job } from 'bullmq';
 import { updateRecipientDelivery } from '../../services/whatsappBroadcastService';
 import { handleTemplateStatusWebhook } from '../../services/whatsappTemplateService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export interface WaWebhookJob {
   payload: any; // raw parsed Meta webhook body

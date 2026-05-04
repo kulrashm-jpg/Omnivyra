@@ -1,21 +1,23 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/track/analytics?account_id=xxx&days=30
  *
  * Returns aggregated blog performance metrics with:
  *   - Before/after comparison (current 7d vs previous 7d)
- *   - Content scores per page (0–100)
- *   - Prioritized insights (top 3 by impact × confidence)
+ *   - Content scores per page (0â€“100)
+ *   - Prioritized insights (top 3 by impact Ã— confidence)
  *   - Cold start state when no data exists
  *
  * Prefers blog_analytics_daily for historical data (faster at scale).
  * Falls back to raw blog_analytics if daily table is empty.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-// ── Public types (used by BlogAnalyticsPanel) ──────────────────────────────
+// â”€â”€ Public types (used by BlogAnalyticsPanel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface BlogInsight {
   type:      'warning' | 'success' | 'tip';
@@ -29,7 +31,7 @@ export interface PageStats {
   views:        number;
   avg_time:     number;
   avg_scroll:   number;
-  content_score: number;  // 0–100
+  content_score: number;  // 0â€“100
 }
 
 export interface PeriodDelta {
@@ -38,7 +40,7 @@ export interface PeriodDelta {
   scroll_delta: number | null;
 }
 
-// ── Content score ──────────────────────────────────────────────────────────
+// â”€â”€ Content score â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // weights: scroll 40%, time 30%, views 30% (views normalised vs max in set)
 
 function contentScore(views: number, avgScroll: number, avgTime: number, maxViews: number): number {
@@ -48,7 +50,7 @@ function contentScore(views: number, avgScroll: number, avgTime: number, maxView
   return Math.round(nViews * 30 + nScroll * 40 + nTime * 30);
 }
 
-// ── Insight engine (prioritised) ───────────────────────────────────────────
+// â”€â”€ Insight engine (prioritised) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface ScoredInsight extends BlogInsight { _score: number; }
 
@@ -65,8 +67,8 @@ function deriveInsights(
     type:    BlogInsight['type'],
     message: string,
     action:  string | undefined,
-    impact:  number,  // 1–10
-    confidence: number, // 1–10
+    impact:  number,  // 1â€“10
+    confidence: number, // 1â€“10
   ) => candidates.push({ type, message, action, _score: impact * confidence });
 
   // Cold start
@@ -75,35 +77,35 @@ function deriveInsights(
     return [{ type: 'tip', message: candidates[0].message }];
   }
 
-  // Low scroll — weak intro
+  // Low scroll â€” weak intro
   if (avgScroll < 30 && totalViews >= 10) {
     add('warning', 'Readers aren\'t scrolling past the intro.', 'Strengthen your opening paragraph or move the best insight higher.', 9, 8);
   }
 
-  // Fast bounce — low engagement
+  // Fast bounce â€” low engagement
   if (avgTime < 20 && totalViews >= 5) {
     add('warning', 'Visitors leave within 20 seconds on average.', 'Add a compelling hook in the first 100 words. Check page load speed.', 8, 7);
   }
 
-  // High traffic + low scroll — readability issue
+  // High traffic + low scroll â€” readability issue
   if (totalViews > 50 && avgScroll < 25) {
     add('warning', `High traffic (${totalViews} views) but low scroll depth (${avgScroll}%).`, 'Improve readability: shorter paragraphs, subheadings, pull quotes.', 7, 9);
   }
 
-  // High engagement — campaign opportunity
+  // High engagement â€” campaign opportunity
   if (avgScroll > 75 && avgTime > 60) {
-    add('success', 'High engagement — readers are reading in full.', 'Turn this blog into a LinkedIn campaign or Twitter thread.', 9, 9);
+    add('success', 'High engagement â€” readers are reading in full.', 'Turn this blog into a LinkedIn campaign or Twitter thread.', 9, 9);
   }
 
   // Star page
   const star = topPages.find((p) => p.content_score >= 70);
   if (star) {
-    add('success', `"${star.slug}" is your best-performing page (score ${star.content_score}/100).`, 'Repurpose it — LinkedIn posts, email digest, or short-form video hooks.', 8, 8);
+    add('success', `"${star.slug}" is your best-performing page (score ${star.content_score}/100).`, 'Repurpose it â€” LinkedIn posts, email digest, or short-form video hooks.', 8, 8);
   }
 
   // Positive trend
   if (delta.views_delta !== null && delta.views_delta >= 20) {
-    add('success', `Views up ${delta.views_delta}% vs the previous 7 days.`, 'Momentum is strong — publish more content in this topic area.', 7, 9);
+    add('success', `Views up ${delta.views_delta}% vs the previous 7 days.`, 'Momentum is strong â€” publish more content in this topic area.', 7, 9);
   }
 
   // Negative trend
@@ -113,7 +115,7 @@ function deriveInsights(
 
   // Scroll improving
   if (delta.scroll_delta !== null && delta.scroll_delta >= 15) {
-    add('success', `Scroll depth improved +${delta.scroll_delta}% — content is more engaging.`, undefined, 6, 8);
+    add('success', `Scroll depth improved +${delta.scroll_delta}% â€” content is more engaging.`, undefined, 6, 8);
   }
 
   if (candidates.length === 0) {
@@ -126,7 +128,7 @@ function deriveInsights(
     .map(({ _score, ...rest }) => rest);
 }
 
-// ── Aggregation helpers ────────────────────────────────────────────────────
+// â”€â”€ Aggregation helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface RawRow { url_slug: string; time_on_page: number; scroll_depth: number }
 
@@ -162,9 +164,9 @@ function pctChange(cur: number, prev: number): number | null {
   return Math.round(((cur - prev) / prev) * 100);
 }
 
-// ── Handler ────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const accountId = typeof req.query.account_id === 'string' ? req.query.account_id.trim() : null;
@@ -181,7 +183,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const cur7Start  = new Date(now - 7 * 86_400_000).toISOString();
   const prev7Start = new Date(now - 14 * 86_400_000).toISOString();
 
-  // ── Try pre-aggregated daily table first ──────────────────────────────
+  // â”€â”€ Try pre-aggregated daily table first â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: dailyRows } = await supabase
     .from('blog_analytics_daily')
     .select('url_slug, views, avg_time, avg_scroll, sessions, date')
@@ -221,7 +223,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     totalViews = agg.totalViews; avgTime = agg.avgTime; avgScroll = agg.avgScroll; rawPages = agg.pages;
   }
 
-  // ── Before/After (always from raw) ────────────────────────────────────
+  // â”€â”€ Before/After (always from raw) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [curPv, curLv, prevPv, prevLv] = await Promise.all([
     supabase.from('blog_analytics').select('url_slug').eq('account_id', accountId).eq('event_type', 'pageview').gte('created_at', cur7Start),
     supabase.from('blog_analytics').select('url_slug, time_on_page, scroll_depth').eq('account_id', accountId).eq('event_type', 'pageleave').gte('created_at', cur7Start),
@@ -238,14 +240,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     scroll_delta: pctChange(cur.avgScroll,  prev.avgScroll),
   };
 
-  // ── Content scores ────────────────────────────────────────────────────
+  // â”€â”€ Content scores â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const maxViews  = Math.max(1, ...rawPages.map((p) => p.views));
   const topPages: PageStats[] = rawPages.map((p) => ({
     ...p,
     content_score: contentScore(p.views, p.avg_scroll, p.avg_time, maxViews),
   }));
 
-  // ── Insights ──────────────────────────────────────────────────────────
+  // â”€â”€ Insights â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const insights = deriveInsights(totalViews, avgTime, avgScroll, topPages, delta);
 
   return res.status(200).json({
@@ -259,3 +261,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     cold_start:   totalViews < 5,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

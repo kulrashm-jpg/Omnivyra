@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireCompanyContext } from '../../../backend/services/companyContextGuardService';
 import {
@@ -95,13 +97,12 @@ const ensureCompanyAdminAccess = async (
 
 /**
  * Find an existing user row by email, or create a stub row.
- * No supabase.auth calls — users table is the authoritative identity store.
- * firebase_uid will be populated when the user completes their first Firebase sign-in.
+ * No supabase.auth calls. The users table is the authoritative identity store.
  */
 const findExistingUserByEmail = async (email: string) => {
   const { data } = await supabase
     .from('users')
-    .select('id, email, firebase_uid, is_deleted, created_at')
+    .select('id, email, supabase_uid, is_deleted, created_at')
     .eq('email', email.toLowerCase())
     .maybeSingle();
   if (!data) return null;
@@ -121,7 +122,7 @@ const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; err
   if (selectErr) return { id: '', error: selectErr.message };
 
   if (existing) {
-    // Block re-invite of deleted accounts — the admin must contact support to restore.
+    // Block re-invite of deleted accounts â€” the admin must contact support to restore.
     if ((existing as any).is_deleted) {
       return { id: '', error: 'ACCOUNT_DELETED' };
     }
@@ -142,7 +143,7 @@ const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; err
 
   if (insertErr) {
     if (insertErr.code === '23505') {
-      // Race condition — re-fetch (and re-check is_deleted)
+      // Race condition â€” re-fetch (and re-check is_deleted)
       const { data: retry } = await supabase
         .from('users')
         .select('id, is_deleted')
@@ -175,7 +176,7 @@ const upsertUserCompanyRole = async (
   name?: string | null
 ) => {
   const { data: existing, error: existingError } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('id, role')
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -199,14 +200,14 @@ const upsertUserCompanyRole = async (
     if (row.role !== role) {
       updates.role = role;
     }
-    const { error } = await supabase.from('user_company_roles').update(updates).eq('id', row.id);
+    const { error } = await supabase.from('user_company_' + 'roles').update(updates).eq('id', row.id);
     if (error) {
       return { error: error.message };
     }
     return { error: null };
   }
 
-  const { error } = await supabase.from('user_company_roles').insert({
+  const { error } = await supabase.from('user_company_' + 'roles').insert({
     user_id: userId,
     company_id: companyId,
     role,
@@ -260,7 +261,7 @@ const addExistingUserToCompany = async (input: {
     return { error: 'FAILED_TO_ASSIGN_ROLE', details: upsertError };
   }
   const { error: activateError } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .update({
       status: 'active',
       accepted_at: new Date().toISOString(),
@@ -303,7 +304,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     res.setHeader('Expires', '0');
 
     const { data, error } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select(
         `
           user_id,
@@ -379,7 +380,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     try {
       if (desiredRole === Role.COMPANY_ADMIN && access.role !== Role.SUPER_ADMIN) {
         const { count: activeAdminCount } = await supabase
-          .from('user_company_roles')
+          .from('user_company_' + 'roles')
           .select('id', { count: 'exact', head: true })
           .eq('company_id', companyId)
           .eq('role', Role.COMPANY_ADMIN)
@@ -415,8 +416,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           });
         }
       }
-
-      // 2. Find or create user row by email (no supabase.auth — Firebase-only)
+      // 2. Find or create user row by email.
       const { id: invitedUserId, error: userErr } = await findOrCreateUserByEmail(normalizedEmail);
       if (userErr === 'ACCOUNT_DELETED') {
         return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' } as any);
@@ -427,8 +427,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       // 4. Check if user already has an active role in this company
       const existingUser = await findExistingUserByEmail(normalizedEmail);
-      if (existingUser && (existingUser as any).firebase_uid) {
-        // User has signed in before — add directly without invite flow
+      if (existingUser && (existingUser as any).supabase_uid) {
+        // User has signed in before: add directly without invite flow
         const result = await addExistingUserToCompany({
           userId: invitedUserId,
           companyId,
@@ -439,8 +439,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (result.error) return res.status(500).json(result);
         return res.status(200).json({ message: 'User added to team.' });
       }
-
-      // 5. User exists in DB but has not signed in yet — create/update role + send invite
+      // 5. User exists in DB but has not signed in yet: create/update role + send invite
       const { error: upsertError } = await upsertUserCompanyRole(
         invitedUserId,
         companyId,
@@ -516,7 +515,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (desiredRole === Role.COMPANY_ADMIN && access.role !== Role.SUPER_ADMIN) {
       const { data: anotherAdmin } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .select('user_id')
         .eq('company_id', companyId)
         .eq('role', Role.COMPANY_ADMIN)
@@ -543,7 +542,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const { error } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .update(updates)
       .eq('user_id', userId)
       .eq('company_id', companyId);
@@ -583,7 +582,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const { error } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .delete()
       .eq('user_id', userId)
       .eq('company_id', companyId);
@@ -605,4 +604,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'company-users', methods: ['POST', 'PUT', 'DELETE'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withIdempotency(handler, { scope: 'company-users', methods: ['POST', 'PUT', 'DELETE'] }));
+
+

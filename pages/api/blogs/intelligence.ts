@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/blogs/intelligence
  *
@@ -26,7 +27,7 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { runCompanyBlogIntelligence } from '../../../lib/blog/companyBlogIntelligenceService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { company_id } = req.body ?? {};
@@ -35,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'company_id required' });
   }
 
-  // ── Auth ───────────────────────────────────────────────────────────────────
+  // â”€â”€ Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
@@ -46,8 +47,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   if (!roleGate) return;
 
-  // ── Intelligence ───────────────────────────────────────────────────────────
+  // â”€â”€ Intelligence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const result = await runCompanyBlogIntelligence(company_id);
 
   return res.status(200).json(result);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

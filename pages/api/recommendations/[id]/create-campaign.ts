@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getUserRole,
   hasPermission,
@@ -158,7 +160,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     const resolvedBlogType = source_blog_type === 'company' ? 'company' : 'public';
 
-    // ── Blog source integrity validation ────────────────────────────────────
+    // â”€â”€ Blog source integrity validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (source_blog_id) {
       const blogTable = resolvedBlogType === 'company' ? 'blogs' : 'public_blogs';
       const { data: blogRow, error: blogErr } = await supabase
@@ -208,11 +210,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       campaign_snapshot: {
         campaign,
         source_recommendation_id: recommendation.id,
-        // Campaign Assist context — null when user skipped the panel
+        // Campaign Assist context â€” null when user skipped the panel
         ...(blog_context    != null ? { blog_context }    : {}),
         ...(insight_context != null ? { insight_context } : {}),
         ...(topic_context   != null ? { topic_context }   : {}),
-        // Source blog reference — which blog anchored this campaign
+        // Source blog reference â€” which blog anchored this campaign
         ...(source_blog_id ? { source_blog: { id: String(source_blog_id), type: resolvedBlogType } } : {}),
       },
       status: 'draft',
@@ -308,4 +310,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default handler;
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

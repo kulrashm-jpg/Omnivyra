@@ -3,39 +3,41 @@
  * GET /api/admin/intelligence/company-health
  *
  * Query modes:
- *   ?company_id=<uuid>   — single company score
- *   ?all=true            — all companies ranked by score (uses company_profiles table)
- *   ?all=true&limit=50   — paginated (default limit 20, max 100)
+ *   ?company_id=<uuid>   â€” single company score
+ *   ?all=true            â€” all companies ranked by score (uses company_profiles table)
+ *   ?all=true&limit=50   â€” paginated (default limit 20, max 100)
  *
  * Auth: super_admin_session cookie
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import {
   computeCompanyHealthScore,
   computeAllCompanyHealthScores,
 } from '../../../../backend/services/intelligenceHealthService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
+  const ctx = await requireAdminScope(req, res, 'intelligence:company-health');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/intelligence/company-health', 'intelligence:company-health');
+  }
+
   try {
-    // ── Single company ──────────────────────────────────────────────────────
+    // â”€â”€ Single company â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const companyId = typeof req.query.company_id === 'string' ? req.query.company_id.trim() : null;
     if (companyId) {
       const score = await computeCompanyHealthScore(companyId);
       return res.status(200).json(score);
     }
 
-    // ── All companies ───────────────────────────────────────────────────────
+    // â”€â”€ All companies â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (req.query.all === 'true') {
       const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
 
@@ -70,3 +72,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to compute health scores' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

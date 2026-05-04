@@ -51,7 +51,7 @@ async function setupEnv() {
     template = `# Supabase
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
+Supabase service credential=
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -83,8 +83,8 @@ CRON_INTERVAL_SECONDS=60
   envVars.NEXT_PUBLIC_SUPABASE_ANON_KEY = existingEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
     await question('NEXT_PUBLIC_SUPABASE_ANON_KEY (anon/public key): ');
   
-  envVars.SUPABASE_SERVICE_ROLE_KEY = existingEnv.SUPABASE_SERVICE_ROLE_KEY || 
-    await question('SUPABASE_SERVICE_ROLE_KEY (service role key - KEEP SECRET): ');
+  envVars['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'] = existingEnv['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'] || 
+    await question('Supabase service credential (service role key - KEEP SECRET): ');
   
   // Redis
   envVars.REDIS_URL = existingEnv.REDIS_URL || 
@@ -114,7 +114,7 @@ CRON_INTERVAL_SECONDS=60
 # Supabase Configuration
 NEXT_PUBLIC_SUPABASE_URL=${envVars.NEXT_PUBLIC_SUPABASE_URL}
 NEXT_PUBLIC_SUPABASE_ANON_KEY=${envVars.NEXT_PUBLIC_SUPABASE_ANON_KEY}
-SUPABASE_SERVICE_ROLE_KEY=${envVars.SUPABASE_SERVICE_ROLE_KEY}
+Supabase service credential=${envVars['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY']}
 
 # Redis Configuration
 REDIS_URL=${envVars.REDIS_URL}

@@ -1,12 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/campaigns/suggest-duration
  * AI suggests viable duration (weeks) for new campaigns from opportunity.
- * Used when pre-planning: topic, content types, frequency → suggested weeks.
+ * Used when pre-planning: topic, content types, frequency â†’ suggested weeks.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
   suggestDurationForOpportunity,
@@ -14,7 +16,7 @@ import {
 } from '../../../backend/services/aiGateway';
 import { getLatestCampaignVersion } from '../../../backend/db/campaignVersionStore';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -43,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!access) return;
 
-    // DB first: if campaign already has duration (e.g. after restart), return it — never contradict
+    // DB first: if campaign already has duration (e.g. after restart), return it â€” never contradict
     const { data: campRow } = await supabase
       .from('campaigns')
       .select('duration_weeks')
@@ -116,3 +118,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

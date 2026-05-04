@@ -1,28 +1,27 @@
-/**
- * Infrastructure cost estimation engine — v2.
+﻿/**
+ * Infrastructure cost estimation engine â€” v2.
  *
  * Changes from v1:
- *  - Free-tier handling: cost = 0 when usage ≤ free allowance
+ *  - Free-tier handling: cost = 0 when usage â‰¤ free allowance
  *  - Tiered pricing: correct per-unit rates at each tier boundary
  *  - topCostDrivers: ranked list of (service, reason, impact) for explainability
  *  - estimationQuality: per-service flag when counters have no data
  *
  * All costs are ESTIMATES.  Rate cards are based on published pricing as of
- * 2026-Q1.  Mark values [est] in the UI — never present as exact invoices.
+ * 2026-Q1.  Mark values [est] in the UI â€” never present as exact invoices.
  *
  * Pricing sources:
- *   Upstash Redis  — upstash.com/pricing (Pay-as-you-go)
- *   Supabase       — supabase.com/pricing (Pro plan)
- *   Vercel         — vercel.com/pricing (Pro plan)
- *   Firebase       — firebase.google.com/pricing (Blaze plan)
- *   Railway        — railway.app/pricing (Hobby plan)
- *   OpenAI         — openai.com/pricing
- *   Anthropic      — anthropic.com/pricing
+ *   Upstash Redis  â€” upstash.com/pricing (Pay-as-you-go)
+ *   Supabase       â€” supabase.com/pricing (Pro plan)
+ *   Vercel         â€” vercel.com/pricing (Pro plan)
+ *   Railway        â€” railway.app/pricing (Hobby plan)
+ *   OpenAI         â€” openai.com/pricing
+ *   Anthropic      â€” anthropic.com/pricing
  */
 
 import type { SystemMetrics } from './systemMetrics';
 
-// ── Rate cards ────────────────────────────────────────────────────────────────
+// â”€â”€ Rate cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const RATES = {
   upstash: {
@@ -41,7 +40,7 @@ const RATES = {
     extraStoragePerGB: 0.021,
     freeBandwidthGB:   50,
     extraBandwidthPerGB: 0.09,
-    // Free tier (if on free plan) reference — not used for cost, just for notes
+    // Free tier (if on free plan) reference â€” not used for cost, just for notes
     freePlanStorageGB: 0.5,
   },
   vercel: {
@@ -51,13 +50,6 @@ const RATES = {
     extraInvocationsPerM: 0.60,      // per 1M beyond included
     includedBandwidthGB:  1_000,
     extraBandwidthPerGB:  0.15,
-  },
-  firebase: {
-    // Blaze plan — free tier applies
-    freeMauPerMonth:    50_000,
-    extraPer1000Mau:    0.0055,
-    freeFunctionCalls:  2_000_000,   // per month
-    functionCallsPerM:  0.40,
   },
   railway: {
     hobbyCredit:           5,        // $5/month included
@@ -86,7 +78,7 @@ const RATES = {
   },
 } as const;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface CostDriver {
   service: string;
@@ -113,7 +105,7 @@ export interface CostEstimate {
   warnings:             string[];
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Return cost for usage above a free tier, 0 if within free tier. */
 function aboveFreeTier(usage: number, freeAllowance: number, unitCost: number): number {
@@ -126,13 +118,13 @@ function toMonthly(perMin: number): number {
   return perMin * 60 * 24 * 30;
 }
 
-// ── Per-service estimators ────────────────────────────────────────────────────
+// â”€â”€ Per-service estimators â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function estimateRedis(redis: SystemMetrics['redis']): ServiceCost {
   const notes: string[] = [];
   const breakdown: Record<string, number> = {};
 
-  // ── Storage cost (based on INFO memory, injected into redis.storageBytesUsed) ──
+  // â”€â”€ Storage cost (based on INFO memory, injected into redis.storageBytesUsed) â”€â”€
   const storageBytesUsed = redis?.storageBytesUsed ?? 0;
   const storageUsedMB    = storageBytesUsed / (1024 * 1024);
   const storageUsedGB    = storageUsedMB / 1024;
@@ -145,10 +137,10 @@ function estimateRedis(redis: SystemMetrics['redis']): ServiceCost {
 
   if (storageUsedMB > 0) {
     if (storageCost === 0) {
-      notes.push(`Storage: ${storageUsedMB.toFixed(1)} MB used · within 256 MB free tier`);
+      notes.push(`Storage: ${storageUsedMB.toFixed(1)} MB used Â· within 256 MB free tier`);
     } else {
       const billableMB = Math.max(0, storageUsedMB - RATES.upstash.freeStorageMB);
-      notes.push(`Storage: ${storageUsedMB.toFixed(1)} MB used · ${billableMB.toFixed(0)} MB billed at $0.25/GB`);
+      notes.push(`Storage: ${storageUsedMB.toFixed(1)} MB used Â· ${billableMB.toFixed(0)} MB billed at $0.25/GB`);
     }
   }
 
@@ -161,7 +153,7 @@ function estimateRedis(redis: SystemMetrics['redis']): ServiceCost {
     return { service: 'Upstash Redis', estimatedMonthly: storageCost, breakdown, notes, hasData: storageCost > 0 };
   }
 
-  // ── Ops cost ──────────────────────────────────────────────────────────────
+  // â”€â”€ Ops cost â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const windowMs  = Math.max(
     1_000,
     new Date(redis.windowEnd).getTime() - new Date(redis.windowStart).getTime(),
@@ -173,7 +165,7 @@ function estimateRedis(redis: SystemMetrics['redis']): ServiceCost {
   breakdown['ops']   = opsCost;
 
   if (opsCost === 0) {
-    notes.push(`Ops: ~${Math.round(monthlyOps / 1_000)}K/month · within ${Math.round(monthlyFree / 1_000)}K free tier`);
+    notes.push(`Ops: ~${Math.round(monthlyOps / 1_000)}K/month Â· within ${Math.round(monthlyFree / 1_000)}K free tier`);
   } else {
     const billable = Math.max(0, monthlyOps - monthlyFree);
     notes.push(`Ops: ~${Math.round(billable / 1_000)}K billable ops/month above free tier`);
@@ -197,7 +189,7 @@ function estimateSupabase(supabase: SystemMetrics['supabase']): ServiceCost {
   const notes: string[] = ['Pro plan base ($25/month)'];
   const breakdown: Record<string, number> = { base: RATES.supabase.baseMonthly };
 
-  // Compute cost (constant for Pro — 1 compute instance)
+  // Compute cost (constant for Pro â€” 1 compute instance)
   const computeCost = RATES.supabase.computePerHour * 730;
   breakdown['compute'] = computeCost;
 
@@ -211,10 +203,10 @@ function estimateSupabase(supabase: SystemMetrics['supabase']): ServiceCost {
   }
 
   const hasData = !!(supabase && (supabase.reads > 0 || supabase.writes > 0));
-  if (!hasData) notes.push('No query activity observed — base plan cost only');
+  if (!hasData) notes.push('No query activity observed â€” base plan cost only');
 
   if (supabase && supabase.errors > 0) {
-    notes.push(`${supabase.errors} DB errors observed — check connection pool`);
+    notes.push(`${supabase.errors} DB errors observed â€” check connection pool`);
   }
 
   return {
@@ -249,10 +241,10 @@ function estimateVercel(api: SystemMetrics['api']): ServiceCost {
     }
 
     if (api.errorRate > 0.05) {
-      notes.push(`Error rate ${(api.errorRate * 100).toFixed(1)}% — investigate 4xx/5xx`);
+      notes.push(`Error rate ${(api.errorRate * 100).toFixed(1)}% â€” investigate 4xx/5xx`);
     }
   } else {
-    notes.push('No API call activity observed — base plan cost only');
+    notes.push('No API call activity observed â€” base plan cost only');
   }
 
   return {
@@ -264,7 +256,6 @@ function estimateVercel(api: SystemMetrics['api']): ServiceCost {
   };
 }
 
-// Firebase removed — auth is now Supabase only
 
 function estimateRailway(): ServiceCost {
   const cpuCost = RATES.railway.cpuPerVcpuHour * RATES.railway.assumedVcpu * RATES.railway.hoursPerMonth;
@@ -281,10 +272,10 @@ function estimateRailway(): ServiceCost {
       hobby_credit: -RATES.railway.hobbyCredit,
     },
     notes: [
-      `1 vCPU × 0.5 GB worker, continuous (${RATES.railway.hoursPerMonth} h/month)`,
+      `1 vCPU Ã— 0.5 GB worker, continuous (${RATES.railway.hoursPerMonth} h/month)`,
       `$${RATES.railway.hobbyCredit} Hobby credit applied`,
     ],
-    hasData: true,  // constant — doesn't depend on observed counters
+    hasData: true,  // constant â€” doesn't depend on observed counters
   };
 }
 
@@ -296,7 +287,7 @@ function estimateAiApis(external: SystemMetrics['external']): ServiceCost {
   // OpenAI
   const openai = external?.byService?.['openai'];
   if (openai && openai.calls > 0) {
-    const monthlyCallsEst = toMonthly(openai.calls / 1);  // calls in current window ≈ 1 min
+    const monthlyCallsEst = toMonthly(openai.calls / 1);  // calls in current window â‰ˆ 1 min
     const inputCost  = (monthlyCallsEst * RATES.openai.assumedInputTokens  / 1_000_000) * RATES.openai.gpt4oMini.inputPerM;
     const outputCost = (monthlyCallsEst * RATES.openai.assumedOutputTokens / 1_000_000) * RATES.openai.gpt4oMini.outputPerM;
     breakdown['openai'] = inputCost + outputCost;
@@ -326,7 +317,7 @@ function estimateAiApis(external: SystemMetrics['external']): ServiceCost {
   };
 }
 
-// ── Cost drivers ──────────────────────────────────────────────────────────────
+// â”€â”€ Cost drivers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildCostDrivers(
   metrics: SystemMetrics,
@@ -364,14 +355,14 @@ function buildCostDrivers(
       if (writeRatio > 0.4) {
         drivers.push({
           service: 'Supabase',
-          reason:  `High write ratio (${(writeRatio * 100).toFixed(0)}%) — consider batching`,
+          reason:  `High write ratio (${(writeRatio * 100).toFixed(0)}%) â€” consider batching`,
           impact:  supaCost.estimatedMonthly * 0.3,
         });
       }
       if (metrics.supabase.errors > 0) {
         drivers.push({
           service: 'Supabase',
-          reason:  `${metrics.supabase.errors} query errors — wasted compute cost`,
+          reason:  `${metrics.supabase.errors} query errors â€” wasted compute cost`,
           impact:  supaCost.estimatedMonthly * 0.05,
         });
       }
@@ -395,7 +386,7 @@ function buildCostDrivers(
       if (cachePercent < 10) {
         drivers.push({
           service: 'AI APIs',
-          reason:  'Low ai_cache Redis utilisation — uncached prompts inflate OpenAI cost',
+          reason:  'Low ai_cache Redis utilisation â€” uncached prompts inflate OpenAI cost',
           impact:  (aiCost.breakdown['openai'] ?? 0) * 0.4,
         });
       } else {
@@ -408,12 +399,12 @@ function buildCostDrivers(
     }
   }
 
-  // Vercel driver — p95 latency hint
+  // Vercel driver â€” p95 latency hint
   const vercelCost = breakdown['Vercel'];
   if (vercelCost && metrics.api && metrics.api.p95LatencyMs && metrics.api.p95LatencyMs > 3_000) {
     drivers.push({
       service: 'Vercel',
-      reason:  `High p95 latency (${metrics.api.p95LatencyMs}ms) — cold starts or slow upstream`,
+      reason:  `High p95 latency (${metrics.api.p95LatencyMs}ms) â€” cold starts or slow upstream`,
       impact:  vercelCost.estimatedMonthly * 0.1,
     });
   }
@@ -421,11 +412,11 @@ function buildCostDrivers(
   return drivers.sort((a, b) => b.impact - a.impact).slice(0, 8);
 }
 
-// ── Main estimator ────────────────────────────────────────────────────────────
+// â”€â”€ Main estimator â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function estimateCost(metrics: SystemMetrics): CostEstimate {
   const warnings = [
-    'All values are [est] — not actual invoices.',
+    'All values are [est] â€” not actual invoices.',
     'Extrapolated from current observation window to 30-day month.',
     'Plan tiers assumed: Supabase Pro, Vercel Pro, Railway Hobby.',
   ];
@@ -462,3 +453,4 @@ export function estimateCost(metrics: SystemMetrics): CostEstimate {
     warnings,
   };
 }
+

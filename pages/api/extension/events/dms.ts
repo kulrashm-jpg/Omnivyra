@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/extension/events/dms
  *
@@ -5,10 +6,10 @@
  * content script walks the inbox DOM, extracts thread + message data,
  * and POSTs here. We upsert into the unified engagement model:
  *
- *   engagement_threads  — one row per conversation
+ *   engagement_threads  â€” one row per conversation
  *                         (platform='linkedin', platform_thread_id=URN/id,
  *                          message_type distinguisher lives on messages).
- *   engagement_messages — one row per captured message
+ *   engagement_messages â€” one row per captured message
  *                         (message_type='direct_message').
  *
  * Tenant-scoped via the extension session (orgId from hmac-signed token).
@@ -28,7 +29,7 @@
  *       unread_count?: number
  *     }>,
  *     messages: Array<{
- *       platform_thread_id: string,   // FK → threads above
+ *       platform_thread_id: string,   // FK â†’ threads above
  *       platform_message_id: string,
  *       sender_name?: string,
  *       sender_username?: string,
@@ -44,7 +45,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { config } from '@/config';
 import {
   isExtensionDmPlatform,
@@ -61,14 +63,14 @@ type IncomingThread = {
   participant_name?: string | null;
   participant_username?: string | null;
   /** LinkedIn profile URL (https://www.linkedin.com/in/<slug>/). Stable
-   *  per person — used as engagement_authors.platform_user_id so the
+   *  per person â€” used as engagement_authors.platform_user_id so the
    *  inbox dedup keys on real identity, not display name. */
   participant_profile_url?: string | null;
   participant_avatar_url?: string | null;
   thread_url?: string | null;
   last_message_preview?: string | null;
   last_message_at?: string | null;
-  /** True when the conversation list preview was prefixed with "You:" —
+  /** True when the conversation list preview was prefixed with "You:" â€”
    *  i.e. the user sent the last message in this thread. The Needs
    *  Response filter uses this signal so the user's own pending replies
    *  drop out of the queue. */
@@ -162,7 +164,7 @@ function actionMatchesScrapedMessage(input: {
     && observedMs <= actionMs + maxScrapeDelayMs;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -191,7 +193,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Ensure an engagement_sources row exists for this platform — some
+    // Ensure an engagement_sources row exists for this platform â€” some
     // queries join on it. Cheap: upsert-on-conflict.
     let sourceId: string | null = null;
     try {
@@ -211,12 +213,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceId = insertedSource?.id ?? null;
       }
     } catch {
-      /* non-fatal — FK is nullable */
+      /* non-fatal â€” FK is nullable */
     }
 
-    // ── Authors upsert ──────────────────────────────────────────────────────
+    // â”€â”€ Authors upsert â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // The inbox dedup logic in /api/engagement/inbox keys on
-    // engagement_authors.id — a stable per-person uuid backed by
+    // engagement_authors.id â€” a stable per-person uuid backed by
     // (platform, platform_user_id=profile_url). Without these rows the
     // dedup falls back to thread_id and never collapses, so two threads
     // for the same external person stay split AND two real people sharing
@@ -250,7 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       collectAuthor(t.participant_profile_url, t.participant_username, t.participant_name);
     }
     for (const m of incomingMessages) {
-      // Self messages don't need an author row — they're the user, not a
+      // Self messages don't need an author row â€” they're the user, not a
       // counterparty. Skipping keeps the engagement_authors table tidy.
       if (normalizeScrapedMessageContent({
         platform,
@@ -264,12 +266,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Resolve author ids: SELECT existing rows by (platform, platform_user_id),
-    // INSERT any missing ones. Map keyed by platformUserId → uuid so the
+    // INSERT any missing ones. Map keyed by platformUserId â†’ uuid so the
     // message upsert below can stamp author_id without another round-trip.
     //
     // Wrapped in its own try/catch so a partial failure (e.g. a transient
     // Supabase blip on insert) doesn't fail the entire DM sync. Author
-    // resolution is best-effort — without it, messages just keep
+    // resolution is best-effort â€” without it, messages just keep
     // author_id=null and dedup degrades to thread-level grouping, which
     // is the same behaviour the system had before identity-anchoring.
     const authorIdByPlatformUserId = new Map<string, string>();
@@ -314,8 +316,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn('[extension/events/dms] author phase failed (continuing with degraded dedup):', (authorPhaseErr as Error)?.message);
     }
 
-    // ── Threads upsert ─────────────────────────────────────────────────────
-    // Map of incoming platform_thread_id → DB uuid so we can link messages.
+    // â”€â”€ Threads upsert â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Map of incoming platform_thread_id â†’ DB uuid so we can link messages.
     const threadIdByPlatformThread: Record<string, string> = {};
     let threadsUpserted = 0;
 
@@ -323,8 +325,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const platformThreadId = (t.platform_thread_id || '').toString().trim();
       if (!platformThreadId) continue;
 
-      // Look up existing first (scoped to tenant). If found → update
-      // mutable fields; if not → insert.
+      // Look up existing first (scoped to tenant). If found â†’ update
+      // mutable fields; if not â†’ insert.
       const { data: existing } = await supabase
         .from('engagement_threads')
         .select('id')
@@ -337,7 +339,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // inbox layer can read participant identity + last_message_self
       // without re-scraping. last_message_self lets the inbox drop the
       // thread from Needs Response when the user already replied
-      // outside Omnivyra (LinkedIn preview is "You: …").
+      // outside Omnivyra (LinkedIn preview is "You: â€¦").
       const threadRawPayload: Record<string, unknown> = {
         participant_name: t.participant_name ?? null,
         participant_username: t.participant_username ?? null,
@@ -385,7 +387,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── Messages upsert ────────────────────────────────────────────────────
+    // â”€â”€ Messages upsert â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const platformThreadIdsWithDetailedMessages = new Set(
       incomingMessages
         .map((m) => (m.platform_thread_id || m.thread_id || '').toString().trim())
@@ -700,7 +702,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err) {
     // Always return STRUCTURED JSON, never an HTML 500 page. The extension's
-    // SW relay reads .error → console.error → chrome://extensions error log,
+    // SW relay reads .error â†’ console.error â†’ chrome://extensions error log,
     // so a missing/empty error message is exactly what produced the
     // "[APIClient] Failed: [object Object]" the user has been seeing.
     const e = err as Error;
@@ -713,3 +715,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -2,45 +2,21 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
 import { connectGoogleAnalytics } from '../../../backend/services/analyticsIntegrationService';
 import { resolveOmnivyraWebsiteCompany } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<{ userId: string | null }> {
-  if (req.cookies?.super_admin_session === '1') {
-    return { userId: null };
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return { userId: null };
-  }
-
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (!roleRow) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return { userId: null };
-  }
-
-  return { userId: user.id };
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const access = await requireSuperAdminAccess(req, res);
-  if (res.writableEnded) return;
+  const ctx = await requireAdminScope(req, res, 'config:analytics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/ga-connect', 'config:analytics');
+  }
+  const access = { userId: ctx.id };
 
   const company = await resolveOmnivyraWebsiteCompany();
   if (!company) {
@@ -90,3 +66,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

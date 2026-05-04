@@ -7,7 +7,8 @@
  * Also provides wallet snapshot reads and total available balance.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 

@@ -56,7 +56,7 @@ type ConsolidatedResult = {
 };
 
 export default function MarketPulseTab(props: OpportunityTabProps) {
-  const { companyId, regions, onPromote, onAction, fetchWithAuth, onSwitchTab, overrideText = '', onOverrideChange } = props;
+  const { companyId, regions, onPromote, onAction, apiFetch, onSwitchTab, overrideText = '', onOverrideChange } = props;
 
   const [contextMode, setContextMode] = useState<ContextMode>('FULL');
   const [focusedModules, setFocusedModules] = useState<FocusModule[]>([]);
@@ -83,7 +83,7 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
   }>(
     jobId,
     jobId ? `/api/market-pulse/job/${jobId}` : null,
-    fetchWithAuth,
+    apiFetch,
     { enabled: !!jobId }
   );
 
@@ -105,7 +105,7 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
   const forceStopJob = async () => {
     if (!jobId) return;
     try {
-      const res = await fetchWithAuth(`/api/market-pulse/job/${jobId}/cancel`, {
+      const res = await apiFetch(`/api/market-pulse/job/${jobId}/cancel`, {
         method: 'POST',
       });
       if (res.ok) {
@@ -136,7 +136,7 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
           : ['GLOBAL'];
 
     try {
-      const res = await fetchWithAuth('/api/market-pulse/job/create', {
+      const res = await apiFetch('/api/market-pulse/job/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -213,7 +213,7 @@ export default function MarketPulseTab(props: OpportunityTabProps) {
     <div className="space-y-6">
       <EngineContextPanel
         companyId={companyId}
-        fetchWithAuth={fetchWithAuth}
+        apiFetch={apiFetch}
         contextMode={contextMode}
         focusedModules={focusedModules}
         additionalDirection={additionalDirection}

@@ -1,7 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireTenantScope } from './utils';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -17,3 +18,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     event_opportunities: [],
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

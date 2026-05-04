@@ -6,7 +6,8 @@
  * Never throws in production. Fail silently (log error only).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { GOVERNANCE_POLICY_VERSION, getGovernancePolicyHash } from '../governance/GovernancePolicy';
 import { assertPolicySignatureUnchanged } from '../governance/GovernancePolicyRegistry';
 import { computeGovernanceEventHash } from '../governance/GovernanceLedger';

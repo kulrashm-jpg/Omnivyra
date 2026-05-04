@@ -3,7 +3,8 @@
  * Generates canonical decision objects from campaign health, trend, and inbox signals.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getMarketingMemoriesByType } from './marketingMemoryService';
 import {
   archiveDecisionScope,

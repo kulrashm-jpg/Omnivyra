@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../backend/services/userContextService';
 import { requireCompanyContext } from '../../backend/services/companyContextGuardService';
@@ -34,7 +35,7 @@ function parsePrioritizationMode(value: string | string[] | undefined): Prioriti
   return undefined;
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<PrioritizedDecisionApiResponse>
 ) {
@@ -116,3 +117,8 @@ export default async function handler(
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

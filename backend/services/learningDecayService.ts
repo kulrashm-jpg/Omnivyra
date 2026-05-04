@@ -15,7 +15,8 @@
  * Run: daily cron or after each campaign distillation.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const DECAY_LAMBDA = 0.02;   // decay rate constant
 const PRUNE_THRESHOLD = 0.05; // remove learnings with effective score below this

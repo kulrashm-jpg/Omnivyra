@@ -4,7 +4,8 @@
  * Campaign roles are optional; existing access is unchanged.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUserRole } from './rbacService';
 
 // -----------------------------------------------------------------------------

@@ -1,44 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveSelectedProperty } from '../../../backend/services/analyticsIntegrationService';
 import { resolveOmnivyraWebsiteCompany } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') {
-    return true;
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return false;
-  }
-
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (!roleRow) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return false;
-  }
-
-  return true;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'config:analytics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/ga-select-property', 'config:analytics');
+  }
 
   const propertyId = typeof req.body?.propertyId === 'string' ? req.body.propertyId : '';
   if (!propertyId) {
@@ -61,3 +37,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ status: 'error', message: 'Failed to select Google Analytics property' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

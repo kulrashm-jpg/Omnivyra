@@ -5,43 +5,37 @@
  * Returns anomaly data for the Super Admin system-health dashboard.
  *
  * Response:
- *   summary        — 24h anomaly counts by severity
- *   anomalies      — last 100 anomaly rows, most-recent first
- *   authEvents     — last-24h auth_audit_log event counts (for trending)
- *   systemStatus   — quick-read Redis / auth service health
- *   baselines      — current cached hourly baselines per event type
+ *   summary        â€” 24h anomaly counts by severity
+ *   anomalies      â€” last 100 anomaly rows, most-recent first
+ *   authEvents     â€” last-24h auth_audit_log event counts (for trending)
+ *   systemStatus   â€” quick-read Redis / auth service health
+ *   baselines      â€” current cached hourly baselines per event type
  *
  * Auth: super_admin_session cookie OR Supabase SUPER_ADMIN role
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getHourlyBaseline } from '../../../lib/anomaly/baselineService';
 import { ANOMALY_CONFIGS } from '../../../lib/anomaly/types';
 import { getUsageStatus } from '../../../lib/redis/usageProtection';
 
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'health:system');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/system-health', 'health:system');
+  }
 
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
   const since1h  = new Date(Date.now() -       60 * 60 * 1_000).toISOString();
   const since5m  = new Date(Date.now() -        5 * 60 * 1_000).toISOString();
 
-  // ── Parallel queries ─────────────────────────────────────────────────────
+  // â”€â”€ Parallel queries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [anomaliesRes, authEventsRes, recentRedisRes, recent5mRes] = await Promise.all([
     // Last 100 anomalies (all severities, last 24 h)
     supabase
@@ -73,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .gte('created_at', since5m),
   ]);
 
-  // ── Summary counts ───────────────────────────────────────────────────────
+  // â”€â”€ Summary counts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const anomalies = anomaliesRes.data ?? [];
   const summary = {
     critical_24h:    anomalies.filter(a => a.severity === 'CRITICAL').length,
@@ -82,20 +76,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     last_critical_at: anomalies.find(a => a.severity === 'CRITICAL')?.created_at ?? null,
   };
 
-  // ── Auth event counts (map: eventType → count) ───────────────────────────
+  // â”€â”€ Auth event counts (map: eventType â†’ count) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const authEventCounts: Record<string, number> = {};
   for (const row of authEventsRes.data ?? []) {
     authEventCounts[row.event] = (authEventCounts[row.event] ?? 0) + 1;
   }
 
-  // ── System status ────────────────────────────────────────────────────────
+  // â”€â”€ System status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const lastRedisFail = (recentRedisRes.data ?? [])[0]?.created_at ?? null;
   const systemStatus = {
     redis:              lastRedisFail ? 'degraded' : 'ok',
     last_redis_failure: lastRedisFail,
   };
 
-  // ── System state (overall health signal) ─────────────────────────────────
+  // â”€â”€ System state (overall health signal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const recent5m    = recent5mRes.data ?? [];
   const crit5m      = recent5m.filter(a => a.severity === 'CRITICAL');
   const warn5m      = recent5m.filter(a => a.severity === 'WARNING');
@@ -128,7 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     reasons: stateReasons,
   };
 
-  // ── Baselines (current cached values for all registered anomaly types) ───
+  // â”€â”€ Baselines (current cached values for all registered anomaly types) â”€â”€â”€
   // Fetched concurrently; failures return 0 (safe default)
   const baselineEntries = await Promise.all(
     Object.keys(ANOMALY_CONFIGS).map(async (type) => {
@@ -138,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   );
   const baselines = Object.fromEntries(baselineEntries);
 
-  // ── Redis usage protection status ────────────────────────────────────────
+  // â”€â”€ Redis usage protection status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const redisUsage = getUsageStatus();
 
   // Fold Redis pressure into the overall system state
@@ -175,3 +169,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     redisUsage,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

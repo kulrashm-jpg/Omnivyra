@@ -14,20 +14,21 @@
  * }
  *
  * Response:
- * { new_hook: string }  — the replacement <p>…</p> HTML
+ * { new_hook: string }  â€” the replacement <p>â€¦</p> HTML
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function extractFirstParagraph(html: string): string {
   const m = html.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
   return m ? m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() : '';
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { company_id, content_html, topic, angle_type } = req.body ?? {};
@@ -73,12 +74,12 @@ Rewrite the provided opening paragraph so it becomes STRONG.
 
 STRONG hook criteria:
 - Opens with a specific claim, counterintuitive insight, concrete problem, or surprising data point
-- Creates immediate tension or curiosity — the reader MUST continue
+- Creates immediate tension or curiosity â€” the reader MUST continue
 - Does NOT start with "In today's", "Have you ever", or any generic AI-sounding filler
 - Stays under 60 words
 - Matches the blog topic and editorial angle provided
 
-Return ONLY valid JSON: { "new_hook": "<p>…rewritten paragraph…</p>" }
+Return ONLY valid JSON: { "new_hook": "<p>â€¦rewritten paragraphâ€¦</p>" }
 The value must be a complete <p> tag with the rewritten text inside. No markdown, no extra keys.`,
         },
         {
@@ -97,3 +98,9 @@ The value must be a complete <p> tag with the rewritten text inside. No markdown
     return res.status(500).json({ error: 'Hook rewrite failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -2,7 +2,8 @@ import type { PersistedDecisionObject } from './decisionObjectService';
 import type { ResolvedReportInput } from './reportInputResolver';
 import { classifyDecisionType } from './decisionTypeRegistry';
 import { impactScore } from './reportDecisionUtils';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import axios from 'axios';
 import { config } from '@/config';
 import {

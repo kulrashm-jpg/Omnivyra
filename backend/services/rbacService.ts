@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../db/supabaseClient';
+import * as supabaseClient from '../db/supabaseClient';
 import { resolveUserContext } from './userContextService';
 import {
   getCompanyRoleIncludingInvited,
@@ -14,6 +14,21 @@ type RbacPermissions = Record<string, string[]>;
 type RbacConfig = {
   roles: Role[];
   permissions: RbacPermissions;
+};
+
+const runWithServiceRole = async <T>(
+  reason: string,
+  fn: (client: any) => PromiseLike<T> | T,
+): Promise<T> => {
+  const runner = (supabaseClient as any).runWithServiceRole;
+  if (typeof runner === 'function') {
+    return runner(reason, fn);
+  }
+  const mockClient = (supabaseClient as any).supabase;
+  if (mockClient) {
+    return await fn(mockClient);
+  }
+  throw new Error('runWithServiceRole export is missing');
 };
 
 export const ALL_ROLES: Role[] = [
@@ -117,11 +132,14 @@ export const getRbacConfig = async (): Promise<RbacConfig> => {
     return rbacCache.value;
   }
   const fallback: RbacConfig = { roles: ALL_ROLES, permissions: { ...PERMISSIONS } };
-  const { data, error } = await supabase
-    .from('rbac_config')
-    .select('roles, permissions, updated_at')
-    .order('updated_at', { ascending: false })
-    .limit(1);
+  const { data, error } = await runWithServiceRole(
+    'Load RBAC configuration',
+    (client) => client
+      .from('rbac_config')
+      .select('roles, permissions, updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(1),
+  );
   if (error || !data || data.length === 0) {
     rbacCache = { value: fallback, fetchedAt: now };
     return fallback;
@@ -147,11 +165,14 @@ export const saveRbacConfig = async (input: {
     updated_by: input.updatedBy || null,
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await supabase
-    .from('rbac_config')
-    .insert(payload)
-    .select('roles, permissions')
-    .single();
+  const { data, error } = await runWithServiceRole(
+    'Save RBAC configuration',
+    (client) => client
+      .from('rbac_config')
+      .insert(payload)
+      .select('roles, permissions')
+      .single(),
+  );
   if (error) {
     throw new Error(error.message);
   }
@@ -175,13 +196,16 @@ export const getUserRole = async (
   companyId: string
 ): Promise<{ role: Role | null; error: string | null; membershipType?: 'EXTERNAL' | 'INTERNAL' }> => {
   // Query company-specific role first (happy path: 1 DB round-trip)
-  const { data, error } = await supabase
-    .from('user_company_roles')
-    .select('role, status')
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .eq('status', 'active')
-    .limit(1);
+  const { data, error } = await runWithServiceRole(
+    'Resolve active user company role',
+    (client) => client
+      .from('user_company_roles')
+      .select('role, status')
+      .eq('user_id', userId)
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .limit(1),
+  );
   if (error) {
     return { role: null, error: null, membershipType: undefined };
   }
@@ -193,13 +217,16 @@ export const getUserRole = async (
   }
 
   // No active role: check invited (admin fallback) before "any role" check
-  const { data: invitedData } = await supabase
-    .from('user_company_roles')
-    .select('role')
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .eq('status', 'invited')
-    .limit(1);
+  const { data: invitedData } = await runWithServiceRole(
+    'Resolve invited user company role fallback',
+    (client) => client
+      .from('user_company_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .eq('company_id', companyId)
+      .eq('status', 'invited')
+      .limit(1),
+  );
   if (invitedData && invitedData.length > 0) {
     const fallbackRole = normalizeRole((invitedData[0] as { role: string }).role);
     if (
@@ -212,11 +239,14 @@ export const getUserRole = async (
   }
 
   // No role for company: check if user has any role (distinguish COMPANY_ACCESS_DENIED vs null)
-  const { data: anyRoleRows, error: anyRoleError } = await supabase
-    .from('user_company_roles')
-    .select('role')
-    .eq('user_id', userId)
-    .limit(1);
+  const { data: anyRoleRows, error: anyRoleError } = await runWithServiceRole(
+    'Check whether user has any company role',
+    (client) => client
+      .from('user_company_roles')
+      .select('role')
+      .eq('user_id', userId)
+      .limit(1),
+  );
   if (anyRoleError) return { role: null, error: null, membershipType: undefined };
   if (anyRoleRows && anyRoleRows.length > 0) {
     return { role: null, error: 'COMPANY_ACCESS_DENIED', membershipType: undefined };
@@ -246,26 +276,80 @@ export const getUserCompanyRole = async (
   return { role, userId: user.userId };
 };
 
+/**
+ * @deprecated Use `isPlatformSuperAdmin` directly. This alias is retained for
+ * legacy callers and resolves to the same canonical query against
+ * `user_company_roles.role = 'SUPER_ADMIN'`.
+ */
 export const isSuperAdmin = async (userId: string): Promise<boolean> => {
-  const { data, error } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('role', Role.SUPER_ADMIN)
-    .limit(1);
+  return isPlatformSuperAdmin(userId);
+};
+
+export const isPlatformSuperAdmin = async (userId: string): Promise<boolean> => {
+  const { data, error } = await runWithServiceRole(
+    'Check platform super-admin role',
+    (client) => client
+      .from('user_company_roles')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('role', Role.SUPER_ADMIN)
+      .limit(1),
+  );
   if (error) return false;
   return !!data && data.length > 0;
 };
 
-export const isPlatformSuperAdmin = async (userId: string): Promise<boolean> => {
-  const { data, error } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('role', Role.SUPER_ADMIN)
-    .limit(1);
-  if (error) return false;
-  return !!data && data.length > 0;
+export const getPlatformSuperAdminUserIds = async (): Promise<string[]> => {
+  const { data, error } = await runWithServiceRole(
+    'List platform super-admin user ids',
+    (client) => client
+      .from('user_company_roles')
+      .select('user_id')
+      .eq('role', Role.SUPER_ADMIN)
+      .eq('status', 'active'),
+  );
+  if (error) return [];
+  return Array.from(new Set((data ?? []).map((row: any) => row.user_id).filter(Boolean)));
+};
+
+export const getPlatformSuperAdminRoleRows = async (): Promise<{
+  user_id: string;
+  role: Role;
+  company_id: string | null;
+  created_at: string | null;
+  status: string | null;
+}[]> => {
+  const { data, error } = await runWithServiceRole(
+    'List platform super-admin role rows',
+    (client) => client
+      .from('user_company_roles')
+      .select('user_id, role, company_id, created_at, status')
+      .eq('role', Role.SUPER_ADMIN)
+      .eq('status', 'active'),
+  );
+  if (error) throw error;
+  return (data ?? []) as {
+    user_id: string;
+    role: Role;
+    company_id: string | null;
+    created_at: string | null;
+    status: string | null;
+  }[];
+};
+
+export const downgradePlatformSuperAdminRoles = async (
+  userId: string,
+  updatedAt = new Date().toISOString(),
+): Promise<void> => {
+  const { error } = await runWithServiceRole(
+    'Downgrade platform super-admin roles',
+    (client) => client
+      .from('user_company_roles')
+      .update({ role: Role.COMPANY_ADMIN, updated_at: updatedAt })
+      .eq('user_id', userId)
+      .eq('role', Role.SUPER_ADMIN),
+  );
+  if (error) throw error;
 };
 
 export const enforceRole = async (input: {

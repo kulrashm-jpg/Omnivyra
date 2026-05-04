@@ -20,7 +20,8 @@
  *     (credit_admin_grants.idempotency_key UNIQUE).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 import { logger } from './logger';
 

@@ -24,7 +24,8 @@
 
 import { Job } from 'bullmq';
 import { createHash } from 'crypto';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import {
   generateMasterContentFromIntent,
@@ -67,15 +68,22 @@ export type BoltContentJobData = {
 
 const BLOG_CONTENT_TYPES = new Set(['blog', 'article', 'newsletter', 'white_paper', 'short_story']);
 
-const PLATFORM_ORDER = ['linkedin', 'facebook', 'instagram', 'x', 'twitter', 'youtube', 'tiktok', 'pinterest'];
+const PLATFORM_ORDER = ['linkedin', 'facebook', 'threads', 'instagram', 'x', 'twitter', 'youtube', 'tiktok', 'pinterest'];
+
+// Text formats are preserved as-is across text-capable platforms so the
+// user-selected content type flows through to scheduled_posts.content_type
+// (and therefore to the calendar). Only non-text formats get platform-specific
+// remapping below.
+const TEXT_PRESERVE_TYPES = new Set(['post', 'tweet', 'short_story', 'article', 'poll']);
 
 const FALLBACK_CT_MAP: Record<string, Record<string, string>> = {
-  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'article', white_paper: 'article', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
-  x:         { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
-  twitter:   { post: 'tweet', video: 'video', article: 'tweet', newsletter: 'tweet', short_story: 'tweet', white_paper: 'tweet', poll: 'tweet', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet' },
+  linkedin:  { post: 'post', video: 'video', article: 'article', newsletter: 'newsletter', short_story: 'short_story', white_paper: 'article', poll: 'poll', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'article' },
+  x:         { post: 'post', video: 'video', article: 'article', newsletter: 'tweet', short_story: 'short_story', white_paper: 'tweet', poll: 'poll', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet', tweet: 'tweet' },
+  twitter:   { post: 'post', video: 'video', article: 'article', newsletter: 'tweet', short_story: 'short_story', white_paper: 'tweet', poll: 'poll', carousel: 'tweet', image: 'tweet', reel: 'video', short: 'video', story: 'tweet', thread: 'thread', blog: 'tweet', tweet: 'tweet' },
+  facebook:  { post: 'post', video: 'video', article: 'article', newsletter: 'post', short_story: 'short_story', white_paper: 'post', poll: 'poll', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'post', tweet: 'post' },
+  threads:   { post: 'post', video: 'video', article: 'article', newsletter: 'post', short_story: 'short_story', white_paper: 'post', poll: 'poll', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'post', tweet: 'post' },
   instagram: { post: 'feed_post', video: 'reel', article: 'feed_post', newsletter: 'feed_post', short_story: 'feed_post', white_paper: 'feed_post', poll: 'feed_post', carousel: 'feed_post', image: 'feed_post', reel: 'reel', short: 'reel', story: 'story', thread: 'feed_post', blog: 'feed_post' },
   youtube:   { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'short', image: 'video', reel: 'short', short: 'short', story: 'video', thread: 'video', blog: 'video' },
-  facebook:  { post: 'post', video: 'video', article: 'post', newsletter: 'post', short_story: 'post', white_paper: 'post', poll: 'post', carousel: 'post', image: 'post', reel: 'video', short: 'video', story: 'post', thread: 'post', blog: 'post' },
   tiktok:    { post: 'video', video: 'video', article: 'video', newsletter: 'video', short_story: 'video', white_paper: 'video', poll: 'video', carousel: 'video', image: 'video', reel: 'video', short: 'video', story: 'video', thread: 'video', blog: 'video' },
   pinterest: { post: 'pin', video: 'pin', article: 'pin', newsletter: 'pin', short_story: 'pin', white_paper: 'pin', poll: 'pin', carousel: 'pin', image: 'pin', reel: 'pin', short: 'pin', story: 'pin', thread: 'pin', blog: 'pin' },
 };
@@ -109,6 +117,11 @@ function toDbContentType(
   typeMapByPlatform: Record<string, Record<string, string>>
 ): string {
   const ct = String(contentType || '').toLowerCase().trim();
+  // Preserve user-selected text formats so the calendar shows the actual type
+  // the user picked (e.g. "short_story" stays "short_story", not "post").
+  // Publishing platforms still receive the same body — only the displayed/stored
+  // content_type label is preserved.
+  if (TEXT_PRESERVE_TYPES.has(ct)) return ct;
   const fromDb = typeMapByPlatform[platform];
   if (fromDb?.[ct]) return fromDb[ct];
   const fallback = FALLBACK_CT_MAP[platform] ?? FALLBACK_CT_MAP['linkedin']!;

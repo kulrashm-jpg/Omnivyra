@@ -19,22 +19,12 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getMetricsReport } from '../../../lib/redis/instrumentation';
 import { getSharedRedisClient } from '../../../backend/queue/bullmqClient';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-// ── History loader ────────────────────────────────────────────────────────────
+// â”€â”€ History loader â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function loadHistory(): Promise<unknown[]> {
   try {
@@ -52,7 +42,7 @@ async function loadHistory(): Promise<unknown[]> {
     if (keys.length === 0) return [];
 
     // Sort by the embedded timestamp and take the 12 most recent
-    keys.sort(); // ascending numeric timestamp suffix → oldest first
+    keys.sort(); // ascending numeric timestamp suffix â†’ oldest first
     const recent = keys.slice(-12);
 
     const values = await redis.mget(...recent);
@@ -68,11 +58,15 @@ async function loadHistory(): Promise<unknown[]> {
   }
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'health:redis-metrics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/redis-metrics', 'health:redis-metrics');
+  }
 
   const live = getMetricsReport();
 
@@ -83,3 +77,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ live });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -17,7 +17,8 @@
  * - Pinterest: backend/adapters/pinterestAdapter.ts ✅
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getToken, isTokenExpiringSoon } from '../auth/tokenStore';
 import { refreshPlatformToken, refreshTwitterTokenIfNeeded } from '../auth/tokenRefresh';
 import { getScheduledPost, getSocialAccount } from '../db/queries';

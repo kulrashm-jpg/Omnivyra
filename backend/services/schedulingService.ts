@@ -7,7 +7,8 @@
  * - Conflict detection for overlapping campaigns
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logActivity } from './activityLogger';
 
 /**

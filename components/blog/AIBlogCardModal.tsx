@@ -15,7 +15,7 @@ import {
   X, Send, Loader2, Sparkles, CheckCircle2, ArrowRight,
   Lightbulb, Target, Zap, Mic, MicOff,
 } from 'lucide-react';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -130,7 +130,7 @@ export default function AIBlogCardModal({
         content: m.message,
       }));
 
-      const response = await fetchWithAuth('/api/ai/blog-card-chat', {
+      const response = await apiFetch('/api/ai/blog-card-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

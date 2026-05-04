@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import externalApisHandler from '../../../pages/api/external-apis/index';
 import { publishScheduledPost } from '../../services/socialPlatformPublisher';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createApiRequestMock } from '../utils';
 
 jest.mock('../../db/supabaseClient', () => ({

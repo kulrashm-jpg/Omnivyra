@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/engagement/cancel-queued
  *
  * Cancels a pending DM (or reply) action that the Chrome extension has not
  * yet claimed. The conversation pane shows queued-but-undelivered actions
- * inline with a Cancel button — clicking it routes here. We mark the row
+ * inline with a Cancel button â€” clicking it routes here. We mark the row
  * 'failed' (status='failed', execution_result.reason='user_cancelled') so:
  *   - The has_pending_outbound_action signal flips off, the inbox stops
  *     showing the thread as "in flight"
@@ -14,19 +15,20 @@
  * Safety: only the same organization that owns the action can cancel it,
  * and only rows that are still pending+unleased are cancellable. Once the
  * extension has claimed the row (dispatch_lease_id set) we leave it alone
- * — it's already in flight to LinkedIn.
+ * â€” it's already in flight to LinkedIn.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type Body = {
   organization_id?: string;
   action_id?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -72,3 +74,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, action_id: updated.id, status: updated.status });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -9,25 +9,23 @@
  * 4. scheduled_posts never triggering ingestion
  *
  * Run: node backend/scripts/engagementPhase1Validation.js
- * Requires: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY in .env.local
+ * Requires: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), Supabase service credential in .env.local
  */
 
 const path = require('path');
 const dotenv = require('dotenv');
-const { createClient } = require('@supabase/supabase-js');
+const { createServiceRoleMigrationProxy } = require('../db/supabaseClient');
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local');
+if (!SUPABASE_URL) {
+  console.error('Missing SUPABASE_URL or Supabase service credential in .env.local');
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createServiceRoleMigrationProxy('DIRECT_SR_REMOVAL');
 
 async function count(table, filter = null) {
   let q = supabase.from(table).select('*', { count: 'exact', head: true });

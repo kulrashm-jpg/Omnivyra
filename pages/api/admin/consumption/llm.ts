@@ -4,65 +4,47 @@
  * LLM token and cost consumption.
  *
  * Query params:
- *   companyId  – required for company_admin / user views; optional for super_admin (returns all-orgs if omitted)
- *   year       – optional, defaults to current month
- *   month      – optional, defaults to current month
- *   page, limit – for all-orgs pagination (super_admin only)
+ *   companyId  â€“ required for company_admin / user views; optional for super_admin (returns all-orgs if omitted)
+ *   year       â€“ optional, defaults to current month
+ *   month      â€“ optional, defaults to current month
+ *   page, limit â€“ for all-orgs pagination (super_admin only)
  *
  * Role visibility:
- *   super_admin   → full cost + by_user + all orgs overview when companyId omitted
- *   company_admin → cost + by_operation + by_campaign for own org
- *   user          → token counts only (no costs) for own org
+ *   super_admin   â†’ full cost + by_user + all orgs overview when companyId omitted
+ *   company_admin â†’ cost + by_operation + by_campaign for own org
+ *   user          â†’ token counts only (no costs) for own org
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, isSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { Role } from '../../../../backend/services/rbacPrimitives';
 import {
   getLlmConsumption,
   getAllOrgsConsumption,
   ConsumptionTier,
 } from '../../../../backend/services/consumptionAnalyticsService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function resolveTier(
   req: NextApiRequest,
   res: NextApiResponse,
   companyId?: string
 ): Promise<{ tier: ConsumptionTier; userId: string; orgId: string | null } | null> {
-  // Super admin cookie session (username/password login — no Supabase token)
-  if (req.cookies?.super_admin_session === '1') {
-    return { tier: 'super_admin', userId: 'super_admin_session', orgId: companyId ?? null };
+  const ctx = await requireAdminScope(req, res, 'consumption:llm', { companyId });
+  if (!ctx) return null;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/consumption/llm', 'consumption:llm');
   }
-
-  const auth = await getSupabaseUserFromRequest(req);
-  if (auth.error || !auth.user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
+  if (ctx.role === Role.SUPER_ADMIN) {
+    return { tier: 'super_admin', userId: ctx.id, orgId: companyId ?? null };
   }
-  const userId = auth.user.id;
-
-  if ((await isPlatformSuperAdmin(userId)) || (await isSuperAdmin(userId))) {
-    return { tier: 'super_admin', userId, orgId: companyId ?? null };
-  }
-
-  if (!companyId) {
-    res.status(400).json({ error: 'companyId required' });
-    return null;
-  }
-
-  const { role } = await getUserRole(userId, companyId);
-  if (!role) {
-    res.status(403).json({ error: 'FORBIDDEN' });
-    return null;
-  }
-
-  const tier: ConsumptionTier =
-    role === 'COMPANY_ADMIN' || role === 'ADMIN' ? 'company_admin' : 'user';
-  return { tier, userId, orgId: companyId };
+  const tier: ConsumptionTier = ctx.role === Role.COMPANY_ADMIN ? 'company_admin' : 'user';
+  return { tier, userId: ctx.id, orgId: companyId ?? null };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
@@ -75,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { tier, orgId } = context;
 
-    // Super admin with no companyId → return all-orgs overview
+    // Super admin with no companyId â†’ return all-orgs overview
     if (tier === 'super_admin' && !orgId) {
       const rows = await getAllOrgsConsumption({ year, month });
       return res.status(200).json({ tier, scope: 'all_orgs', data: rows });
@@ -91,3 +73,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: msg });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

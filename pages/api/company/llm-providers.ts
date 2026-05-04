@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/company/llm-providers?companyId=...
  *
@@ -5,13 +6,12 @@
  * Returns all active LLM providers and models configured by Super Admin,
  * plus the company's current selection if any.
  *
- * Used by settings UI dropdowns — any authenticated company member can read this.
+ * Used by settings UI dropdowns â€” any authenticated company member can read this.
  * Writing is restricted to COMPANY_ADMIN via /api/company/llm-config.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
@@ -24,7 +24,7 @@ import {
 } from '../../../backend/services/llmProviderService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -36,19 +36,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!companyAccess) return;
 
   // Auth: any authenticated company member can read
-  const legacy = getLegacySuperAdminSession(req);
-  if (!legacy) {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (error || !user) return res.status(401).json({ error: 'UNAUTHORIZED' });
+  const { user, error } = await getSupabaseUserFromRequest(req);
+  if (error || !user) return res.status(401).json({ error: 'UNAUTHORIZED' });
 
-    // Must have at least some role in this company
-    let { role } = await getUserRole(user.id, companyId);
-    if (!role) {
-      const fallback = await getCompanyRoleIncludingInvited(user.id, companyId);
-      role = fallback ?? null;
-    }
-    if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+  // Must have at least some role in this company
+  let { role } = await getUserRole(user.id, companyId);
+  if (!role) {
+    const fallback = await getCompanyRoleIncludingInvited(user.id, companyId);
+    role = fallback ?? null;
   }
+  if (!role) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
 
   try {
     const [providers, models, companyConfig] = await Promise.all([
@@ -83,3 +80,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

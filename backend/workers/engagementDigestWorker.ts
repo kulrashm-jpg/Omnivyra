@@ -3,7 +3,8 @@
  * Generates daily digest for each organization. Runs once per day.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generateDailyDigest } from '../services/engagementDigestService';
 import { executeWithRetry } from '../services/workerRetryService';
 import { getControls } from '../services/engagementGovernanceService';

@@ -1,7 +1,7 @@
 
 /**
- * GET  /api/admin/cron-config  — read current cron overrides
- * POST /api/admin/cron-config  — save new overrides
+ * GET  /api/admin/cron-config  â€” read current cron overrides
+ * POST /api/admin/cron-config  â€” save new overrides
  *
  * Auth: super_admin_session cookie
  *
@@ -26,10 +26,10 @@
  *
  * Safe ranges:
  *   enabled:            boolean
- *   intervalMultiplier: 0.1–20  (1=normal, 2=half-freq, 0.5=double-freq)
+ *   intervalMultiplier: 0.1â€“20  (1=normal, 2=half-freq, 0.5=double-freq)
  *
  * Changes apply at the next cron cycle (within 15 minutes).
- * No restart required — cron.ts reads config from Redis on each cycle.
+ * No restart required â€” cron.ts reads config from Redis on each cycle.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -39,6 +39,7 @@ import {
   validateCronConfig,
   type CronAdminConfig,
 } from '../../../backend/services/adminRuntimeConfig';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
@@ -79,4 +80,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'admin-cron-config', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

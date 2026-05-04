@@ -3,7 +3,8 @@
  * Phase 2: Orchestrates company intelligence data with cache.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   aggregateCompanyIntelligence,
   type CompanyIntelligenceInsights,

@@ -3,7 +3,8 @@
  * Global guard layer. Only 1 row in governance_lockdown (enforced in service).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordGovernanceEvent } from './GovernanceEventService';
 
 const LOCKDOWN_SINGLETON_ID = '00000000-0000-0000-0000-000000000001';

@@ -4,7 +4,8 @@
  * Invalidate when configuration changes (company-config PUT, access API bulk/single).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const CACHE_PREFIX = 'company_api_config:';
 const TTL_MS = 5 * 60 * 1000;

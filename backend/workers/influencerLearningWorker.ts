@@ -5,7 +5,8 @@
  * Aggregates authors from engagement_messages, computes metrics, and upserts influencer_intelligence.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { calculateInfluencers } from '../services/influencerIntelligenceService';
 
 export async function runInfluencerLearningWorker(): Promise<{

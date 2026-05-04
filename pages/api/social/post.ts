@@ -1,8 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 
 // LEGACY ENGINE - DO NOT EXTEND
 // Scheduled for removal after DB-platform intelligence cutover.
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createLegacyScheduledPost } from '@/backend/services/structuredPlanScheduler';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
@@ -25,7 +27,7 @@ async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise
   return user.id;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -78,3 +80,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

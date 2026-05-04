@@ -10,7 +10,8 @@
  * Used when extending campaigns or regenerating remaining weeks with performance data.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const MAX_ADJUSTMENT_PCT = 0.2; // ±20% of original distribution
 const MIN_SIGNALS_FOR_ADJUSTMENT = 2;

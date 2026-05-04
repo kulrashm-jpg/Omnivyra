@@ -12,7 +12,8 @@
  * Stores status in campaign_health_reports (reuses existing table).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getDecisionConfig } from './configService';
 import { tryAutoScale } from './campaignAutoScalingService';
 import { generateRecoveryCampaign } from './campaignRecoveryService';

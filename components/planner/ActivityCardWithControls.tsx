@@ -15,7 +15,7 @@ import {
   type CalendarPlanDay,
 } from './plannerSessionStore';
 import { InlineActivityEditor } from './InlineActivityEditor';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -118,7 +118,7 @@ export function ActivityCardWithControls({
     if (!companyId || !activity.execution_id) return;
     setRegenerating(true);
     try {
-      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
+      const res = await apiFetch('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

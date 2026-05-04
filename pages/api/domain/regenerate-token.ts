@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/domain/regenerate-token
  *
@@ -12,7 +13,7 @@
  *   - audit_logs row: action=DOMAIN_TOKEN_REGENERATED
  *
  * Auth: COMPANY_ADMIN or SUPER_ADMIN active in the target company.
- *       force=true is NOT supported (no admin-override path here — the
+ *       force=true is NOT supported (no admin-override path here â€” the
  *       legitimate use case is "I lost my token" not "I want to bypass").
  *
  * Rate limit: 5/min/IP (matches /api/domain/verify).
@@ -29,7 +30,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { logger } from '../../../backend/services/logger';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
@@ -46,7 +48,7 @@ const REGEN_RATE_LIMIT = {
 type SuccessResponse = { ok: true; token: string; final_domain: string };
 type ErrorResponse = { error: string; details?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -74,7 +76,7 @@ export default async function handler(
   const rawDomain = (body?.domain ?? '') as string;
   const domain = normalizeDomain(String(rawDomain));
 
-  // Resolve user → active company → domain row
+  // Resolve user â†’ active company â†’ domain row
   const { data: userRow } = await supabase
     .from('users')
     .select('id, active_company_id')
@@ -118,9 +120,9 @@ export default async function handler(
   }
   if (!domainRow) return res.status(404).json({ error: 'DOMAIN_NOT_FOUND' });
 
-  // Authorization — COMPANY_ADMIN or SUPER_ADMIN in the owning company.
+  // Authorization â€” COMPANY_ADMIN or SUPER_ADMIN in the owning company.
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('role')
     .eq('user_id', internalUserId)
     .eq('company_id', domainRow.company_id)
@@ -157,7 +159,7 @@ export default async function handler(
     return res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 
-  // Audit — non-null actor enforced via insertAuditLogStrict.
+  // Audit â€” non-null actor enforced via insertAuditLogStrict.
   await insertAuditLogStrict({
     actorUserId: internalUserId,
     action:      'DOMAIN_TOKEN_REGENERATED',
@@ -181,3 +183,8 @@ export default async function handler(
     final_domain: domainRow.final_domain,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

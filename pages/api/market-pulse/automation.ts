@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 import {
@@ -6,7 +7,7 @@ import {
   upsertAutomationSettings,
 } from '../../../backend/services/marketPulseV2Service';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (typeof req.query.companyId === 'string' ? req.query.companyId : '') ||
     (typeof req.body?.companyId === 'string' ? req.body.companyId : '');
@@ -51,3 +52,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (error as Error).message || 'Failed to manage Market Pulse automation' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
@@ -9,7 +10,7 @@ import {
 
 const ALLOWED_TYPES: IntegrationType[] = ['lead_webhook', 'wordpress', 'custom_blog_api'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     typeof req.query.company_id === 'string' ? req.query.company_id :
     typeof req.body?.company_id === 'string' ? req.body.company_id : null;
@@ -19,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
 
-  // GET — any company member can list integrations
+  // GET â€” any company member can list integrations
   if (req.method === 'GET') {
     const type = typeof req.query.type === 'string' ? req.query.type as IntegrationType : undefined;
     const integrations = await getIntegrations(companyId, type).catch(() => []);
@@ -27,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ integrations });
   }
 
-  // POST — only admins can create
+  // POST â€” only admins can create
   if (req.method === 'POST') {
     const roleGate = await enforceRole({
       req, res, companyId,
@@ -56,3 +57,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

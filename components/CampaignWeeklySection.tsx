@@ -33,7 +33,7 @@ import {
 import CampaignAIChat from './CampaignAIChat';
 import AIGenerationProgress from './AIGenerationProgress';
 import { useCompanyContext } from './CompanyContext';
-import { fetchWithAuth } from './community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { GovernanceStatusCard } from './governance/GovernanceStatusCard';
 import { GovernanceAnalyticsCard } from './governance/GovernanceAnalyticsCard';
 import { GovernanceExplanationPanel, deriveFromEvent } from './governance/GovernanceExplanationPanel';

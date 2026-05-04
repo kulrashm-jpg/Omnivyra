@@ -24,7 +24,8 @@
  */
 
 import { resolveOrganizationPlanLimits } from './planResolutionService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Pricing table ─────────────────────────────────────────────────────────────
 

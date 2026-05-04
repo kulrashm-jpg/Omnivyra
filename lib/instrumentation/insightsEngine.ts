@@ -1,17 +1,16 @@
-/**
- * Cross-service correlation insights engine — v2.
+﻿/**
+ * Cross-service correlation insights engine â€” v2.
  *
  * v2 changes:
- *  - Each Insight now carries an `action` string — a concrete next step
+ *  - Each Insight now carries an `action` string â€” a concrete next step
  *  - Detectors are baseline-aware: when SystemBaselines are provided, dynamic
- *    thresholds (baseline × multiplier) replace static values; static thresholds
+ *    thresholds (baseline Ã— multiplier) replace static values; static thresholds
  *    are used as a fallback when history is unavailable
  *
  * Detections:
- *   API → Redis   : Rate limiting / caching driving Redis ops
- *   API → External: Uncached AI calls inflating cost
- *   Redis → Cost  : Dominant feature / command consuming disproportionate ops
- *   Auth load     : Firebase verify rate close to API request rate (no token caching)
+ *   API â†’ Redis   : Rate limiting / caching driving Redis ops
+ *   API â†’ External: Uncached AI calls inflating cost
+ *   Redis â†’ Cost  : Dominant feature / command consuming disproportionate ops
  *   Supabase      : Error spike, high write ratio
  *   External APIs : Elevated error rates
  *   Latency       : API p95 above baseline or static threshold
@@ -24,7 +23,7 @@ import type { CostProjection } from './costProjection';
 import type { SystemBaselines } from './baselineEngine';
 import { WARN_MULTIPLIER, CRITICAL_MULTIPLIER } from './baselineEngine';
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface Insight {
   /** One-line description of the finding. */
@@ -37,7 +36,7 @@ export interface Insight {
   tags:    string[];
 }
 
-// ── Context passed to every detector ──────────────────────────────────────────
+// â”€â”€ Context passed to every detector â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface DetectionContext {
   metrics:    SystemMetrics;
@@ -46,7 +45,7 @@ interface DetectionContext {
   baselines:  SystemBaselines | null;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function pct(n: number, total: number): number {
   return total === 0 ? 0 : Math.round((n / total) * 100);
@@ -75,7 +74,7 @@ function thresholds(
   return { warn: staticWarn, critical: staticCritical, isDynamic: false };
 }
 
-// ── Detection rules ────────────────────────────────────────────────────────────
+// â”€â”€ Detection rules â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function detectRateLimitPressure({ metrics, baselines }: DetectionContext): Insight | null {
   const rlPct  = featurePct(metrics, 'rate_limit');
@@ -87,7 +86,7 @@ function detectRateLimitPressure({ metrics, baselines }: DetectionContext): Insi
       ? `(${Math.round(apiCpm / thresh.warn * 100)}% above your ${Math.round(thresh.warn)}/min baseline)`
       : '';
     return {
-      summary: `Rate limiting consumes ${rlPct}% of Redis ops — driven by API traffic at ${apiCpm} req/min ${hint}`.trim(),
+      summary: `Rate limiting consumes ${rlPct}% of Redis ops â€” driven by API traffic at ${apiCpm} req/min ${hint}`.trim(),
       action:  'Raise rate-limit window size or increase allowed burst; review suspicious client IPs in API logs',
       level:   rlPct >= 60 ? 'warn' : 'info',
       tags:    ['redis', 'api', 'rate_limit'],
@@ -106,8 +105,8 @@ function detectCacheMiss({ metrics, cost }: DetectionContext): Insight | null {
     const aiCost   = cost?.breakdown?.['AI APIs']?.estimatedMonthly ?? 0;
     const costHint = aiCost > 5 ? ` (~$${aiCost.toFixed(0)}/mo est.)` : '';
     return {
-      summary: `AI cache is only ${cachePct}% of Redis ops while ${aiCalls} AI calls are active${costHint} — prompts not being cached`,
-      action:  'Increase ai_cache TTL and ensure cache key includes all prompt variables; target ≥ 30% cache hit ratio',
+      summary: `AI cache is only ${cachePct}% of Redis ops while ${aiCalls} AI calls are active${costHint} â€” prompts not being cached`,
+      action:  'Increase ai_cache TTL and ensure cache key includes all prompt variables; target â‰¥ 30% cache hit ratio',
       level:   aiCalls > 5 ? 'warn' : 'info',
       tags:    ['redis', 'ai_apis', 'cost'],
     };
@@ -141,7 +140,7 @@ function detectSupabaseErrors({ metrics, baselines }: DetectionContext): Insight
 
   if (errPct >= thresh.warn && errors > 0) {
     const latencyHint = avgReadLatency && avgReadLatency > 500
-      ? ` — avg read latency ${avgReadLatency}ms suggests pool saturation`
+      ? ` â€” avg read latency ${avgReadLatency}ms suggests pool saturation`
       : '';
     return {
       summary: `Supabase error rate is ${errPct}% (${errors}/${total} queries)${latencyHint}`,
@@ -164,7 +163,7 @@ function detectHighWriteRatio({ metrics }: DetectionContext): Insight | null {
   const writeRatio = writes / total;
   if (writeRatio > 0.5) {
     return {
-      summary: `Supabase write ratio is ${Math.round(writeRatio * 100)}% (${writes}/${total} ops) — unusually write-heavy`,
+      summary: `Supabase write ratio is ${Math.round(writeRatio * 100)}% (${writes}/${total} ops) â€” unusually write-heavy`,
       action:  'Consider batching writes, using Postgres triggers for derived data, or switching hot write paths to an append-only queue',
       level:   writeRatio > 0.7 ? 'warn' : 'info',
       tags:    ['supabase', 'cost'],
@@ -173,7 +172,6 @@ function detectHighWriteRatio({ metrics }: DetectionContext): Insight | null {
   return null;
 }
 
-// detectHighAuthLoad removed — Firebase auth replaced by Supabase JWT
 
 function detectExternalApiErrors({ metrics }: DetectionContext): Insight | null {
   const services  = metrics.external?.topServices ?? [];
@@ -242,7 +240,7 @@ function detectRedisNearFree({ metrics, baselines }: DetectionContext): Insight 
   // Use dynamic baseline to project whether trend will breach the free tier
   const baselineOps = baselines?.redisOpsPerMin?.mean;
   const trendNote   = baselineOps && opsPerMin > baselineOps * 1.2
-    ? ' — current rate is rising above your 7-day average'
+    ? ' â€” current rate is rising above your 7-day average'
     : '';
 
   if (ratio > 0.8 && ratio < 1.0) {
@@ -262,7 +260,7 @@ function detectRisingCostTrend({ projection }: DetectionContext): Insight | null
   if (!projection.weeklyDeltaPct || projection.weeklyDeltaPct < 10) return null;
 
   const projected = projection.projectedMonthlyCost;
-  const projStr   = projected != null ? ` — projected to reach $${projected.toFixed(0)}/mo` : '';
+  const projStr   = projected != null ? ` â€” projected to reach $${projected.toFixed(0)}/mo` : '';
   return {
     summary: `Infrastructure cost is rising at +${projection.weeklyDeltaPct}%/week${projStr}`,
     action:  'Identify the fastest-growing service in the Cost Overview card; set a cost alert in your cloud provider dashboard',
@@ -271,13 +269,13 @@ function detectRisingCostTrend({ projection }: DetectionContext): Insight | null
   };
 }
 
-// ── Main export ────────────────────────────────────────────────────────────────
+// â”€â”€ Main export â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Derive actionable insights from a current snapshot, optional cost estimate,
  * optional cost projection, and optional dynamic baselines.
  *
- * Pure function — no side effects, no I/O.
+ * Pure function â€” no side effects, no I/O.
  */
 export function deriveInsights(
   metrics:    SystemMetrics,

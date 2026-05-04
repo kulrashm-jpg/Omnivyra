@@ -20,6 +20,7 @@ import {
   Activity, Clock, Zap, Database, BarChart2, Settings, Save,
   ToggleLeft, ToggleRight, Sparkles, X, Check,
 } from 'lucide-react';
+import { apiFetch } from '../../lib/apiFetch';
 
 // ── API types ─────────────────────────────────────────────────────────────────
 
@@ -1080,9 +1081,9 @@ export default function RedisEfficiencyPanel() {
     const errs: Record<SubTab, string | null> = { 'rate-limiter': null, queue: null, cron: null };
 
     const [rRes, qRes, cRes, rlCfgRes, qCfgRes, cronCfgRes] = await Promise.allSettled([
-      fetch('/api/super-admin/redis-metrics', { credentials: 'include' }),
-      fetch('/api/super-admin/queue-metrics',  { credentials: 'include' }),
-      fetch('/api/super-admin/cron-metrics',   { credentials: 'include' }),
+      apiFetch('/api/super-admin/redis-metrics'),
+      apiFetch('/api/super-admin/queue-metrics'),
+      apiFetch('/api/super-admin/cron-metrics'),
       fetch('/api/admin/rate-limit-config',    { credentials: 'include' }),
       fetch('/api/admin/queue-config',         { credentials: 'include' }),
       fetch('/api/admin/cron-config',          { credentials: 'include' }),

@@ -5,7 +5,8 @@
  * Non-blocking. Never throws.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isTerminalExecutionState } from '../governance/ExecutionStateMachine';
 import { assertValidExecutionTransition } from '../governance/ExecutionStateMachine';
 import { recordGovernanceEvent, recordCampaignCompletedEvent } from './GovernanceEventService';

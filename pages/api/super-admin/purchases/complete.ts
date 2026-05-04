@@ -8,29 +8,28 @@
  * Body: { purchase_id: string, reference_id?: string }
  *
  * Also handles:
- *   action = 'fail' — marks the purchase as failed without crediting.
- *   action = 'create' — creates a new pending purchase record (for testing
+ *   action = 'fail' â€” marks the purchase as failed without crediting.
+ *   action = 'create' â€” creates a new pending purchase record (for testing
  *                        or manual offline purchases).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
 import { completePurchase, failPurchase } from '../../../../backend/services/purchaseService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  if (!isContentArchitectSession(req)) {
+    const ctx = await requireAdminScope(req, res, 'credits:grant');
+    if (!ctx) return;
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[ADMIN_SCOPE]', '/api/super-admin/purchases/complete', 'credits:grant');
+    }
+  }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { action = 'complete', purchase_id, reference_id } = body as {
@@ -46,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     currency?: string;
   };
 
-  // ── action = 'create': create a pending purchase ───────────────────────────
+  // â”€â”€ action = 'create': create a pending purchase â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (action === 'create') {
     const { organization_id, package_id, plan_id, credits, amount_paid = 0, currency = 'USD' } = body;
     if (!organization_id) return res.status(400).json({ error: 'organization_id is required' });
@@ -74,14 +73,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(201).json({ success: true, purchase_id: data.id });
   }
 
-  // ── action = 'fail': mark purchase failed ─────────────────────────────────
+  // â”€â”€ action = 'fail': mark purchase failed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (action === 'fail') {
     if (!purchase_id) return res.status(400).json({ error: 'purchase_id is required' });
     await failPurchase(purchase_id, reference_id);
     return res.status(200).json({ success: true, purchase_id, status: 'failed' });
   }
 
-  // ── action = 'complete': complete purchase and credit org ──────────────────
+  // â”€â”€ action = 'complete': complete purchase and credit org â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (!purchase_id) return res.status(400).json({ error: 'purchase_id is required' });
 
   const result = await completePurchase(purchase_id, reference_id);
@@ -100,3 +99,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     credits_granted: result.creditsGranted,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

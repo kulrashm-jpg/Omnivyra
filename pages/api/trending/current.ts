@@ -1,21 +1,22 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 
 // One Specialized Source Per Platform Type for Best Results
 const getTrendingData = async () => {
   try {
-    // 1. Google Trends → LinkedIn (Professional & Business Topics)
+    // 1. Google Trends â†’ LinkedIn (Professional & Business Topics)
     const linkedinTrends = await fetchGoogleTrends();
     
-    // 2. Reddit → Twitter (Real-time Discussions & Viral Topics)
+    // 2. Reddit â†’ Twitter (Real-time Discussions & Viral Topics)
     const twitterTrends = await fetchRedditTrending();
     
-    // 3. YouTube → Instagram/TikTok (Visual Content & Viral Videos)
+    // 3. YouTube â†’ Instagram/TikTok (Visual Content & Viral Videos)
     const instagramTrends = await fetchYouTubeTrending();
     
-    // 4. Reddit → Facebook (Community-driven Social Topics)
+    // 4. Reddit â†’ Facebook (Community-driven Social Topics)
     const facebookTrends = await fetchRedditTrending();
     
-    // 5. YouTube → YouTube (Video Content & Trending Videos)
+    // 5. YouTube â†’ YouTube (Video Content & Trending Videos)
     const youtubeTrends = await fetchYouTubeTrending();
 
     return {
@@ -176,8 +177,8 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
     trendingData.linkedin?.forEach(trend => {
       suggestions.push({
         type: "linkedin_trend",
-        text: `🔍 "${trend.keyword}" trending for professionals`,
-        icon: "💼",
+        text: `ðŸ” "${trend.keyword}" trending for professionals`,
+        icon: "ðŸ’¼",
         source: "Google Trends",
         platform: "LinkedIn",
         category: trend.category,
@@ -192,8 +193,8 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
     trendingData.twitter?.forEach(trend => {
       suggestions.push({
         type: "twitter_trend",
-        text: `🔥 "${trend.keyword}" viral on r/${trend.subreddit}`,
-        icon: "𝕏",
+        text: `ðŸ”¥ "${trend.keyword}" viral on r/${trend.subreddit}`,
+        icon: "ð•",
         source: "Reddit",
         platform: "Twitter",
         category: "Community",
@@ -208,8 +209,8 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
     trendingData.instagram?.forEach(trend => {
       suggestions.push({
         type: "instagram_trend",
-        text: `📸 "${trend.keyword}" trending with ${trend.views} views`,
-        icon: "📸",
+        text: `ðŸ“¸ "${trend.keyword}" trending with ${trend.views} views`,
+        icon: "ðŸ“¸",
         source: "YouTube",
         platform: "Instagram",
         category: trend.category,
@@ -224,8 +225,8 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
     trendingData.facebook?.forEach(trend => {
       suggestions.push({
         type: "facebook_trend",
-        text: `👥 "${trend.keyword}" popular in communities`,
-        icon: "👥",
+        text: `ðŸ‘¥ "${trend.keyword}" popular in communities`,
+        icon: "ðŸ‘¥",
         source: "Reddit",
         platform: "Facebook",
         category: "Social",
@@ -240,8 +241,8 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
     trendingData.youtube?.forEach(trend => {
       suggestions.push({
         type: "youtube_trend",
-        text: `📺 "${trend.keyword}" trending with ${trend.views} views`,
-        icon: "📺",
+        text: `ðŸ“º "${trend.keyword}" trending with ${trend.views} views`,
+        icon: "ðŸ“º",
         source: "YouTube",
         platform: "YouTube",
         category: trend.category,
@@ -254,7 +255,7 @@ const generateAISuggestions = (trendingData, connectedPlatforms = ['linkedin', '
   return suggestions.slice(0, 15); // Return top 15 suggestions
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -286,3 +287,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: error.message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

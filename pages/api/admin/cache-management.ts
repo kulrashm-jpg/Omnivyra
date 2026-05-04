@@ -1,7 +1,7 @@
 
 /**
- * GET  /api/admin/cache-management  — Returns cache stats for all layers
- * POST /api/admin/cache-management  — Flushes a specific cache layer
+ * GET  /api/admin/cache-management  â€” Returns cache stats for all layers
+ * POST /api/admin/cache-management  â€” Flushes a specific cache layer
  *
  * Body for POST: { action: 'flush_ai' | 'flush_ext_api' | 'flush_intelligence' }
  *
@@ -10,18 +10,10 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import IORedis from 'ioredis';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getCacheStats as getExtApiStats } from '../../../backend/services/redisExternalApiCache';
 import { invalidateCacheByPrefix } from '../../../backend/services/aiResponseCache';
-
-const requireSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function getRedisClient(): IORedis | null {
   const url = process.env.REDIS_URL || process.env.REDIS_PRIVATE_URL;
@@ -66,7 +58,7 @@ async function getRedisKeyStats(client: IORedis): Promise<{ prefix: string; coun
   const results: { prefix: string; count: number }[] = [];
   for (const { prefix, label } of prefixes) {
     try {
-      // SCAN to count keys — more efficient than KEYS for production
+      // SCAN to count keys â€” more efficient than KEYS for production
       let cursor = '0';
       let count = 0;
       do {
@@ -82,10 +74,14 @@ async function getRedisKeyStats(client: IORedis): Promise<{ prefix: string; coun
   return results;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireSuperAdmin(req, res))) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'admin:cache-management');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/cache-management', 'admin:cache-management');
+  }
 
-  // ── POST: flush a cache layer ────────────────────────────────────────────
+  // â”€â”€ POST: flush a cache layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const { action } = req.body as { action?: string };
 
@@ -142,7 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Unknown action' });
   }
 
-  // ── GET: return cache stats ──────────────────────────────────────────────
+  // â”€â”€ GET: return cache stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method !== 'GET') return res.status(405).end();
 
   const client = getRedisClient();
@@ -169,10 +165,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   return res.status(200).json({
     redis: {
       available:         redisAvailable,
-      used_memory:       redisInfo.used_memory_human ?? '—',
-      peak_memory:       redisInfo.used_memory_peak_human ?? '—',
+      used_memory:       redisInfo.used_memory_human ?? 'â€”',
+      peak_memory:       redisInfo.used_memory_peak_human ?? 'â€”',
       max_memory:        redisInfo.maxmemory_human ?? 'unlimited',
-      eviction_policy:   redisInfo.maxmemory_policy ?? '—',
+      eviction_policy:   redisInfo.maxmemory_policy ?? 'â€”',
       evicted_keys:      parseInt(redisInfo.evicted_keys ?? '0', 10),
       expired_keys:      parseInt(redisInfo.expired_keys ?? '0', 10),
       connected_clients: parseInt(redisInfo.connected_clients ?? '0', 10),
@@ -189,7 +185,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       per_api_misses: extApiStats.per_api_misses,
     },
     layers: [
-      { name: 'AI Response Cache',    prefix: 'ai_cache',      ttl: '6h–24h',  auto_evict: true  },
+      { name: 'AI Response Cache',    prefix: 'ai_cache',      ttl: '6hâ€“24h',  auto_evict: true  },
       { name: 'External API Cache',   prefix: 'ext_api',       ttl: '12 min',  auto_evict: true  },
       { name: 'Intelligence Cache',   prefix: 'intelligence',  ttl: '1h',      auto_evict: true  },
       { name: 'Strategy Index',       prefix: 'strategy_index', ttl: '24h',    auto_evict: true  },
@@ -197,3 +193,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     collected_at: new Date().toISOString(),
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

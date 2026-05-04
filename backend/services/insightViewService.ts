@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { PersistedDecisionObject } from './decisionObjectService';
 import { assertDecisionArray } from './decisionRuntimeGuardService';
 import { assertApiReadContext } from './intelligenceExecutionContext';

@@ -13,7 +13,8 @@
  */
 
 import crypto from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getToken, setToken } from './tokenStore';
 
 // Meta deprecates Graph API versions ~24 months after release. Bump together
@@ -189,47 +190,70 @@ export async function refreshLongLivedToken(
 
 // ── Primary entry point ───────────────────────────────────────────────────────
 
-const REFRESH_BUFFER_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
+const ON_DEMAND_REFRESH_BUFFER_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Determines whether a token should be refreshed inline.
+ * Bypasses refresh for system-user tokens.
+ */
+export function refreshTokenIfNeeded(
+  isSystemUser: boolean,
+  expiresAt: Date | null,
+  bufferMs: number = ON_DEMAND_REFRESH_BUFFER_MS,
+): boolean {
+  if (isSystemUser) return false;
+  if (!expiresAt) return true;
+  return expiresAt.getTime() - Date.now() < bufferMs;
+}
 
 /**
  * Get a valid access token for a Meta social account.
- * Automatically refreshes if within 5-day expiry window.
+ * Refreshes inline when expiry is within 24 hours.
  *
- * Usage in adapters:
- *   const token = await getValidAccessToken(account.id);
+ * Failure handling: if the inline refresh throws, the cached (potentially
+ * about-to-expire) token is returned as a best-effort fallback so a single
+ * Meta-side hiccup doesn't immediately fail the publish. The background
+ * refresh job (runMetaTokenRefreshJob) is the durable owner of refresh
+ * lifecycle and will mark the connection refresh_failed_at on persistent
+ * failure.
  */
 export async function getValidAccessToken(socialAccountId: string): Promise<string> {
   const ctx = await getSocialAccountAuthContext(socialAccountId);
 
-  // System User tokens never expire
   if (ctx.is_system_user) return ctx.access_token;
 
-  // Check if refresh is needed
-  const expiresAt   = ctx.token_expires_at ? new Date(ctx.token_expires_at) : null;
-  const needsRefresh = !expiresAt || (expiresAt.getTime() - Date.now()) < REFRESH_BUFFER_MS;
+  const expiresAt = ctx.token_expires_at ? new Date(ctx.token_expires_at) : null;
+  if (!refreshTokenIfNeeded(ctx.is_system_user, expiresAt)) {
+    return ctx.access_token;
+  }
 
-  if (!needsRefresh) return ctx.access_token;
+  try {
+    const refreshed = await refreshLongLivedToken(
+      ctx.platform,
+      ctx.access_token,
+      ctx.is_system_user,
+      ctx.client_id,
+      ctx.client_secret,
+    );
 
-  // Refresh
-  const refreshed = await refreshLongLivedToken(
-    ctx.platform,
-    ctx.access_token,
-    ctx.is_system_user,
-    ctx.client_id,
-    ctx.client_secret,
-  );
+    const newExpiresAt = refreshed.expires_in > 0
+      ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
+      : null;
 
-  const newExpiresAt = refreshed.expires_in > 0
-    ? new Date(Date.now() + refreshed.expires_in * 1000).toISOString()
-    : null;
+    await setToken(socialAccountId, {
+      access_token: refreshed.access_token,
+      expires_at:   newExpiresAt ?? undefined,
+      token_type:   refreshed.token_type,
+    });
 
-  await setToken(socialAccountId, {
-    access_token: refreshed.access_token,
-    expires_at:   newExpiresAt ?? undefined,
-    token_type:   refreshed.token_type,
-  });
-
-  return refreshed.access_token;
+    return refreshed.access_token;
+  } catch (err) {
+    console.warn(
+      `[metaAuthService] inline refresh failed for ${socialAccountId} (${ctx.platform}); ` +
+      `serving cached token. cause: ${(err as Error).message}`,
+    );
+    return ctx.access_token;
+  }
 }
 
 // ── OAuth flow guard ──────────────────────────────────────────────────────────

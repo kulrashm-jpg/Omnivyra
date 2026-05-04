@@ -10,7 +10,8 @@
  */
 
 import OpenAI from 'openai';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
 
 export type SentimentLabel = 'positive' | 'neutral' | 'negative' | 'intent';

@@ -1,7 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // Handle GET/POST requests to /api/campaigns
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import {
@@ -80,7 +82,7 @@ const requireCompanyRole = async (
   return { userId, role };
 };
 
-// supabase singleton imported from shared client — no local re-creation
+// supabase singleton imported from shared client â€” no local re-creation
 
 const validatePlaybookReference = async (playbookId: string, companyId: string) => {
   const { data, error } = await supabase
@@ -116,7 +118,7 @@ const mapCampaignPlaybook = (campaign: any) => ({
     : null,
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     const companyIdRaw =
       (req.query.companyId as string | undefined) ||
@@ -134,7 +136,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (auth.error || !auth.user) {
         return res.status(401).json({ error: 'UNAUTHORIZED' });
       }
-      // Single RBAC resolution — checks platform admin, legacy admin, then company role
+      // Single RBAC resolution â€” checks platform admin, legacy admin, then company role
       const userId = auth.user.id;
       if (await isPlatformSuperAdmin(userId)) {
         requester = { id: userId, role: Role.SUPER_ADMIN };
@@ -516,7 +518,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
       }
 
-      // Stored recommendation card (from Build Campaign Blueprint) — for Content Architect and campaign detail views
+      // Stored recommendation card (from Build Campaign Blueprint) â€” for Content Architect and campaign detail views
       const sourceRecommendationCard =
         snapshot?.source_recommendation_id || snapshot?.source_strategic_theme
           ? {
@@ -570,7 +572,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       return res.status(200).json({ goals });
     } else {
-      // List campaigns for company — paginated
+      // List campaigns for company â€” paginated
       const page = Math.max(1, parseInt((req.query.page as string) || '1', 10));
       const limit = Math.min(100, Math.max(1, parseInt((req.query.limit as string) || '50', 10)));
       const offset = (page - 1) * limit;
@@ -659,3 +661,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

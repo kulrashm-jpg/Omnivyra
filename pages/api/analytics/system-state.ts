@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getGoogleAnalyticsStatus } from '../../../backend/services/analyticsIntegrationService';
 import { resolveOrganizationPlanLimits, type ResolvedPlanLimits } from '../../../backend/services/planResolutionService';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
@@ -282,7 +284,7 @@ function buildWeeklyTimeline(weeks: number, rows: GenericRow[], dateField: strin
     }));
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<SystemStateResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<SystemStateResponse | { error: string }>) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -365,7 +367,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     fetchRows('content_assets', 'campaign_id, platform, status, created_at', (query) =>
       hasCampaigns ? query.in('campaign_id', campaignIds) : query.eq('campaign_id', ZERO_UUID)
     ),
-    fetchRows('user_company_roles', 'user_id', (query) =>
+    fetchRows('user company roles', 'user_id', (query) =>
       query.eq('company_id', companyId).eq('status', 'active')
     ),
     fetchRows('usage_meter_monthly', 'llm_total_tokens, external_api_calls, automation_executions', (query) =>
@@ -679,3 +681,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   return res.status(200).json(response);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,7 +1,7 @@
 
 /**
- * GET  /api/admin/queue-config  — read current queue overrides
- * POST /api/admin/queue-config  — save new overrides
+ * GET  /api/admin/queue-config  â€” read current queue overrides
+ * POST /api/admin/queue-config  â€” save new overrides
  *
  * Auth: super_admin_session cookie
  *
@@ -16,9 +16,9 @@
  * }
  *
  * Safe ranges (validated server-side):
- *   maxJobsPerCycle: 1–5000
- *   attempts:        0–10
- *   concurrency:     1–50
+ *   maxJobsPerCycle: 1â€“5000
+ *   attempts:        0â€“10
+ *   concurrency:     1â€“50
  *
  * Note: concurrency and attempts affect future worker/queue creation only.
  *       maxJobsPerCycle applies immediately to the next addBulk call.
@@ -31,6 +31,7 @@ import {
   validateQueueConfig,
   type QueueAdminConfig,
 } from '../../../backend/services/adminRuntimeConfig';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
@@ -71,4 +72,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'admin-queue-config', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

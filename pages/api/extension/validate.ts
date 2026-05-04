@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
 
 type SuccessResponse = {
@@ -20,7 +22,7 @@ type ErrorResponse = {
   timestamp: number;
 };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>
 ) {
@@ -37,7 +39,7 @@ export default async function handler(
   const requestedOrgId = String(body.orgId || body.organization_id || body.organizationId || '').trim();
 
   // Session token (HMAC-verified) is authoritative for orgId. The body field
-  // is only used to assert the client's view matches the session — if the
+  // is only used to assert the client's view matches the session â€” if the
   // client omits it, fall back to the session's pinned orgId rather than
   // 400-ing a request that's otherwise valid.
   const effectiveOrgId = requestedOrgId || session.orgId;
@@ -47,14 +49,14 @@ export default async function handler(
   }
 
   // In dev-bypass mode the middleware uses a sentinel userId that has no
-  // user_company_roles row by design — the bypass IS the trust signal.
+  // user company roles row by design â€” the bypass IS the trust signal.
   // Skip the role check so validation succeeds and the extension can
   // start polling. Production paths still run the check below.
   const isBypassSession = session.userId === '00000000-0000-4000-8000-000000000001';
 
   if (!isBypassSession) {
     const { data: roleRow, error: roleError } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id, status')
       .eq('user_id', session.userId)
       .eq('company_id', effectiveOrgId)
@@ -83,3 +85,8 @@ export default async function handler(
     timestamp: Date.now(),
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

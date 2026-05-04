@@ -1,6 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /**
  * GET /api/recommendations/strategy-signals?companyId=...
@@ -8,7 +10,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
  * - archived, longTerm (strategic backlog), adopted (ideas adopted into campaigns),
  * - totalRecommendations, adoptionRate (%)
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -32,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let totalRecommendations = 0;
   let adopted = 0;
 
-  // Query 1 — Archived
+  // Query 1 â€” Archived
   const { count: archivedCount, error: archivedErr } = await supabase
     .from('recommendation_user_state')
     .select('*', { count: 'exact', head: true })
@@ -41,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!archivedErr && archivedCount != null) archived = archivedCount;
 
-  // Query 2 — Strategic Backlog (LONG_TERM)
+  // Query 2 â€” Strategic Backlog (LONG_TERM)
   const { count: longTermCount, error: longTermErr } = await supabase
     .from('recommendation_user_state')
     .select('*', { count: 'exact', head: true })
@@ -50,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!longTermErr && longTermCount != null) longTerm = longTermCount;
 
-  // Query 3 — Total Recommendations
+  // Query 3 â€” Total Recommendations
   const { count: totalCount, error: totalErr } = await supabase
     .from('recommendation_snapshots')
     .select('*', { count: 'exact', head: true })
@@ -58,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!totalErr && totalCount != null) totalRecommendations = totalCount;
 
-  // Query 4 — Adopted (campaigns created from recommendations)
+  // Query 4 â€” Adopted (campaigns created from recommendations)
   const { data: cvRows, error: cvErr } = await supabase
     .from('campaign_versions')
     .select('campaign_snapshot')
@@ -88,3 +90,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     adoptionRate,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

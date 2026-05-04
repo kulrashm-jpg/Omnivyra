@@ -1,8 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -17,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     switch (action) {
       case 'get-overview':
-        // Get campaign data — try campaigns table first, then campaign_versions snapshot (opportunity-promoted)
+        // Get campaign data â€” try campaigns table first, then campaign_versions snapshot (opportunity-promoted)
         let campaign: { id: string; name?: string; description?: string; status?: string; created_at?: string; weekly_themes?: unknown } | null = null;
         const { data: campaignRow, error: campaignError } = await supabase
           .from('campaigns')
@@ -53,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        // Blueprint (campaign_week_plan) is source of truth for committed plans — check first
+        // Blueprint (campaign_week_plan) is source of truth for committed plans â€” check first
         const blueprint = await getUnifiedCampaignBlueprint(campaignId as string);
         const { data: weeklyRefinements } = await supabase
           .from('weekly_content_refinements')
@@ -200,3 +202,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

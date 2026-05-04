@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import PlaybookList from '../../components/community-ai/PlaybookList';
 import PlaybookEditor, { defaultPlaybook } from '../../components/community-ai/PlaybookEditor';
 import type { EngagementPlaybook } from '../../backend/services/playbooks/playbookTypes';
@@ -23,7 +23,7 @@ export default function CommunityAiPlaybooks() {
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/community-ai/playbooks?tenant_id=${encodeURIComponent(
           tenantId
         )}&organization_id=${encodeURIComponent(tenantId)}`
@@ -55,7 +55,7 @@ export default function CommunityAiPlaybooks() {
     setErrorMessage(null);
     try {
       const isUpdate = Boolean(playbook.id);
-      const response = await fetchWithAuth('/api/community-ai/playbooks', {
+      const response = await apiFetch('/api/community-ai/playbooks', {
         method: isUpdate ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -79,7 +79,7 @@ export default function CommunityAiPlaybooks() {
     if (!tenantId || !playbook.id) return;
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/playbooks', {
+      const response = await apiFetch('/api/community-ai/playbooks', {
         method: playbook.status === 'active' ? 'DELETE' : 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

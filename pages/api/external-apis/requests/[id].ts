@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { saveTenantPlatformConfig } from '../../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
@@ -12,7 +14,7 @@ import {
 } from '../../../../backend/services/rbacService';
 import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Request ID is required' });
@@ -216,3 +218,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(400).json({ error: 'Missing status or action' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

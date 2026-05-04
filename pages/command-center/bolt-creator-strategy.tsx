@@ -8,7 +8,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';

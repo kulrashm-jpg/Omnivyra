@@ -12,7 +12,7 @@
 
 import React, { useEffect, useState } from 'react';
 import type { PerformanceInsight } from '../../lib/performance/performanceAnalyzer';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface PerformanceInsightResponse {
   campaignId: string;
@@ -46,7 +46,7 @@ export function PerformanceInsightsCard({
     setLoading(true);
     setError(null);
 
-    fetchWithAuth(`/api/campaigns/performance-insights?campaignId=${encodeURIComponent(campaignId)}`)
+    apiFetch(`/api/campaigns/performance-insights?campaignId=${encodeURIComponent(campaignId)}`)
       .then((res) => res.json())
       .then((json) => {
         if (cancelled) return;

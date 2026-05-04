@@ -13,7 +13,8 @@
  *   Patterns with engagement_rate above the CONTRIBUTION_THRESHOLD are eligible.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // Only contribute patterns with engagement ≥ 2%
 const CONTRIBUTION_THRESHOLD = 0.02;

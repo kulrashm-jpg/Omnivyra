@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/blogs/resolve?slug=<slug>&company_id=<uuid>
  *
@@ -12,10 +13,11 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const slug      = typeof req.query.slug       === 'string' ? req.query.slug.trim()       : null;
@@ -45,3 +47,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     status:  data.status,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

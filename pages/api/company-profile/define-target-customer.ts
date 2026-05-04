@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { getProfile } from '../../../backend/services/companyProfileService';
@@ -6,12 +7,12 @@ import { resolveCompanyAccess } from '../../../backend/services/contentArchitect
 // Commercial fields collected in Phase 1. Field naming matches company_profiles DB columns.
 const FIELDS_DESCRIPTION = [
   'target_customer_segment: who they sell to (e.g. SMB, enterprise, vertical)',
-  'ideal_customer_profile: 1–2 sentence description of the ideal buyer',
+  'ideal_customer_profile: 1â€“2 sentence description of the ideal buyer',
   'pricing_model: e.g. subscription, one-time, usage-based, freemium',
   'sales_motion: e.g. self-serve, sales-led, hybrid, product-led',
   'avg_deal_size: typical deal or contract value (e.g. $5k, $50k)',
   'sales_cycle: e.g. days, weeks, months',
-  'key_metrics: 2–4 metrics they care about (e.g. MRR, CAC, LTV)',
+  'key_metrics: 2â€“4 metrics they care about (e.g. MRR, CAC, LTV)',
 ].join('\n');
 
 // Phase 2: Campaign purpose questions. Parsed into campaign_purpose_intent JSONB.
@@ -28,7 +29,7 @@ function getOpenAiClient(): OpenAI {
   return new OpenAI({ apiKey });
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -59,12 +60,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       FIELDS_DESCRIPTION +
       '\n\n' +
       '- Phase 2: After the 7 commercial fields, ask these campaign purpose questions (one at a time):\n' +
-      CAMPAIGN_PURPOSE_QUESTIONS.map((q) => `  • ${q}`).join('\n') +
+      CAMPAIGN_PURPOSE_QUESTIONS.map((q) => `  â€¢ ${q}`).join('\n') +
       '\n\n' +
       'Response format (JSON only, no markdown, no explanation):\n' +
       '- If you need more information: { "nextQuestion": "your question here" }\n' +
       '- When you have enough to fill all 7 commercial fields AND campaign purpose: { "done": true, "structuredFields": { "target_customer_segment": "...", "ideal_customer_profile": "...", "pricing_model": "...", "sales_motion": "...", "avg_deal_size": "...", "sales_cycle": "...", "key_metrics": "..." }, "campaign_purpose_intent": { "primary_objective": "...", "campaign_intent": "...", "monetization_intent": "...", "dominant_problem_domains": ["...", "..."], "brand_positioning_angle": "..." } }\n' +
-      'Use empty string for any commercial field you could not infer. Keep values concise (1–2 sentences max for ideal_customer_profile).\n' +
+      'Use empty string for any commercial field you could not infer. Keep values concise (1â€“2 sentences max for ideal_customer_profile).\n' +
       'In campaign_purpose_intent: primary_objective = why social media for this business; campaign_intent = what they want to achieve; monetization_intent = how campaigns support revenue; dominant_problem_domains = array of problems they want to solve; brand_positioning_angle = how they want to be perceived. Always return valid JSON.';
 
     const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -130,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
     return res.status(200).json({
-      nextQuestion: parsed.nextQuestion || 'Anything else you’d like to add about your commercial strategy?',
+      nextQuestion: parsed.nextQuestion || 'Anything else youâ€™d like to add about your commercial strategy?',
     });
   } catch (err: any) {
     console.error('Define target customer failed:', err);
@@ -140,3 +141,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

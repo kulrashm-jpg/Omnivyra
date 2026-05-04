@@ -3,7 +3,8 @@
  * Validates tamper-evident hash chain. Never throws.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 import { computeGovernanceEventHash } from '../governance/GovernanceLedger';
 

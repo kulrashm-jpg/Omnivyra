@@ -3,7 +3,8 @@
  * Tracks performance of AI-generated replies for the Response Learning Engine.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordMetric } from './systemHealthMetricsService';
 
 export type RecordReplyInput = {

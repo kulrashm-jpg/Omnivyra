@@ -5,7 +5,8 @@
  * Runs every 6 hours. Idempotent.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { invalidateStrategyProfileCache } from '../services/strategyProfileCache';
 
 const LOOKBACK_DAYS = 30;

@@ -3,7 +3,8 @@
  * Does not block execution. Does not modify meter or ledger. Signal only.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { resolveOrganizationPlanLimits } from './planResolutionService';
 
 const THRESHOLDS = [100, 95, 80] as const;

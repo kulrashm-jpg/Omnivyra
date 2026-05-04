@@ -52,9 +52,9 @@ Usage:
 
 Examples:
   node db-utility/db-inspector.js --list
-  node db-utility/db-inspector.js --describe user_company_roles
-  node db-utility/db-inspector.js --details user_company_roles
-  node db-utility/db-inspector.js --sample user_company_roles --limit 10
+  node db-utility/db-inspector.js --describe user company roles
+  node db-utility/db-inspector.js --details user company roles
+  node db-utility/db-inspector.js --sample user company roles --limit 10
 `);
 };
 

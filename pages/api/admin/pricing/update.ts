@@ -30,13 +30,14 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
 import {
   requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
+  requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { refreshPricingCache, getActionPricing } from '../../../../backend/services/pricingService';
 import { resolveActionKey } from '../../../../backend/services/usageLedgerService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
@@ -236,22 +237,26 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:pricing', 20, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
+  const ctx = await requireAdminScope(req, res, 'pricing:update');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/pricing/update', 'pricing:update');
   }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
   const target = (body as UpdateBody).target;
 
   if (target === 'model') {
-    return handleModelUpdate(body as ModelUpdateBody, user.id, res);
+    return handleModelUpdate(body as ModelUpdateBody, ctx.id, res);
   }
   if (target === 'action') {
-    return handleActionUpdate(body as ActionUpdateBody, user.id, res);
+    return handleActionUpdate(body as ActionUpdateBody, ctx.id, res);
   }
   return res.status(400).json({ error: "target must be 'model' or 'action'" });
 }
 
-export default withIdempotency(handler, { scope: 'admin-pricing-update', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

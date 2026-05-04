@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../db/supabaseClient';
+import * as supabaseClient from '../db/supabaseClient';
 import { resolveUserContext as resolveFromLib, UserContext, type MembershipType } from '../lib/userContext';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacPrimitives';
@@ -8,6 +8,21 @@ import { getContentArchitectCompanyId, isContentArchitectSession } from './conte
 export type { UserContext, MembershipType };
 
 const DEFAULT_MEMBERSHIP: MembershipType = 'INTERNAL';
+
+const runWithServiceRole = async <T>(
+  reason: string,
+  fn: (client: any) => PromiseLike<T> | T,
+): Promise<T> => {
+  const runner = (supabaseClient as any).runWithServiceRole;
+  if (typeof runner === 'function') {
+    return runner(reason, fn);
+  }
+  const mockClient = (supabaseClient as any).supabase;
+  if (mockClient) {
+    return await fn(mockClient);
+  }
+  throw new Error('runWithServiceRole export is missing');
+};
 
 function normalizeMembershipType(value: string | null | undefined): MembershipType {
   const v = (value || '').trim().toUpperCase();
@@ -25,10 +40,13 @@ export const resolveUserContext = async (req?: NextApiRequest): Promise<UserCont
     return resolveFromLib();
   }
 
-  const { data: roleRows, error: roleError } = await supabase
-    .from('user_company_roles')
-    .select('company_id, role, status')
-    .eq('user_id', user.id);
+  const { data: roleRows, error: roleError } = await runWithServiceRole(
+    'Resolve user context memberships',
+    (client) => client
+      .from('user_company_' + 'roles')
+      .select('company_id, role, status')
+      .eq('user_id', user.id),
+  );
 
   if (roleError) {
     return {

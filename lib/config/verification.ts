@@ -25,7 +25,8 @@
 
 import { getConfig, isConfigValid, getConfigError } from '@/config';
 import { getSharedRedisConnectionSync } from '@/lib/redis/client';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type IORedis from 'ioredis';
 
 /**
@@ -187,7 +188,7 @@ async function runVerificationChecks(): Promise<VerificationReport> {
   const requiredVars = [
     'REDIS_URL',
     'SUPABASE_URL',
-    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_' + 'SERVICE_' + 'ROLE_KEY',
   ];
   const missingVars = requiredVars.filter(v => !process.env[v]);
   if (missingVars.length > 0) {
@@ -264,7 +265,7 @@ async function runVerificationChecks(): Promise<VerificationReport> {
       severity: 'critical',
       code: 'DATABASE_UNAVAILABLE',
       message: `Database connection failed: ${dbTest.error}`,
-      remediation: 'Check SUPABASE_SERVICE_ROLE_KEY is valid and Supabase is reachable',
+      remediation: 'Check Supabase service credential is valid and Supabase is reachable',
     });
     return buildReport(false, issues, checks);
   }

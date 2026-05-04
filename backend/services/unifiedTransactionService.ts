@@ -11,7 +11,8 @@
  * parallel usage_events write stays intact so visibility isn't lost.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordCostAnomaly } from './pricingService';
 import { logger } from './logger';
 

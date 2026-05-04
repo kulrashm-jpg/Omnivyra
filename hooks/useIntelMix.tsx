@@ -9,7 +9,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import UnifiedContextModeSelector, {
   type ContextMode,
   type FocusModule,
@@ -247,7 +247,7 @@ export function useIntelMix() {
       return;
     }
     let cancelled = false;
-    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}`)
+    apiFetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled) return;
@@ -274,7 +274,7 @@ export function useIntelMix() {
   useEffect(() => {
     if (!selectedCompanyId) return;
     setSuggestionsLoading(true);
-    fetchWithAuth('/api/planner/suggest-campaigns', {
+    apiFetch('/api/planner/suggest-campaigns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ companyId: selectedCompanyId }),

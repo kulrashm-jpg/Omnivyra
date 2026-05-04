@@ -8,7 +8,7 @@ import { usePlannerSession, type StrategicThemeEntry } from './plannerSessionSto
 import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { Send, Loader2 } from 'lucide-react';
 import ChatVoiceButton from '../ChatVoiceButton';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
 export interface AIPlanningAssistantTabProps {
@@ -61,7 +61,7 @@ export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProp
           platform_content_requests: state.platform_content_requests,
           calendar_plan: calendarPlan,
         });
-        const res = await fetchWithAuth('/api/planner/generate-themes', {
+        const res = await apiFetch('/api/planner/generate-themes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -140,7 +140,7 @@ export function AIPlanningAssistantTab({ companyId }: AIPlanningAssistantTabProp
         body.platform_content_requests = state.platform_content_requests ?? undefined;
         body.campaign_type = state.campaign_type ?? undefined;
       }
-      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
+      const res = await apiFetch('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

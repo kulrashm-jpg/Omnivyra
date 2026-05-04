@@ -1,5 +1,6 @@
 import handler from '../../../pages/api/campaigns/[id]/ai-history';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 jest.mock('../../db/supabaseClient', () => ({

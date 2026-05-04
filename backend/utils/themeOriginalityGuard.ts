@@ -5,7 +5,8 @@
  * Loads last N themes from campaign_week_plan + campaign_versions, checks similarity.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { computeTextSimilarity } from './themeDiversityGuard';
 
 export const DEFAULT_RECENT_THEMES_LIMIT = 50;

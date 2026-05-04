@@ -3,7 +3,8 @@
  * Deterministic. All criteria must pass. Never throws.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { getCampaignGovernanceAnalytics } from './GovernanceAnalyticsService';
 import { getCompanyGovernanceAnalytics } from './GovernanceAnalyticsService';

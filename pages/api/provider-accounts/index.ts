@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
- * POST /api/provider-accounts         — create account for an API
- * GET  /api/provider-accounts?api_source_id=  — list accounts for a provider
+ * POST /api/provider-accounts         â€” create account for an API
+ * GET  /api/provider-accounts?api_source_id=  â€” list accounts for a provider
  *
  * SUPER_ADMIN only. No tenant access.
  */
@@ -15,7 +16,7 @@ import {
 } from '../../../backend/services/providerAccountService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 
-// ── Auth guard ─────────────────────────────────────────────────────────────────
+// â”€â”€ Auth guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function requireSuperAdmin(
   req: NextApiRequest,
@@ -36,10 +37,10 @@ async function requireSuperAdmin(
   return null;
 }
 
-// ── Handler ────────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // ── GET: list accounts for a provider ──────────────────────────────────────
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // â”€â”€ GET: list accounts for a provider â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const session = await requireSuperAdmin(req, res);
     if (!session) return;
@@ -50,12 +51,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const accounts = await listAccountsForApi(api_source_id);
-    // Strip credentials from list response — never expose to client
+    // Strip credentials from list response â€” never expose to client
     const safe = accounts.map(({ credentials_encrypted: _creds, ...rest }) => rest);
     return res.status(200).json({ accounts: safe });
   }
 
-  // ── POST: create account ────────────────────────────────────────────────────
+  // â”€â”€ POST: create account â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const session = await requireSuperAdmin(req, res);
     if (!session) return;
@@ -63,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const {
       api_source_id,
       account_name,
-      credentials,          // plain object — we serialize + optionally encrypt
+      credentials,          // plain object â€” we serialize + optionally encrypt
       rate_limit_per_min,
       rate_limit_per_day,
       priority,
@@ -79,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'credentials object required' });
     }
 
-    // Validate shape — must have at least one usable field
+    // Validate shape â€” must have at least one usable field
     const hasApiKey =
       (typeof credentials.api_key_env_name === 'string' && credentials.api_key_env_name.trim()) ||
       (typeof credentials.api_key_value === 'string' && credentials.api_key_value.trim());
@@ -136,3 +137,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

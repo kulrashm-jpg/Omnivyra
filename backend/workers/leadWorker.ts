@@ -13,7 +13,8 @@ dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
 import { Worker } from 'bullmq';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { processLeadJobV1 } from '../services/leadJobProcessor';
 import { leadQueueConnection } from '../queue/leadQueue';
 

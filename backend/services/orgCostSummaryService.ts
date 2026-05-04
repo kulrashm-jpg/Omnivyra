@@ -9,7 +9,8 @@
  * Filters on final_attempt=true so intermediate retries don't double-count.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 import { assertAnalyticsUsesUnified } from './unifiedLedgerGuard';
 

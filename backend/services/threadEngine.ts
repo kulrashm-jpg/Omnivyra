@@ -4,7 +4,8 @@
  * New layer after community_posts. Does not modify intelligence pipeline.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const THREAD_TYPES = ['reply_chain', 'carousel', 'discussion_prompt', 'comment_seed'] as const;
 

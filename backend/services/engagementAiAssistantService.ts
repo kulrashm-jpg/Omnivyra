@@ -2,12 +2,13 @@
  * Engagement AI Assistant Service
  *
  * Generates reply suggestions for engagement messages using OpenAI/Omnivyra.
- * Returns suggested_replies and tone_variants keyed by response intent/tone.
+ * Returns exactly three intent-based suggested replies: yes, no, and maybe.
  */
 
 import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClientV1';
 import { getThreadMessages } from './engagementMessageService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getProfile } from './companyProfileService';
 import { runCompletionWithOperation } from './aiGateway';
 import { isDmMessageType, stripSenderColonPrefix } from '../../lib/engagement/messageRoles';
@@ -16,12 +17,7 @@ import { config } from '@/config';
 export type ToneVariant =
   | 'accept'
   | 'decline'
-  | 'clarify'
-  | 'defer'
-  | 'professional'
-  | 'friendly'
-  | 'educational'
-  | 'thought_leadership';
+  | 'clarify';
 
 export type ReplySuggestion = {
   text: string;
@@ -30,8 +26,97 @@ export type ReplySuggestion = {
 
 export type GenerateReplySuggestionsResult = {
   suggested_replies: ReplySuggestion[];
-  tone_variants: Partial<Record<ToneVariant, string>>;
 };
+
+type ReplyIntentBucket = 'accept' | 'decline' | 'maybe';
+
+const INTENT_BUCKET_ORDER: ReplyIntentBucket[] = ['accept', 'decline', 'maybe'];
+
+function toneForBucket(bucket: ReplyIntentBucket): ToneVariant {
+  if (bucket === 'accept') return 'accept';
+  if (bucket === 'decline') return 'decline';
+  return 'clarify';
+}
+
+function normalizeReplyForComparison(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function classifyReplyIntent(reply: { text?: string | null; tone?: string | null }): ReplyIntentBucket | null {
+  const rawTone = String(reply.tone || '').trim().toLowerCase();
+  if (rawTone === 'accept') return 'accept';
+  if (rawTone === 'decline') return 'decline';
+  if (rawTone === 'clarify' || rawTone === 'maybe') return 'maybe';
+
+  const text = normalizeReplyForComparison(reply.text);
+  if (!text) return null;
+
+  if (/\b(no|not|cannot|can't|wont|won't|unable|unavailable|do not have|don't have|cant take|can't take|won't be able|cannot take)\b/.test(text)) {
+    return 'decline';
+  }
+  if (/\b(maybe|think|consider|let me check|come back|review|before i confirm|before confirming|can you|could you|would you|share|send|clarify|context|details|timeline|resume|role|location|notice period)\b/.test(text) || text.includes('?')) {
+    return 'maybe';
+  }
+  if (/\b(yes|happy to|sure|available|glad to|can help|will check|i will|let's|lets|sounds good|works for me)\b/.test(text)) {
+    return 'accept';
+  }
+  return null;
+}
+
+function enforceIntentCoverage(
+  replies: ReplySuggestion[],
+  fallbackReplies: ReplySuggestion[],
+): ReplySuggestion[] {
+  const candidates: ReplySuggestion[] = [];
+  const seen = new Set<string>();
+
+  for (const reply of [...replies, ...fallbackReplies]) {
+    const text = String(reply?.text || '').trim();
+    if (!text) continue;
+    const key = normalizeReplyForComparison(text);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({ text, tone: reply.tone });
+  }
+
+  const chosen: ReplySuggestion[] = [];
+  const usedKeys = new Set<string>();
+
+  for (const bucket of INTENT_BUCKET_ORDER) {
+    const match = candidates.find((reply) => {
+      const key = normalizeReplyForComparison(reply.text);
+      return key && !usedKeys.has(key) && classifyReplyIntent(reply) === bucket;
+    });
+    if (!match) continue;
+    usedKeys.add(normalizeReplyForComparison(match.text));
+    chosen.push({ text: match.text, tone: toneForBucket(bucket) });
+  }
+
+  for (const bucket of INTENT_BUCKET_ORDER) {
+    if (chosen.length >= 3) break;
+    const fallback = fallbackReplies.find((reply) => classifyReplyIntent(reply) === bucket);
+    if (!fallback) continue;
+    const key = normalizeReplyForComparison(fallback.text);
+    if (!key || usedKeys.has(key)) continue;
+    usedKeys.add(key);
+    chosen.push({ text: fallback.text, tone: toneForBucket(bucket) });
+  }
+
+  for (const reply of candidates) {
+    if (chosen.length >= 3) break;
+    const key = normalizeReplyForComparison(reply.text);
+    if (!key || usedKeys.has(key)) continue;
+    usedKeys.add(key);
+    const bucket = classifyReplyIntent(reply) ?? 'maybe';
+    chosen.push({ text: reply.text, tone: toneForBucket(bucket) });
+  }
+
+  return chosen.slice(0, 3);
+}
 
 // Last-resort templated fallback. Only fires when both Omnivyra AND the
 // direct OpenAI path are unavailable. Kept short and natural — no verbatim
@@ -74,14 +159,14 @@ function buildContextualFallbackReplies(args: {
     } else if (isShort) {
       suggested_replies.push(
         { text: firstName ? `Hey ${firstName}, got it.` : `Hey, got it.`, tone: 'accept' },
-        { text: firstName ? `${firstName}, what should I look at next here?` : `What should I look at next here?`, tone: 'clarify' },
-        { text: firstName ? `Thanks ${firstName}. I'll come back once I have a proper answer.` : `Thanks. I'll come back once I have a proper answer.`, tone: 'defer' }
+        { text: firstName ? `${firstName}, I can't take this up from just this message, but send the context and I will review it.` : `I can't take this up from just this message, but send the context and I will review it.`, tone: 'decline' },
+        { text: firstName ? `${firstName}, what should I look at next here?` : `What should I look at next here?`, tone: 'clarify' }
       );
     } else if (/\?$/.test(rawMessage) || /\bhow|what|why|when|where|can you|could you|would you\b/.test(normalized)) {
       suggested_replies.push(
         { text: `${firstName ? `Hi ${firstName}, ` : ''}happy to help with this. Here's what I can share based on what I know right now.`, tone: 'accept' },
-        { text: `${firstName ? `${firstName}, ` : ''}quick clarifying question: what's the context on your side so I answer the right thing?`, tone: 'clarify' },
-        { text: `${firstName ? `Hi ${firstName}, ` : ''}I don't want to guess on this. Let me check properly and come back with a cleaner answer.`, tone: 'defer' }
+        { text: `${firstName ? `Hi ${firstName}, ` : ''}I don't want to give a half answer here, so I will not commit on this yet.`, tone: 'decline' },
+        { text: `${firstName ? `Hi ${firstName}, ` : ''}I don't want to guess on this. Let me check properly and come back with a cleaner answer.`, tone: 'clarify' }
       );
     } else if (/\bcall|meeting|chat|connect|catch up|sync\b/.test(normalized)) {
       suggested_replies.push(
@@ -92,24 +177,20 @@ function buildContextualFallbackReplies(args: {
     } else {
       suggested_replies.push(
         { text: `${firstName ? `Hi ${firstName}, ` : ''}thanks for sharing this. I'll look into it and get back to you.`, tone: 'accept' },
-        { text: `${firstName ? `${firstName}, ` : ''}what outcome are you hoping for here? That will help me respond in the right direction.`, tone: 'clarify' },
-        { text: `${firstName ? `Hi ${firstName}, ` : ''}I may not be able to take this up immediately, but send the key details and I'll review them.`, tone: 'defer' }
+        { text: `${firstName ? `Hi ${firstName}, ` : ''}I may not be able to take this up right now, but send the key details and I will review them when I can.`, tone: 'decline' },
+        { text: `${firstName ? `${firstName}, ` : ''}what outcome are you hoping for here? That will help me respond in the right direction.`, tone: 'clarify' }
       );
     }
 
-    const tv: Partial<Record<ToneVariant, string>> = {};
-    for (const r of suggested_replies) {
-      if (r.tone && r.text) tv[r.tone] = r.text;
-    }
-    return { suggested_replies, tone_variants: tv };
+    return { suggested_replies };
   }
 
   if (isShort) {
     // Vague/short comments ("test", "nice", "👍") — match the energy.
     suggested_replies.push(
       { text: `${addr ? `Thanks, ${firstName}!` : 'Thanks!'}`, tone: 'accept' },
-      { text: `${addr ? `${firstName}, anything specific you'd want me to dig into?` : `Anything specific you'd want me to dig into?`}`, tone: 'clarify' },
-      { text: `${addr ? `Appreciate it, ${firstName}. I'll share more detail once I have the right context.` : `Appreciate it. I'll share more detail once I have the right context.`}`, tone: 'defer' }
+      { text: `${addr ? `${firstName}, I don't have enough context to add more here yet.` : `I don't have enough context to add more here yet.`}`, tone: 'decline' },
+      { text: `${addr ? `${firstName}, anything specific you'd want me to dig into?` : `Anything specific you'd want me to dig into?`}`, tone: 'clarify' }
     );
   } else if (platform === 'linkedin' && isCareerHelpRequest) {
     suggested_replies.push(
@@ -126,25 +207,18 @@ function buildContextualFallbackReplies(args: {
   } else if (/\?$/.test(rawMessage) || /\bhow|what|why|when|where|can you|could you|would you\b/.test(normalized)) {
     suggested_replies.push(
       { text: `Good question${firstName ? `, ${firstName}` : ''}. Here's the short version based on the context I have.`, tone: 'accept' },
-      { text: `${addr}could you share a bit more about your specific situation so the answer actually applies to you?`, tone: 'clarify' },
-      { text: `${addr}I don't want to give you a generic answer. Let me check the details and come back with a sharper response.`, tone: 'defer' }
+      { text: `${addr}I don't want to give a generic answer here, so I won't pretend I have the full context yet.`, tone: 'decline' },
+      { text: `${addr}I don't want to give you a generic answer. Let me check the details and come back with a sharper response.`, tone: 'clarify' }
     );
   } else {
     suggested_replies.push(
       { text: `${addr}fair point. I appreciate you weighing in.`, tone: 'accept' },
-      { text: `${addr}curious what prompted that on your side?`, tone: 'clarify' },
-      { text: `${addr}noted. I may come back to this once I have more context to add something useful.`, tone: 'defer' }
+      { text: `${addr}I don't fully see it the same way, but I appreciate you sharing the perspective.`, tone: 'decline' },
+      { text: `${addr}curious what prompted that on your side?`, tone: 'clarify' }
     );
   }
 
-  const tone_variants: Partial<Record<ToneVariant, string>> = {};
-  for (const reply of suggested_replies) {
-    if (reply.tone && reply.text) {
-      tone_variants[reply.tone] = reply.text;
-    }
-  }
-
-  return { suggested_replies, tone_variants };
+  return { suggested_replies };
 }
 
 type ConversationTurn = {
@@ -210,14 +284,14 @@ async function generateReplySuggestionsViaOpenAi(
     '- Read the conversation history first. If you have already greeted them earlier in the thread, do NOT greet again — pick up where the conversation left off.',
     '- Reply DIRECTLY to what they just said. If they asked a question, answer it (or ask the precise clarifying question that actually unblocks an answer). If they shared news, react to it like a human would.',
     '- Never repeat what they said back at them in quotation marks. Never start with "Sure!" or "Absolutely!" boilerplate.',
-    '- Give three materially different response paths, not three paraphrases. Use accept/help, decline/boundary, and clarify/defer when the latest message is a request, availability ask, opportunity, or invitation.',
+    '- Give exactly three materially different response paths: #1 YES/accept/help, #2 NO/decline/boundary, #3 MAYBE/clarify/need more details.',
     '- For job, referral, recruitment, resume, hiring, candidate, or opportunity messages, answer that specific career context. The three paths should usually be: help/check network, polite boundary/no current opening, and ask for resume/role/location/timeline details.',
-    '- If accept/decline/clarify does not fit, still make each option a different useful action: answer directly, ask for context, defer politely, close the loop, or move to the next step.',
-    '- Intent labels: "accept", "decline", "clarify", "defer", "professional", "friendly", "educational".',
+    '- If accept/decline/clarify does not fit perfectly, still make each option a different useful action: answer directly, set a boundary, ask for context, close the loop, or move to the next step.',
+    '- Intent labels must be only "accept", "decline", or "clarify".',
     '- Each reply must be self-contained, ready to paste, no placeholders, no surrounding quotes.',
     lengthHint,
     namedAddress,
-    'Return ONLY a JSON object: {"replies":[{"text":"...","tone":"accept|decline|clarify|defer|professional|friendly|educational"}, ...]}',
+    'Return ONLY a JSON object with exactly three replies in this order: {"replies":[{"text":"...","tone":"accept"},{"text":"...","tone":"decline"},{"text":"...","tone":"clarify"}]}',
   ];
 
   const commentRules = [
@@ -227,12 +301,12 @@ async function generateReplySuggestionsViaOpenAi(
     '- The reply MUST clearly engage with what THIS specific commenter said. If the comment is vague (e.g. "test", "nice"), respond like a real person would to a vague comment — short, warm, and human, not a generic AI acknowledgement.',
     '- The reply should feel grounded in the original post — but only weave in the post topic when the comment actually invites that, not as a forced tie-in.',
     '- Do NOT quote the comment back verbatim in quotation marks. Do NOT use phrases like "Glad this resonated" or "Thanks for reaching out". Sound like a human writing on their phone.',
-    '- Give three materially different response paths, not three paraphrases. For requests, use accept/help, decline/boundary, and clarify/defer. For normal comments, use different useful actions such as acknowledge, ask a follow-up, add context, or invite the next step.',
+    '- Give exactly three materially different response paths: #1 YES/accept/help, #2 NO/decline/boundary, #3 MAYBE/clarify/need more details.',
     '- For job, referral, recruitment, resume, hiring, candidate, or opportunity comments, address that career context directly. Do not return generic "happy to help with this" replies.',
     '- Each reply must be self-contained, ready to paste, no placeholders, no surrounding quotes.',
     lengthHint,
     namedAddress,
-    'Return ONLY a JSON object: {"replies":[{"text":"...","tone":"accept|decline|clarify|defer|professional|friendly|educational"}, ...]}',
+    'Return ONLY a JSON object with exactly three replies in this order: {"replies":[{"text":"...","tone":"accept"},{"text":"...","tone":"decline"},{"text":"...","tone":"clarify"}]}',
   ];
 
   const system = (isDm ? dmRules : commentRules).join('\n');
@@ -316,23 +390,15 @@ async function generateReplySuggestionsViaOpenAi(
     }
 
     const replies = Array.isArray(parsed?.replies) ? parsed.replies : [];
-    const allowedTones = [
-      'accept',
-      'decline',
-      'clarify',
-      'defer',
-      'professional',
-      'friendly',
-      'educational',
-      'thought_leadership',
-    ];
     const out: ReplySuggestion[] = replies
-      .map((r: any) => ({
-        text: typeof r?.text === 'string' ? r.text.trim() : '',
-        tone: (allowedTones.includes(r?.tone)
-          ? r.tone
-          : 'professional') as ToneVariant,
-      }))
+      .map((r: any) => {
+        const text = typeof r?.text === 'string' ? r.text.trim() : '';
+        const bucket = classifyReplyIntent({
+          text,
+          tone: typeof r?.tone === 'string' ? r.tone : undefined,
+        });
+        return { text, tone: bucket ? toneForBucket(bucket) : undefined };
+      })
       .filter((r: ReplySuggestion) => r.text.length > 0);
 
     if (out.length === 0) {
@@ -520,14 +586,11 @@ export async function generateReplySuggestions(
   };
 
   const wrapAsResult = (replies: ReplySuggestion[]): GenerateReplySuggestionsResult => {
-    const tone_variants: Partial<Record<ToneVariant, string>> = {};
-    for (const r of replies) {
-      if (r.tone && r.text) tone_variants[r.tone] = r.text;
-    }
-    if (replies.length > 0 && Object.keys(tone_variants).length === 0) {
-      tone_variants.professional = replies[0].text;
-    }
-    return { suggested_replies: replies, tone_variants };
+    const fallbackReplies = fallback().suggested_replies;
+    const suggested_replies = enforceIntentCoverage(replies, fallbackReplies);
+    return {
+      suggested_replies,
+    };
   };
 
   const preferDirectOpenAi = Boolean(config.OPENAI_API_KEY);
@@ -539,7 +602,7 @@ export async function generateReplySuggestions(
   }
 
   if (!isOmnivyraEnabled()) {
-    return fallback();
+    return wrapAsResult(fallback().suggested_replies);
   }
 
   try {
@@ -570,7 +633,7 @@ export async function generateReplySuggestions(
         target_message: message.content,
         target_author: targetAuthorName ?? undefined,
         reply_suggestion_directive:
-          'Return reply suggestions as materially different response paths, not paraphrases. Prefer accept/help, decline/boundary, and clarify/defer when applicable.',
+          'Return exactly three materially different response paths in this order: YES/accept/help, NO/decline/boundary, MAYBE/clarify/ask for missing details.',
         alignment_directive: isDmContext
           ? 'This is a 1:1 direct message — read the conversation history first, do NOT re-greet, reply directly to the latest message. Sound like a human texting back, not a public-facing brand statement. Suggestions must be different response choices, not restyled duplicates.'
           : 'The reply MUST reference both the original post topic and the specific comment text. Address the commenter by first name when available. Avoid generic acknowledgements. Suggestions must be different response choices, not restyled duplicates.',
@@ -586,32 +649,26 @@ export async function generateReplySuggestions(
       (action: any) => action?.action_type === 'reply' && action?.suggested_text
     );
 
-    const suggested_replies: ReplySuggestion[] = replyActions.slice(0, 3).map((action: any) => ({
-      text: (action.suggested_text ?? '').toString().trim(),
-      tone: (action.tone as ToneVariant) ?? 'professional',
-    }));
-
-    const tone_variants: Partial<Record<ToneVariant, string>> = {};
-    for (const reply of suggested_replies) {
-      if (reply.tone && reply.text) {
-        tone_variants[reply.tone] = reply.text;
-      }
-    }
-    if (suggested_replies.length > 0 && Object.keys(tone_variants).length === 0) {
-      tone_variants.professional = suggested_replies[0].text;
-    }
+    const suggested_replies: ReplySuggestion[] = replyActions.slice(0, 3).map((action: any) => {
+      const text = (action.suggested_text ?? '').toString().trim();
+      const bucket = classifyReplyIntent({
+        text,
+        tone: typeof action?.tone === 'string' ? action.tone : undefined,
+      });
+      return { text, tone: bucket ? toneForBucket(bucket) : undefined };
+    });
 
     if (suggested_replies.length === 0) {
       const llmReplies = await generateReplySuggestionsViaOpenAi(llmInput);
       if (llmReplies && llmReplies.length > 0) return wrapAsResult(llmReplies);
-      return fallback();
+      return wrapAsResult(fallback().suggested_replies);
     }
 
-    return { suggested_replies, tone_variants };
+    return wrapAsResult(suggested_replies);
   } catch (err) {
     console.warn('[engagementAiAssistantService] Omnivyra error:', (err as Error)?.message);
     const llmReplies = await generateReplySuggestionsViaOpenAi(llmInput);
     if (llmReplies && llmReplies.length > 0) return wrapAsResult(llmReplies);
-    return fallback();
+    return wrapAsResult(fallback().suggested_replies);
   }
 }

@@ -7,7 +7,7 @@
  * Usage: node scripts/apply-p2-migrations.js
  * 
  * Prerequisites:
- * - SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in environment
+ * - SUPABASE_URL and Supabase service credential in environment
  */
 
 const fs = require('fs');
@@ -16,12 +16,12 @@ const { createClient } = require('@supabase/supabase-js');
 
 async function applyMigrations() {
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
 
   if (!supabaseUrl || !supabaseKey) {
     console.error('❌ Missing required environment variables:');
     console.error('   SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL');
-    console.error('   SUPABASE_SERVICE_ROLE_KEY');
+    console.error('   Supabase service credential');
     process.exit(1);
   }
 

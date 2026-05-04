@@ -5,7 +5,8 @@
  * No database schema changes; reuses campaign_summary and campaign_health_reports.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from '../services/campaignBlueprintService';
 import {
   evaluateCampaignHealth,

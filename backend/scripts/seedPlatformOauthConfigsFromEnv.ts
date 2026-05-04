@@ -1,7 +1,7 @@
 /**
  * Seed platform_oauth_configs from environment variables.
  *
- * Run after: database/platform_oauth_configs.sql
+ * Schema source: supabase/migrations/00000000000000_baseline_schema.sql
  * Usage: npx ts-node -r dotenv/config backend/scripts/seedPlatformOauthConfigsFromEnv.ts
  *
  * Reads LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, etc. from .env,
@@ -9,7 +9,8 @@
  * Requires ENCRYPTION_KEY.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { encryptCredential } from '../auth/credentialEncryption';
 
 const PLATFORMS: {

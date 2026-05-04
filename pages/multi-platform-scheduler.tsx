@@ -90,20 +90,39 @@ export default function MultiPlatformSchedulerPage() {
     if (!selectedCompanyId) return;
     let active = true;
     setLoadingPlatforms(true);
+    // Use the source content type when available so the platform list reflects
+    // what can publish THIS draft. Falls back to URL contentType, then 'post'.
+    const ct = String(
+      draft?.sourceContentType || (typeof router.query.contentType === 'string' ? router.query.contentType : '') || 'post'
+    ).trim().toLowerCase() || 'post';
     Promise.all([
-      fetch(`/api/social-accounts/status?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
-        .then((r) => (r.ok ? r.json() : { accounts: [] }))
-        .catch(() => ({ accounts: [] })),
+      fetch(
+        `/api/social-accounts/postable-platforms?companyId=${encodeURIComponent(selectedCompanyId)}&contentType=${encodeURIComponent(ct)}`,
+        { credentials: 'include' },
+      )
+        .then((r) => (r.ok ? r.json() : { platforms: [] }))
+        .catch(() => ({ platforms: [] })),
       fetch(`/api/company/platform-config?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
         .then((r) => (r.ok ? r.json() : { platforms: [] }))
         .catch(() => ({ platforms: [] })),
     ])
-      .then(([accountsData, configData]) => {
+      .then(([postableData, configData]) => {
         if (!active) return;
-        const accounts = Array.isArray(accountsData?.accounts) ? accountsData.accounts : [];
+        const platforms = Array.isArray(postableData?.platforms) ? postableData.platforms : [];
         const configs = Array.isArray(configData?.platforms) ? configData.platforms : [];
+        // The endpoint already filters to postable + content-type-eligible, so
+        // we just adapt the row shape to ConnectedAccount and skip the local
+        // connected/category check.
         setConnectedAccounts(
-          accounts.filter((account: ConnectedAccount) => account.connected && account.category === 'social'),
+          platforms.map((p: { platform_key: string; platform_label: string; account_name: string | null; username: string | null; social_account_id: string | null }) => ({
+            platform_key: p.platform_key,
+            platform_label: p.platform_label,
+            social_account_id: p.social_account_id,
+            account_name: p.account_name,
+            username: p.username,
+            connected: true,
+            category: 'social',
+          })),
         );
         setPlatformConfig(configs);
       })
@@ -114,7 +133,7 @@ export default function MultiPlatformSchedulerPage() {
     return () => {
       active = false;
     };
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, draft?.sourceContentType, router.query.contentType]);
   const platformOptions = useMemo(() => {
     const configMap = new Map(platformConfig.map((item) => [normalizePlatform(item.platform), item]));
     return connectedAccounts
@@ -149,12 +168,14 @@ export default function MultiPlatformSchedulerPage() {
     setPlatformState((current) => {
       const next = { ...current };
       for (const option of platformOptions) {
-        const sourceContent = getSourceContentForPlatform(option.key, draft);
-        const isSourcePlatform = normalizedSourcePlatform && option.key === normalizedSourcePlatform;
         if (next[option.key]) continue;
+        // Start social copy blank for every platform — including the original
+        // source platform — so the user never sees the master content flash
+        // in before the adaptation effect replaces it. The "Adapting for X…"
+        // spinner inside the textarea label conveys the in-progress state.
         next[option.key] = {
           contentType: option.contentTypes[0] || 'post',
-          content: isSourcePlatform ? String(draft.content || sourceContent || '').trim() : '',
+          content: '',
           hashtags: draft.hashtags.join(' '),
           scheduledFor: defaultScheduleValue(),
           busy: false,

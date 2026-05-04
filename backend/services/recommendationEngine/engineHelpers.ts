@@ -31,7 +31,8 @@ import {
   TrendSignalNormalized,
 } from '../trendProcessingService';
 import { normalizeTrends } from '../trendNormalizationService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
 import { polishRecommendations } from '../recommendationPolishService';

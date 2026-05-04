@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignStatus } from '../db/campaignStore';
 import { getCampaignReadiness } from './campaignReadinessService';
 import { DiagnosticsByType, ViralityAssessment } from './viralityAdvisorService';

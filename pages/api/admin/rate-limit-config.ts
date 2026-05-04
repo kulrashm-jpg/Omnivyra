@@ -1,7 +1,7 @@
 
 /**
- * GET  /api/admin/rate-limit-config  — read current overrides
- * POST /api/admin/rate-limit-config  — save new overrides
+ * GET  /api/admin/rate-limit-config  â€” read current overrides
+ * POST /api/admin/rate-limit-config  â€” save new overrides
  *
  * Auth: super_admin_session cookie
  *
@@ -16,8 +16,8 @@
  * }
  *
  * Safe ranges (validated server-side):
- *   limit:      1–1000
- *   windowSecs: 10–86400
+ *   limit:      1â€“1000
+ *   windowSecs: 10â€“86400
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -27,6 +27,7 @@ import {
   validateRateLimitConfig,
   type RateLimitAdminConfig,
 } from '../../../backend/services/adminRuntimeConfig';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
@@ -67,4 +68,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'admin-rate-limit-config', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

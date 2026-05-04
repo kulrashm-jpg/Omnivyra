@@ -1,14 +1,16 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * GET  /api/campaigns/[id]/outcomes  — fetch or compute outcome score
- * POST /api/campaigns/[id]/outcomes  — trigger re-measurement
+ * GET  /api/campaigns/[id]/outcomes  â€” fetch or compute outcome score
+ * POST /api/campaigns/[id]/outcomes  â€” trigger re-measurement
  *
  * Auth: requireAuth + requireCompanyAccess
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { measureOutcomeScore, getOutcomeSnapshot } from '../../../../backend/services/outcomeTrackingService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAuth, requireCompanyAccess } from '../../../../backend/middleware/authMiddleware';
 
 async function getCompanyId(campaignId: string): Promise<string | null> {
@@ -20,11 +22,11 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
   return (data as any)?.company_id ?? null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
   if (!campaignId) return res.status(400).json({ error: 'Campaign ID required' });
 
-  // ── Auth ────────────────────────────────────────────────────────────────
+  // â”€â”€ Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const auth = await requireAuth(req, res);
   if (!auth) return;
 
@@ -55,3 +57,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

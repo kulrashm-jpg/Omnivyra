@@ -1,16 +1,17 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/extension/commands
  *
  * Returns the set of pending browser-assisted commands for the caller's
  * (user, org). Only commands whose (platform, action) pair is verified or
  * partial in the capability map are emitted. Anything else is skipped at
- * dispatch — the extension will never see an unsupported command.
+ * dispatch â€” the extension will never see an unsupported command.
  *
  * Correctness contract:
  *  - Validation (capability + payload schema) runs BEFORE the CAS claim, so
  *    a permanently-invalid row does not get claimed-and-dropped on every
  *    90-second cycle.
- *  - On claim, the row transitions pending → dispatched and stamps
+ *  - On claim, the row transitions pending â†’ dispatched and stamps
  *    dispatch_lease_id, dispatch_lease_expires_at, dispatch_lease_holder_id.
  *    Only the same holder (derived from session) may submit the result.
  *
@@ -22,7 +23,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash, randomBytes, randomUUID } from 'crypto';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { resolveEngagementCapability, CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
 import { isCurrentlyDisabled } from '@/backend/services/extensionReliabilityService';
 import { validateCommandPayload, COMMAND_SCHEMA_VERSION } from '@/backend/services/extensionCommandSchema';
@@ -62,7 +64,7 @@ function deriveHolderId(session: { userId: string; orgId: string; hmacNonce: str
   return createHash('sha256').update(`lease-holder:${basis}`).digest('hex').slice(0, 32);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'POST') {
     return handleAck(req, res);
   }
@@ -97,11 +99,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Heartbeat: a successful auth + capability check past this point means
   // the extension is alive and polling. Stamp extension_sessions.last_seen
   // so the platform-health badge can flip from 'unverified' to 'ok' as
-  // soon as the extension is loaded — not only after a successful action.
+  // soon as the extension is loaded â€” not only after a successful action.
   // Best-effort: failures here must not block command dispatch.
   //
   // The table has no unique index on (user_id, org_id), so we can't use
-  // upsert-on-conflict. Pattern: UPDATE → if zero rows matched, INSERT.
+  // upsert-on-conflict. Pattern: UPDATE â†’ if zero rows matched, INSERT.
   void (async () => {
     try {
       const nowTs = new Date().toISOString();
@@ -114,7 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .limit(1);
 
       if (!updated || updated.length === 0) {
-        // No prior session row for this (user, org) — likely the first
+        // No prior session row for this (user, org) â€” likely the first
         // poll under DEV_EXTENSION_AUTH_BYPASS, where no real redeem ever
         // ran. Insert a minimal heartbeat row so subsequent polls can
         // UPDATE it cleanly.
@@ -131,7 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     } catch (hbErr) {
       // Heartbeat is opportunistic. If a constraint or race means we
-      // can't write, swallow — the command flow still works.
+      // can't write, swallow â€” the command flow still works.
       console.warn('[extension/commands] heartbeat write skipped:', (hbErr as Error)?.message);
     }
   })();
@@ -163,7 +165,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const commands: any[] = [];
 
     for (const row of data || []) {
-      // ── Chain-aware step selection ────────────────────────────────────────
+      // â”€â”€ Chain-aware step selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // When the row carries a command_chain, dispatch the step at
       // command_chain_index instead of the row's top-level action_type.
       // The DM orchestration path uses this to emit open_thread first,
@@ -174,13 +176,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const chainIndex = Number((row as any).command_chain_index ?? 0);
       const currentStep = chain && chain[chainIndex] ? chain[chainIndex] : null;
 
-      // ── Validate BEFORE claim ─────────────────────────────────────────────
+      // â”€â”€ Validate BEFORE claim â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       const topAction = String(row.action_type || '').toLowerCase();
       const capabilityAction = currentStep
         ? String(currentStep.action_type || '').toLowerCase()
         : topAction;
 
-      // Capability gate still uses the ROW's action_type (e.g. 'dm') —
+      // Capability gate still uses the ROW's action_type (e.g. 'dm') â€”
       // chain steps are internal orchestration. The top action must be
       // api_verified; orchestration steps are always dispatchable once
       // the parent pair is.
@@ -273,7 +275,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      // ── Claim via CAS on (id, prior lease expiry, status=pending) ────────
+      // â”€â”€ Claim via CAS on (id, prior lease expiry, status=pending) â”€â”€â”€â”€â”€â”€â”€â”€
       const priorExpiry = (row as any).dispatch_lease_expires_at as string | null;
       let update = supabase
         .from('community_ai_actions')
@@ -304,11 +306,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         payload: validation.payload,
         metadata: null,
         created_at: row.created_at,
-        // Lifecycle correlation id — must be echoed back on /action-result
+        // Lifecycle correlation id â€” must be echoed back on /action-result
         // so the backend can verify the ack belongs to this lifecycle and
-        // so logs/metrics across execute → dispatch → ack → result join cleanly.
+        // so logs/metrics across execute â†’ dispatch â†’ ack â†’ result join cleanly.
         execution_correlation_id: (row as any).execution_correlation_id ?? null,
-        // Chain state — the extension echoes these back on /action-result
+        // Chain state â€” the extension echoes these back on /action-result
         // so the server can deterministically advance the chain.
         chain_total: chain ? chain.length : 0,
         chain_index: chain ? chainIndex : 0,
@@ -328,9 +330,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 /**
- * POST /api/extension/commands  — body: { commandId, leaseId }
+ * POST /api/extension/commands  â€” body: { commandId, leaseId }
  *
- * DISPATCHED → ACKNOWLEDGED transition. The extension calls this immediately
+ * DISPATCHED â†’ ACKNOWLEDGED transition. The extension calls this immediately
  * after receiving a claim batch so the backend can distinguish "claimed and
  * received" from "claimed but never reached the extension" (e.g. lost HTTP
  * response). Only the session whose derived holder_id matches the row's
@@ -450,3 +452,8 @@ async function handleAck(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ success: false, error: (error as Error)?.message || 'ack failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

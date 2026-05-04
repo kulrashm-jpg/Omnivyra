@@ -179,7 +179,7 @@ function buildResolvedRegionPreview(
 }
 
 export default function MarketPulseTabV2(props: OpportunityTabProps) {
-  const { companyId, fetchWithAuth } = props;
+  const { companyId, apiFetch } = props;
   const [context, setContext] = useState<ContextResponse | null>(null);
   const [loadingContext, setLoadingContext] = useState(false);
   const [mode, setMode] = useState<'one_time' | 'automated'>('one_time');
@@ -208,7 +208,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     const load = async () => {
       setLoadingContext(true);
       try {
-        const res = await fetchWithAuth(`/api/market-pulse/context?companyId=${encodeURIComponent(companyId)}`);
+        const res = await apiFetch(`/api/market-pulse/context?companyId=${encodeURIComponent(companyId)}`);
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err?.error || 'Failed to load Market Pulse context');
@@ -227,7 +227,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
 
     const loadAutomation = async () => {
       try {
-        const res = await fetchWithAuth(`/api/market-pulse/automation?companyId=${encodeURIComponent(companyId)}`);
+        const res = await apiFetch(`/api/market-pulse/automation?companyId=${encodeURIComponent(companyId)}`);
         if (!res.ok) return;
         const data = (await res.json()) as AutomationResponse;
         if (!active) return;
@@ -260,7 +260,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
 
     const loadHistory = async () => {
       try {
-        const res = await fetchWithAuth(`/api/market-pulse/history?companyId=${encodeURIComponent(companyId)}`);
+        const res = await apiFetch(`/api/market-pulse/history?companyId=${encodeURIComponent(companyId)}`);
         if (!res.ok) return;
         const data = await res.json();
         if (!active) return;
@@ -276,19 +276,19 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     return () => {
       active = false;
     };
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
     if (!runId || !companyId) return;
     const timer = window.setInterval(async () => {
       try {
-        const res = await fetchWithAuth(`/api/market-pulse/runs/${encodeURIComponent(runId)}?companyId=${encodeURIComponent(companyId)}`);
+        const res = await apiFetch(`/api/market-pulse/runs/${encodeURIComponent(runId)}?companyId=${encodeURIComponent(companyId)}`);
         if (!res.ok) return;
         const data = (await res.json()) as RunResponse;
         setRunResult(data);
         setPendingRun(null);
         if (!['pending', 'running'].includes(String(data.run?.status ?? ''))) {
-          const historyRes = await fetchWithAuth(`/api/market-pulse/history?companyId=${encodeURIComponent(companyId)}`);
+          const historyRes = await apiFetch(`/api/market-pulse/history?companyId=${encodeURIComponent(companyId)}`);
           if (historyRes.ok) {
             const historyData = await historyRes.json();
             setHistory(Array.isArray(historyData?.history) ? historyData.history : []);
@@ -304,7 +304,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     }, 4000);
 
     return () => window.clearInterval(timer);
-  }, [companyId, fetchWithAuth, runId]);
+  }, [companyId, apiFetch, runId]);
 
   const groupedFindings = useMemo(() => {
     const findings = runResult?.findings ?? [];
@@ -338,7 +338,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
       progress_stage: 'INITIALIZING',
     });
     try {
-      const res = await fetchWithAuth('/api/market-pulse/run', {
+      const res = await apiFetch('/api/market-pulse/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -374,7 +374,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     setAutomationLoading(true);
     setErrorMessage(null);
     try {
-      const res = await fetchWithAuth('/api/market-pulse/automation', {
+      const res = await apiFetch('/api/market-pulse/automation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -407,7 +407,7 @@ export default function MarketPulseTabV2(props: OpportunityTabProps) {
     setCancelLoading(true);
     setErrorMessage(null);
     try {
-      const res = await fetchWithAuth(`/api/market-pulse/runs/${encodeURIComponent(runId)}/cancel`, {
+      const res = await apiFetch(`/api/market-pulse/runs/${encodeURIComponent(runId)}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId }),

@@ -3,7 +3,8 @@
  * Supports baseline conditioning — only latest snapshot per platform is used.
  */
 
-import { supabase } from './supabaseClient';
+import { createServiceRoleMigrationProxy } from './supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export interface PlatformSnapshot {
   platform: string;

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/activity-workspace/schedule
@@ -8,18 +9,19 @@
  * so inserts succeed even before the social_account_id NOT NULL column is relaxed via DDL.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { grantEarnCredit } from '@/backend/services/earnCreditsService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log('[schedule] method:', req.method, 'url:', req.url);
   if (req.method !== 'POST') {
     return res.status(405).json({ error: `Method not allowed: ${req.method}` });
   }
 
-  // Resolve current user — always use the real Supabase JWT user ID
+  // Resolve current user â€” always use the real Supabase JWT user ID
   // (resolveUserContext can return 'content_architect' for platform-level sessions,
   // which has no social_accounts and cannot schedule posts on behalf of a real user)
   let userId: string;
@@ -80,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   // Only allow scheduling from today onwards (compare on date-only basis).
   // Past DATES belong to work that missed its publish window. Within today,
-  // allow any time slot — the scheduler will fire ASAP if the time has passed.
+  // allow any time slot â€” the scheduler will fire ASAP if the time has passed.
   {
     const requestedDateStr = String(scheduledDate).slice(0, 10);
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -94,7 +96,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // Normalise 'x' → 'twitter' for DB storage (chk_platform constraint only allows 'twitter')
+  // Normalise 'x' â†’ 'twitter' for DB storage (chk_platform constraint only allows 'twitter')
   const platformNorm = String(platform).toLowerCase().trim() === 'x' ? 'twitter' : String(platform).toLowerCase().trim();
   const executionIdStr = String(executionId || '').trim();
 
@@ -139,16 +141,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.warn('[schedule] social account resolution error:', err);
   }
 
-  // socialAccountId may be null — social_account_id is nullable (patch-scheduled-posts-social-account-optional.sql).
+  // socialAccountId may be null â€” social_account_id is nullable (patch-scheduled-posts-social-account-optional.sql).
   // Publishing workers check for a valid account before posting; UI shows a "Connect" warning badge.
   console.log('[schedule] inserting row with socialAccountId:', socialAccountId, 'campaignId:', campaignId);
 
-  // campaign_id in scheduled_posts is UUID — only include if it looks like a valid UUID
+  // campaign_id in scheduled_posts is UUID â€” only include if it looks like a valid UUID
   const isValidUuid = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
   const campaignIdUuid = isValidUuid(campaignId) ? campaignId : null;
   if (!campaignIdUuid) console.warn('[schedule] campaignId is not a valid UUID, skipping campaign_id column:', campaignId);
 
-  // Base row — columns guaranteed to exist in the initial schema
+  // Base row â€” columns guaranteed to exist in the initial schema
   const baseRow: Record<string, unknown> = {
     user_id: userId,
     campaign_id: campaignIdUuid,
@@ -170,7 +172,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     social_account_id: socialAccountId,
   };
 
-  // Repurpose lineage columns — added by scheduled_posts_repurpose_lineage.sql migration.
+  // Repurpose lineage columns â€” added by scheduled_posts_repurpose_lineage.sql migration.
   // Only include them when the migration has been applied (detected by insert error on first attempt).
   const repurposeExtras: Record<string, unknown> = {
     repurpose_parent_execution_id: executionIdStr || null,
@@ -265,7 +267,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           scheduledPostId = existing.id;
         }
       } catch (lookupErr: any) {
-        // repurpose_parent_execution_id column doesn't exist — skip idempotency check
+        // repurpose_parent_execution_id column doesn't exist â€” skip idempotency check
         console.warn('[schedule] repurpose lookup failed (column may not exist):', lookupErr?.message);
       }
     }
@@ -295,7 +297,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Enqueue the job to fire at the exact scheduled_for time.
-    // Falls back gracefully: duplicate → already queued, past → safety-net cron handles it.
+    // Falls back gracefully: duplicate â†’ already queued, past â†’ safety-net cron handles it.
     if (scheduledPostId) {
       try {
         await enqueueScheduledPostAt(
@@ -310,7 +312,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── First campaign published → +200 credits (fire-and-forget) ────────────
+    // â”€â”€ First campaign published â†’ +200 credits (fire-and-forget) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (scheduledPostId && companyId) {
       grantEarnCredit({
         orgId:       companyId,
@@ -326,3 +328,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message || 'Failed to schedule post' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

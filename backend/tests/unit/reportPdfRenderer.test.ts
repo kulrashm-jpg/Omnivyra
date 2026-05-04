@@ -137,7 +137,7 @@ describe('reportPdfRenderer', () => {
     const htmlArg = (renderPdfFromHtml as jest.Mock).mock.calls[0][0] as string;
     expect(htmlArg).toContain('id="pdf-report"');
     expect(htmlArg).toContain('class="report-page"');
-    expect(htmlArg).toContain('#pdf-report { width: 186mm;');
+    expect(htmlArg).toContain('#pdf-report { width: 100%; max-width: 196mm;');
     expect(htmlArg).toContain('page-hero-header');
   });
 });

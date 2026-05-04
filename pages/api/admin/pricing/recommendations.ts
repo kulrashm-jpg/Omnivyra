@@ -6,19 +6,20 @@
  * pricing_adjustment_queue proposal (if any).
  *
  * Query params (optional):
- *   ?onlyDeviations=true    — return only rows with deviation_flag=true
- *   ?week=YYYY-MM-DD        — pin to a specific ISO-week Monday; default = latest
+ *   ?onlyDeviations=true    â€” return only rows with deviation_flag=true
+ *   ?week=YYYY-MM-DD        â€” pin to a specific ISO-week Monday; default = latest
  *
  * Auth: super-admin via requireAuthenticatedInternalUser + RBAC.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
 import {
   requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
+  requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from '../../../../backend/services/logger';
 
 interface IntelligenceRow {
@@ -63,10 +64,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:pricing_recommendations', 60, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
+  const ctx = await requireAdminScope(req, res, 'pricing:recommendations');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/pricing/recommendations', 'pricing:recommendations');
   }
 
   const onlyDeviations = String(req.query.onlyDeviations ?? '').toLowerCase() === 'true';
@@ -149,4 +150,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default handler;
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

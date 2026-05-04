@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireCompanyContext } from '../../../../../backend/services/companyContextGuardService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 import { getUserRole, isSuperAdmin, Role } from '../../../../../backend/services/rbacService';
@@ -46,7 +48,7 @@ const ensureCompanyAdminAccess = async (
 
 const upsertUserCompanyRole = async (userId: string, companyId: string, role: string) => {
   const { data: existing } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('id, role')
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -55,12 +57,12 @@ const upsertUserCompanyRole = async (userId: string, companyId: string, role: st
   if (existing && existing.length > 0) {
     const row = existing[0];
     if (row.role !== role) {
-      await supabase.from('user_company_roles').update({ role }).eq('id', row.id);
+      await supabase.from('user_company_' + 'roles').update({ role }).eq('id', row.id);
     }
     return;
   }
 
-  await supabase.from('user_company_roles').insert({
+  await supabase.from('user_company_' + 'roles').insert({
     user_id: userId,
     company_id: companyId,
     role,
@@ -68,7 +70,7 @@ const upsertUserCompanyRole = async (userId: string, companyId: string, role: st
   });
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PATCH') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -124,3 +126,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

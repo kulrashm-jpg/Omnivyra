@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
@@ -57,4 +58,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALL_ROLES);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, ALL_ROLES));
+

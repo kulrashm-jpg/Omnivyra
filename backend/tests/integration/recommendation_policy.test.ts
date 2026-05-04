@@ -1,6 +1,7 @@
 import { getActivePolicy, updatePolicy } from '../../services/recommendationPolicyService';
 import { generateRecommendations } from '../../services/recommendationEngine';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logRecommendationAudit } from '../../services/recommendationAuditService';
 
 jest.mock('../../services/externalApiService', () => ({

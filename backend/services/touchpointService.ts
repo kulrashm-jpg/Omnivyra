@@ -1,6 +1,15 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import {
+  createLastTouchAttributionsForRevenueTouchpoints,
+  type AttributionProcessingResult,
+} from './attributionService';
+import { handleTouchpointsCreated, type ExpectedEventTouchpoint } from './expectedEventEngine';
 import { logger } from './logger';
+import { reconcileAfterTouchpointsCreated, type ReconciliationResult } from './reconciliationService';
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
+
+const TOUCHPOINT_CONFLICT_TARGET = 'company_id,reference_table,reference_id,touchpoint_type';
 
 export type TouchpointInput = {
   companyId: string;
@@ -18,6 +27,12 @@ export type TouchpointWriteResult = {
   attempted: number;
   created: number;
   skipped: number;
+  touchpointIds?: string[];
+  expectedEventsCreated?: number;
+  expectedEventsCompleted?: number;
+  expectedEventsMissed?: number;
+  attribution?: AttributionProcessingResult;
+  reconciliation?: ReconciliationResult;
 };
 
 function requireText(value: unknown, field: string): string {
@@ -77,20 +92,22 @@ export async function bulkCreateTouchpoints(
   const { data, error } = await supabase
     .from('unified_touchpoints')
     .upsert(payload, {
-      onConflict: 'company_id,reference_table,reference_id',
+      onConflict: TOUCHPOINT_CONFLICT_TARGET,
       ignoreDuplicates: true,
     })
-    .select('id');
+    .select('id, company_id, unified_person_id, source, unified_source, touchpoint_type, reference_table, reference_id, occurred_at, metadata');
 
   if (error) {
     throw new Error(`Failed to create unified touchpoints: ${error.message}`);
   }
 
-  const created = Array.isArray(data) ? data.length : 0;
-  const result = {
+  const createdTouchpoints = (data ?? []) as ExpectedEventTouchpoint[];
+  const created = createdTouchpoints.length;
+  const result: TouchpointWriteResult = {
     attempted: payload.length,
     created,
     skipped: payload.length - created,
+    touchpointIds: createdTouchpoints.map((touchpoint) => touchpoint.id),
   };
 
   logger.info('unified_touchpoints_created', {
@@ -98,7 +115,66 @@ export async function bulkCreateTouchpoints(
     attempted: result.attempted,
     created: result.created,
     skipped: result.skipped,
+    conflictTarget: TOUCHPOINT_CONFLICT_TARGET,
   });
+
+  if (result.skipped > 0) {
+    logger.info('unified_touchpoints_duplicates_skipped', {
+      ...context,
+      attempted: result.attempted,
+      created: result.created,
+      skipped: result.skipped,
+      conflictTarget: TOUCHPOINT_CONFLICT_TARGET,
+    });
+  }
+
+  if (created > 0) {
+    try {
+      const expectedEventResult = await handleTouchpointsCreated(
+        createdTouchpoints,
+        context
+      );
+      result.expectedEventsCreated = expectedEventResult.instancesCreated;
+      result.expectedEventsCompleted = expectedEventResult.instancesCompleted;
+      result.expectedEventsMissed = expectedEventResult.instancesMissed;
+    } catch (error) {
+      logger.error('expected_event_engine_failed', {
+        ...context,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    try {
+      const revenueTouchpoints = createdTouchpoints.filter(
+        (touchpoint) => touchpoint.touchpoint_type === 'revenue'
+      );
+      if (revenueTouchpoints.length > 0) {
+        result.attribution = await createLastTouchAttributionsForRevenueTouchpoints(
+          revenueTouchpoints,
+          context
+        );
+      }
+    } catch (error) {
+      logger.error('attribution_processing_failed', {
+        ...context,
+        touchpointIds: result.touchpointIds ?? [],
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    try {
+      result.reconciliation = await reconcileAfterTouchpointsCreated({
+        touchpointIds: result.touchpointIds ?? [],
+        context,
+      });
+    } catch (error) {
+      logger.error('touchpoint_reconciliation_failed', {
+        ...context,
+        touchpointIds: result.touchpointIds ?? [],
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   return result;
 }

@@ -1,9 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../../backend/services/recommendationEngineService';
 import { getCompanyDefaultApiIds } from '../../../backend/services/externalApiService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getProfile } from '../../../backend/services/companyProfileService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
@@ -504,9 +506,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [
   Role.COMPANY_ADMIN,
   Role.CONTENT_CREATOR,
   Role.CONTENT_MANAGER,
   Role.SUPER_ADMIN,
-]);
+]));
+

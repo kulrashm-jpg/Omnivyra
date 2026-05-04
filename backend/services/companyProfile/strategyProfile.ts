@@ -1,5 +1,6 @@
 import { runCompletionWithOperation } from '../aiGateway';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { CompanyProfile, StrategyProfile } from './types';
 
 type StrategyProfileDraft = {

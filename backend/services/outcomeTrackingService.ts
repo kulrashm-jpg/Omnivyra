@@ -15,7 +15,8 @@
  * credits_per_outcome = credits_used / max(outcome_score, 0.1)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

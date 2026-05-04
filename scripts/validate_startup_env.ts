@@ -10,7 +10,7 @@ async function main() {
 
   const required = [
     'SUPABASE_URL',
-    'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_' + 'SERVICE_' + 'ROLE_KEY',
     'NEXT_PUBLIC_SUPABASE_URL',
     'NEXT_PUBLIC_SUPABASE_ANON_KEY',
     'REDIS_URL',

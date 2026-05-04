@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
 import { getAuthToken } from '../utils/getAuthToken';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { classifyApiError } from '../pages/external-apis.types';
 
 type ApiSource = {
@@ -332,7 +332,7 @@ export function useExtApisAccess() {
         setDrafts({});
         return;
       }
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`
       );
       if (!response.ok) throw new Error('Failed to load APIs');
@@ -357,7 +357,7 @@ export function useExtApisAccess() {
         setRequests([]);
         return;
       }
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`
       );
       if (!response.ok) {
@@ -382,7 +382,7 @@ export function useExtApisAccess() {
     }
     const load = async () => {
       try {
-        const res = await fetchWithAuth(
+        const res = await apiFetch(
           `/api/external-apis/company-config?companyId=${encodeURIComponent(selectedCompanyId)}&api_source_id=${encodeURIComponent(configModalApiId)}`
         );
         if (!res.ok) {
@@ -493,7 +493,7 @@ export function useExtApisAccess() {
     const excludeFilters: Record<string, string[]> = { ...companyConfig.exclude_filters };
     setCompanyConfig((c) => ({ ...c, saving: true, error: null }));
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/external-apis/company-config?companyId=${encodeURIComponent(selectedCompanyId)}`,
         {
           method: 'PUT',
@@ -518,7 +518,7 @@ export function useExtApisAccess() {
       }
       const preset = globalPresets.find((p) => p.id === configModalApiId);
       const draft = preset ? drafts[configModalApiId] : null;
-      await fetchWithAuth(
+      await apiFetch(
         `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`,
         {
           method: 'POST',
@@ -560,7 +560,7 @@ export function useExtApisAccess() {
   const runApprovalAction = async (requestId: string, action: string, rejectionReason?: string) => {
     setApprovalActionId(requestId);
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/external-apis/requests/${requestId}?companyId=${encodeURIComponent(selectedCompanyId!)}`,
         {
           method: 'PUT',
@@ -595,7 +595,7 @@ export function useExtApisAccess() {
         setRequestMessage('Select a company to submit a request.');
         return;
       }
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`,
         {
         method: 'POST',
@@ -688,7 +688,7 @@ export function useExtApisAccess() {
     configModalApiId,
     drafts,
     expandedUsageId,
-    fetchWithAuth,
+    apiFetch,
     globalPresets,
     isLoading,
     isReadOnly,

@@ -4,7 +4,8 @@
  * Verification only — no changes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function main() {
   const report: string[] = [];

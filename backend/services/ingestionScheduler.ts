@@ -15,7 +15,8 @@ import {
   type IngestionSource,
 } from './ingestionRunService';
 import { resolveCompanyWebsite } from './ingestionUtils';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type CompanyIntegrationRow = {
   type: string;

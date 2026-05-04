@@ -8,7 +8,8 @@
  *  - Safe template retrieval (Improvement 5 + Refinement 7)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getValidAccessToken } from '../auth/metaAuthService';
 
 const META_GRAPH = 'https://graph.facebook.com/v22.0';

@@ -6,7 +6,7 @@ import {
   type CompanyData,
   type GoogleAnalyticsCompanySummary,
 } from '@/pages/super-admin.types';
-import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import {
   Activity,
   AlertCircle,
@@ -65,7 +65,7 @@ export default function AnalyticsTab({
     setIsLoadingGaAnalytics(true);
     setGaAnalyticsError(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/ga-analytics-summary');
+      const response = await apiFetch('/api/super-admin/ga-analytics-summary');
       const data = await response.json().catch(() => null);
       if (signal?.cancelled) return;
       if (!response.ok) {
@@ -126,7 +126,7 @@ export default function AnalyticsTab({
     setGaAnalyticsError(null);
     setGaNotice(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/ga-connect', {
+      const response = await apiFetch('/api/super-admin/ga-connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -147,7 +147,7 @@ export default function AnalyticsTab({
     setGaAnalyticsError(null);
     setGaNotice(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/ga-select-property', {
+      const response = await apiFetch('/api/super-admin/ga-select-property', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ propertyId: selectedPropertyId }),

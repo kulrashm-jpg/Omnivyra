@@ -1,4 +1,4 @@
-# Activities Taxonomy & Resource Consumption Guide
+﻿# Activities Taxonomy & Resource Consumption Guide
 
 **Version:** 1.0  
 **Last Updated:** 2026-03-25  
@@ -14,11 +14,10 @@ This document defines all atomic activities in the Virality platform and their e
 **Parent Flow:** Authentication & Onboarding  
 **Trigger:** New user signup  
 **Atomic Steps:**
-- **1.1.1 Validate Email & Credentials** → Supabase (auth check, user lookup)
-- **1.1.2 Create User Record** → Supabase (INSERT), Firebase Auth
-- **1.1.3 Initialize User Profile** → Supabase (INSERT user_profiles)
-- **1.1.4 Send Welcome Email** → Vercel (email service), External API (SendGrid/Mailgun if used)
-- **1.1.5 Log Audit Event** → Supabase (audit_logs INSERT)
+- **1.1.1 Validate Email & Credentials** â†’ Supabase (auth check, user lookup)
+- **1.1.3 Initialize User Profile** â†’ Supabase (INSERT user_profiles)
+- **1.1.4 Send Welcome Email** â†’ Vercel (email service), External API (SendGrid/Mailgun if used)
+- **1.1.5 Log Audit Event** â†’ Supabase (audit_logs INSERT)
 
 **Resource Cost Drivers:**
 - Database: Query count (2-5 reads, 3-4 writes)
@@ -34,28 +33,28 @@ This document defines all atomic activities in the Virality platform and their e
 **Parent Flow:** Account Lifecycle  
 **Trigger:** Post-signup, first login  
 **Atomic Steps:**
-- **1.2.1 Fetch Available Integrations** → Supabase (SELECT integrations), API Gateway (JSON serialization)
+- **1.2.1 Fetch Available Integrations** â†’ Supabase (SELECT integrations), API Gateway (JSON serialization)
 - **1.2.2 Connect Social Platform** (LinkedIn, Twitter, etc.)
-  - 1.2.2a Initiate OAuth → Vercel (OAuth endpoint)
-  - 1.2.2b Request Auth Token → External API (LinkedIn/Twitter OAuth)
-  - 1.2.2c Store Credentials** → Supabase (INSERT encrypted_tokens)
-  - 1.2.2d Validate Connection** → External API (test API call)
+  - 1.2.2a Initiate OAuth â†’ Vercel (OAuth endpoint)
+  - 1.2.2b Request Auth Token â†’ External API (LinkedIn/Twitter OAuth)
+  - 1.2.2c Store Credentials** â†’ Supabase (INSERT encrypted_tokens)
+  - 1.2.2d Validate Connection** â†’ External API (test API call)
   - **Cost:** Per platform: ~5 API calls + 2 DB writes + 1 validation call
   
 - **1.2.3 Connect Community Platforms** (Discord, Slack, etc.)
   - Similar to 1.2.2, cost per platform
   
-- **1.2.4 Set Timezone & Preferences** → Supabase (UPDATE user_settings)
-- **1.2.5 Initialize Redis Cache** → Redis (SET user_preferences, activity_cache)
+- **1.2.4 Set Timezone & Preferences** â†’ Supabase (UPDATE user_settings)
+- **1.2.5 Initialize Redis Cache** â†’ Redis (SET user_preferences, activity_cache)
 
 **Resource Cost Drivers:**
-- **APIs:** 2-5 external platform integrations × (5-10 API calls each)
+- **APIs:** 2-5 external platform integrations Ã— (5-10 API calls each)
 - **Database:** 20-30 writes, 30-50 reads
 - **Redis:** 3-5 cache entries (~5KB each)
 - **Vercel:** 2-5 OAuth callback requests
 
 **Creator-Dependent Factors:**
-- Number of platforms connected (1-10 platforms) → Linear API cost increase
+- Number of platforms connected (1-10 platforms) â†’ Linear API cost increase
   
 **Cost Allocation:**
 - Social platform connection: 70% to this activity, 30% to System (infrastructure overhead)
@@ -71,40 +70,40 @@ This document defines all atomic activities in the Virality platform and their e
 **Atomic Steps:**
 
 #### Phase 1: Information Gathering
-- **2.1.1 Analyze Brand Assets** → Supabase (SELECT brand_profiles), LLM API (Claude/GPT)
+- **2.1.1 Analyze Brand Assets** â†’ Supabase (SELECT brand_profiles), LLM API (Claude/GPT)
   - Cost: 1 LLM call (~500-2000 tokens)
-- **2.1.2 Fetch Trending Topics** → External API (Trend API, news APIs)
+- **2.1.2 Fetch Trending Topics** â†’ External API (Trend API, news APIs)
   - Cost: 1-3 API calls, 100-500KB data
-- **2.1.3 Pull Competitor Intelligence** (Optional) → External API (data aggregators)
+- **2.1.3 Pull Competitor Intelligence** (Optional) â†’ External API (data aggregators)
   - Cost: 1-5 API calls
 
 #### Phase 2: Theme Generation
-- **2.1.4 Create Strategic Theme Cards** → LLM API (multi-turn conversation)
+- **2.1.4 Create Strategic Theme Cards** â†’ LLM API (multi-turn conversation)
   - Cost: 5-10 LLM calls (~1000-5000 tokens each)
   - Uses: Trend API data + Brand insights
-- **2.1.5 Generate Visuals** (If enabled) → Image Generation API (Stable Diffusion, DALL-E)
+- **2.1.5 Generate Visuals** (If enabled) â†’ Image Generation API (Stable Diffusion, DALL-E)
   - Cost: 1-3 image generations (~0.1-0.5 credits each)
   - Platform-dependent: Multi-platform themes = more variations
 
 #### Phase 3: Planning
-- **2.1.6 Create Weekly Plan** → Supabase (INSERT campaign_plans)
+- **2.1.6 Create Weekly Plan** â†’ Supabase (INSERT campaign_plans)
   - Cost: 5-10 API calls (schedule generation)
   - LLM: 2-3 calls for weekly strategy
-- **2.1.7 Break Down to Daily Plans** → LLM API + Supabase
+- **2.1.7 Break Down to Daily Plans** â†’ LLM API + Supabase
   - Cost: 7 LLM calls (one per day) + 7 DB writes
-- **2.1.8 Generate Activity Workspace** → Supabase (INSERT campaign_activities)
+- **2.1.8 Generate Activity Workspace** â†’ Supabase (INSERT campaign_activities)
   - Cost: 10-50 DB writes (one per activity)
 
 #### Phase 4: Content Creation
-- **2.1.9 Create Master Content** → LLM API (long-form generation)
+- **2.1.9 Create Master Content** â†’ LLM API (long-form generation)
   - Cost: 5-10 LLM calls (5000-10000 tokens each)
   - Vercel: CPU time (~2-5 seconds per activation)
-- **2.1.10 Repurpose Content** → LLM API (multi-format adaptation)
-  - Cost: Per platform × content types (text, carousel, video metadata)
+- **2.1.10 Repurpose Content** â†’ LLM API (multi-format adaptation)
+  - Cost: Per platform Ã— content types (text, carousel, video metadata)
   - 2-5 LLM calls per platform
-- **2.1.11 Schedule Posts** → Supabase + Redis
+- **2.1.11 Schedule Posts** â†’ Supabase + Redis
   - Cost: 5-10 DB writes, 10-20 Redis cache entries
-- **2.1.12 Publish/Share to Platforms** → External APIs
+- **2.1.12 Publish/Share to Platforms** â†’ External APIs
   - Cost: 1 API call per platform
   - Network: Vercel egress (100KB-5MB per platform)
 
@@ -120,11 +119,11 @@ This document defines all atomic activities in the Virality platform and their e
 | Redis Keys | 10 | 50 | Schedule caching, activity state |
 
 **Creator-Dependent Factors:**
-- **Single Platform + Text Only** → Base cost (30K LLM tokens, 50 API calls)
-- **2-3 Platforms + Text** → 1.5x cost (45K tokens, 75 API calls)
-- **4+ Platforms + Video/Carousel** → 3-4x cost (90K-120K tokens, 150+ API calls)
-- **With Competitor Intelligence** → +20% cost
-- **Multi-week campaign** → Linear scaling per week
+- **Single Platform + Text Only** â†’ Base cost (30K LLM tokens, 50 API calls)
+- **2-3 Platforms + Text** â†’ 1.5x cost (45K tokens, 75 API calls)
+- **4+ Platforms + Video/Carousel** â†’ 3-4x cost (90K-120K tokens, 150+ API calls)
+- **With Competitor Intelligence** â†’ +20% cost
+- **Multi-week campaign** â†’ Linear scaling per week
 
 ---
 
@@ -132,11 +131,11 @@ This document defines all atomic activities in the Virality platform and their e
 **Parent Flow:** Campaign Creation  
 **Trigger:** User uses Recommendation AI  
 **Atomic Steps:**
-- **2.2.1 Analyze Historical Performance** → Supabase (complex aggregate queries)
+- **2.2.1 Analyze Historical Performance** â†’ Supabase (complex aggregate queries)
   - Cost: 5-10 heavy reads
-- **2.2.2 Fetch Audience Insights** → LLM API (analysis)
+- **2.2.2 Fetch Audience Insights** â†’ LLM API (analysis)
   - Cost: 2-3 LLM calls
-- **2.2.3 Generate Recommendations** → LLM + Supabase
+- **2.2.3 Generate Recommendations** â†’ LLM + Supabase
   - Cost: 5-10 LLM calls, 20-50 reads
 - **2.2.4-2.2.12** Similar to BOLT Phase 3-4
 
@@ -150,13 +149,13 @@ This document defines all atomic activities in the Virality platform and their e
 **Parent Flow:** Campaign Creation  
 **Trigger:** User manually creates campaign  
 **Atomic Steps:**
-- **2.3.1 Create Campaign Skeleton** → Supabase (INSERT campaigns)
-- **2.3.2 Define Strategy** → Supabase (UPDATE campaign_strategy)
-- **2.3.3 Create Daily Plans** → Supabase + LLM (light, optional)
-- **2.3.4 Activity Workspace Setup** → Supabase
-- **2.3.5 Repurpose Content** → LLM API (if using smart repurpose)
-- **2.3.6 Schedule Posts** → Supabase + Redis
-- **2.3.7 Share to Platforms** → External APIs
+- **2.3.1 Create Campaign Skeleton** â†’ Supabase (INSERT campaigns)
+- **2.3.2 Define Strategy** â†’ Supabase (UPDATE campaign_strategy)
+- **2.3.3 Create Daily Plans** â†’ Supabase + LLM (light, optional)
+- **2.3.4 Activity Workspace Setup** â†’ Supabase
+- **2.3.5 Repurpose Content** â†’ LLM API (if using smart repurpose)
+- **2.3.6 Schedule Posts** â†’ Supabase + Redis
+- **2.3.7 Share to Platforms** â†’ External APIs
 
 **Resource Cost Summary:**
 - 50-60% of BOLT campaign cost (less AI, more manual work)
@@ -172,17 +171,17 @@ This document defines all atomic activities in the Virality platform and their e
 **Parent Flow:** Content Creation  
 **Trigger:** New blog creation  
 **Atomic Steps:**
-- **3.1.1 Identify Topic** → LLM API (analysis, +trending topics)
+- **3.1.1 Identify Topic** â†’ LLM API (analysis, +trending topics)
   - Cost: 1-2 LLM calls
-- **3.1.2 Select Topic** → Supabase (read available topics)
+- **3.1.2 Select Topic** â†’ Supabase (read available topics)
   - Cost: 1-5 reads
-- **3.1.3 Write Blog** → LLM API (if using AI writer)
+- **3.1.3 Write Blog** â†’ LLM API (if using AI writer)
   - Cost: 5-10 LLM calls (5000-15000 tokens)
-- **3.1.4 SEO & Geo Alignment** → LLM API
+- **3.1.4 SEO & Geo Alignment** â†’ LLM API
   - Cost: 2-3 LLM calls
-- **3.1.5 Generate/Fetch Images** → Image API (Unsplash, DALL-E, or search)
+- **3.1.5 Generate/Fetch Images** â†’ Image API (Unsplash, DALL-E, or search)
   - Cost: 1-5 API calls
-- **3.1.6 Format & Publish** → Supabase (INSERT), Vercel (CDN)
+- **3.1.6 Format & Publish** â†’ Supabase (INSERT), Vercel (CDN)
   - Cost: 2-3 writes, 100KB-5MB CDN egress
 
 **Resource Cost Summary:**
@@ -206,14 +205,14 @@ This document defines all atomic activities in the Virality platform and their e
 **Parent Flow:** Social Engagement  
 **Trigger:** New social comments/messages  
 **Atomic Steps:**
-- **4.1.1 Fetch Comments/Messages** → External APIs (social platforms)
+- **4.1.1 Fetch Comments/Messages** â†’ External APIs (social platforms)
   - Cost: Per platform API call (polling or webhook)
-- **4.1.2 Send to Command Center** → Redis + Supabase
+- **4.1.2 Send to Command Center** â†’ Redis + Supabase
   - Cost: 1 Redis SET + 1 Supabase INSERT per activity
-- **4.1.3 AI Analysis (Optional)** → LLM API
+- **4.1.3 AI Analysis (Optional)** â†’ LLM API
   - Cost: 200-500 tokens per comment (sentiment, suggested response)
-- **4.1.4 User Responds** → Supabase (INSERT response)
-- **4.1.5 Post Response to Platform** → External API
+- **4.1.4 User Responds** â†’ Supabase (INSERT response)
+- **4.1.5 Post Response to Platform** â†’ External API
   - Cost: 1 API call per response, 100B-10KB per post
 
 **Resource Cost Summary (Per Monitoring Session):**
@@ -298,10 +297,10 @@ This document defines all atomic activities in the Virality platform and their e
 - External APIs: Subscription minimums not fully utilized
 
 **Optimization Opportunities:**
-- Connection pooling tuning → Can reduce by 15-20%
-- Query optimization → Can reduce by 10-30%
-- Cache hit rate improvement → Can reduce by 5-15%
-- Batch operations → Can reduce by 10-20%
+- Connection pooling tuning â†’ Can reduce by 15-20%
+- Query optimization â†’ Can reduce by 10-30%
+- Cache hit rate improvement â†’ Can reduce by 5-15%
+- Batch operations â†’ Can reduce by 10-20%
 
 ---
 
@@ -329,7 +328,7 @@ When adding new features, document as follows:
 **Parent Flow:** [Category]
 **Trigger:** [Event that starts activity]
 **Atomic Steps:**
-- **X.X.1 Step Name** → [Service Used] ([operation type])
+- **X.X.1 Step Name** â†’ [Service Used] ([operation type])
   - Cost: [Resources consumed]
 - [Repeat for each step]
 

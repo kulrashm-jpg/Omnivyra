@@ -31,7 +31,8 @@ import {
   TrendSignalNormalized,
 } from '../trendProcessingService';
 import { normalizeTrends } from '../trendNormalizationService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
 import { polishRecommendations } from '../recommendationPolishService';
@@ -526,7 +527,7 @@ export const generateRecommendations = async (
         ? computeScenarioOutcomes(scoringAdjustments.adjusted_confidence, 0)
         : undefined;
       const result = {
-        trends_used: [],
+        trends_used: merged,
         trends_ignored: [],
         weekly_plan: fallbackPlan.weekly_plan ?? [],
         daily_plan: fallbackPlan.daily_plan ?? [],
@@ -567,7 +568,7 @@ export const generateRecommendations = async (
         const learning = await sendLearningSnapshot({
           companyId: input.companyId,
           campaignId: input.campaignId ?? undefined,
-          trends_used: [],
+          trends_used: merged,
           trends_ignored: [],
           signal_confidence_summary: result.signal_quality?.signal_confidence_summary ?? null,
           novelty_score: undefined,
@@ -924,18 +925,18 @@ export const generateRecommendations = async (
     if (!isOmnivyraEnabled()) {
       setLastFallbackReason('omnivyra_disabled');
     }
-    const fallbackBaseConfidence = computeConfidence([], undefined);
-    const fallbackAdjustments = buildScoringAdjustments(
-      fallbackBaseConfidence,
-      [],
-      profile,
-      personaSummary
-    );
+      const fallbackBaseConfidence = computeConfidence(trendsUsed, undefined);
+      const fallbackAdjustments = buildScoringAdjustments(
+        fallbackBaseConfidence,
+        trendsUsed,
+        profile,
+        personaSummary
+      );
     const scenarioOutcomes = input.simulate
       ? computeScenarioOutcomes(fallbackAdjustments.adjusted_confidence, 0)
       : undefined;
-    const result = {
-      trends_used: [],
+      const result = {
+        trends_used: trendsUsed,
       trends_ignored: [],
       weekly_plan: fallbackPlan.weekly_plan ?? [],
       daily_plan: fallbackPlan.daily_plan ?? [],
@@ -974,7 +975,7 @@ export const generateRecommendations = async (
       const learning = await sendLearningSnapshot({
         companyId: input.companyId,
         campaignId: input.campaignId ?? undefined,
-        trends_used: [],
+          trends_used: trendsUsed,
         trends_ignored: [],
         signal_confidence_summary: result.signal_quality?.signal_confidence_summary ?? null,
         novelty_score: noveltyScore,
@@ -1125,4 +1126,3 @@ export const generateRecommendations = async (
 
   return result;
 };
-

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from '@/config';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   applyEnrichmentProfile,
   applyKnownCompetitorEnrichment,

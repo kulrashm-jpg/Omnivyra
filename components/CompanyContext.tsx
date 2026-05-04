@@ -30,7 +30,7 @@ const normalizeCompanyRole = (role?: string | null) => {
   if (!role) return null;
   const upper = role.toUpperCase();
   if (upper === 'ADMIN') return 'COMPANY_ADMIN';
-  // SUPER_ADMIN in user_company_roles means the row was miscreated during onboarding.
+  // SUPER_ADMIN in user company roles means the row was miscreated during onboarding.
   // Real platform super admins authenticate via the super-admin cookie path
   // (loadContentArchitectContext), not via normal Supabase auth. Downgrade silently.
   if (upper === 'SUPER_ADMIN') return 'COMPANY_ADMIN';

@@ -501,7 +501,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     createCompanyLoading,
     draftProfile,
     errorMessage,
-    fetchWithAuth,
+    apiFetch,
     filteredCompanies,
     generateMarketingIntelligence,
     handleChange,
@@ -760,7 +760,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
       formData.append('width', String(width));
       formData.append('height', String(height));
 
-      const response = await fetchWithAuth('/api/media/upload', {
+      const response = await apiFetch('/api/media/upload', {
         method: 'POST',
         body: formData,
       });
@@ -792,7 +792,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
         throw new Error('Select a company before uploading brand assets.');
       }
 
-      const saveResponse = await fetchWithAuth('/api/company-profile', {
+      const saveResponse = await apiFetch('/api/company-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1548,7 +1548,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               companyId={companyId || activeProfile.company_id}
               profile={activeProfile}
               latestRefinement={latestRefinement}
-              fetchWithAuth={fetchWithAuth}
+              apiFetch={apiFetch}
               onProfileUpdated={updateActiveProfile}
               onNotifyUpdated={notifyCompanyProfileUpdated}
               onSuccess={setSuccessMessage}

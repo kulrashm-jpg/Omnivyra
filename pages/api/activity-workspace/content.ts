@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import {
   buildPlatformVariantsFromMaster,
@@ -7,7 +8,8 @@ import {
 } from '@/backend/services/contentGenerationPipeline';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { processContent } from '@/backend/services/unifiedContentProcessor';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { hasEnoughCredits } from '@/backend/services/creditDeductionService';
 import { deductCreditsAwaited, executeWithCredits, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { assertOrgMembership } from '@/backend/services/requestAccessService';
@@ -102,7 +104,7 @@ const FAILED_VARIANT_PREFIXES = [
   '[PLATFORM ADAPTATION FAILED]',
   '[MASTER GENERATION FAILED',
 ];
-// Note: [PLATFORM MEDIA BLUEPRINT] is NOT a failure — it is a valid creator-activity placeholder
+// Note: [PLATFORM MEDIA BLUEPRINT] is NOT a failure â€” it is a valid creator-activity placeholder
 // indicating the variant requires a media asset. It is returned as a successful variant so the
 // client can show a "waiting for media" state rather than an error.
 
@@ -111,12 +113,12 @@ function isFailedVariant(v: unknown): boolean {
   return FAILED_VARIANT_PREFIXES.some((p) => content.startsWith(p));
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Auth check — must be an authenticated user
+  // Auth check â€” must be an authenticated user
   const { getSupabaseUserFromRequest } = await import('@/backend/services/supabaseAuthService');
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
   if (authError || !user) {
@@ -129,7 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const schedules = Array.isArray((req.body as any)?.schedules) ? (req.body as any).schedules : [];
     const dailyExecutionItemRaw = asObject((req.body as any)?.dailyExecutionItem) || {};
     const extra_instruction = typeof (req.body as any)?.extra_instruction === 'string' ? String((req.body as any).extra_instruction).trim() || undefined : undefined;
-    // Prefer client-supplied companyId; fall back to DB lookup via activity id → campaign → company
+    // Prefer client-supplied companyId; fall back to DB lookup via activity id â†’ campaign â†’ company
     let companyId: string | null = String((req.body as any)?.companyId || '').trim() || null;
     if (!companyId) {
       const activityId = String((req.body as any)?.activity?.id || '').trim();
@@ -170,7 +172,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (improvementType === 'ADD_DISCOVERABILITY') {
         const discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
-        // Store hashtags in discoverability_meta only — do NOT append to generated_content.
+        // Store hashtags in discoverability_meta only â€” do NOT append to generated_content.
         // The preview layer renders hashtags from discoverability_meta.hashtags separately.
       const improved_variant = {
         ...variant,
@@ -186,7 +188,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Unsupported improvement type' });
       }
 
-      // Build a plain-text prompt — avoids JSON parsing confusion in the model
+      // Build a plain-text prompt â€” avoids JSON parsing confusion in the model
       const lines = currentContent.split('\n');
       const firstLine = lines[0] ?? '';
       const restLines = lines.slice(1).join('\n');
@@ -199,18 +201,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? [
               'You are a social content editor. Your ONLY job: rewrite the FIRST LINE of the content to be punchier and under 100 characters.',
               'STRICT RULES:',
-              '1. Output the COMPLETE content — first line replaced, every other line UNCHANGED.',
+              '1. Output the COMPLETE content â€” first line replaced, every other line UNCHANGED.',
               '2. Do NOT touch any line after the first.',
               '3. Do NOT add anything at the end.',
-              '4. Return plain text only — no labels, no commentary.',
+              '4. Return plain text only â€” no labels, no commentary.',
             ].join('\n')
           : [
               'You are a social content editor. Your ONLY job: rewrite the LAST SENTENCE (or last 1-2 sentences) of the content to be a stronger, more specific call-to-action.',
               'STRICT RULES:',
-              '1. Output the COMPLETE content — everything before the last sentence UNCHANGED, last sentence replaced with a better CTA.',
-              '2. Do NOT append a new line at the bottom — the new CTA replaces the existing ending in-place.',
+              '1. Output the COMPLETE content â€” everything before the last sentence UNCHANGED, last sentence replaced with a better CTA.',
+              '2. Do NOT append a new line at the bottom â€” the new CTA replaces the existing ending in-place.',
               '3. Do NOT touch anything before the last sentence.',
-              '4. Return plain text only — no labels, no commentary.',
+              '4. Return plain text only â€” no labels, no commentary.',
             ].join('\n');
 
       const userPrompt =
@@ -233,7 +235,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               beforeLastSentence || currentContent,
               '',
               '## LAST SENTENCE (replace with a stronger CTA):',
-              lastSentence || '(no ending sentence found — add a CTA at the end)',
+              lastSentence || '(no ending sentence found â€” add a CTA at the end)',
               '',
               'Output the complete revised content now:',
             ].join('\n');
@@ -288,7 +290,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       const contentType = String(variant?.content_type || 'post').trim().toLowerCase();
 
-      // ADD_DISCOVERABILITY is independent — generate hashtags separately
+      // ADD_DISCOVERABILITY is independent â€” generate hashtags separately
       let discoverabilityMeta: Record<string, unknown> | undefined;
       if (improvementTypes.includes('ADD_DISCOVERABILITY')) {
         discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
@@ -307,8 +309,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const lastSentence = lastSentenceIdx > 0 ? currentContent.slice(lastSentenceIdx + 1).trim() : currentContent.trim();
 
         const improvementInstructions = contentImprovements.map((t) => {
-          if (t === 'IMPROVE_HOOK') return '1. IMPROVE_HOOK: Rewrite the FIRST LINE to be punchier and under 100 characters — replace in place, do not append.';
-          if (t === 'IMPROVE_CTA') return `${contentImprovements.length > 1 ? '2' : '1'}. IMPROVE_CTA: Rewrite the LAST SENTENCE (or last 1-2 sentences) with a stronger, more specific call-to-action — replace in place, do not append a new line.`;
+          if (t === 'IMPROVE_HOOK') return '1. IMPROVE_HOOK: Rewrite the FIRST LINE to be punchier and under 100 characters â€” replace in place, do not append.';
+          if (t === 'IMPROVE_CTA') return `${contentImprovements.length > 1 ? '2' : '1'}. IMPROVE_CTA: Rewrite the LAST SENTENCE (or last 1-2 sentences) with a stronger, more specific call-to-action â€” replace in place, do not append a new line.`;
           return '';
         }).filter(Boolean).join('\n');
 
@@ -318,9 +320,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           '',
           'STRICT RULES:',
           '1. Output the COMPLETE revised content with every improvement applied in the correct position.',
-          '2. Do NOT append any new lines at the end — every change must replace the relevant part in-place.',
+          '2. Do NOT append any new lines at the end â€” every change must replace the relevant part in-place.',
           '3. Do NOT touch any part of the content that is not being improved.',
-          '4. Return plain text only — no labels, no commentary.',
+          '4. Return plain text only â€” no labels, no commentary.',
         ].join('\n');
 
         const userPromptParts = [
@@ -328,7 +330,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           '',
         ];
         if (contentImprovements.includes('IMPROVE_HOOK')) {
-          userPromptParts.push('## FIRST LINE (rewrite this — IMPROVE_HOOK):');
+          userPromptParts.push('## FIRST LINE (rewrite this â€” IMPROVE_HOOK):');
           userPromptParts.push(firstLine);
           userPromptParts.push('');
           userPromptParts.push('## REST OF CONTENT (keep exactly as-is, except last sentence if IMPROVE_CTA applies):');
@@ -339,8 +341,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         if (contentImprovements.includes('IMPROVE_CTA')) {
           userPromptParts.push('');
-          userPromptParts.push('## LAST SENTENCE (replace with a stronger CTA — IMPROVE_CTA):');
-          userPromptParts.push(lastSentence || '(no ending sentence found — add a CTA at the end)');
+          userPromptParts.push('## LAST SENTENCE (replace with a stronger CTA â€” IMPROVE_CTA):');
+          userPromptParts.push(lastSentence || '(no ending sentence found â€” add a CTA at the end)');
         }
         userPromptParts.push('', 'Output the complete revised content now:');
 
@@ -421,31 +423,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     if (action === 'generate_master') {
-      // ── STRICT REQUIREMENTS ──────────────────────────────────────────────
-      //   1. orgId is NEVER taken from request body — resolved server-side
-      //      from activity → campaign → company.
+      // â”€â”€ STRICT REQUIREMENTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      //   1. orgId is NEVER taken from request body â€” resolved server-side
+      //      from activity â†’ campaign â†’ company.
       //   2. Tenant membership is verified BEFORE any credit work.
       //   3. Rate limits: per-user (30/min, 300/hour) + per-org (100/min,
       //      1000/hour), sliding-window (Redis zset).
-      //   4. Provider + model pinned explicitly — no env fallback.
+      //   4. Provider + model pinned explicitly â€” no env fallback.
       //   5. Model hard limits (max_context_tokens, max_output_tokens) are
       //      validated inside estimateLlmHoldCredits BEFORE HOLD is placed.
-      //   6. HOLD size = resolveLlmCost(maxTokens, applyCeiling=false) —
+      //   6. HOLD size = resolveLlmCost(maxTokens, applyCeiling=false) â€”
       //      no ceiling cap on the reservation; the settlement cap still
       //      applies when CONFIRM computes the actual charge.
       //   7. Tokens come ONLY from executor return; source flag distinguishes
       //      provider-metered from cache.
       //   8. aiGateway owns usage_events telemetry; executeWithCredits owns
       //      credit_transactions. No suppressUsageLog flag, no double-write.
-      //   9. Response is minimal — no pricing / settlement / tokens leaked.
-      // ─────────────────────────────────────────────────────────────────────
+      //   9. Response is minimal â€” no pricing / settlement / tokens leaked.
+      // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
       if (!activityDbId || activityDbId.startsWith('workspace-')) {
         return res.status(400).json({ error: 'Persisted activity id required (workspace IDs are not billable)' });
       }
 
-      // Server-side orgId resolution — body.companyId is IGNORED.
+      // Server-side orgId resolution â€” body.companyId is IGNORED.
       const { data: plan } = await supabase
         .from('daily_content_plans')
         .select('campaign_id')
@@ -470,7 +472,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
       }
 
-      // ── Rate limits (sliding window, per-user + per-org, min + hour) ──
+      // â”€â”€ Rate limits (sliding window, per-user + per-org, min + hour) â”€â”€
       const rlChecks = await Promise.all([
         checkRateLimit(user.id,        { keyPrefix: 'genmaster:user:min',  limit: 30,   windowSecs: 60   }),
         checkRateLimit(user.id,        { keyPrefix: 'genmaster:user:hour', limit: 300,  windowSecs: 3600 }),
@@ -574,7 +576,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         messages: [
           {
             role: 'system',
-            content: 'You are a senior social content editor. Apply user refinement instructions while preserving factual meaning and platform fit. Preserve all paragraph line breaks and blank lines between paragraphs. Return only refined content — no labels, no commentary.',
+            content: 'You are a senior social content editor. Apply user refinement instructions while preserving factual meaning and platform fit. Preserve all paragraph line breaks and blank lines between paragraphs. Return only refined content â€” no labels, no commentary.',
           },
           {
             role: 'user',
@@ -619,7 +621,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ── generate_variants ─────────────────────────────────────────────────────
+    // â”€â”€ generate_variants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const activityDbId = String((req.body as any)?.activity?.id || '').trim();
 
     const creatorAsset = asObject((dailyExecutionItemRaw as any)?.creator_asset);
@@ -660,10 +662,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const variants = await buildPlatformVariantsFromMaster(itemWithMaster);
 
-    // Filter out failed/placeholder variants — never return error strings as content
+    // Filter out failed/placeholder variants â€” never return error strings as content
     const successfulVariants = variants.filter((v) => !isFailedVariant(v));
     if (successfulVariants.length === 0 && variants.length > 0) {
-      // All variants failed — surface the actual error instead of silently returning garbage
+      // All variants failed â€” surface the actual error instead of silently returning garbage
       return res.status(500).json({
         error: 'VARIANT_GENERATION_FAILED',
         message: 'Platform adaptation failed for all targets.',
@@ -696,3 +698,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to process activity content request' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

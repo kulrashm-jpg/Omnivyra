@@ -6,7 +6,7 @@ import { GovernanceExplanationPanel, deriveFromEvent } from '../../components/go
 import { GovernanceTimeline } from '../../components/governance/GovernanceTimeline';
 import { PreemptionHistory } from '../../components/governance/PreemptionHistory';
 import { TradeOffSuggestionList } from '../../components/governance/TradeOffSuggestionList';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type NegotiationResult = {
   status: string;
@@ -179,7 +179,7 @@ export default function GovernanceTab({
             autoOptimizationEligibility={governanceAnalytics?.autoOptimizationEligibility}
             onToggleAutoOptimize={async (enabled: boolean) => {
               if (!campaignId || !effectiveCompanyId) return;
-              const res = await fetchWithAuth('/api/analytics/toggle-auto-optimize', {
+              const res = await apiFetch('/api/analytics/toggle-auto-optimize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ campaignId, companyId: effectiveCompanyId, enabled }),
@@ -226,7 +226,7 @@ export default function GovernanceTab({
                     setNegotiationLoading(true);
                     setNegotiationResult(null);
                     try {
-                      const res = await fetchWithAuth('/api/campaigns/negotiate-duration', {
+                      const res = await apiFetch('/api/campaigns/negotiate-duration', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ campaignId, companyId: effectiveCompanyId, message: negotiationMessage }),
@@ -240,9 +240,9 @@ export default function GovernanceTab({
                           evaluation: data.evaluation,
                         });
                         const [statusRes, eventsRes, analyticsRes] = await Promise.all([
-                          fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(campaignId)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
-                          fetchWithAuth(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(campaignId)}`),
-                          fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(campaignId)}`),
+                          apiFetch(`/api/governance/campaign-status?campaignId=${encodeURIComponent(campaignId)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
+                          apiFetch(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(campaignId)}`),
+                          apiFetch(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(campaignId)}`),
                         ]);
                         if (statusRes.ok) {
                           const statusData = await statusRes.json();

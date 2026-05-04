@@ -1,6 +1,7 @@
 import handler from '../../../pages/api/recommendations/[id]/create-campaign';
 import { runCampaignAiPlan } from '../../services/campaignAiOrchestrator';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 jest.mock('../../services/campaignAiOrchestrator', () => ({

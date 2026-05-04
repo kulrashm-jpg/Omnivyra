@@ -49,9 +49,7 @@ type Props = {
   createPath: string;
 };
 
-type ConnectedAccount = {
-  connected?: boolean;
-  category?: string;
+type PostablePlatform = {
   platform_key?: string;
   platform_label?: string;
 };
@@ -97,18 +95,20 @@ export default function ShortformResultPage({
     }
 
     let active = true;
-    fetch(`/api/social-accounts/status?companyId=${encodeURIComponent(selectedCompanyId)}`, { credentials: 'include' })
-      .then((response) => (response.ok ? response.json() : { accounts: [] }))
+    const url = `/api/social-accounts/postable-platforms?companyId=${encodeURIComponent(selectedCompanyId)}&contentType=${encodeURIComponent(contentType)}`;
+    fetch(url, { credentials: 'include' })
+      .then((response) => (response.ok ? response.json() : { platforms: [] }))
       .then((data) => {
         if (!active) return;
-        const accounts = Array.isArray(data?.accounts) ? data.accounts as ConnectedAccount[] : [];
-        const unique = new Map<string, string>();
-        for (const account of accounts) {
-          const key = String(account.platform_key || '').trim().toLowerCase().replace(/^twitter$/i, 'x');
-          if (!account.connected || account.category !== 'social' || !key || unique.has(key)) continue;
-          unique.set(key, account.platform_label || key);
-        }
-        setConnectedPlatforms(Array.from(unique.entries()).map(([key, label]) => ({ key, label })));
+        const platforms = Array.isArray(data?.platforms) ? data.platforms as PostablePlatform[] : [];
+        setConnectedPlatforms(
+          platforms
+            .map((p) => ({
+              key: String(p.platform_key || '').trim().toLowerCase(),
+              label: p.platform_label || p.platform_key || '',
+            }))
+            .filter((p) => p.key),
+        );
       })
       .catch(() => {
         if (active) setConnectedPlatforms([]);
@@ -117,7 +117,7 @@ export default function ShortformResultPage({
     return () => {
       active = false;
     };
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, contentType]);
 
   const generatedContent = payload?.output?.platform_variant?.generated_content || '';
   const hashtags = payload?.output?.platform_variant?.discoverability_meta?.hashtags || [];

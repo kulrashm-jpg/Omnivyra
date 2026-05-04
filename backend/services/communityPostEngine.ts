@@ -4,7 +4,8 @@
  * New layer after campaign_narratives. Does not modify intelligence pipeline.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type NarrativeRow = {
   id: string;

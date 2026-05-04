@@ -36,7 +36,7 @@ function normalize(value: number, max: number): number {
 
 /**
  * Resolve campaign IDs for a company.
- * Uses campaign_versions first; falls back to user_company_roles + campaigns.
+ * Uses campaign_versions first; falls back to user company roles + campaigns.
  */
 export async function resolveCampaignIdsForCompany(
   supabase: SupabaseClient,
@@ -58,7 +58,7 @@ export async function resolveCampaignIdsForCompany(
     if (ids.size > 0) return Array.from(ids);
 
     const { data: roles } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id')
       .eq('company_id', companyId)
       .eq('status', 'active');

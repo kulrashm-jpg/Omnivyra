@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/campaigns/pending/:id/approve
@@ -11,11 +12,12 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { logDecision } from '@/backend/services/autonomousDecisionLogger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const auth = await requireAuth(req, res);
@@ -50,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const reviewedAt = new Date().toISOString();
   const reviewedBy = auth.user.email ?? auth.user.id;
 
-  // ── Reject ────────────────────────────────────────────────────────────────
+  // â”€â”€ Reject â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (action === 'reject') {
     const { error: rejectErr } = await supabase.from('pending_campaigns').update({
       status:      'rejected',
@@ -73,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ success: true, action: 'rejected' });
   }
 
-  // ── Approve → mark pending first, then create campaign ───────────────────
+  // â”€â”€ Approve â†’ mark pending first, then create campaign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Marking as approved BEFORE creating the campaign prevents a double-approve
   // race and ensures no orphaned campaigns if campaign insert fails.
   const { error: markErr } = await supabase.from('pending_campaigns').update({
@@ -141,3 +143,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     campaign_id: campaignId,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

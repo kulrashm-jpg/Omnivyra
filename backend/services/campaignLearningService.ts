@@ -6,7 +6,8 @@
  * without overriding trend intelligence.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const DEFAULT_LOOKBACK_DAYS = 90;
 const MIN_SIGNALS_FOR_INSIGHT = 3;

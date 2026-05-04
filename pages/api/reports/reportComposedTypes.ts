@@ -1,3 +1,5 @@
+﻿// AUTH EXEMPT: non-route API helper module without default handler
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { PriorityType } from '../../../backend/services/actionPriorityService';
 
 export type ComposedReportSection = {
@@ -566,3 +568,4 @@ export type ComposedReportData = {
   };
   sections?: ComposedReportSection[];
 };
+

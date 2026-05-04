@@ -1,8 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
 import { getActiveProperty } from '../../../backend/services/analyticsIntegrationService';
 import { runIngestionForCompany } from '../../../backend/services/ingestionScheduler';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 // 15s upper bound on the synchronous wait. Returning 'started' after this is
@@ -12,7 +14,7 @@ const POLL_INTERVAL_MS = 1_000;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -36,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Note: we deliberately do NOT call saveSelectedProperty here. The active
   // property has already been verified above, and saveSelectedProperty fires
-  // its own triggerImmediateGa4Ingestion in the background — calling it on
+  // its own triggerImmediateGa4Ingestion in the background â€” calling it on
   // top of the explicit fire-and-forget below would race two runs against
   // each other. getActiveProperty is sufficient proof the property is live.
 
@@ -45,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Fire-and-forget: the run can legitimately take minutes, so we must not
   // await it. runIngestionForCompany already wraps each source in try/catch
   // and writes status=error to data_source_status on failure, so an unhandled
-  // rejection here is impossible — but we attach a catch handler defensively
+  // rejection here is impossible â€” but we attach a catch handler defensively
   // so a genuine bug never surfaces as an unhandled rejection on the server.
   void runIngestionForCompany({
     companyId,
@@ -109,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sessionsWritten = (lastRun as { records_inserted?: number } | null)?.records_inserted ?? null;
   }
 
-  // TEMP verification log — remove once force-sync is observed working in prod.
+  // TEMP verification log â€” remove once force-sync is observed working in prod.
   console.log('[GA-FORCE-SYNC]', {
     companyId,
     propertyId: activeProperty.property_id,
@@ -140,3 +142,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     sessions_written: null,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

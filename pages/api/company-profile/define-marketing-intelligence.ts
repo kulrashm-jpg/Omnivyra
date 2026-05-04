@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { getProfile } from '../../../backend/services/companyProfileService';
@@ -19,7 +20,7 @@ function getOpenAiClient(): OpenAI {
   return new OpenAI({ apiKey });
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -71,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       'Response format (JSON only, no markdown):\n' +
       '- If you need more information: { "nextQuestion": "your question here" }\n' +
       '- When you have enough to output refined values for all 7 fields: { "done": true, "structuredFields": { "marketing_channels": "...", "content_strategy": "...", "campaign_focus": "...", "key_messages": "...", "brand_positioning": "...", "competitive_advantages": "...", "growth_priorities": "..." } }\n' +
-      'In structuredFields: merge current values with user input; do not leave a field empty unless the user explicitly clears it. Keep values concise (1–2 sentences max where needed).';
+      'In structuredFields: merge current values with user input; do not leave a field empty unless the user explicitly clears it. Keep values concise (1â€“2 sentences max where needed).';
 
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
@@ -117,7 +118,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       nextQuestion:
         parsed.nextQuestion ||
-        'Anything else you’d like to add about your marketing strategy?',
+        'Anything else youâ€™d like to add about your marketing strategy?',
     });
   } catch (err: any) {
     console.error('Define marketing intelligence failed:', err);
@@ -127,3 +128,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

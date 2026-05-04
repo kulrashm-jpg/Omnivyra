@@ -1,23 +1,19 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const VALID_TYPES = new Set(['related', 'prerequisite', 'continuation']);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const ok = await requireSuperAdmin(req, res);
-  if (!ok) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'blog:relationships');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/blog/relationships', 'blog:relationships');
+  }
 
-  // ── POST — create relationship ─────────────────────────────────────────────
+  // â”€â”€ POST â€” create relationship â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const { source_blog_id, target_blog_id, relationship_type = 'related' } = req.body ?? {};
 
@@ -41,7 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(201).json(data);
   }
 
-  // ── DELETE — remove relationship ───────────────────────────────────────────
+  // â”€â”€ DELETE â€” remove relationship â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'DELETE') {
     const id = req.query.id as string;
     if (!id) return res.status(400).json({ error: 'id required' });
@@ -53,3 +49,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

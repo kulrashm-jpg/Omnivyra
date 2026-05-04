@@ -472,11 +472,10 @@ export function useSocialPlatforms() {
       if (data.session?.user?.id) params.set('userId', data.session.user.id);
     } catch { /* non-fatal */ }
 
-    // Route through community-ai connectors so one OAuth connect writes to both
-    // social_accounts (publishing) and community_ai_platform_tokens (engagement).
-    // YouTube does not have a community-ai connector route yet, so it must keep
-    // using the legacy OAuth flow with explicit company context.
-    const connectorPlatforms = new Set(['linkedin', 'x', 'facebook', 'instagram', 'reddit', 'youtube']);
+    // Route non-Meta connector platforms through community-ai connectors.
+    // Meta publishing needs the dedicated /api/auth/facebook flow because it
+    // derives Page, Instagram Business, and Threads rows transactionally.
+    const connectorPlatforms = new Set(['linkedin', 'x', 'reddit']);
     if (selectedCompanyId && connectorPlatforms.has(p.platform_key)) {
       const connectorKey = p.platform_key;
       const connectorParams = new URLSearchParams({
@@ -573,6 +572,10 @@ export function useSocialPlatforms() {
     );
   };
 
+  const isInstagramConnected = (): boolean => {
+    return platforms.some((row) => row.platform_key === 'instagram' && row.connected && !row.expired);
+  };
+
   const getStatusBadge = (p: PlatformStatus) => {
     const isThreads = p.platform_key === 'threads';
     if (p.connected && p.expired) return (
@@ -585,6 +588,13 @@ export function useSocialPlatforms() {
         <CheckCircle2 className="h-3 w-3" /> {p.platform_key === 'threads' ? 'Enabled' : 'Connected'}
       </span>
     );
+    if (isThreads && isInstagramConnected()) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-500 border border-gray-200">
+          <AlertCircle className="h-3 w-3" /> Not available
+        </span>
+      );
+    }
     if (isThreads && p.connection_status === 'disconnected') {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
@@ -615,6 +625,18 @@ export function useSocialPlatforms() {
     const isThreads = p.platform_key === 'threads';
     const oauthConfigured = p.oauth_configured || isThreads;
     const authPath = isThreads ? '/api/auth/instagram' : p.auth_path;
+    // Threads has 3 UI states:
+    //   1. connected            → threads row exists with valid token
+    //   2. not_available        → instagram is connected but no threads row was derived
+    //   3. connect              → no instagram, no threads (must connect Meta first)
+    const threadsState: 'connected' | 'not_available' | 'connect' =
+      isThreads
+        ? p.connected
+          ? 'connected'
+          : isInstagramConnected()
+            ? 'not_available'
+            : 'connect'
+        : 'connect';
     const meta = PLATFORM_META[p.platform_key];
     const isChecking = checking === p.platform_key;
     const builtinTypes = CONTENT_TYPES_PER_PLATFORM[p.platform_key] ?? ['post'];
@@ -659,7 +681,7 @@ export function useSocialPlatforms() {
                   Add credentials in Super Admin → Platform Config
                 </div>
               )}
-              {oauthConfigured && !p.connected && authPath && (
+              {oauthConfigured && !p.connected && authPath && !(isThreads && threadsState === 'not_available') && (
                 <div className="mt-0.5 text-xs text-gray-400">
                   {isThreads && p.connection_status === 'disconnected' ? 'Ready to reconnect' : 'Ready to connect'}
                   {(p.platform_key === 'facebook' || p.platform_key === 'instagram' || p.platform_key === 'whatsapp' || isThreads) && (
@@ -669,6 +691,14 @@ export function useSocialPlatforms() {
                         : '- connects Facebook, Instagram & WhatsApp in one Meta consent'}
                     </span>
                   )}
+                </div>
+              )}
+              {isThreads && threadsState === 'not_available' && (
+                <div className="mt-0.5 text-xs text-gray-500">
+                  Instagram connected.
+                  <span className="ml-1 italic text-gray-400">
+                    Threads not available for this account.
+                  </span>
                 </div>
               )}
               {checks[p.platform_key] && (
@@ -740,6 +770,13 @@ export function useSocialPlatforms() {
                   {disconnecting === p.platform_key ? 'Disconnecting…' : 'Disconnect'}
                 </button>
               </>
+            ) : isThreads && threadsState === 'not_available' ? (
+              <span
+                title="This Instagram account does not have a linked Threads profile that Meta exposes via Graph API. Set up Threads in the Instagram or Threads app, then reconnect Meta."
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-gray-500 text-xs font-medium"
+              >
+                <AlertCircle className="h-3.5 w-3.5" /> Threads not available for this account
+              </span>
             ) : oauthConfigured && authPath ? (
               <button
                 onClick={() => handleConnect({ ...p, auth_path: authPath, oauth_configured: oauthConfigured })}

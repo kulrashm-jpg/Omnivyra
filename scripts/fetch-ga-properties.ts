@@ -16,7 +16,8 @@ import {
   fetchGAAccountsAndProperties,
   getValidAccessTokenForIntegration,
 } from '../backend/services/analyticsIntegrationService';
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function rawAdminGet(accessToken: string, url: string) {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });

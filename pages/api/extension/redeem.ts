@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/extension/redeem
  *
  * Called by the extension service worker with ONLY a claim code. Redeems
  * the one-time code and returns the session token + HMAC secret. No
- * Authorization header is required or honored on this endpoint — the
+ * Authorization header is required or honored on this endpoint â€” the
  * single-use claim code IS the authentication factor for this one call.
  *
  * Response shape (the extension worker consumes this directly):
@@ -30,7 +31,7 @@ import {
 } from '@/backend/services/extensionSessionService';
 import { CAPABILITY_MAP_VERSION } from '@/backend/services/engagementCapabilityMap';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -85,3 +86,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ success: false, error: (error as Error)?.message || 'redeem failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

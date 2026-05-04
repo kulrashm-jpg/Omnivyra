@@ -600,7 +600,7 @@ export default function AboutPage({ hero, chaos, disconnected, connected, bluepr
           </div>
 
           <p className="mt-6 text-xs text-white/40">
-            No credit card required · 300 credits free · Start in minutes
+            No credit card required · 50 credits free · Start in minutes
           </p>
 
           <div className="mx-auto mt-12 h-px w-24 bg-gradient-to-r from-transparent via-white/20 to-transparent" />

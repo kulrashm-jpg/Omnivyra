@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Activity Feed API
@@ -8,7 +9,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getActivityFeed } from '../../../backend/services/activityLogger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -21,7 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { campaign_id, action_type, entity_type, start_date, end_date, limit, offset } = req.query;
 
-    // Always use the authenticated user's own ID — never accept user_id from query (IDOR prevention)
+    // Always use the authenticated user's own ID â€” never accept user_id from query (IDOR prevention)
     const activities = await getActivityFeed(user.id, {
       campaign_id: campaign_id as string,
       action_type: action_type as any,
@@ -44,3 +45,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

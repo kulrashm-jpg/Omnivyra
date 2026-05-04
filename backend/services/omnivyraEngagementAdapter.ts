@@ -8,7 +8,8 @@
  * DO NOT change engagementEvaluationService behavior — it still uses post_comments.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type BuildOmnivyraEngagementInputOptions = {
   tenant_id: string;

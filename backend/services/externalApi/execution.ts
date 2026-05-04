@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { updateApiHealth } from '../externalApiHealthService';
 import { logUsageEvent } from '../usageLedgerService';
 import { incrementUsageMeter } from '../usageMeterService';
@@ -435,7 +436,7 @@ export const recordApiHealth = async (
       if (isSchemaError && !(globalThis as any).__external_api_health_schema_hint_shown) {
         (globalThis as any).__external_api_health_schema_hint_shown = true;
         console.warn(
-          'external_api_health table not found. Run database/external_api_health.sql to create it. API health tracking will be skipped.'
+          'Schema mismatch: external_api_health table missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql. API health tracking will be skipped.'
         );
       } else if (!isSchemaError) {
         console.warn('Failed to persist API health record', {
@@ -507,6 +508,7 @@ export async function executeWithAccountLoop(input: {
       DEFAULT_RATE_LIMIT_PER_MIN;
 
     if (await isRateLimited(rateLimitKey, limitPerMin)) {
+      addRateLimitedSource(`${input.source.name}:${accountId ?? 'default'}`);
       await logExternalApiUsage({
         apiSourceId: input.source.id,
         userId: input.usageUserId,

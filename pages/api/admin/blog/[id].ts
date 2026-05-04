@@ -1,23 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<{ userId: string | null } | null> {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) return { userId: null };
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (isAdmin) return { userId: user.id };
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return null;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const auth = await requireSuperAdmin(req, res);
-  if (!auth) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'blog:generate');
+  if (!ctx) return;
+  const auth = { userId: ctx.id };
 
   const id = req.query.id as string;
   if (!id?.trim()) {
@@ -86,3 +76,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

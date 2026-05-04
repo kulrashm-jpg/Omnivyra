@@ -5,7 +5,8 @@
  * from engagement messages. Feeds Opportunity Radar, Content Opportunity Engine, Topic Intelligence.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   writeLeadSignal,
 } from './canonicalLeadSignalService';

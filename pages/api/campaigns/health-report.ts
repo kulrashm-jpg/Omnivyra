@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { getResolvedCampaignPlanContext } from '../../../backend/services/campaignBlueprintService';
@@ -6,7 +7,8 @@ import {
   getTrendSnapshots,
   saveCampaignHealthReport,
 } from '../../../backend/db/campaignVersionStore';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { listAssetsWithLatestContent } from '../../../backend/db/contentAssetStore';
 import { getLatestAnalyticsReport, getLatestLearningInsights } from '../../../backend/db/performanceStore';
 import { ALL_ROLES } from '../../../backend/services/rbacService';
@@ -97,4 +99,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALL_ROLES);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, ALL_ROLES));
+

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Team Assignment API
@@ -8,7 +9,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { assignWeek, updateWeekStatus } from '../../../backend/services/teamService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
   if (authError || !user) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -60,3 +61,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(405).json({ error: 'Method not allowed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

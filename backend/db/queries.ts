@@ -11,7 +11,8 @@
  * - social_accounts
  */
 
-import { supabase } from './supabaseClient';
+import { createServiceRoleMigrationProxy } from './supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export interface QueueJob {
   id: string;

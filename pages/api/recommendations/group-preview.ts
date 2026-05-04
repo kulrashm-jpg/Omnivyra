@@ -1,8 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const normalizeObject = (value: any) => {
   if (!value) return {};
@@ -203,9 +205,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       '- momentum classification\n' +
       'Include a one-sentence priority_rationale.\n' +
       'Execution window rules:\n' +
-      '- Momentum + High reach → Immediate (0–2 days)\n' +
-      '- Emerging + High lead potential → This Week (3–7 days)\n' +
-      '- Wildcard or High complexity → Plan Next (7–21 days)\n' +
+      '- Momentum + High reach â†’ Immediate (0â€“2 days)\n' +
+      '- Emerging + High lead potential â†’ This Week (3â€“7 days)\n' +
+      '- Wildcard or High complexity â†’ Plan Next (7â€“21 days)\n' +
       'Also return decay_risk and a one-sentence timing_rationale.\n' +
       'Forecasting rules:\n' +
       '- Leads consider expected_lead_potential, growth_opportunity_score, audience intent, platform suitability.\n' +
@@ -213,7 +215,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       '- Budget allocation prefers high reach + engagement; reduce where execution_complexity is high.\n' +
       'Confidence band rules:\n' +
       '- Consider priority_score, confidence, number of supporting sources, trend_classification, platform reuse.\n' +
-      '- High: 70–90%, Medium: 40–70%, Low: 10–40%.\n' +
+      '- High: 70â€“90%, Medium: 40â€“70%, Low: 10â€“40%.\n' +
       'ROI estimate rules:\n' +
       '- Base on estimated_revenue_30d max relative to execution_complexity.\n' +
       'Use learning_signals (if provided) to calibrate forecast confidence and ROI realism.\n' +
@@ -242,4 +244,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]));
+

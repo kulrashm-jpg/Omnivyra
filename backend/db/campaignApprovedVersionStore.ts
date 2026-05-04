@@ -1,4 +1,5 @@
-import { supabase } from './supabaseClient';
+import { createServiceRoleMigrationProxy } from './supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersion } from './campaignVersionStore';
 
 export async function getLatestApprovedCampaignVersion(

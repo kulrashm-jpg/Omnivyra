@@ -4,7 +4,8 @@
  * Combines momentum_score, topic_match, competitor_match, region_match, recency.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type {
   FilteredSignalWithEvaluation,
   SignalMatchEvaluation,

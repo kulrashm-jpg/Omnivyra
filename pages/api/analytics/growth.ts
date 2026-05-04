@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/analytics/growth
  *
@@ -6,17 +7,18 @@
  *
  * Query params:
  *   company_id   (required)
- *   platform     (optional) — filter to a single platform
- *   date_from    (optional) — YYYY-MM-DD
- *   date_to      (optional) — YYYY-MM-DD
- *   limit        (optional, default 90)   — max days to return per platform
+ *   platform     (optional) â€” filter to a single platform
+ *   date_from    (optional) â€” YYYY-MM-DD
+ *   date_to      (optional) â€” YYYY-MM-DD
+ *   limit        (optional, default 90)   â€” max days to return per platform
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
@@ -68,3 +70,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     total:    data?.length ?? 0,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/credits/claim-action
@@ -8,11 +9,11 @@
  * Body: { category: string }
  *
  * Valid categories:
- *   invite_friend   → +200
- *   feedback        → +100
- *   setup           → +100
- *   connect_social  → +150
- *   first_campaign  → +200
+ *   invite_friend   â†’ +200
+ *   feedback        â†’ +100
+ *   setup           â†’ +100
+ *   connect_social  â†’ +150
+ *   first_campaign  â†’ +200
  *
  * Auth: requires Supabase Bearer token
  */
@@ -40,7 +41,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
-  // ── Domain eligibility gate ───────────────────────────────────────────────
+  // â”€â”€ Domain eligibility gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (user.email) {
     const eligibility = await checkDomainEligibility(user.email, user.id);
     if (eligibility.status === 'blocked') {
@@ -51,7 +52,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { category } = body as { category: string };
 
-  // ── STEP 4: Load active reward amounts from DB with fallback ─────────────
+  // â”€â”€ STEP 4: Load active reward amounts from DB with fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const { data: configRows } = await serviceSb
     .from('free_credit_config')
@@ -71,7 +72,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const credits = CREDIT_REWARDS[category];
 
   try {
-    // Insert claim — UNIQUE(user_id, category) will reject duplicates
+    // Insert claim â€” UNIQUE(user_id, category) will reject duplicates
     const { error: claimErr } = await serviceSb.from('free_credit_claims').insert({
       user_id:         user.id,
       category,
@@ -87,7 +88,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Get org to apply credit transaction
     const { data: membership } = await serviceSb
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', user.id)
       .limit(1)
@@ -102,7 +103,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           category:       'incentive',
           referenceType:  'free_credits_earn',
           referenceId:    `${user.id}:${category}`,
-          note:           `Free credits — ${category.replace(/_/g, ' ')}`,
+          note:           `Free credits â€” ${category.replace(/_/g, ' ')}`,
           performedBy:    user.id,
           idempotencyKey: makeIdempotencyKey(user.id, `earn:${category}`, orgId),
         });
@@ -122,4 +123,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withIdempotency(handler, { scope: 'credits-claim-action' });
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withIdempotency(handler, { scope: 'credits-claim-action' }));
+

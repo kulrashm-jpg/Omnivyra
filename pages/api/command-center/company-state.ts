@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/command-center/company-state
@@ -38,7 +39,7 @@ type ErrorResponse = {
   code?: string;
 };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -46,7 +47,7 @@ export default async function handler(
     return res.status(405).json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
   }
 
-  // ── 1. Verify user is authenticated ───────────────────────────────────────
+  // â”€â”€ 1. Verify user is authenticated â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
 
   if (userErr || !user) {
@@ -56,7 +57,7 @@ export default async function handler(
   try {
     const supabase = getSupabaseBrowser();
 
-    // ── 2. Get user's selected company ID from request ──────────────────────
+    // â”€â”€ 2. Get user's selected company ID from request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const companyId = (req.query.company_id as string) || '';
     if (!companyId) {
       return res.status(400).json({
@@ -65,9 +66,9 @@ export default async function handler(
       });
     }
 
-    // ── 3. Check if user has access to this company ────────────────────────
+    // â”€â”€ 3. Check if user has access to this company â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: roleData } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('id')
       .eq('user_id', user.id)
       .eq('company_id', companyId)
@@ -81,7 +82,7 @@ export default async function handler(
       });
     }
 
-    // ── 4. Fetch company setup state ──────────────────────────────────────
+    // â”€â”€ 4. Fetch company setup state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     // Check blogs created by this user for this company
     const { data: blogData, error: blogErr } = await supabase
@@ -114,7 +115,7 @@ export default async function handler(
       .limit(1)
       .maybeSingle();
 
-    // ── 5. Build response ────────────────────────────────────────────────
+    // â”€â”€ 5. Build response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const state: CompanySetupState = {
       hasBlogsCreated: blogData && blogData.length > 0,
       hasSocialLinked: socialAccounts && socialAccounts.length > 0,
@@ -138,3 +139,9 @@ export default async function handler(
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

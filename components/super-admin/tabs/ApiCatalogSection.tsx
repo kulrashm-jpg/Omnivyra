@@ -1,4 +1,4 @@
-import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import React, { useState, useEffect } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
 import { KNOWN_APIS } from '@/pages/super-admin.types';
@@ -66,7 +66,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
   const loadCatalogApis = async () => {
     setLoadingCatalogApis(true);
     try {
-      const r = await fetchWithAuth('/api/external-apis?scope=platform');
+      const r = await apiFetch('/api/external-apis?scope=platform');
       if (!r.ok) return;
       const d = await r.json();
       const apis: any[] = d.apis || [];
@@ -76,7 +76,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
       for (const api of apis) {
         const canonical = CANONICAL_BASE_URLS[api.name];
         if (canonical && api.base_url !== canonical) {
-          fetchWithAuth(`/api/external-apis/${api.id}?scope=platform`, {
+          apiFetch(`/api/external-apis/${api.id}?scope=platform`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: api.name, base_url: canonical }),
@@ -91,7 +91,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
 
   const addApiToCatalog = async (known: { name: string; env_var: string | null; base_url: string; auth_type: string }) => {
     try {
-      const r = await fetchWithAuth('/api/external-apis?scope=platform', {
+      const r = await apiFetch('/api/external-apis?scope=platform', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: known.name, base_url: known.base_url, auth_type: known.auth_type, api_key_env_name: known.env_var, is_active: true, is_preset: true, purpose: 'trends' }),
@@ -105,7 +105,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
     setCheckingApiId(known.key);
     setApiEnvSaveError(null);
     try {
-      const r = await fetchWithAuth('/api/external-apis?scope=platform', {
+      const r = await apiFetch('/api/external-apis?scope=platform', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: known.name, base_url: known.base_url, auth_type: known.auth_type, api_key_env_name: known.env_var, is_active: true, is_preset: true, purpose: 'trends', query_params: known.default_query_params || {}, headers: known.default_headers || {} }),
@@ -149,7 +149,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
       const canonicalAuthType = known?.auth_type ?? catalogEntry.auth_type ?? 'none';
       const effectiveAuthType = (known?.optional_token && !resolvedApiKeyEnvName) ? 'none' : canonicalAuthType;
 
-      const r = await fetchWithAuth(`/api/external-apis/${catalogEntry.id}?scope=platform`, {
+      const r = await apiFetch(`/api/external-apis/${catalogEntry.id}?scope=platform`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -185,7 +185,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
   const loadAccounts = async (apiId: string) => {
     setAccountsLoadingId(apiId);
     try {
-      const res = await fetchWithAuth(`/api/provider-accounts?api_source_id=${apiId}`);
+      const res = await apiFetch(`/api/provider-accounts?api_source_id=${apiId}`);
       if (!res.ok) return;
       const data = await res.json();
       setAccountsByApiId((prev) => ({ ...prev, [apiId]: data.accounts || [] }));
@@ -216,8 +216,8 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
       if (accountForm.oauth_client_secret.trim()) credentials.oauth_client_secret = accountForm.oauth_client_secret.trim();
       const body: Record<string, unknown> = { account_name: accountForm.account_name.trim(), credentials, priority: Number(accountForm.priority) || 1, is_active: accountForm.is_active, rate_limit_per_min: accountForm.rate_limit_per_min ? Number(accountForm.rate_limit_per_min) : null, rate_limit_per_day: accountForm.rate_limit_per_day ? Number(accountForm.rate_limit_per_day) : null };
       const res = accountModal.mode === 'add'
-        ? await fetchWithAuth('/api/provider-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, api_source_id: accountModal.apiId }) })
-        : await fetchWithAuth(`/api/provider-accounts/${accountModal.account!.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        ? await apiFetch('/api/provider-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, api_source_id: accountModal.apiId }) })
+        : await apiFetch(`/api/provider-accounts/${accountModal.account!.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Failed to save'); }
       setAccountModal(null);
       await loadAccounts(accountModal.apiId);
@@ -228,7 +228,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
   const deleteAccount = async (accountId: string, apiId: string, accountName: string) => {
     if (!confirm(`Delete account "${accountName}"? This cannot be undone.`)) return;
     try {
-      const res = await fetchWithAuth(`/api/provider-accounts/${accountId}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/provider-accounts/${accountId}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete');
       await loadAccounts(apiId);
     } catch { setApiEnvSaveError('Failed to delete account.'); }
@@ -241,7 +241,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
       [apiId]: (prev[apiId] ?? []).map((a: any) => a.id === acct.id ? { ...a, is_active: !acct.is_active } : a),
     }));
     try {
-      const res = await fetchWithAuth(`/api/provider-accounts/${acct.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: !acct.is_active }) });
+      const res = await apiFetch(`/api/provider-accounts/${acct.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_active: !acct.is_active }) });
       if (!res.ok) throw new Error('Failed to update');
     } catch {
       // Revert on failure
@@ -270,7 +270,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
     const updated = reordered.map((a: any, i: number) => ({ ...a, priority: i + 1 }));
     setAccountsByApiId((prev) => ({ ...prev, [apiId]: updated }));
     for (const acct of updated) {
-      await fetchWithAuth(`/api/provider-accounts/${acct.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priority: acct.priority }) }).catch(() => {});
+      await apiFetch(`/api/provider-accounts/${acct.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priority: acct.priority }) }).catch(() => {});
     }
   };
 
@@ -353,7 +353,7 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
                         onClick={async () => {
                           setCheckingApiId(known.key);
                           try {
-                            const r = await fetchWithAuth(`/api/external-apis/${catalogEntry.id}/test?scope=platform`);
+                            const r = await apiFetch(`/api/external-apis/${catalogEntry.id}/test?scope=platform`);
                             const d = await r.json().catch(() => ({}));
                             const detail = d.detail || d.error || (r.ok ? `Connection OK${d.response?.status ? ` (${d.response.status})` : ''}` : `Check failed${d.response?.status ? ` — HTTP ${d.response.status}` : ''}`);
                             setApiCheckResults((prev) => ({ ...prev, [known.key]: { ok: r.ok && d.response?.ok !== false, detail, checked_at: new Date().toISOString() } }));

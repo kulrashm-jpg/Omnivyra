@@ -1,5 +1,6 @@
 import { URL } from 'node:url';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   archiveDecisionSourceEntityType,
   createDecisionObjects,

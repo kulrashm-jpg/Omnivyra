@@ -1,5 +1,6 @@
 import type { NextApiRequest } from 'next';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { evaluateCommunityAiForecastInsights, isOmnivyraEnabled } from './omnivyraClientV1';
 import forecastHandler from '../../pages/api/community-ai/forecast';
 import trendsHandler from '../../pages/api/community-ai/trends';

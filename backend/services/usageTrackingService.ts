@@ -13,7 +13,8 @@
  * Never call it directly.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { CategorySplit } from './creditPriorityService';
 
 export interface TrackUsageParams {

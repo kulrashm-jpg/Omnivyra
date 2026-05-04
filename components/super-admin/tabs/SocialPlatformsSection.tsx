@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { OAUTH_PLATFORMS } from '@/pages/super-admin.types';
-import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import {
   AlertCircle,
   BarChart3,
@@ -218,7 +218,7 @@ export default function SocialPlatformsSection() {
   const checkPlatformConfig = async (platformKey: string) => {
     setCheckingPlatform(platformKey);
     try {
-      const response = await fetchWithAuth(`/api/social-accounts/verify-config?platform=${platformKey}`);
+      const response = await apiFetch(`/api/social-accounts/verify-config?platform=${platformKey}`);
       if (response.ok) {
         const data = await response.json();
         setPlatformCheckResults((prev) => ({ ...prev, [platformKey]: data }));
@@ -250,7 +250,7 @@ export default function SocialPlatformsSection() {
     const results = await Promise.all(
       configuredEnabledPlatforms.map(async (platform) => {
         try {
-          const response = await fetchWithAuth(`/api/social-accounts/verify-config?platform=${platform.platform_key}`);
+          const response = await apiFetch(`/api/social-accounts/verify-config?platform=${platform.platform_key}`);
           if (!response.ok) {
             return [platform.platform_key, null] as const;
           }
@@ -278,7 +278,7 @@ export default function SocialPlatformsSection() {
   const loadSocialPlatforms = async () => {
     setLoadingSocialPlatforms(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/platform-oauth-configs');
+      const response = await apiFetch('/api/super-admin/platform-oauth-configs');
       if (response.ok) {
         const data = await response.json();
         const apiPlatforms: any[] = data.platforms || [];
@@ -335,7 +335,7 @@ export default function SocialPlatformsSection() {
         body.client_secret = form.client_secret;
       }
 
-      const response = await fetchWithAuth('/api/super-admin/platform-oauth-configs', {
+      const response = await apiFetch('/api/super-admin/platform-oauth-configs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -360,7 +360,7 @@ export default function SocialPlatformsSection() {
 
   const loadAnalyticsProvider = async () => {
     try {
-      const response = await fetchWithAuth('/api/super-admin/analytics-provider-config');
+      const response = await apiFetch('/api/super-admin/analytics-provider-config');
       if (!response.ok) {
         if (response.status === 403) window.location.href = '/super-admin/login';
         return;
@@ -384,7 +384,7 @@ export default function SocialPlatformsSection() {
     setAnalyticsProviderSaving(true);
     setAnalyticsProviderMessage(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/analytics-provider-config', {
+      const response = await apiFetch('/api/super-admin/analytics-provider-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

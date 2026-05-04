@@ -5,7 +5,8 @@ import * as path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type Status = 'READY' | 'NOT_READY';
 type LeadSignalLogEntry = {

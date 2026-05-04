@@ -12,6 +12,16 @@ export type Suggestion = {
   explanation_tag?: string;
 };
 
+function suggestionIntentLabel(tag?: string | null): string | null {
+  const normalized = String(tag || '').trim().toLowerCase().replace(/_/g, ' ');
+  if (!normalized) return null;
+  if (normalized === 'accept') return 'Yes';
+  if (normalized === 'decline' || normalized === 'boundary') return 'No';
+  if (normalized === 'clarify' || normalized === 'maybe') return 'Maybe';
+  if (normalized === 'refined') return 'Refined';
+  return normalized;
+}
+
 export interface AISuggestionPanelProps {
   messageId: string | null;
   organizationId: string;
@@ -138,6 +148,7 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
           thread_id: threadId,
           draft: selectedSuggestion.text,
           instruction: refinePrompt.trim(),
+          selected_intent: suggestionIntentLabel(selectedSuggestion.explanation_tag),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -150,17 +161,18 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
       setSuggestions((current) =>
         current.map((suggestion) =>
           suggestion.id === selectedSuggestion.id
-            ? { ...suggestion, text: refined, explanation_tag: 'refined' }
+            ? { ...suggestion, text: refined, explanation_tag: selectedSuggestion.explanation_tag }
             : suggestion
         )
       );
+      onSelectSuggestion(refined);
       setRefinePrompt('');
     } catch (err) {
       setRefineError(err instanceof Error ? err.message : 'Failed to refine reply');
     } finally {
       setRefining(false);
     }
-  }, [organizationId, refinePrompt, selectedSuggestion, threadId]);
+  }, [organizationId, onSelectSuggestion, refinePrompt, selectedSuggestion, threadId]);
 
   if (!visible) return null;
 
@@ -201,6 +213,7 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
       <div className="space-y-2">
         {suggestions.map((s) => {
           const selected = s.id === selectedSuggestionId;
+          const intentLabel = suggestionIntentLabel(s.explanation_tag);
           return (
             <div
               key={s.id}
@@ -212,7 +225,10 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
             >
               <button
                 type="button"
-                onClick={() => setSelectedSuggestionId(s.id)}
+                onClick={() => {
+                  setSelectedSuggestionId(s.id);
+                  onSelectSuggestion(s.text);
+                }}
                 className="min-w-0 flex-1 text-left"
               >
                 <div className="mb-1 flex items-center gap-2">
@@ -221,8 +237,8 @@ export const AISuggestionPanel = React.memo(function AISuggestionPanel({
                       Selected
                     </span>
                   ) : null}
-                  {s.explanation_tag && (
-                    <span className="text-xs text-slate-500">{s.explanation_tag}</span>
+                  {intentLabel && (
+                    <span className="text-xs font-medium text-slate-500">{intentLabel}</span>
                   )}
                 </div>
                 <p className="text-sm text-slate-800">{s.text}</p>

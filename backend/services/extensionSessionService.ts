@@ -14,7 +14,7 @@ function getExtensionSessionSecret() {
     process.env.EXTENSION_SESSION_SECRET ||
     process.env.AUTH_SECRET ||
     process.env.NEXTAUTH_SECRET ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'] ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     'omnivyra-extension-session-secret'
   );

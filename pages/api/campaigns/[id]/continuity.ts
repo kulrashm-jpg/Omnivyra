@@ -1,16 +1,18 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/campaigns/[id]/continuity
  *
  * Returns the full strategic continuity picture for a campaign:
- *   - previous_result  — evaluation of the latest recorded performance
- *   - decision         — next action (continue / optimize / pivot) + confidence
- *   - pattern_memory   — patterns recognised across the company's campaign portfolio
- *   - timeline         — campaign journey: completed → current → suggested
- *   - suggested_blog   — blog to read before building the next campaign
+ *   - previous_result  â€” evaluation of the latest recorded performance
+ *   - decision         â€” next action (continue / optimize / pivot) + confidence
+ *   - pattern_memory   â€” patterns recognised across the company's campaign portfolio
+ *   - timeline         â€” campaign journey: completed â†’ current â†’ suggested
+ *   - suggested_blog   â€” blog to read before building the next campaign
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
 import { decideNextAction } from '../../../../backend/lib/campaigns/continuityDecisionEngine';
@@ -22,7 +24,7 @@ import {
   getBlogsForTopic,
 } from '../../../../backend/services/campaignKnowledgeGraphService';
 
-// ── Timeline step type ────────────────────────────────────────────────────────
+// â”€â”€ Timeline step type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface JourneyStep {
   campaign_id:   string;
@@ -34,7 +36,7 @@ interface JourneyStep {
   stage:         'completed' | 'current' | 'suggested';
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -46,7 +48,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Campaign ID required' });
   }
 
-  // ── 1. Load campaign + resolve company_id ─────────────────────────────────
+  // â”€â”€ 1. Load campaign + resolve company_id â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [campaignRes, versionRes] = await Promise.all([
     supabase
       .from('campaigns')
@@ -73,7 +75,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ? (snapshot.daily_plan as any[]).length
     : null;
 
-  // ── 2. Latest performance snapshot ────────────────────────────────────────
+  // â”€â”€ 2. Latest performance snapshot â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: perf } = await supabase
     .from('campaign_performance')
     .select('evaluation_status, evaluation_score, evaluation_summary, metric_breakdown, confidence_level, confidence_reason, next_topic, suggested_blog_id, suggested_blog_type')
@@ -94,7 +96,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // ── 3. Topic context (cached or freshly built) ────────────────────────────
+  // â”€â”€ 3. Topic context (cached or freshly built) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const currentTopic = campaign.topic_seed ?? 'content marketing';
 
   let topicMap = await getCampaignTopicMap(id);
@@ -106,7 +108,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     topicMap = { topic: graph.current_topic, related_topics: graph.related_topics, blog_ids: graph.related_blog_ids };
   }
 
-  // ── 4. Decision engine ────────────────────────────────────────────────────
+  // â”€â”€ 4. Decision engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const evaluationResult = {
     status:           perf.evaluation_status as 'exceeded' | 'met' | 'underperformed',
     score:            Number(perf.evaluation_score) || 50,
@@ -127,7 +129,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     goal_type:        (campaign.goal_type as any) ?? 'awareness',
   });
 
-  // ── 5. Multi-campaign pattern memory ──────────────────────────────────────
+  // â”€â”€ 5. Multi-campaign pattern memory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let patternMemory = { patterns: [] as any[], dominant_topic_cluster: null as string | null, best_performing_goal: null as string | null, campaigns_analyzed: 0, portfolio_avg_score: 0 };
 
   if (companyId) {
@@ -175,7 +177,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // ── 6. Strategic timeline ─────────────────────────────────────────────────
+  // â”€â”€ 6. Strategic timeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const timeline: JourneyStep[] = [];
 
   if (companyId) {
@@ -243,7 +245,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     stage:         'suggested',
   });
 
-  // ── 7. Suggested blog ─────────────────────────────────────────────────────
+  // â”€â”€ 7. Suggested blog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let suggestedBlog: { id: string; title: string; slug: string } | null = null;
 
   if (decision.suggested_blog_id) {
@@ -269,7 +271,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // ── 8. Effort vs Impact signal ────────────────────────────────────────────
+  // â”€â”€ 8. Effort vs Impact signal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   type EffortLevel = 'high' | 'medium' | 'low';
   type OutcomeLevel = 'high' | 'medium' | 'low';
   type EffortSignalKey =
@@ -296,7 +298,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         description: outcome === 'high'
           ? 'Campaign delivered strong results.'
           : outcome === 'medium'
-          ? 'Campaign results were moderate — there is room to improve.'
+          ? 'Campaign results were moderate â€” there is room to improve.'
           : 'Campaign underdelivered on its targets.',
       };
     }
@@ -307,18 +309,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       signal: EffortSignalKey; label: string; description: string;
     }>> = {
       high: {
-        high:   { signal: 'high_performance',  label: 'High-effort, high-return',       description: `${posts} posts delivered strong results — efficient execution. Maintain or scale this rhythm.` },
+        high:   { signal: 'high_performance',  label: 'High-effort, high-return',       description: `${posts} posts delivered strong results â€” efficient execution. Maintain or scale this rhythm.` },
         medium: { signal: 'moderate_return',   label: 'High effort, moderate return',   description: `${posts} posts produced moderate results. Consider focusing on fewer, higher-quality posts.` },
-        low:    { signal: 'inefficiency',      label: 'High effort, low return',        description: `${posts} posts underdelivered. The strategy needs rethinking — effort isn't the issue, direction is.` },
+        low:    { signal: 'inefficiency',      label: 'High effort, low return',        description: `${posts} posts underdelivered. The strategy needs rethinking â€” effort isn't the issue, direction is.` },
       },
       medium: {
-        high:   { signal: 'strong_return',     label: 'Efficient — strong return',      description: `${posts} posts delivered high performance. Good signal-to-effort ratio.` },
-        medium: { signal: 'baseline',          label: 'Baseline performance',           description: `${posts} posts, moderate results. A consistent baseline — incremental improvements will compound.` },
+        high:   { signal: 'strong_return',     label: 'Efficient â€” strong return',      description: `${posts} posts delivered high performance. Good signal-to-effort ratio.` },
+        medium: { signal: 'baseline',          label: 'Baseline performance',           description: `${posts} posts, moderate results. A consistent baseline â€” incremental improvements will compound.` },
         low:    { signal: 'underpowered',      label: 'Underpowered campaign',          description: `${posts} posts weren't enough to gain traction. Either increase volume or concentrate effort.` },
       },
       low: {
-        high:   { signal: 'leverage',          label: 'Leverage opportunity',           description: `Only ${posts} posts drove high performance — this topic is a leverage point. Scale it.` },
-        medium: { signal: 'efficient_baseline',label: 'Lean and efficient',             description: `${posts} posts produced decent results — solid efficiency. Consider testing higher frequency.` },
+        high:   { signal: 'leverage',          label: 'Leverage opportunity',           description: `Only ${posts} posts drove high performance â€” this topic is a leverage point. Scale it.` },
+        medium: { signal: 'efficient_baseline',label: 'Lean and efficient',             description: `${posts} posts produced decent results â€” solid efficiency. Consider testing higher frequency.` },
         low:    { signal: 'underpowered',      label: 'Underpowered campaign',          description: `${posts} posts with weak results. More volume or a stronger angle is needed.` },
       },
     };
@@ -329,7 +331,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const effortSignal = classifyEffortSignal(postCount, evaluationResult.score);
 
-  // ── 9. Persist decision ───────────────────────────────────────────────────
+  // â”€â”€ 9. Persist decision â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   await supabase
     .from('campaign_performance')
     .update({
@@ -372,4 +374,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]));
+

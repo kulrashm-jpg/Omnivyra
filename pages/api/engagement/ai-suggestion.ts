@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/engagement/ai-suggestion
  *
@@ -47,7 +48,7 @@ type Body =
       reason?: string;
     };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -92,8 +93,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'suggestion_id or correlation_id required' });
       }
       // No separate enforceCompanyAccess here: we resolve by suggestion id
-      // and the DB RLS policy restricts to service_role. The service
-      // helpers never return the row itself, just a boolean — keeping
+      // and the DB RLS policy restricts to service role. The service
+      // helpers never return the row itself, just a boolean â€” keeping
       // this endpoint a pure write with no tenant leak.
       const ok = body.event === 'accepted'
         ? await recordSuggestionAccepted({
@@ -116,3 +117,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: msg });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

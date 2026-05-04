@@ -1,4 +1,4 @@
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { PlatformCustomization, RefinedDay, StructuredPlan } from './types';
 
 type PlanMode = 'generate_plan' | 'refine_day' | 'platform_customize';
@@ -75,7 +75,7 @@ export function useCampaignPlanApi({
 
     let response: Response;
     try {
-      response = await fetchWithAuth('/api/campaigns/ai/plan', {
+      response = await apiFetch('/api/campaigns/ai/plan', {
         method: 'POST',
         signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },

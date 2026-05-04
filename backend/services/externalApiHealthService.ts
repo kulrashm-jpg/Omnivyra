@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type ApiHealthRuntime = {
   avg_latency_ms: number;
@@ -146,7 +147,7 @@ export const updateApiHealth = async (input: {
         if (!(globalThis as any).__external_api_health_schema_hint_shown) {
           (globalThis as any).__external_api_health_schema_hint_shown = true;
           console.warn(
-            'external_api_health table not found. Run database/external_api_health.sql to create it. API health tracking will be skipped.'
+            'Schema mismatch: external_api_health table missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql. API health tracking will be skipped.'
           );
         }
       } else {

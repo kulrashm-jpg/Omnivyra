@@ -12,7 +12,8 @@
  * a second run overwrites via upsert with fresh computed values.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getOrgCostSummary, listActiveOrgsInWindow } from '../services/orgCostSummaryService';
 import { recordCostAnomaly, getActionPricing } from '../services/pricingService';
 import {

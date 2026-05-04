@@ -1,18 +1,20 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/campaigns/proposals/convert
- * Convert proposal → campaign + campaign_week_plan, update proposal status = accepted
+ * Convert proposal â†’ campaign + campaign_week_plan, update proposal status = accepted
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -155,3 +157,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     proposal_id: proposalId,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

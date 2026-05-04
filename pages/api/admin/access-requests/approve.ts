@@ -6,7 +6,7 @@
  *
  * On approval (Option A):
  *  1. Creates a company for the approved user (name = request.name or brand)
- *     admin_email_domain = NULL (public domain — no domain claim)
+ *     admin_email_domain = NULL (public domain â€” no domain claim)
  *  2. Stores the new company's ID in access_requests.organization_id
  *  3. Marks the request as 'approved'
  *
@@ -18,33 +18,24 @@
  *   checked at onboarding time by email match.
  *
  * Body: { requestId, adminNote?, brandName? }
- *   brandName — override for company name (defaults to request.name)
+ *   brandName â€” override for company name (defaults to request.name)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const authHeader = req.headers.authorization ?? '';
-  const isSuperAdminCookie = req.cookies?.super_admin_session === '1';
-
-  if (!isSuperAdminCookie) {
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'Missing auth token' });
+  const ctx = await requireAdminScope(req, res, 'access-requests:approve');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/access-requests/approve', 'access-requests:approve');
   }
-
-  // Resolve admin identity (Bearer or cookie session)
-  let adminUserId: string | null = null;
-  if (!isSuperAdminCookie) {
-    const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-    if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-    adminUserId = user.id;
-
-    adminUserId = user.id;
-  }
+  const adminUserId = ctx.id;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { requestId, adminNote, brandName } = body as {
@@ -55,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (!requestId) return res.status(400).json({ error: 'requestId is required' });
 
-  // ── Fetch the access request ───────────────────────────────────────────────
+  // â”€â”€ Fetch the access request â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: request, error: fetchErr } = await supabase
     .from('access_requests')
     .select('*')
@@ -70,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const now     = new Date().toISOString();
   const company = brandName?.trim() || request.name?.trim() || request.email.split('@')[0];
 
-  // ── Guard: one organization per email ─────────────────────────────────────
+  // â”€â”€ Guard: one organization per email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Another request for this email may already have been approved (duplicate
   // submission, re-application after rejection, etc.). Reuse the existing org
   // rather than creating a second company for the same person.
@@ -84,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .maybeSingle();
 
   if (priorApproval) {
-    // Mark this duplicate request as approved and point it at the existing org —
+    // Mark this duplicate request as approved and point it at the existing org â€”
     // do NOT create a second company.
     await supabase
       .from('access_requests')
@@ -93,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         organization_id: priorApproval.organization_id,
         reviewed_by:     adminUserId ?? null,
         reviewed_at:     now,
-        admin_note:      adminNote ?? 'Duplicate — linked to existing organization',
+        admin_note:      adminNote ?? 'Duplicate â€” linked to existing organization',
       })
       .eq('id', requestId);
 
@@ -105,8 +96,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // ── 1. Create company for the approved user ────────────────────────────────
-  // admin_email_domain = NULL — public email domain cannot claim a domain slot.
+  // â”€â”€ 1. Create company for the approved user â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // admin_email_domain = NULL â€” public email domain cannot claim a domain slot.
   // The user is approved per-email, not per-domain.
   const { data: newCompany, error: companyErr } = await supabase
     .from('companies')
@@ -126,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to create company for approved user' });
   }
 
-  // ── 2. Update access_requests: status + link organization_id ──────────────
+  // â”€â”€ 2. Update access_requests: status + link organization_id â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // organization_id is stored so onboarding can find the pre-created company
   // by doing: SELECT * FROM access_requests WHERE email=$email AND status='approved'
   const { error: updateErr } = await supabase
@@ -152,3 +143,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     companyName: company,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

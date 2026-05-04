@@ -1,4 +1,5 @@
-import { supabase } from './supabaseClient';
+import { createServiceRoleMigrationProxy } from './supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export async function createContentAsset(input: {
   campaignId: string;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
 import { type RbacPermissions, roleOptions } from '@/pages/super-admin.types';
-import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 export default function RbacTab() {
 
@@ -22,7 +22,7 @@ export default function RbacTab() {
   }, [rbacPermissions]);
 
   useEffect(() => {
-    fetchWithAuth('/api/super-admin/rbac')
+    apiFetch('/api/super-admin/rbac')
       .then(async (res) => {
         if (res.ok) {
           const data = await res.json();
@@ -114,7 +114,7 @@ export default function RbacTab() {
     setRbacSaveError(null);
     setRbacSaveSuccess(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/rbac', {
+      const response = await apiFetch('/api/super-admin/rbac', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roles: displayRoles, permissions: rbacDraftPermissions }),

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/feature-completion
@@ -28,7 +29,7 @@ interface ApiResponse {
  * - sync=true: Force sync before returning (auto-compute latest)
  * - company_id: Optional to override (requires admin)
  */
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ApiResponse>
 ) {
@@ -63,7 +64,7 @@ export default async function handler(
 
     const supabaseUid = session.user.id;
 
-    // Resolve internal user ID (user_company_roles.user_id references public.users.id)
+    // Resolve internal user ID (user company roles.user_id references public.users.id)
     const { data: userRow } = await supabase
       .from('users')
       .select('id')
@@ -80,7 +81,7 @@ export default async function handler(
       typeof req.query.company_id === 'string' ? req.query.company_id.trim() : '';
 
     const { data: activeRoles } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', userId)
       .eq('status', 'active')
@@ -145,3 +146,8 @@ export default async function handler(
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

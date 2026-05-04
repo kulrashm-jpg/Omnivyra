@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getUserRole, Role } from '../../../../backend/services/rbacService';
 import { getProfile } from '../../../../backend/services/companyProfileService';
@@ -7,7 +9,7 @@ import { previewStrategy } from '../../../../backend/services/aiGateway';
 
 const allowedRoles = new Set([Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -162,3 +164,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     snapshot_hash: recommendation?.snapshot_hash ?? null,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

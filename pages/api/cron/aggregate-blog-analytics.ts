@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: cron endpoint uses cron-specific authorization
 
 /**
  * GET /api/cron/aggregate-blog-analytics
@@ -8,17 +9,21 @@
  * Configure in vercel.json:
  *   { "path": "/api/cron/aggregate-blog-analytics", "schedule": "0 3 * * *" }
  *
- * Protected by x-cron-secret header.
+ * Protected by Authorization: Bearer CRON_SECRET.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { assertCronAuthorized, rejectCronUnauthorized } from '../../../backend/utils/cronAuthGuard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers['x-cron-secret'] !== secret) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    assertCronAuthorized(req);
+  } catch (error) {
+    if (rejectCronUnauthorized(res, error)) return;
+    throw error;
   }
 
   const yesterday = new Date();
@@ -94,3 +99,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ ok: true, date: dateStr, rows_upserted: rows.length });
 }
+

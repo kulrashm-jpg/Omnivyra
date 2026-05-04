@@ -4,7 +4,8 @@
  * Provides author profile and engagement stats for the Unified Engagement Inbox.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type AuthorProfile = {
   id: string;

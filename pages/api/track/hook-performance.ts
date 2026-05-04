@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/track/hook-performance?account_id=xxx&days=90
@@ -5,8 +6,8 @@
  * Hook Performance Tracking.
  *
  * Computes hook engagement from existing pageleave analytics:
- *   hook_exit_rate    — % of sessions that left at scroll_depth < 20 (bounced at hook)
- *   hook_pass_rate    — % of sessions that scrolled past scroll_depth ≥ 25 (got past intro)
+ *   hook_exit_rate    â€” % of sessions that left at scroll_depth < 20 (bounced at hook)
+ *   hook_pass_rate    â€” % of sessions that scrolled past scroll_depth â‰¥ 25 (got past intro)
  *
  * Groups results by AI-assessed hook_strength (strong / moderate / weak) so you can
  * validate whether the AI's hook assessment actually predicts reader behaviour.
@@ -16,9 +17,9 @@
  *   by_strength: [{
  *     hook_strength:   'strong' | 'moderate' | 'weak',
  *     post_count:      number,
- *     avg_hook_pass:   number,   // 0–100 — % that scrolled past intro
- *     avg_hook_exit:   number,   // 0–100 — % that bounced at intro
- *     avg_scroll:      number,   // 0–100 — overall avg scroll depth
+ *     avg_hook_pass:   number,   // 0â€“100 â€” % that scrolled past intro
+ *     avg_hook_exit:   number,   // 0â€“100 â€” % that bounced at intro
+ *     avg_scroll:      number,   // 0â€“100 â€” overall avg scroll depth
  *   }],
  *   top_hooks: [{                // per-blog breakdown, sorted by hook_pass_rate desc
  *     slug:          string,
@@ -34,11 +35,12 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-const HOOK_EXIT_THRESHOLD = 20;  // scroll_depth < 20  → bounced at hook
-const HOOK_PASS_THRESHOLD = 25;  // scroll_depth >= 25 → made it past intro
+const HOOK_EXIT_THRESHOLD = 20;  // scroll_depth < 20  â†’ bounced at hook
+const HOOK_PASS_THRESHOLD = 25;  // scroll_depth >= 25 â†’ made it past intro
 
 function slugMatches(urlSlug: string, blogSlug: string): boolean {
   if (!blogSlug) return false;
@@ -46,7 +48,7 @@ function slugMatches(urlSlug: string, blogSlug: string): boolean {
   return normalized === '/' + blogSlug || normalized.endsWith('/' + blogSlug);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const accountId = typeof req.query.account_id === 'string' ? req.query.account_id.trim() : null;
@@ -58,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const days  = Math.min(180, Math.max(7, parseInt(String(req.query.days ?? '90'), 10) || 90));
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
 
-  // ── Fetch published blogs ──────────────────────────────────────────────────
+  // â”€â”€ Fetch published blogs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: blogs } = await supabase
     .from('blogs')
     .select('slug, title, hook_strength')
@@ -70,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ by_strength: [], top_hooks: [], has_data: false });
   }
 
-  // ── Fetch pageleave events ─────────────────────────────────────────────────
+  // â”€â”€ Fetch pageleave events â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: lvData } = await supabase
     .from('blog_analytics')
     .select('url_slug, scroll_depth')
@@ -91,7 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     slugSessions.set(r.url_slug, arr);
   }
 
-  // ── Per-blog stats ─────────────────────────────────────────────────────────
+  // â”€â”€ Per-blog stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   interface BlogStat {
     slug:           string;
     title:          string;
@@ -132,7 +134,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ by_strength: [], top_hooks: [], has_data: false });
   }
 
-  // ── Group by hook_strength ─────────────────────────────────────────────────
+  // â”€â”€ Group by hook_strength â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const strengthMap = new Map<string, { passRates: number[]; exitRates: number[]; scrolls: number[]; slugs: Set<string> }>();
 
   for (const stat of blogStats) {
@@ -159,10 +161,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }))
     .sort((a, b) => STRENGTH_ORDER.indexOf(a.hook_strength) - STRENGTH_ORDER.indexOf(b.hook_strength));
 
-  // ── Top hooks sorted by pass rate ──────────────────────────────────────────
+  // â”€â”€ Top hooks sorted by pass rate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const top_hooks = [...blogStats]
     .sort((a, b) => b.hook_pass_rate - a.hook_pass_rate)
     .slice(0, 10);
 
   return res.status(200).json({ by_strength, top_hooks, has_data: true });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

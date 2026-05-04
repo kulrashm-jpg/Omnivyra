@@ -101,7 +101,7 @@ export function useExternalApisAccess(selectedCompanyId: string | null | undefin
   const [globalPresets, setGlobalPresets] = useState<ApiSourceAccess[]>([]);
   const [companyDefaultApis, setCompanyDefaultApis] = useState<string[]>([]);
 
-  const fetchWithAuth = useCallback(async (input: RequestInfo, init?: RequestInit) => {
+  const apiFetch = useCallback(async (input: RequestInfo, init?: RequestInit) => {
     const token = await getAuthToken();
     if (!token) throw new Error('Not authenticated');
     return fetch(input, {
@@ -118,7 +118,7 @@ export function useExternalApisAccess(selectedCompanyId: string | null | undefin
     try {
       setIsLoading(true);
       if (!selectedCompanyId) { setApis([]); setDrafts({}); return; }
-      const response = await fetchWithAuth(`/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`);
+      const response = await apiFetch(`/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`);
       if (!response.ok) throw new Error('Failed to load APIs');
       const data = await response.json();
       const available = data.availableApis || data.apis || [];
@@ -133,19 +133,19 @@ export function useExternalApisAccess(selectedCompanyId: string | null | undefin
     } finally {
       setIsLoading(false);
     }
-  }, [selectedCompanyId, fetchWithAuth]);
+  }, [selectedCompanyId, apiFetch]);
 
   const loadRequests = useCallback(async () => {
     try {
       if (!selectedCompanyId) { setRequests([]); return; }
-      const response = await fetchWithAuth(`/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`);
+      const response = await apiFetch(`/api/external-apis/requests?companyId=${encodeURIComponent(selectedCompanyId)}`);
       if (!response.ok) { setRequests([]); return; }
       const data = await response.json();
       setRequests(data.requests || []);
     } catch {
       // ignore
     }
-  }, [selectedCompanyId, fetchWithAuth]);
+  }, [selectedCompanyId, apiFetch]);
 
   const todayKey = new Date().toISOString().slice(0, 10);
 
@@ -176,6 +176,6 @@ export function useExternalApisAccess(selectedCompanyId: string | null | undefin
     requests, setRequests, canManageExternalApis,
     globalPresets, companyDefaultApis,
     visibleApis, activeCount, pendingRequestNames, usageTotals,
-    fetchWithAuth, updateDraft, loadApis, loadRequests,
+    apiFetch, updateDraft, loadApis, loadRequests,
   };
 }

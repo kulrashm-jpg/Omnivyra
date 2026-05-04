@@ -22,7 +22,8 @@
  */
 
 import crypto from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 import { insertAuditLogStrict, SYSTEM_USER_ID } from './auditActorService';
 import { hashVerificationToken } from './verificationSecret';

@@ -1,5 +1,6 @@
 import { getLatestCompletedRun } from './ingestionRunService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const ANALYTICS_FRESHNESS_HOURS = 24;
 const MIN_ANALYTICS_EVENTS = 100;

@@ -12,7 +12,8 @@
  * Called by POST /api/blogs/intelligence (COMPANY_ADMIN only).
  */
 
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   fetchCompanyPostPerformance,
   fetchCompanySeriesPostIds,

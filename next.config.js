@@ -1,10 +1,13 @@
-/** @type {import('next').NextConfig} */
+﻿/** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
     tsconfigPath: 'tsconfig.build.json',
   },
   experimental: {
-    webpackBuildWorker: true,
+    // webpackBuildWorker disabled on Windows: the worker thread races the main
+    // process for .next/dev/server/pages/*.js writes, producing intermittent
+    // ENOENT on _document.js / _app build-manifest.json mid-session.
+    webpackBuildWorker: false,
   },
   turbopack: {},
   // Don't bundle server-only packages - they use Node built-ins or are API-route-only.
@@ -13,7 +16,6 @@ const nextConfig = {
     'pdfkit',       // PDF generation - API routes only
     'axios',        // Used only in backend adapters / API routes
     'express',      // Extension worker server
-    'firebase-admin', // Server-side Firebase (being phased out)
     'pg',           // Direct Postgres client
   ],
   images: {

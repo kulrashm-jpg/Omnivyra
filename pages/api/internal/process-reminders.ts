@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET|POST /api/internal/process-reminders
  *
@@ -17,8 +18,8 @@
  *   2. For each row:
  *        - resolve recipient email from auth.users (best-effort)
  *        - re-read company_domains.verification_status
- *        - if status IN ('verified','admin_override') → mark sent=true, skip send
- *        - else → call sendDomainVerificationReminder(); mark sent=true
+ *        - if status IN ('verified','admin_override') â†’ mark sent=true, skip send
+ *        - else â†’ call sendDomainVerificationReminder(); mark sent=true
  *      Each iteration is wrapped in try/catch so a single failure cannot
  *      stop the loop.
  *   3. Cleanup: delete rows where sent=true AND created_at < now() - 7d.
@@ -28,7 +29,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from '../../../backend/services/logger';
 import { sendDomainVerificationReminder } from '../../../backend/services/domainReminderService';
 
@@ -42,12 +44,12 @@ type ReminderRow = {
   final_domain: string | null;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
   }
 
-  // CRON_SECRET protection — matches /api/cron/* convention.
+  // CRON_SECRET protection â€” matches /api/cron/* convention.
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const auth = req.headers['authorization'];
@@ -55,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: 'UNAUTHORIZED' });
     }
   } else {
-    // Fail closed in production — never run unauthenticated unless explicitly
+    // Fail closed in production â€” never run unauthenticated unless explicitly
     // allowed via env (e.g., local dev).
     if (process.env.NODE_ENV === 'production') {
       logger.error('process_reminders_no_secret_in_production');
@@ -83,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let skipped_already_verified = 0;
   let failed = 0;
 
-  // 2. Process each row independently — failures NEVER stop the loop.
+  // 2. Process each row independently â€” failures NEVER stop the loop.
   for (const row of rows) {
     try {
       // Re-read verification status to skip rows whose domain has since
@@ -107,7 +109,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         continue;
       }
 
-      // Resolve recipient email. Best-effort — if missing, mark sent=true to
+      // Resolve recipient email. Best-effort â€” if missing, mark sent=true to
       // prevent re-attempt; log so it's visible.
       let recipientEmail: string | null = null;
       if (row.user_id) {
@@ -144,7 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq('id', row.id);
       sent += 1;
     } catch (err) {
-      // Last-resort guard — should never reach here because all called
+      // Last-resort guard â€” should never reach here because all called
       // helpers are themselves try/catch'd. Log + advance.
       failed += 1;
       logger.warn('process_reminders_iteration_threw', {
@@ -189,7 +191,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
 
   // Lightweight alert: a single tick with > 5 failures is an anomalous
-  // signal — likely SES misconfiguration, Edge Function regression, or DB
+  // signal â€” likely SES misconfiguration, Edge Function regression, or DB
   // outage. Emit a structured warn that monitoring can pattern-match.
   if (failed > 5) {
     logger.warn('REMINDER_FAILURE_SPIKE', {
@@ -209,3 +211,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     duration_ms,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

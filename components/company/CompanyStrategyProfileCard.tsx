@@ -14,7 +14,7 @@ type Props = {
   companyId?: string;
   profile: CompanyProfile;
   latestRefinement?: CompanyProfileRefinement | null;
-  fetchWithAuth: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   onProfileUpdated: (profile: CompanyProfile) => void;
   onNotifyUpdated: (companyId: string) => void;
   onSuccess: (message: string) => void;
@@ -225,7 +225,7 @@ export default function CompanyStrategyProfileCard({
   companyId,
   profile,
   latestRefinement,
-  fetchWithAuth,
+  apiFetch,
   onProfileUpdated,
   onNotifyUpdated,
   onSuccess,
@@ -270,7 +270,7 @@ export default function CompanyStrategyProfileCard({
     try {
       setIsSaving(true);
       onError(null);
-      const response = await fetchWithAuth('/api/company-profile/strategy', {
+      const response = await apiFetch('/api/company-profile/strategy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -322,7 +322,7 @@ export default function CompanyStrategyProfileCard({
     try {
       setIsRegenerating(true);
       onError(null);
-      const response = await fetchWithAuth('/api/company-profile/strategy', {
+      const response = await apiFetch('/api/company-profile/strategy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -355,7 +355,7 @@ export default function CompanyStrategyProfileCard({
       setExampleError(null);
       if (exampleSample) return;
       setIsLoadingExample(true);
-      const response = await fetchWithAuth(`/api/company/blogs?company_id=${encodeURIComponent(effectiveCompanyId)}`);
+      const response = await apiFetch(`/api/company/blogs?company_id=${encodeURIComponent(effectiveCompanyId)}`);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data?.error || 'Failed to load example content');

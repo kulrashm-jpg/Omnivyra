@@ -1,11 +1,11 @@
-'use client';
+﻿'use client';
 
 /**
  * /onboarding/phone
- * Step 2 of free-credits signup — lands here after magic link click.
- * Collects company name, then verifies phone via Firebase SMS OTP,
+ * Step 2 of free-credits signup â€” lands here after magic link click.
  * then calls /api/onboarding/complete to create free_credit_profiles
- * and grant 300 credits.
+ * and grant the configured initial free credit (50 by default â€” see
+ * free_credit_config / initialFreeCreditService).
  */
 
 import { useState, useEffect, useRef } from 'react';
@@ -21,7 +21,7 @@ export default function PhoneVerificationPage() {
   const { goals: goalsParam = '', team: teamParam = '', challenge: challengeParam = '' } = router.query as Record<string, string>;
 
   // Intent params arrive as query params when coming from create-account directly,
-  // or from sessionStorage when routed here via /auth/callback → /onboarding/verify-phone.
+  // or from sessionStorage when routed here via /auth/callback â†’ /onboarding/verify-phone.
   const goals     = goalsParam     || (typeof window !== 'undefined' ? sessionStorage.getItem('intent_goals')     ?? '' : '');
   const team      = teamParam      || (typeof window !== 'undefined' ? sessionStorage.getItem('intent_team')      ?? '' : '');
   const challenge = challengeParam || (typeof window !== 'undefined' ? sessionStorage.getItem('intent_challenge') ?? '' : '');
@@ -36,7 +36,7 @@ export default function PhoneVerificationPage() {
 
   const confirmationRef = useRef<any>(null);
 
-  // ── Require Supabase session ──────────────────────────────────────────────
+  // â”€â”€ Require Supabase session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     getSupabaseBrowser().auth.getSession().then(({ data }) => {
       if (!data.session) {
@@ -47,7 +47,7 @@ export default function PhoneVerificationPage() {
     });
   }, [router]);
 
-  // ── Step 0: Company name ────────────────────────────────────────────────────
+  // â”€â”€ Step 0: Company name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function handleCompanySubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!companyName.trim()) { setErrorMsg('Enter your company name.'); return; }
@@ -55,7 +55,7 @@ export default function PhoneVerificationPage() {
     setStep('phone');
   }
 
-  // ── Step 1: Send SMS ────────────────────────────────────────────────────────
+  // â”€â”€ Step 1: Send SMS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
     if (!phone.trim()) { setErrorMsg('Enter your phone number.'); return; }
@@ -74,7 +74,7 @@ export default function PhoneVerificationPage() {
     }
   }
 
-  // ── Step 2: Verify OTP ──────────────────────────────────────────────────────
+  // â”€â”€ Step 2: Verify OTP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function handleVerifyOtp(e: React.FormEvent) {
     e.preventDefault();
     if (!otp.trim() || otp.length < 6) { setErrorMsg('Enter the 6-digit code.'); return; }
@@ -140,12 +140,12 @@ export default function PhoneVerificationPage() {
         <main className="flex flex-1 items-center justify-center px-6 py-12">
           <div className="w-full max-w-md">
 
-            {/* ── Company name ─────────────────────────────────────────── */}
+            {/* â”€â”€ Company name â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'company' && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
                   <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-2xl shadow-lg">
-                    🏢
+                    ðŸ¢
                   </div>
                   <h1
                     className="text-2xl font-bold tracking-tight text-[#0B1F33]"
@@ -189,12 +189,12 @@ export default function PhoneVerificationPage() {
               </div>
             )}
 
-            {/* ── Phone number ─────────────────────────────────────────── */}
+            {/* â”€â”€ Phone number â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'phone' && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
                   <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-2xl shadow-lg">
-                    📱
+                    ðŸ“±
                   </div>
                   <h1
                     className="text-2xl font-bold tracking-tight text-[#0B1F33]"
@@ -235,7 +235,7 @@ export default function PhoneVerificationPage() {
                     disabled={loading}
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {loading ? 'Sending SMS…' : 'Send verification code'}
+                    {loading ? 'Sending SMSâ€¦' : 'Send verification code'}
                   </button>
 
                   <button
@@ -243,18 +243,18 @@ export default function PhoneVerificationPage() {
                     onClick={() => { setStep('company'); setErrorMsg(null); }}
                     className="w-full text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors"
                   >
-                    ← Change company name
+                    â† Change company name
                   </button>
                 </form>
               </div>
             )}
 
-            {/* ── OTP entry ───────────────────────────────────────────── */}
+            {/* â”€â”€ OTP entry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'otp' && (
               <div className="animate-fadeIn">
                 <div className="mb-8 text-center">
                   <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-[#EBF3FD] text-2xl">
-                    🔐
+                    ðŸ”
                   </div>
                   <h1
                     className="text-2xl font-bold tracking-tight text-[#0B1F33]"
@@ -289,7 +289,7 @@ export default function PhoneVerificationPage() {
                     disabled={loading || otp.length < 6}
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {loading ? 'Verifying…' : 'Verify & claim credits'}
+                    {loading ? 'Verifyingâ€¦' : 'Verify & claim credits'}
                   </button>
 
                   <button
@@ -297,13 +297,13 @@ export default function PhoneVerificationPage() {
                     onClick={() => { setStep('phone'); setOtp(''); setErrorMsg(null); }}
                     className="w-full text-sm text-[#6B7C93] hover:text-[#0A66C2] transition-colors"
                   >
-                    ← Use a different number
+                    â† Use a different number
                   </button>
                 </form>
               </div>
             )}
 
-            {/* ── Done / Credits granted ──────────────────────────────── */}
+            {/* â”€â”€ Done / Credits granted â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'done' && (
               <div className="animate-fadeIn space-y-6 text-center">
                 <div
@@ -312,13 +312,13 @@ export default function PhoneVerificationPage() {
                 >
                   <p className="text-xs font-semibold uppercase tracking-widest text-white/60">Credits claimed</p>
                   <p className="mt-2 text-6xl font-bold">300</p>
-                  <p className="mt-2 text-sm font-medium text-[#3FA9F5]">free credits · expires in 14 days</p>
+                  <p className="mt-2 text-sm font-medium text-[#3FA9F5]">free credits Â· expires in 14 days</p>
                   <p className="mt-4 text-sm text-white/70">
                     Enough to audit your website, generate content, and plan campaigns.
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <p className="text-sm text-[#6B7C93]">Redirecting to your dashboard…</p>
+                  <p className="text-sm text-[#6B7C93]">Redirecting to your dashboardâ€¦</p>
                   <div className="flex justify-center gap-1">
                     <div className="h-1 w-1 rounded-full bg-[#0A66C2] animate-pulse"></div>
                     <div className="h-1 w-1 rounded-full bg-[#0A66C2] animate-pulse" style={{ animationDelay: '0.2s' }}></div>
@@ -328,11 +328,11 @@ export default function PhoneVerificationPage() {
               </div>
             )}
 
-            {/* ── Error state (e.g. phone already used) ───────────────── */}
+            {/* â”€â”€ Error state (e.g. phone already used) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
             {step === 'error' && (
               <div className="animate-fadeIn text-center">
                 <div className="mb-6 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-red-50 text-2xl">
-                  ⚠️
+                  âš ï¸
                 </div>
                 <h2 className="text-xl font-bold text-[#0B1F33]">Couldn&rsquo;t claim credits</h2>
                 <p className="mt-3 text-sm leading-relaxed text-[#6B7C93]">{errorMsg}</p>

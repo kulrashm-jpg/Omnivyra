@@ -4,7 +4,8 @@
  * Runs every 15 minutes with overlap prevention.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   collectLinkedInSignals,
   collectTwitterSignals,

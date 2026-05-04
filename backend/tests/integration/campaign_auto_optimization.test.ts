@@ -33,7 +33,8 @@ jest.mock('../../db/campaignVersionStore', () => ({
   getLatestCampaignVersionByCampaignId: jest.fn(),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignRoiIntelligence } from '../../services/CampaignRoiIntelligenceService';
 import { getCampaignGovernanceAnalytics } from '../../services/GovernanceAnalyticsService';
 import { getCompanyGovernanceAnalytics } from '../../services/GovernanceAnalyticsService';

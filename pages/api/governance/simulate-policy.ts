@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/governance/simulate-policy
- * Stage 26 — Policy simulation. Run evaluation under specified policy version.
+ * Stage 26 â€” Policy simulation. Run evaluation under specified policy version.
  * No mutation. No event emission. Read-only.
  * RBAC: COMPANY_ADMIN minimum.
  */
@@ -8,7 +9,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersionByCampaignId } from '../../../backend/db/campaignVersionStore';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { getGovernancePolicy, PolicyVersionNotFoundError } from '../../../backend/governance/GovernancePolicyRegistry';
@@ -116,4 +118,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]));
+

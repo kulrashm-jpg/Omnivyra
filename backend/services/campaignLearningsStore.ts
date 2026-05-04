@@ -14,7 +14,8 @@
  *   hook           — hook phrasing patterns
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generatePerformanceInsights } from './performanceInsightGenerator';
 import { rankPlatformsByPerformance } from './platformPerformanceRanker';
 import { logDecision } from './autonomousDecisionLogger';

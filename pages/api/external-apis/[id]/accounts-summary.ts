@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/external-apis/[id]/accounts-summary
  *
@@ -9,12 +10,13 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
 
-// ── Auth guard ─────────────────────────────────────────────────────────────────
+// â”€â”€ Auth guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function requireSuperAdmin(
   req: NextApiRequest,
@@ -35,9 +37,9 @@ async function requireSuperAdmin(
   return null;
 }
 
-// ── Handler ────────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -64,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: 'API source not found' });
   }
 
-  // ── Fetch all accounts for this source ────────────────────────────────────
+  // â”€â”€ Fetch all accounts for this source â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: accounts, error: accountsError } = await supabase
     .from('api_provider_accounts')
     .select('id, account_name, is_active, priority, current_usage_min, current_usage_day, last_reset_at, created_at')
@@ -78,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const accountList = accounts ?? [];
   const accountIds = accountList.map((a) => a.id);
 
-  // ── Fetch latest usage row per account ────────────────────────────────────
+  // â”€â”€ Fetch latest usage row per account â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // We pull usage rows that reference these account IDs (last_outcome + last_used_at).
   const { data: usageRows } = accountIds.length
     ? await supabase
@@ -103,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     {}
   );
 
-  // ── Fetch health: account-scoped first, then source-level fallback ─────────
+  // â”€â”€ Fetch health: account-scoped first, then source-level fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: healthByAccount } = accountIds.length
     ? await supabase
         .from('external_api_health')
@@ -128,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const sourceLevelHealthScore = sourceHealth?.health_score ?? null;
 
-  // ── Build response ─────────────────────────────────────────────────────────
+  // â”€â”€ Build response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const summary = accountList.map((account) => {
     const usage = latestUsageByAccount[account.id] ?? { last_used_at: null, last_outcome: null };
     const healthScore =
@@ -161,3 +163,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     accounts: summary,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

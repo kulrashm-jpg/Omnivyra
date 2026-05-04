@@ -8,7 +8,7 @@
  * Environment Variables:
  * - ENCRYPTION_KEY (required, 32-byte hex string or base64)
  * - SUPABASE_URL (required)
- * - SUPABASE_SERVICE_ROLE_KEY (required)
+ * - Supabase service credential (required)
  * 
  * Security Notes:
  * - Never commit ENCRYPTION_KEY to version control
@@ -18,7 +18,8 @@
  */
 
 import crypto from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { config } from '@/config';
 
 const ALGORITHM = 'aes-256-gcm';

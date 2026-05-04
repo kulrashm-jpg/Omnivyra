@@ -9,7 +9,8 @@
  * @see docs/CANONICAL-SOCIAL-PLATFORM-OPERATIONS-DESIGN.md
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getScheduledPost } from '../db/queries';
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { getProfile } from './companyProfileService';

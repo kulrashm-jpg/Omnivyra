@@ -1,7 +1,8 @@
 import handler from '../../../pages/api/campaigns/ai/plan';
 import { assessVirality } from '../../services/viralityAdvisorService';
 import { requestDecision } from '../../services/omnivyreClient';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 jest.mock('../../db/supabaseClient', () => ({

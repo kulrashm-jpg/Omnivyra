@@ -1,19 +1,21 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 
 function slugify(text: string): string {
   return text.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 80);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const company_id = (req.query.company_id ?? req.body?.company_id) as string | undefined;
   if (!company_id) return res.status(400).json({ error: 'company_id is required' });
 
   const auth = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!auth) return;
 
-  // GET — list series with post counts
+  // GET â€” list series with post counts
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('company_blog_series')
@@ -25,7 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ series: data ?? [] });
   }
 
-  // POST — create series
+  // POST â€” create series
   if (req.method === 'POST') {
     const body = req.body ?? {};
     const title = body.title?.trim();
@@ -49,3 +51,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

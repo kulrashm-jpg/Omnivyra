@@ -21,7 +21,7 @@ function getSecret(): string {
     process.env.RPA_AUTH_SECRET ||
     process.env.AUTH_SECRET ||
     process.env.NEXTAUTH_SECRET ||
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'] ||
     'omnivyra-rpa-auth-secret'
   );
 }

@@ -3,7 +3,8 @@ import { externalApiPresets } from '../../services/externalApiPresets';
 import presetsHandler from '../../../pages/api/external-apis/presets';
 import externalApisHandler from '../../../pages/api/external-apis/index';
 import { buildExternalApiRequest } from '../../services/externalApiService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn(), rpc: jest.fn() },

@@ -1,14 +1,14 @@
-/**
+﻿/**
  * Anomaly detection type registry.
  *
  * Each entry defines:
- *   severity      — alert urgency (CRITICAL | WARNING | INFO)
- *   entityType    — what the anomaly is about (user | company | system)
- *   multiplier    — current_rate must exceed baseline * multiplier to trigger
- *   minThreshold  — absolute floor; active when baseline is zero (new system).
+ *   severity      â€” alert urgency (CRITICAL | WARNING | INFO)
+ *   entityType    â€” what the anomaly is about (user | company | system)
+ *   multiplier    â€” current_rate must exceed baseline * multiplier to trigger
+ *   minThreshold  â€” absolute floor; active when baseline is zero (new system).
  *                   For CRITICAL events like redis_fallback_mode set to 1 so
  *                   the very first occurrence triggers regardless of baseline.
- *   dbEventType   — corresponding auth_audit_logs.event value for cross-instance
+ *   dbEventType   â€” corresponding auth_audit_logs.event value for cross-instance
  *                   DB aggregation. null for infra events that have no audit entry.
  */
 
@@ -35,7 +35,7 @@ export interface AnomalyConfig {
  * automatically without code changes elsewhere.
  */
 export const ANOMALY_CONFIGS: Record<string, AnomalyConfig> = {
-  // ── CRITICAL ──────────────────────────────────────────────────────────────
+  // â”€â”€ CRITICAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   redis_fallback_mode: {
     type:         'redis_fallback_mode',
@@ -43,7 +43,7 @@ export const ANOMALY_CONFIGS: Record<string, AnomalyConfig> = {
     entityType:   'system',
     multiplier:   1,
     minThreshold: 1,   // any Redis failure triggers immediately
-    description:  'Rate limiter fell back to in-memory mode — Redis unavailable',
+    description:  'Rate limiter fell back to in-memory mode â€” Redis unavailable',
     dbEventType:  null,
   },
 
@@ -53,7 +53,7 @@ export const ANOMALY_CONFIGS: Record<string, AnomalyConfig> = {
     entityType:   'user',
     multiplier:   3,
     minThreshold: 5,
-    description:  'Valid Firebase token with no matching active DB user row',
+    description:  'Valid auth session has no matching active DB user row',
     dbEventType:  'ghost_session_detected',  // matches auth_audit_logs.event
   },
 
@@ -63,7 +63,7 @@ export const ANOMALY_CONFIGS: Record<string, AnomalyConfig> = {
     entityType:   'user',
     multiplier:   3,
     minThreshold: 10,
-    description:  'Spike in ACCOUNT_DELETED (AUTH_001) responses — possible replay attack',
+    description:  'Spike in ACCOUNT_DELETED (AUTH_001) responses â€” possible replay attack',
     dbEventType:  null,
   },
 
@@ -87,7 +87,7 @@ export const ANOMALY_CONFIGS: Record<string, AnomalyConfig> = {
     dbEventType:  null,
   },
 
-  // ── WARNING ───────────────────────────────────────────────────────────────
+  // â”€â”€ WARNING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   rate_limit_triggered: {
     type:         'rate_limit_triggered',
@@ -95,7 +95,7 @@ export const ANOMALY_CONFIGS: Record<string, AnomalyConfig> = {
     entityType:   'system',
     multiplier:   3,
     minThreshold: 20,
-    description:  'Rate limit hit count exceeded baseline — possible brute-force or abuse',
+    description:  'Rate limit hit count exceeded baseline â€” possible brute-force or abuse',
     dbEventType:  null,
   },
 

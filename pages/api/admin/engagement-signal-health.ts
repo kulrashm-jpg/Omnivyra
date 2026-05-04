@@ -5,17 +5,26 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import {
   getEngagementSignalSchedulerLastRun,
   getEngagementSignalSchedulerErrors,
 } from '../../../backend/jobs/engagementSignalScheduler';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { getEngagementSignalQueueSize } from '../../../backend/queue/engagementSignalQueue';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const ctx = await requireAdminScope(req, res, 'health:engagement-signals');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/engagement-signal-health', 'health:engagement-signals');
   }
 
   try {
@@ -61,3 +70,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

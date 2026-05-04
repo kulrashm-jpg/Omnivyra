@@ -1,4 +1,4 @@
-# Implementation Context Audit Report - Omnivyra Backend
+﻿# Implementation Context Audit Report - Omnivyra Backend
 **Generated**: March 28, 2026  
 **Status**: COMPREHENSIVE ANALYSIS COMPLETE  
 **Scope**: Full backend architecture, critical services, data flows, deployment framework
@@ -16,7 +16,7 @@ The Omnivyra backend is a **multi-tenant SaaS platform** built on Next.js 16.2.1
 - **152+ integration tests** validating end-to-end flows
 - **152+ unit tests** for AI/analytics/scheduling engines
 
-**Key Achievement**: System can distinguish between "platform failures" and "monitoring failures" — enabling automatic escalation without false positives.
+**Key Achievement**: System can distinguish between "platform failures" and "monitoring failures" â€” enabling automatic escalation without false positives.
 
 ---
 
@@ -39,34 +39,34 @@ The Omnivyra backend is a **multi-tenant SaaS platform** built on Next.js 16.2.1
 
 ```
 c:\virality\
-├── backend/              # Node.js backend services
-│   ├── adapters/         # Platform connectors (LinkedIn, Twitter, TikTok, etc.)
-│   ├── auth/             # Authentication & OAuth flows
-│   ├── chatGovernance/   # AI conversation controls
-│   ├── config/           # Configuration management
-│   ├── db/               # Database clients (Supabase)
-│   ├── jobs/             # Scheduled jobs & workers
-│   ├── lib/              # Shared utilities
-│   │   ├── config/       # Hardening infrastructure
-│   │   ├── redis/        # Redis modules (health, monitoring)
-│   │   └── runtime/      # Node/Edge boundary checks
-│   ├── middleware/       # Express/Next middleware
-│   ├── services/         # Core business logic
-│   ├── tests/
-│   │   ├── integration/  # End-to-end flows (94 tests)
-│   │   ├── unit/         # Component tests (152 tests)
-│   │   └── utils/        # Test helpers
-│   └── types/            # TypeScript interfaces
-├── pages/api/            # Next.js API routes
-├── pages/               # Frontend pages
-├── components/          # React components
-├── public/              # Static assets
-├── config/              # App-level configuration
-├── lib/                 # Shared frontend + backend code
-├── hooks/               # React hooks
-├── middleware/          # Auth middleware (frontend)
-├── utils/               # Frontend utilities
-└── [90+ documentation files]  # Implementation guides
+â”œâ”€â”€ backend/              # Node.js backend services
+â”‚   â”œâ”€â”€ adapters/         # Platform connectors (LinkedIn, Twitter, TikTok, etc.)
+â”‚   â”œâ”€â”€ auth/             # Authentication & OAuth flows
+â”‚   â”œâ”€â”€ chatGovernance/   # AI conversation controls
+â”‚   â”œâ”€â”€ config/           # Configuration management
+â”‚   â”œâ”€â”€ db/               # Database clients (Supabase)
+â”‚   â”œâ”€â”€ jobs/             # Scheduled jobs & workers
+â”‚   â”œâ”€â”€ lib/              # Shared utilities
+â”‚   â”‚   â”œâ”€â”€ config/       # Hardening infrastructure
+â”‚   â”‚   â”œâ”€â”€ redis/        # Redis modules (health, monitoring)
+â”‚   â”‚   â””â”€â”€ runtime/      # Node/Edge boundary checks
+â”‚   â”œâ”€â”€ middleware/       # Express/Next middleware
+â”‚   â”œâ”€â”€ services/         # Core business logic
+â”‚   â”œâ”€â”€ tests/
+â”‚   â”‚   â”œâ”€â”€ integration/  # End-to-end flows (94 tests)
+â”‚   â”‚   â”œâ”€â”€ unit/         # Component tests (152 tests)
+â”‚   â”‚   â””â”€â”€ utils/        # Test helpers
+â”‚   â””â”€â”€ types/            # TypeScript interfaces
+â”œâ”€â”€ pages/api/            # Next.js API routes
+â”œâ”€â”€ pages/               # Frontend pages
+â”œâ”€â”€ components/          # React components
+â”œâ”€â”€ public/              # Static assets
+â”œâ”€â”€ config/              # App-level configuration
+â”œâ”€â”€ lib/                 # Shared frontend + backend code
+â”œâ”€â”€ hooks/               # React hooks
+â”œâ”€â”€ middleware/          # Auth middleware (frontend)
+â”œâ”€â”€ utils/               # Frontend utilities
+â””â”€â”€ [90+ documentation files]  # Implementation guides
 ```
 
 ### 1.3 Build Characteristics
@@ -76,12 +76,10 @@ c:\virality\
 - tsc --noEmit: Reports ~5 pre-existing errors (acceptable, documented)
 - Exit code expectations:
   - `npm run build`: Success (0) or build error (1)
-  - `tsc --noEmit`: Success (0) or type errors (2) — documented as acceptable
+  - `tsc --noEmit`: Success (0) or type errors (2) â€” documented as acceptable
 
 **Known Type Issues (Pre-Existing, Not Blocking)**:
 ```
-src/lib/system-intelligence.ts        - firebase property reference
-src/db/users.ts                       - firebaseUid property
 components/analytics/consumption.tsx  - BarChart3 import path
 ```
 
@@ -125,23 +123,23 @@ export const enforceCompanyAccess = async (input: {
 ### 2.2 Access Control Flow
 
 ```
-REQUEST → resolveUserContext(req)
-  ├─ Check for Content Architect override
-  ├─ Get Supabase user from session token
-  ├─ Query user_company_roles table (Postgres)
-  │  └─ Filter: status='active' only
-  ├─ Build companyIds[] array
-  └─ Determine admin status from role
+REQUEST â†’ resolveUserContext(req)
+  â”œâ”€ Check for Content Architect override
+  â”œâ”€ Get Supabase user from session token
+  â”œâ”€ Query user_company_roles table (Postgres)
+  â”‚  â””â”€ Filter: status='active' only
+  â”œâ”€ Build companyIds[] array
+  â””â”€ Determine admin status from role
 
-VALIDATION → enforceCompanyAccess()
-  ├─ Check companyId parameter exists
-  ├─ Check user.companyIds includes companyId
-  │  └─ Fallback: Check invited roles (COMPANY_ADMIN, ADMIN, SUPER_ADMIN)
-  ├─ Optional: Check campaignId if required
-  └─ Return UserContext or 403 Forbidden
+VALIDATION â†’ enforceCompanyAccess()
+  â”œâ”€ Check companyId parameter exists
+  â”œâ”€ Check user.companyIds includes companyId
+  â”‚  â””â”€ Fallback: Check invited roles (COMPANY_ADMIN, ADMIN, SUPER_ADMIN)
+  â”œâ”€ Optional: Check campaignId if required
+  â””â”€ Return UserContext or 403 Forbidden
 
-OPERATION → Execute with context
-  └─ All data filtering uses companyId from context
+OPERATION â†’ Execute with context
+  â””â”€ All data filtering uses companyId from context
 ```
 
 ### 2.3 Database-Level Isolation
@@ -176,10 +174,10 @@ if (isContentArchitectSession(req)) {
 **Responsibility**: Resolve authenticated user's company access and role
 
 **Exports**:
-- `resolveUserContext(req?)` → Promise<UserContext>
-- `enforceCompanyAccess(input)` → Promise<UserContext | null>
-- `isExternalMember(context)` → boolean
-- `isExternalMemberForCompany(context, companyId)` → boolean
+- `resolveUserContext(req?)` â†’ Promise<UserContext>
+- `enforceCompanyAccess(input)` â†’ Promise<UserContext | null>
+- `isExternalMember(context)` â†’ boolean
+- `isExternalMemberForCompany(context, companyId)` â†’ boolean
 
 **Key Implementation Details**:
 - Uses `supabase.from('user_company_roles').select(...)` 
@@ -197,7 +195,7 @@ if (isContentArchitectSession(req)) {
 **Responsibility**: Lightweight context validation wrapper
 
 **Exports**:
-- `requireCompanyContext(input)` → Promise<{ companyId: string } | null>
+- `requireCompanyContext(input)` â†’ Promise<{ companyId: string } | null>
 
 **Key Detail**: Delegates to `enforceCompanyAccess` internally
 
@@ -235,8 +233,8 @@ export const supabase = new Proxy({} as SupabaseClient, { ... })
 
 **Usage Tracking Integration**:
 ```typescript
-// .select() calls → trackDbOp(1, 'read')
-// .insert/upsert/update/delete → trackDbOp(1, 'write')
+// .select() calls â†’ trackDbOp(1, 'read')
+// .insert/upsert/update/delete â†’ trackDbOp(1, 'write')
 // Prevents runaway queries via Redis quota system
 ```
 
@@ -245,8 +243,8 @@ export const supabase = new Proxy({} as SupabaseClient, { ... })
 **Responsibility**: Role normalization and permission checking
 
 **Key Exports**:
-- `getCompanyRoleIncludingInvited(userId, companyId)` → Promise<Role>
-- `normalizePermissionRole(role)` → Role (enum)
+- `getCompanyRoleIncludingInvited(userId, companyId)` â†’ Promise<Role>
+- `normalizePermissionRole(role)` â†’ Role (enum)
 
 **Role Enum**:
 ```typescript
@@ -272,19 +270,19 @@ The system implements **5 independent layers** to prevent unauthorized environme
 
 ```
 Layer 1: Zod Validation
-  └─ config/env.schema.ts validates all vars at startup
+  â””â”€ config/env.schema.ts validates all vars at startup
   
 Layer 2: Runtime Enforcer
-  └─ lib/config/enforcer.ts blocks unauthorized process.env access
+  â””â”€ lib/config/enforcer.ts blocks unauthorized process.env access
   
 Layer 3: Deep Immutability
-  └─ lib/config/deepFreeze.ts prevents mutations & typo detection
+  â””â”€ lib/config/deepFreeze.ts prevents mutations & typo detection
   
 Layer 4: Startup Verification
-  └─ lib/config/verification.ts checks Redis/DB/critical paths
+  â””â”€ lib/config/verification.ts checks Redis/DB/critical paths
   
 Layer 5: Health Endpoint
-  └─ pages/api/health/config.ts provides HTTP health status
+  â””â”€ pages/api/health/config.ts provides HTTP health status
 ```
 
 ### 4.2 Layer 1: Zod Validation (`config/env.schema.ts`)
@@ -332,9 +330,9 @@ export function enforceConfigAccess(varName: string) {
 **Purpose**: Prevent runtime mutations of config after load
 
 **Exports**:
-- `deepFreeze(obj)` → Readonly<T>
-- `createReadonlyProxy(obj)` → Proxy catching mutations
-- `detectTypos(config, allowedKeys)` → void (throws on typo)
+- `deepFreeze(obj)` â†’ Readonly<T>
+- `createReadonlyProxy(obj)` â†’ Proxy catching mutations
+- `detectTypos(config, allowedKeys)` â†’ void (throws on typo)
 
 **Usage**:
 ```typescript
@@ -389,9 +387,9 @@ if (typeof window === 'undefined') {
 ### 4.7 Critical Issues Identified
 
 **30+ Unauthorized process.env Access Points** (Found by enforcer):
-- `cronGuard.ts` — direct env access
-- `supabaseClient.ts` — handled, but check Layer 1
-- `tokenRefresh.ts` — direct env access
+- `cronGuard.ts` â€” direct env access
+- `supabaseClient.ts` â€” handled, but check Layer 1
+- `tokenRefresh.ts` â€” direct env access
 - **9 platform adapters** (LinkedIn, Twitter, TikTok, Pipedrive, etc.)
 - Various feature flags
 
@@ -400,9 +398,9 @@ if (typeof window === 'undefined') {
 - Validation via Layer 4 catches this at startup
 
 **Current Mitigation Status**: 
-- ✅ Enforcer is active in production (throws on unauthorized access)
-- ✅ Startup verification catches missing/invalid values
-- ⚠️ 30+ modules still need refactoring to use @/config import
+- âœ… Enforcer is active in production (throws on unauthorized access)
+- âœ… Startup verification catches missing/invalid values
+- âš ï¸ 30+ modules still need refactoring to use @/config import
 
 ---
 
@@ -414,10 +412,10 @@ if (typeof window === 'undefined') {
 
 | File | Purpose | Runtime Guard |
 |------|---------|---------------|
-| `lib/redis/client.ts` | Connection + health tracking | ✅ enforceNodeRuntime() |
-| `lib/redis/usageProtection.ts` | Quota enforcement + polling | ✅ enforceNodeRuntime() |
-| `lib/redis/failureStrategy.ts` | Failure mode definitions | ✅ |
-| `lib/redis/healthMetrics.ts` | 4-signal monitoring detection | ✅ |
+| `lib/redis/client.ts` | Connection + health tracking | âœ… enforceNodeRuntime() |
+| `lib/redis/usageProtection.ts` | Quota enforcement + polling | âœ… enforceNodeRuntime() |
+| `lib/redis/failureStrategy.ts` | Failure mode definitions | âœ… |
+| `lib/redis/healthMetrics.ts` | 4-signal monitoring detection | âœ… |
 
 ### 5.2 Runtime Isolation
 
@@ -476,10 +474,10 @@ export const failureModes: Record<string, FailureMode> = {
 ### 5.4 Health Monitoring (4-Signal Framework)
 
 **The System Detects**:
-1. **Metrics Freshness** — No update >30s = CRITICAL
-2. **Polling Success Rate** — <95% = WARNING
-3. **Consecutive Failures** — ≥3 failures = WARNING, ≥5 = CRITICAL
-4. **Reconnect Flapping** — >10 reconnects in window = WARNING
+1. **Metrics Freshness** â€” No update >30s = CRITICAL
+2. **Polling Success Rate** â€” <95% = WARNING
+3. **Consecutive Failures** â€” â‰¥3 failures = WARNING, â‰¥5 = CRITICAL
+4. **Reconnect Flapping** â€” >10 reconnects in window = WARNING
 
 **Key Innovation**: Separate "system failures" from "monitoring failures"
 
@@ -517,25 +515,25 @@ export async function handler(req, res) {
 
 ```
 backend/tests/
-├── integration/          # 94 end-to-end tests
-│   ├── recommendation_engine.test.ts
-│   ├── publish_flow.test.ts
-│   ├── rbac_access.test.ts
-│   ├── user_lifecycle_management.test.ts
-│   ├── social_platform_*.test.ts
-│   └── ... (94 total)
-│
-├── unit/               # 152 component tests
-│   ├── weightedAlignmentScoring.test.ts
-│   ├── weeklyScheduleAllocator.test.ts
-│   ├── strategicInsightService.test.ts
-│   ├── contentPersonalization.test.ts
-│   └── ... (152 total)
-│
-└── utils/              # Test helpers
-    ├── testDataFactory.ts
-    ├── mockServices.ts
-    └── assertions.ts
+â”œâ”€â”€ integration/          # 94 end-to-end tests
+â”‚   â”œâ”€â”€ recommendation_engine.test.ts
+â”‚   â”œâ”€â”€ publish_flow.test.ts
+â”‚   â”œâ”€â”€ rbac_access.test.ts
+â”‚   â”œâ”€â”€ user_lifecycle_management.test.ts
+â”‚   â”œâ”€â”€ social_platform_*.test.ts
+â”‚   â””â”€â”€ ... (94 total)
+â”‚
+â”œâ”€â”€ unit/               # 152 component tests
+â”‚   â”œâ”€â”€ weightedAlignmentScoring.test.ts
+â”‚   â”œâ”€â”€ weeklyScheduleAllocator.test.ts
+â”‚   â”œâ”€â”€ strategicInsightService.test.ts
+â”‚   â”œâ”€â”€ contentPersonalization.test.ts
+â”‚   â””â”€â”€ ... (152 total)
+â”‚
+â””â”€â”€ utils/              # Test helpers
+    â”œâ”€â”€ testDataFactory.ts
+    â”œâ”€â”€ mockServices.ts
+    â””â”€â”€ assertions.ts
 ```
 
 ### 6.2 Jest Configuration
@@ -584,7 +582,7 @@ npm test -- --watch
 - Verifies invited member fallback
 
 **User Lifecycle Tests** (`user_lifecycle_management.test.ts`):
-- User creation → company assignment → role grant → access validation
+- User creation â†’ company assignment â†’ role grant â†’ access validation
 - Tests state transitions and error cases
 
 **Recommendation Engine Tests** (52 related tests):
@@ -607,22 +605,22 @@ npm test -- --watch
 
 ```
 PHASE 1: Light Traffic (0-2h)
-  ├─ Deploy to 1-2 instances
-  ├─ 6 go/no-go criteria
-  ├─ Decision: All pass→Phase 2 | Any fail→ROLLBACK
-  └─ Expected: p99 latency <150ms
+  â”œâ”€ Deploy to 1-2 instances
+  â”œâ”€ 6 go/no-go criteria
+  â”œâ”€ Decision: All passâ†’Phase 2 | Any failâ†’ROLLBACK
+  â””â”€ Expected: p99 latency <150ms
 
 PHASE 2: Moderate Load (2-12h)
-  ├─ Scale to 25%→50%→75% of prod capacity
-  ├─ 7 go/no-go criteria
-  ├─ Decision: All pass→Phase 3 | 6/7→EXTEND | ≤5/7→ROLLBACK
-  └─ Expected: p99 latency <300ms
+  â”œâ”€ Scale to 25%â†’50%â†’75% of prod capacity
+  â”œâ”€ 7 go/no-go criteria
+  â”œâ”€ Decision: All passâ†’Phase 3 | 6/7â†’EXTEND | â‰¤5/7â†’ROLLBACK
+  â””â”€ Expected: p99 latency <300ms
 
 PHASE 3: Sustained Load (12-24h)
-  ├─ Scale to 100% of prod capacity
-  ├─ 6 go/no-go criteria
-  ├─ Decision: All pass→APPROVED | 5/6+no incidents→CONDITIONAL | Critical fail→ROLLBACK
-  └─ Expected: p99 latency 60-65ms stable
+  â”œâ”€ Scale to 100% of prod capacity
+  â”œâ”€ 6 go/no-go criteria
+  â”œâ”€ Decision: All passâ†’APPROVED | 5/6+no incidentsâ†’CONDITIONAL | Critical failâ†’ROLLBACK
+  â””â”€ Expected: p99 latency 60-65ms stable
 ```
 
 ### 7.2 Phase 1: Acceptance Criteria (6 Tests)
@@ -680,15 +678,15 @@ node scripts/staged-validation-monitor.js
 ================================================================================
 PHASE 2: MODERATE LOAD - 75% CAPACITY
 ================================================================================
-⏱️  Elapsed: 9h 45m
-📊 Latency (p50/p99): 65ms / 298ms ✅
-📈 Success Rate: 99.02% ✅
-🔄 Retry Rate: 78/min ✅
-💾 Memory Growth: 42MB/hr ✅
-🚨 Active Alerts: 3 (dedup: 87% matched expected)
-⏹️  Hanging Requests: 2
+â±ï¸  Elapsed: 9h 45m
+ðŸ“Š Latency (p50/p99): 65ms / 298ms âœ…
+ðŸ“ˆ Success Rate: 99.02% âœ…
+ðŸ”„ Retry Rate: 78/min âœ…
+ðŸ’¾ Memory Growth: 42MB/hr âœ…
+ðŸš¨ Active Alerts: 3 (dedup: 87% matched expected)
+â¹ï¸  Hanging Requests: 2
 
-DECISION: All 7 criteria PASS → Ready for Phase 3
+DECISION: All 7 criteria PASS â†’ Ready for Phase 3
 ```
 
 ### 7.6 Team Roles
@@ -705,14 +703,14 @@ DECISION: All 7 criteria PASS → Ready for Phase 3
 
 ```
 IF any Phase acceptance criteria fail:
-  └─ IMMEDIATE ACTION REQUIRED
-     ├─ IF critical incident (data loss, auth broken, DDoS):
-     │  └─ Execute IMMEDIATE ROLLBACK (no wait for Phase completion)
-     ├─ IF degradation but contained (latency high, some failures):
-     │  └─ Option 1: Fix in-place (requires root cause confirmation)
-     │  └─ Option 2: ROLLBACK and iterate
-     └─ IF monitoring infrastructure broken:
-        └─ ROLLBACK (cannot trust phase decisions without good metrics)
+  â””â”€ IMMEDIATE ACTION REQUIRED
+     â”œâ”€ IF critical incident (data loss, auth broken, DDoS):
+     â”‚  â””â”€ Execute IMMEDIATE ROLLBACK (no wait for Phase completion)
+     â”œâ”€ IF degradation but contained (latency high, some failures):
+     â”‚  â””â”€ Option 1: Fix in-place (requires root cause confirmation)
+     â”‚  â””â”€ Option 2: ROLLBACK and iterate
+     â””â”€ IF monitoring infrastructure broken:
+        â””â”€ ROLLBACK (cannot trust phase decisions without good metrics)
 
 ROLLBACK EXECUTION:
   1. Tech Lead approves (within 15 minutes of failure)
@@ -947,16 +945,12 @@ export const config = {
 
 **Pre-Existing TypeScript Errors** (Not blocking):
 ```
-backend/lib/system-intelligence.ts:123 - firebase property doesn't exist
-backend/db/users.ts:45 - firebaseUid isn't typed correctly
 components/analytics/consumption.tsx:78 - BarChart3 import not found
 ```
 
 **Mitigation**: `typescript.ignoreBuildErrors: true` in next.config.js
 
 **Fix Plan**:
-1. In system-intelligence.ts: Remove firebase references (being phased out)
-2. In users.ts: Update to use Supabase uid instead of firebaseUid
 3. In consumption.tsx: Use correct Recharts import
 
 ---
@@ -1011,7 +1005,7 @@ components/analytics/consumption.tsx:78 - BarChart3 import not found
 - [ ] Ensure all tests pass: `npm test`
 - [ ] Build succeeds: `npm run build`
 - [ ] Type check passes: `tsc --noEmit` (or accept documented errors)
-- [ ] Follow staged rollout plan (Phase 1 → 2 → 3)
+- [ ] Follow staged rollout plan (Phase 1 â†’ 2 â†’ 3)
 - [ ] Monitor 24-hour burn-in period
 - [ ] Have rollback plan ready
 
@@ -1138,13 +1132,13 @@ node --trace-gc server.js 2>&1 | grep 'Scavenge'
 **Root Cause Analysis**:
 ```
 1. Check user.companyIds includes requested companyId
-   → Query: SELECT * FROM user_company_roles WHERE user_id=? AND status='active'
+   â†’ Query: SELECT * FROM user_company_roles WHERE user_id=? AND status='active'
    
 2. If not, check if user has invited role
-   → Query: SELECT role FROM user_company_roles WHERE user_id=? AND company_id=? AND status='invited'
+   â†’ Query: SELECT role FROM user_company_roles WHERE user_id=? AND company_id=? AND status='invited'
    
 3. If role is COMPANY_ADMIN/ADMIN/SUPER_ADMIN, should pass fallback check
-   → Verify RBAC service: getCompanyRoleIncludingInvited()
+   â†’ Verify RBAC service: getCompanyRoleIncludingInvited()
 ```
 
 **Fix Steps**:
@@ -1162,10 +1156,10 @@ node --trace-gc server.js 2>&1 | grep 'Scavenge'
 **Root Cause Analysis**:
 ```
 1. Test connection: redis-cli -u $REDIS_URL ping
-   → Should respond: PONG
+   â†’ Should respond: PONG
    
 2. Check URL format: redis://host:port
-   → Should NOT have shell characters (!$%^&)
+   â†’ Should NOT have shell characters (!$%^&)
    
 3. Verify credentials: Check Vercel/Railway settings match env vars
    
@@ -1201,13 +1195,13 @@ const url = config.SUPABASE_URL;
 **Root Cause Analysis**:
 ```
 1. Check network: Can machine reach Supabase URL?
-   → ping api.supabase.co
+   â†’ ping api.supabase.co
    
 2. Check credentials: SUPABASE_SERVICE_ROLE_KEY valid?
-   → Compare against Supabase dashboard Settings → API
+   â†’ Compare against Supabase dashboard Settings â†’ API
    
 3. Check DB status: Is database accepting connections?
-   → Try from Supabase SQL editor
+   â†’ Try from Supabase SQL editor
 ```
 
 **Fix Steps**:
@@ -1227,7 +1221,7 @@ node --trace-gc server.js 2>&1 | grep -E 'Scavenge|Mark-sweep'
 
 # Use --inspect to get heap snapshot
 node --inspect server.js
-# Then chrome://inspect → takeHeapSnapshot
+# Then chrome://inspect â†’ takeHeapSnapshot
 
 # Analyze snapshot for:
 - Detached DOM nodes (frontend only)
@@ -1351,7 +1345,7 @@ flushdb
 | Term | Definition | Example |
 |------|-----------|---------|
 | **Company Context** | Authenticated user + accessible company IDs + role | `{ userId, companyIds, role, defaultCompanyId }` |
-| **RBAC** | Role-Based Access Control — permission model | SUPER_ADMIN > COMPANY_ADMIN > ADMIN > USER |
+| **RBAC** | Role-Based Access Control â€” permission model | SUPER_ADMIN > COMPANY_ADMIN > ADMIN > USER |
 | **Enforcer** | Config module preventing unauthorized env access | `lib/config/enforcer.ts` |
 | **Vercel** | Hosting platform for Next.js app | Production environment |
 | **Railway** | Alternative hosting for background jobs | Worker processes |
@@ -1367,31 +1361,31 @@ flushdb
 ## Part 16: Documentation Index
 
 **Critical Reading**:
-- [x] IMPLEMENTATION_CONTEXT_AUDIT.md (this file) — Architecture overview
-- [x] HARDENING_IMPLEMENTATION_GUIDE.md — Config system deep dive
-- [x] PRODUCTION_DEPLOYMENT_GUIDE.md — Staged rollout procedures
-- [x] RUNTIME_ARCHITECTURE.md — Node/Edge boundary enforcement
-- [x] OBSERVABILITY_HARDENING_GUIDE.md — Monitoring failure detection
+- [x] IMPLEMENTATION_CONTEXT_AUDIT.md (this file) â€” Architecture overview
+- [x] HARDENING_IMPLEMENTATION_GUIDE.md â€” Config system deep dive
+- [x] PRODUCTION_DEPLOYMENT_GUIDE.md â€” Staged rollout procedures
+- [x] RUNTIME_ARCHITECTURE.md â€” Node/Edge boundary enforcement
+- [x] OBSERVABILITY_HARDENING_GUIDE.md â€” Monitoring failure detection
 
 **Setup & Onboarding**:
-- P0_QUICK_START.md — Get running in 5 minutes
-- SETUP_GUIDE.md — Detailed environment setup
-- ENV_EXAMPLE_TEMPLATE.md — Required environment variables
-- CONFIG_HARDENING_PROJECT_SUMMARY.md — Why hardening exists
+- P0_QUICK_START.md â€” Get running in 5 minutes
+- SETUP_GUIDE.md â€” Detailed environment setup
+- ENV_EXAMPLE_TEMPLATE.md â€” Required environment variables
+- CONFIG_HARDENING_PROJECT_SUMMARY.md â€” Why hardening exists
 
 **Operations**:
-- 24HOUR_DEPLOYMENT_CHECKLIST.md — Deployment execution guide
-- ROLLBACK_DECISION_TREE.md — When/how to rollback
-- INCIDENT_RUNBOOKS.md — On-call procedures
-- REDIS_POLLING_OPERATIONS_GUIDE.md — Redis-specific operations
+- 24HOUR_DEPLOYMENT_CHECKLIST.md â€” Deployment execution guide
+- ROLLBACK_DECISION_TREE.md â€” When/how to rollback
+- INCIDENT_RUNBOOKS.md â€” On-call procedures
+- REDIS_POLLING_OPERATIONS_GUIDE.md â€” Redis-specific operations
 
 **Testing**:
-- TESTING_CHECKLIST.md — Before production deployment
-- REDIS_POLLING_FINAL_VALIDATION_CHECKLIST.md — Validation procedures
-- CONFIG_HARDENING_VALIDATION.md — Configuration testing
+- TESTING_CHECKLIST.md â€” Before production deployment
+- REDIS_POLLING_FINAL_VALIDATION_CHECKLIST.md â€” Validation procedures
+- CONFIG_HARDENING_VALIDATION.md â€” Configuration testing
 
 **Reference**:
-- QUICK_REFERENCE_CARD.md — Single-page cheat sheet
+- QUICK_REFERENCE_CARD.md â€” Single-page cheat sheet
 - API documentation in code comments
 - TypeScript interfaces (for contract validation)
 
@@ -1414,7 +1408,7 @@ flushdb
 3. Fix: Make code change + add test
 4. Test: `npm test` + integration test pass
 5. Build: `npm run build` succeeds
-6. Deploy: Follow staged rollout (Phase 1 → 2 → 3)
+6. Deploy: Follow staged rollout (Phase 1 â†’ 2 â†’ 3)
 
 ### "Redis Isn't Working"
 
@@ -1427,7 +1421,7 @@ flushdb
 ### "Database Has Stale Types"
 
 1. Regenerate: Log into Supabase dashboard
-2. Go: Settings → API → TypeScript definitions
+2. Go: Settings â†’ API â†’ TypeScript definitions
 3. Download: Copy generated types
 4. Replace: `Update ~/types/supabase.ts`
 5. Rebuild: `npm run build`
@@ -1438,11 +1432,11 @@ flushdb
 
 The Omnivyra backend implements a **production-grade multi-tenant SaaS platform** with:
 
-✅ **Strict isolation** — Company context enforced at every API boundary  
-✅ **Security hardening** — 5-layer zero-trust configuration system  
-✅ **Operational excellence** — 24-hour staged deployment with 19+ decision criteria  
-✅ **Comprehensive monitoring** — Detects failures in both system and monitoring itself  
-✅ **Tested thoroughly** — 246 tests (94 integration + 152 unit) validating critical paths  
+âœ… **Strict isolation** â€” Company context enforced at every API boundary  
+âœ… **Security hardening** â€” 5-layer zero-trust configuration system  
+âœ… **Operational excellence** â€” 24-hour staged deployment with 19+ decision criteria  
+âœ… **Comprehensive monitoring** â€” Detects failures in both system and monitoring itself  
+âœ… **Tested thoroughly** â€” 246 tests (94 integration + 152 unit) validating critical paths  
 
 This document serves as the **implementation manual** for extending, maintaining, and deploying the system. Reference it frequently during development.
 

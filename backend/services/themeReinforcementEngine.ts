@@ -4,7 +4,8 @@
  * Safeguards: adjustment [-0.25, +0.25], scores bounded [0, 1]
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { ADJUSTMENT_MIN, ADJUSTMENT_MAX } from './intelligenceLearningEngine';
 
 export type ThemeReinforcementResult = {

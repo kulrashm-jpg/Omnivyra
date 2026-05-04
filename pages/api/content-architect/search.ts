@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 
 /**
@@ -8,7 +10,7 @@ import { isContentArchitectSession } from '../../../backend/services/contentArch
  * Every company is identified by company_id and can be accessed by ID, name, or website URL.
  * Returns { companies, campaigns, recommendations } so Content Architect can open by ID.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -100,7 +102,7 @@ async function searchCompanies(
     .limit(limit);
   (byUrl || []).forEach((row: { company_id: string; name?: string }) => add(row.company_id, row.name ?? null));
 
-  // 2. companies table (if present): by id, name, or website — every company has id; search by ID, name, or URL
+  // 2. companies table (if present): by id, name, or website â€” every company has id; search by ID, name, or URL
   try {
     const { data: byCompaniesId } = await supabaseClient
       .from('companies')
@@ -237,3 +239,8 @@ async function searchRecommendations(
   }
   return merged.slice(0, limit);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -9,7 +9,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from './CompanyContext';
-import { fetchWithAuth } from './community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { BoltCampaignChat } from './bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from './BOLTProgressModal';
@@ -30,6 +30,16 @@ const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: str
 ];
 
 const BOLT_STATE_KEY = 'bolt-text-strategy-state';
+
+// Some content formats only make sense on a specific platform. Tweet is
+// natively a Twitter/X-only format — selecting it without an X connection
+// would produce content that has no valid destination, so the format is
+// disabled until X is connected. Keep this map authoritative: any format
+// listed here can only be selected when at least one of its platforms is
+// in the connected set.
+const FORMAT_REQUIRED_PLATFORMS: Partial<Record<ContentFormat, string[]>> = {
+  tweet: ['x'],
+};
 
 const CONTENT_FORMATS: { value: ContentFormat; label: string; icon: string }[] = [
   { value: 'post',        label: 'Post',        icon: '📝' },
@@ -770,11 +780,19 @@ export default function BoltStrategyView({ d }: { d: S }) {
                   {CONTENT_FORMATS.map((fmt) => {
                     const selected = contentFormats.includes(fmt.value);
                     const freq = formatFrequency[fmt.value] ?? 3;
+                    const requiredPlatforms = FORMAT_REQUIRED_PLATFORMS[fmt.value];
+                    const platformBlocked = requiredPlatforms != null
+                      && !requiredPlatforms.some((p) => availablePlatforms.includes(p));
+                    const requiredLabels = requiredPlatforms?.map((p) => PLATFORM_LABELS[p] ?? p).join(' / ');
+                    const titleHint = platformBlocked
+                      ? `Connect ${requiredLabels} to enable ${fmt.label}.`
+                      : undefined;
                     return (
                       <div key={fmt.value} className="flex flex-col gap-0.5">
                         <button type="button" onClick={() => toggleFormat(fmt.value)}
-                          disabled={!selected && contentFormats.length >= 2}
-                          className={`flex items-center gap-1.5 text-[11px] px-2 py-1.5 rounded-lg border font-medium transition-all text-left disabled:opacity-40 ${
+                          disabled={platformBlocked || (!selected && contentFormats.length >= 2)}
+                          title={titleHint}
+                          className={`flex items-center gap-1.5 text-[11px] px-2 py-1.5 rounded-lg border font-medium transition-all text-left disabled:opacity-40 disabled:cursor-not-allowed ${
                             selected ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50/40'
                           }`}>
                           <span className="text-sm">{fmt.icon}</span>{fmt.label}
@@ -863,7 +881,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
                 <p className="text-xs text-gray-400">Loading connected platforms…</p>
               ) : availablePlatforms.length === 0 ? (
                 <p className="text-xs text-gray-400">
-                  No text-compatible platforms connected yet. Add social links in company settings to target specific platforms.
+                  No text-capable platforms connected yet. Connect LinkedIn, Facebook, X, or Threads via OAuth in company settings to target them.
                 </p>
               ) : (
                 <>

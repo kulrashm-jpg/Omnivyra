@@ -70,7 +70,7 @@ import type { StrategyStatusPayload } from '../../strategy/StrategyIntelligenceP
 
 
 export function useTrendCampaignsCore(props: OpportunityTabProps) {
-  const { companyId, regions, engineRecommendations, fetchWithAuth, strategicIntents, onStrategicIntentsChange, viewMode, campaignId, initialBlogId, intelligentMixContext: intelligentMixProp } = props;
+  const { companyId, regions, engineRecommendations, apiFetch, strategicIntents, onStrategicIntentsChange, viewMode, campaignId, initialBlogId, intelligentMixContext: intelligentMixProp } = props;
   const router = useRouter();
 
   // Extended Intelligent Mix context type (includes optional campaign focus fields added later)
@@ -681,7 +681,7 @@ export function useTrendCampaignsCore(props: OpportunityTabProps) {
   }>(
     jobId,
     jobId ? `/api/recommendations/job/${jobId}` : null,
-    fetchWithAuth,
+    apiFetch,
     { enabled: !!jobId }
   );
 
@@ -802,31 +802,31 @@ Generate strategic campaign pillars to capture this demand.`;
   useEffect(() => {
     if (!historyDrawerOpen || !companyId) return;
     setHistoryLoading(true);
-    fetchWithAuth(`/api/recommendations/job/history?companyId=${encodeURIComponent(companyId)}&limit=5`)
+    apiFetch(`/api/recommendations/job/history?companyId=${encodeURIComponent(companyId)}&limit=5`)
       .then((res) => (res.ok ? res.json() : { jobs: [] }))
       .then((data) => setJobHistory(Array.isArray(data?.jobs) ? data.jobs : []))
       .catch(() => setJobHistory([]))
       .finally(() => setHistoryLoading(false));
-  }, [historyDrawerOpen, companyId, fetchWithAuth]);
+  }, [historyDrawerOpen, companyId, apiFetch]);
 
   useEffect(() => {
-    if (!companyId || !fetchWithAuth) {
+    if (!companyId || !apiFetch) {
       setRecommendationUserStateMap({});
       return;
     }
-    fetchWithAuth(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => (res.ok ? res.json() : {}))
       .then((data) => (typeof data === 'object' && data !== null ? data : {}))
       .then(setRecommendationUserStateMap)
       .catch(() => setRecommendationUserStateMap({}));
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
     if (!companyId) {
       setUsedRecommendationIds(new Set());
       return;
     }
-    fetchWithAuth(`/api/recommendations/used-by-company?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/recommendations/used-by-company?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => (res.ok ? res.json() : { usedRecommendationIds: [] }))
       .then((data) =>
         setUsedRecommendationIds(
@@ -834,14 +834,14 @@ Generate strategic campaign pillars to capture this demand.`;
         )
       )
       .catch(() => setUsedRecommendationIds(new Set()));
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
     if (!companyId) {
       setStrategyHistory(null);
       return;
     }
-    fetchWithAuth(`/api/recommendations/strategy-history?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/recommendations/strategy-history?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data && typeof data.campaigns_count === 'number' && data.campaigns_count > 0) {
@@ -865,27 +865,27 @@ Generate strategic campaign pillars to capture this demand.`;
         }
       })
       .catch(() => setStrategyHistory(null));
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
-    if (!campaignId?.trim() || !fetchWithAuth) {
+    if (!campaignId?.trim() || !apiFetch) {
       setStrategyStatusPayload(null);
       return;
     }
-    fetchWithAuth(`/api/campaigns/${encodeURIComponent(campaignId)}/strategy-status`)
+    apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/strategy-status`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setStrategyStatusPayload(data ?? null))
       .catch(() => setStrategyStatusPayload(null));
-  }, [campaignId, fetchWithAuth]);
+  }, [campaignId, apiFetch]);
 
   useEffect(() => {
-    if (!companyId || !fetchWithAuth) {
+    if (!companyId || !apiFetch) {
       setRecommendationUserStateMap({});
       setRecommendationSignals(null);
       return;
     }
     let cancelled = false;
-    fetchWithAuth(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => (res.ok ? res.json() : {}))
       .then((data) => {
         if (cancelled) return;
@@ -894,7 +894,7 @@ Generate strategic campaign pillars to capture this demand.`;
       .catch(() => {
         if (!cancelled) setRecommendationUserStateMap({});
       });
-    fetchWithAuth(`/api/recommendations/strategy-signals?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/recommendations/strategy-signals?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled) return;
@@ -914,7 +914,7 @@ Generate strategic campaign pillars to capture this demand.`;
     return () => {
       cancelled = true;
     };
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
 
 
@@ -925,7 +925,7 @@ Generate strategic campaign pillars to capture this demand.`;
       return;
     }
     let cancelled = false;
-    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (cancelled) return;
@@ -954,7 +954,7 @@ Generate strategic campaign pillars to capture this demand.`;
     return () => {
       cancelled = true;
     };
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   const aspects = strategicConfig?.strategic_aspects ?? [];
   const aspectOfferingsMap = strategicConfig?.aspect_offerings_map ?? strategicConfig?.offerings_by_aspect ?? {};
@@ -1112,7 +1112,7 @@ Generate strategic campaign pillars to capture this demand.`;
     executionCollapsed,
     executionSectionRefs,
     fastLoadingCardId,
-    fetchWithAuth,
+    apiFetch,
     firstCardRef,
     focusedModules,
     frequencyPerWeek,
@@ -1297,7 +1297,7 @@ Generate strategic campaign pillars to capture this demand.`;
     executionFieldKeyToLabel,
     executionSectionRefs,
     fastLoadingCardId,
-    fetchWithAuth,
+    apiFetch,
     firstCardRef,
     focusedModules,
     frequencyPerWeek,

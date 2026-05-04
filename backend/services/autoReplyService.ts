@@ -4,7 +4,8 @@
  * All rules must be satisfied before auto reply triggers.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { resolveResponsePolicy } from './responsePolicyEngine';
 import { orchestrateResponse } from './responseOrchestrator';
 import { getControls } from './engagementGovernanceService';

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/domain/track-event
  *
@@ -6,7 +7,7 @@
  * dashboards can compute funnel metrics (view -> click -> success/fail).
  *
  * Auth: Supabase session required (we want events tied to a real user).
- * Rate limit: 30/min/IP — covers a noisy user without being so tight that
+ * Rate limit: 30/min/IP â€” covers a noisy user without being so tight that
  * legitimate retry/back-tap behavior triggers it.
  *
  * Allow-listed events (rejected otherwise):
@@ -18,7 +19,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
@@ -41,7 +43,7 @@ const ALLOWED_EVENTS = new Set([
   'DOMAIN_TOKEN_REGENERATED',
 ]);
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
@@ -93,7 +95,7 @@ export default async function handler(
   // Reminder schedule: when a user skips verification, INSERT a durable row
   // into domain_reminders. The /api/internal/process-reminders cron (every
   // 5 min) drains due rows, skips already-verified domains, and sends the
-  // email. No setTimeout, no in-process state — survives process recycles.
+  // email. No setTimeout, no in-process state â€” survives process recycles.
   if (event === 'DOMAIN_VERIFICATION_SKIPPED' && final_domain) {
     try {
       const scheduledAt = new Date(Date.now() + REMINDER_DELAY_MS).toISOString();
@@ -127,3 +129,8 @@ export default async function handler(
 
   return res.status(202).json({ ok: true });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

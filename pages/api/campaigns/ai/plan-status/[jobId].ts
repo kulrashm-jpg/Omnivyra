@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Campaign Plan Status Poller
@@ -5,13 +6,13 @@
  * GET /api/campaigns/ai/plan-status/[jobId]
  *
  * Returns job status + partial/full result once available.
- * Frontend polls this every 2–5 seconds after POSTing to plan-v2.
+ * Frontend polls this every 2â€“5 seconds after POSTing to plan-v2.
  *
  * Response shape:
  * {
  *   jobId:      string
  *   status:     'pending' | 'processing' | 'layer1' | 'layer2' | 'layer3' | 'layer4' | 'complete' | 'failed'
- *   progress:   number (0–100)
+ *   progress:   number (0â€“100)
  *   result?:    { blueprint: ..., total_posts: number, confidence: number }
  *   error?:     string
  *   updatedAt:  string
@@ -19,7 +20,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUserCompanyRole } from '../../../../../backend/services/rbacService';
 
 const PROGRESS_MAP: Record<string, number> = {
@@ -33,12 +35,12 @@ const PROGRESS_MAP: Record<string, number> = {
   failed:     0,
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { jobId } = req.query;
   if (typeof jobId !== 'string' || !jobId) {
     return res.status(400).json({ error: 'Invalid jobId' });
@@ -64,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const access = await getUserCompanyRole(req, campaign.user_id);
     if (!access.userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
-  // ── Job already fetched above ──────────────────────────────────────────────
+  // â”€â”€ Job already fetched above â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const job = jobRow;
 
   const progress = PROGRESS_MAP[job.status] ?? 0;
@@ -76,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     updatedAt:  job.updated_at,
   };
 
-  // ── On failure: return error ──────────────────────────────────────────────
+  // â”€â”€ On failure: return error â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (job.status === 'failed') {
     return res.status(200).json({
       ...base,
@@ -84,7 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // ── On complete: fetch full plan ──────────────────────────────────────────
+  // â”€â”€ On complete: fetch full plan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (job.status === 'complete') {
     const { data: plan } = await supabase
       .from('campaign_week_plan')
@@ -110,9 +112,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // ── In-progress: return partial result if any ─────────────────────────────
+  // â”€â”€ In-progress: return partial result if any â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return res.status(200).json({
     ...base,
     partial: job.partial_result ?? null,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

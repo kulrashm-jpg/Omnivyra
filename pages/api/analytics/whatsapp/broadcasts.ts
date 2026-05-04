@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/analytics/whatsapp/broadcasts
  *
@@ -6,18 +7,19 @@
  *
  * Query params:
  *   company_id   (required)
- *   status       (optional) — filter: sent | sending | failed | partial
- *   date_from    (optional) — YYYY-MM-DD (filters on broadcast created_at)
- *   date_to      (optional) — YYYY-MM-DD
+ *   status       (optional) â€” filter: sent | sending | failed | partial
+ *   date_from    (optional) â€” YYYY-MM-DD (filters on broadcast created_at)
+ *   date_to      (optional) â€” YYYY-MM-DD
  *   page         (optional, default 1)
  *   per_page     (optional, default 20, max 100)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
@@ -104,3 +106,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -2,7 +2,8 @@
  * Integration Service — company_integrations table
  * Supports: lead_webhook | wordpress | custom_blog_api
  */
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type IntegrationType = 'lead_webhook' | 'wordpress' | 'custom_blog_api';
 export type IntegrationStatus = 'connected' | 'failed' | 'pending';

@@ -3,7 +3,8 @@
  * Orchestrates existing APIs only. No direct DB mutation. Never throws.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { evaluateAutoOptimizationEligibility } from './CampaignAutoOptimizationGuard';
 import { generateOptimizationProposal } from './CampaignOptimizationProposalService';

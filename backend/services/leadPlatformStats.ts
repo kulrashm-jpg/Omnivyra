@@ -2,7 +2,8 @@
  * Platform conversion stats for lead prioritization.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export async function getConversionRate(
   companyId: string,

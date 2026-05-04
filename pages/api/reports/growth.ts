@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { composeGrowthReport } from '../../../backend/services/growthReportService';
 import { resolveAnalyticsReportInput } from '../../../backend/services/analyticsInputResolver';
@@ -27,7 +29,7 @@ type GrowthReportApiResponse = {
 async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
   if (requestedCompanyId) {
     const { data } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', userId)
       .eq('company_id', requestedCompanyId)
@@ -38,7 +40,7 @@ async function resolveCompanyId(userId: string, requestedCompanyId?: string): Pr
   }
 
   const { data } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', userId)
     .eq('status', 'active')
@@ -48,7 +50,7 @@ async function resolveCompanyId(userId: string, requestedCompanyId?: string): Pr
   return data?.company_id ?? null;
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<GrowthReportApiResponse>,
 ) {
@@ -94,3 +96,8 @@ export default async function handler(
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

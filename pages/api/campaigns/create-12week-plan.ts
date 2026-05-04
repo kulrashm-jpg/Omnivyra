@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignById } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
@@ -7,7 +9,7 @@ import { fromLegacyRefinements, fromStructuredPlan, blueprintWeeksToLegacyRefine
 import { saveCampaignBlueprintFromLegacy } from '../../../backend/db/campaignPlanStore';
 import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -130,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let weeklyThemes: { theme: string; focusArea: string; suggestions: string[] }[];
 
     if (hasStructuredPlan) {
-      // Use finalized structured plan (topics, platform_content_breakdown, etc.) — preserves all details
+      // Use finalized structured plan (topics, platform_content_breakdown, etc.) â€” preserves all details
       blueprint = fromStructuredPlan({ weeks: weeksFromPlan, campaign_id: campaignId });
       weeklyThemes = blueprint.weeks.map((w) => ({
         theme: w.phase_label || `Week ${w.week_number}`,
@@ -305,3 +307,9 @@ function generateWeeklyPlans(startDate: Date, aiContent: string, durationWeeks: 
 
   return plans;
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

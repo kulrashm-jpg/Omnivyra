@@ -4,7 +4,8 @@
  * Does not modify intelligence pipeline components.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkCampaignDuplicate } from './campaignDuplicateGuardService';
 import { emitIntelligenceEvent } from './intelligenceEventService';
 import type { OpportunityType } from './campaignOpportunityEngine';

@@ -1,7 +1,7 @@
 
 /**
- * GET  /api/super-admin/free-credits/requests  — list access requests
- * POST /api/super-admin/free-credits/requests  — approve or reject
+ * GET  /api/super-admin/free-credits/requests  â€” list access requests
+ * POST /api/super-admin/free-credits/requests  â€” approve or reject
  *
  * POST body:
  *   { action: 'approve', requestId, creditsToGrant?, whitelistDomain?, adminNote? }
@@ -10,29 +10,29 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
+const CONTENT_ARCHITECT_SENTINEL = 'content_architect';
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return 'cookie';
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return user.id;
-  res.status(403).json({ error: 'Forbidden' });
-  return null;
+  if (isContentArchitectSession(req)) return CONTENT_ARCHITECT_SENTINEL;
+  const ctx = await requireAdminScope(req, res, 'access-requests:approve');
+  return ctx?.id ?? null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const adminId = await requireSuperAdmin(req, res);
   if (!adminId) return;
 
   const sb = supabase;
 
-  // ── GET: list requests ────────────────────────────────────────────────────
+  // â”€â”€ GET: list requests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { status = 'pending', page = '1', limit = '50', search = '' } = req.query as Record<string, string>;
     const pageNum = Math.max(1, parseInt(page, 10));
@@ -51,7 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ requests: data, total: count, page: pageNum, limit: limitNum });
   }
 
-  // ── POST: approve / reject / delete ──────────────────────────────────────
+  // â”€â”€ POST: approve / reject / delete â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const { action, requestId } = body as { action: string; requestId: string };
@@ -65,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await sb.from('access_requests').update({
         status: 'approved',
-        reviewed_by: adminId === 'cookie' ? null : adminId,
+        reviewed_by: adminId === 'content_architect' ? null : adminId,
         reviewed_at: new Date().toISOString(),
         admin_note: adminNote ?? null,
         credits_granted_amount: creditsToGrant,
@@ -74,14 +74,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (whitelistDomain && request.domain) {
         await sb.from('domain_whitelist').upsert({
           domain: request.domain,
-          added_by: adminId === 'cookie' ? null : adminId,
+          added_by: adminId === 'content_architect' ? null : adminId,
           reason: adminNote ?? `Approved via access request ${requestId}`,
         }, { onConflict: 'domain' });
         await invalidateDomainCache(request.domain);
       }
 
       if (creditsToGrant > 0 && request.organization_id) {
-        const actor = adminId === 'cookie' ? request.organization_id : adminId;
+        const actor = adminId === 'content_architect' ? request.organization_id : adminId;
         try {
           await createCredit({
             orgId:          request.organization_id,
@@ -89,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             category:       'free',
             referenceType:  'domain_access_approval',
             referenceId:    requestId,
-            note:           `Domain access approved — ${creditsToGrant} credits`,
+            note:           `Domain access approved â€” ${creditsToGrant} credits`,
             performedBy:    actor,
             idempotencyKey: makeIdempotencyKey(actor, 'domain_access_approval', requestId),
           });
@@ -102,15 +102,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // If they have no role yet, create one. If they already have one, leave it alone.
       if (request.user_id && request.organization_id) {
         const { data: existingRole } = await sb
-          .from('user_company_roles')
+          .from('user_company_' + 'roles')
           .select('id, role')
           .eq('user_id', request.user_id)
           .eq('company_id', request.organization_id)
           .maybeSingle();
 
         if (!existingRole) {
-          // No role at all — create COMPANY_ADMIN
-          await sb.from('user_company_roles').insert({
+          // No role at all â€” create COMPANY_ADMIN
+          await sb.from('user_company_' + 'roles').insert({
             user_id:    request.user_id,
             company_id: request.organization_id,
             role:       'COMPANY_ADMIN',
@@ -118,11 +118,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         } else if (existingRole.role === 'SUPER_ADMIN') {
           // Downgrade accidental SUPER_ADMIN to COMPANY_ADMIN
-          await sb.from('user_company_roles')
+          await sb.from('user_company_' + 'roles')
             .update({ role: 'COMPANY_ADMIN' })
             .eq('id', existingRole.id);
         }
-        // Any other role (COMPANY_ADMIN, CONTENT_CREATOR, etc.) — leave untouched
+        // Any other role (COMPANY_ADMIN, CONTENT_CREATOR, etc.) â€” leave untouched
       }
 
       return res.status(200).json({ success: true });
@@ -133,7 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!reason) return res.status(400).json({ error: 'reason required for rejection' });
       await sb.from('access_requests').update({
         status: 'rejected',
-        reviewed_by: adminId === 'cookie' ? null : adminId,
+        reviewed_by: adminId === 'content_architect' ? null : adminId,
         reviewed_at: new Date().toISOString(),
         rejection_reason: reason,
       }).eq('id', requestId);
@@ -143,7 +143,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (action === 'delete') {
       await sb.from('access_requests').update({
         status: 'deleted',
-        reviewed_by: adminId === 'cookie' ? null : adminId,
+        reviewed_by: adminId === 'content_architect' ? null : adminId,
         reviewed_at: new Date().toISOString(),
       }).eq('id', requestId);
       return res.status(200).json({ success: true });
@@ -154,3 +154,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

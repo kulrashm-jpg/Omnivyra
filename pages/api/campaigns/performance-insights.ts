@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Performance Insights API
@@ -13,7 +14,8 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   analyzeCampaignPerformance,
@@ -26,7 +28,7 @@ import {
   updateCampaignMemory,
 } from '../../../backend/services/campaignContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -42,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'campaignId is required' });
     }
 
-    // ── Fetch slots ──────────────────────────────────────────────────────────
+    // â”€â”€ Fetch slots â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: slots, error: slotsError } = await supabase
       .from('daily_content_plans')
       .select('platform, status, week_number, content_type, actual_metrics')
@@ -54,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'Failed to fetch campaign slots' });
     }
 
-    // ── Pull platform baselines + validation expectations from campaign_context ─
+    // â”€â”€ Pull platform baselines + validation expectations from campaign_context â”€
     let platformBaselines: PlatformBaseline[] = [];
     let expectation: PerformanceExpectation = { platformBaselines };
 
@@ -105,11 +107,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           expectation = { platformBaselines };
         }
       } catch {
-        console.warn('[PLANNER][PERFORMANCE][WARN] Could not load account baselines — using absolute thresholds');
+        console.warn('[PLANNER][PERFORMANCE][WARN] Could not load account baselines â€” using absolute thresholds');
       }
     }
 
-    // ── Normalize slot data ──────────────────────────────────────────────────
+    // â”€â”€ Normalize slot data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const normalizedSlots: SlotMetrics[] = (slots ?? []).map((row) => ({
       platform: String(row?.platform ?? 'unknown').toLowerCase(),
       status: String(row?.status ?? 'planned'),
@@ -120,14 +122,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : null,
     }));
 
-    // ── Run analysis ─────────────────────────────────────────────────────────
+    // â”€â”€ Run analysis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const insight = analyzeCampaignPerformance({
       campaignId,
       slots: normalizedSlots,
       expectation,
     });
 
-    // ── Persist to campaign memory (non-fatal) ────────────────────────────────
+    // â”€â”€ Persist to campaign memory (non-fatal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Resolve companyId: use stored context if available, else look up from campaigns table
     const companyIdForMemory = campaignCtx?.company_id ?? await resolveCompanyId(campaignId);
     if (companyIdForMemory) {
@@ -170,3 +172,9 @@ async function resolveCompanyId(campaignId: string): Promise<string | null> {
     return null;
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

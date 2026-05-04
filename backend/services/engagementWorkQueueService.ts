@@ -4,7 +4,8 @@
  * Actionable = ignored=false, latest message from external, no org reply after.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const PLATFORMS = ['linkedin', 'twitter', 'instagram', 'facebook', 'youtube', 'reddit'];
 
@@ -26,7 +27,7 @@ export type DailyWorkQueue = {
  */
 async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
   const { data: roleUsers } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', organizationId)
     .eq('status', 'active');

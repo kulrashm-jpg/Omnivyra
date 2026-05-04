@@ -1,30 +1,29 @@
 
 /**
- * GET   /api/admin/feedback          — list all feedback submissions (super admin)
- * PATCH /api/admin/feedback?id=<id>  — approve or reject a submission
+ * GET   /api/admin/feedback          â€” list all feedback submissions (super admin)
+ * PATCH /api/admin/feedback?id=<id>  â€” approve or reject a submission
  *
- * On approve → grants +100 incentive credits to the submitter's org
- *            → notifies org members
- * On reject  → notifies submitter so they can re-submit
+ * On approve â†’ grants +100 incentive credits to the submitter's org
+ *            â†’ notifies org members
+ * On reject  â†’ notifies submitter so they can re-submit
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdmin(req: NextApiRequest): Promise<string | null> {
-  const { user } = await getSupabaseUserFromRequest(req);
-  if (!user) return null;
-  const { data } = await supabase.from('users').select('role').eq('id', user.id).maybeSingle();
-  return (data as any)?.role === 'SUPER_ADMIN' ? user.id : null;
-}
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'feedback:review');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/feedback', 'feedback:review');
+  }
+  const adminId = ctx.id;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const adminId = await requireSuperAdmin(req);
-  if (!adminId) return res.status(403).json({ error: 'Super admin only' });
-
-  // ── GET — list all submissions ────────────────────────────────────────────
+  // â”€â”€ GET â€” list all submissions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const status = (req.query.status as string) ?? 'pending';
 
@@ -44,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ feedback: data ?? [] });
   }
 
-  // ── PATCH — approve or reject ─────────────────────────────────────────────
+  // â”€â”€ PATCH â€” approve or reject â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'PATCH') {
     const id = req.query.id as string;
     if (!id) return res.status(400).json({ error: 'id query param required' });
@@ -92,7 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         user_id:  (fb as any).user_id,
         type:     'feedback_rejected',
         title:    'Feedback not accepted this time',
-        message:  'Thank you for your feedback. It didn\'t qualify for credits this time — feel free to submit again.',
+        message:  'Thank you for your feedback. It didn\'t qualify for credits this time â€” feel free to submit again.',
         metadata: { feedback_id: id },
         is_read:  false,
       });
@@ -104,3 +103,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, PATCH');
   return res.status(405).end();
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

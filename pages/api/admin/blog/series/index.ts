@@ -1,25 +1,21 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../../backend/services/rbacService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { createServiceRoleMigrationProxy } from '../../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function slugify(text: string): string {
   return text.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 80);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const ok = await requireSuperAdmin(req, res);
-  if (!ok) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'blog:series-manage');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/blog/series', 'blog:series-manage');
+  }
 
-  // ── GET — list all series with post counts ─────────────────────────────────
+  // â”€â”€ GET â€” list all series with post counts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('blog_series')
@@ -33,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ series: data ?? [] });
   }
 
-  // ── POST — create series ────────────────────────────────────────────────────
+  // â”€â”€ POST â€” create series â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const body = req.body ?? {};
     const title = body.title?.trim();
@@ -57,3 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

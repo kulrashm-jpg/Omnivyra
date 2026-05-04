@@ -1,14 +1,13 @@
-#!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
+﻿#!/usr/bin/env bash
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # CI Guard: prohibit supabase.auth.* calls in application code
 #
-# Firebase Admin SDK is the only permitted auth path.
 # Any call to supabase.auth.* (except in test fixtures) fails the build.
 #
 # Usage (add to package.json scripts):
 #   "prebuild": "bash scripts/check-no-supabase-auth.sh"
 #   "pretest":  "bash scripts/check-no-supabase-auth.sh"
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 set -euo pipefail
 
@@ -29,18 +28,16 @@ EXCLUDE=(
   '--exclude=check-no-supabase-auth.sh'
 )
 
-echo "🔍 Scanning for supabase.auth.* usage..."
+echo "ðŸ” Scanning for supabase.auth.* usage..."
 
 # Run grep; capture output and exit code separately
 MATCHES=$(grep -rn "${EXCLUDE[@]}" "$PATTERN" $SCAN_DIRS 2>/dev/null || true)
 
 if [[ -n "$MATCHES" ]]; then
   echo ""
-  echo "❌ BUILD FAILED: supabase.auth.* calls found in application code."
+  echo "âŒ BUILD FAILED: supabase.auth.* calls found in application code."
   echo ""
-  echo "   Firebase Admin SDK (lib/firebaseAdmin.ts) is the only permitted"
   echo "   auth path. Replace supabase.auth.* calls with:"
-  echo "     - verifyFirebaseIdToken()  for token verification"
   echo "     - verifyAuthHeader()       for API route auth"
   echo "     - verifyToken()            for raw ID token validation"
   echo ""
@@ -50,5 +47,5 @@ if [[ -n "$MATCHES" ]]; then
   exit 1
 fi
 
-echo "✅ No supabase.auth.* calls found. Build may proceed."
+echo "âœ… No supabase.auth.* calls found. Build may proceed."
 exit 0

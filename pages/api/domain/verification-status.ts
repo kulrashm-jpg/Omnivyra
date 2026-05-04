@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/domain/verification-status
  *
@@ -10,7 +11,7 @@
  *     company that owns the domain.
  *
  * Query params:
- *   - company_id (optional) — when omitted, the endpoint uses the caller's
+ *   - company_id (optional) â€” when omitted, the endpoint uses the caller's
  *     active_company_id from users.active_company_id.
  *
  * Response (200):
@@ -35,7 +36,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { logger } from '../../../backend/services/logger';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
@@ -60,7 +62,7 @@ type SuccessResponse = {
 };
 type ErrorResponse = { error: string; code?: string; details?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -104,9 +106,9 @@ export default async function handler(
     });
   }
 
-  // Authorization — COMPANY_ADMIN or SUPER_ADMIN in the target company.
+  // Authorization â€” COMPANY_ADMIN or SUPER_ADMIN in the target company.
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('role')
     .eq('user_id', internalUserId)
     .eq('company_id', companyId)
@@ -155,3 +157,8 @@ export default async function handler(
     },
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

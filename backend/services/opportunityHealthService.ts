@@ -4,7 +4,8 @@
  * Data source: engagement_content_opportunities
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type OpportunityHealthMetrics = {
   opportunities_detected_last_7d: number;

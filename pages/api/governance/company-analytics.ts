@@ -1,13 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/governance/company-analytics
- * Stage 22 — Company-level governance analytics. Read-only.
+ * Stage 22 â€” Company-level governance analytics. Read-only.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getCompanyGovernanceAnalytics } from '../../../backend/services/GovernanceAnalyticsService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -21,3 +22,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const analytics = await getCompanyGovernanceAnalytics(companyId);
   return res.status(200).json(analytics);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

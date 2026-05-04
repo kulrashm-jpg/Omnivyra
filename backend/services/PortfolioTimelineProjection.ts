@@ -3,7 +3,8 @@
  * Computes earliest viable start date when team capacity is constrained by overlapping campaigns.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export interface CalculateEarliestViableStartDateParams {
   teamId: string;

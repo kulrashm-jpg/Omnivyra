@@ -35,7 +35,7 @@ export default function CompanyProfilePage() {
     createCompanyLoading,
     draftProfile,
     errorMessage,
-    fetchWithAuth,
+    apiFetch,
     filteredCompanies,
     generateMarketingIntelligence,
     handleChange,

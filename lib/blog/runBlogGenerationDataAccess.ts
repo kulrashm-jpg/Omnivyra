@@ -3,7 +3,8 @@
  * Separated here because they depend on supabase (not pure functions).
  */
 
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { extractBlogContext } from './blockExtractor';
 import type { AngleType, SeriesSummary } from './blogGenerationEngine';
 import type { ContentBlock, InternalLinkBlock } from './blockTypes';

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Test Platform Connection API
@@ -7,10 +8,11 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getToken } from '../../../../backend/auth/tokenStore';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -54,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Test connection by making a simple API call
     // Platform-specific test endpoints
     const testEndpoints: Record<string, string> = {
-      // LinkedIn: use OIDC userinfo — /v2/me is deprecated and returns 403 without special access
+      // LinkedIn: use OIDC userinfo â€” /v2/me is deprecated and returns 403 without special access
       linkedin: 'https://api.linkedin.com/v2/userinfo',
       twitter: 'https://api.twitter.com/2/users/me',
       instagram: 'https://graph.instagram.com/me',
@@ -105,3 +107,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

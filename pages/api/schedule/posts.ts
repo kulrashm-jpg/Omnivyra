@@ -1,9 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // LEGACY ENGINE - DO NOT EXTEND
 // Scheduled for removal after DB-platform intelligence cutover.
 // API Endpoints for Scheduling and Posting
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createLegacyScheduledPost, listLegacyScheduledPosts } from '@/backend/services/structuredPlanScheduler';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
@@ -18,7 +20,7 @@ async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise
 }
 
 // GET /api/schedule/posts - Get all scheduled posts
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log(`[NEW SCHEDULER ACTIVE] invoked pages/api/schedule/posts.ts handler (${req.method || 'unknown'})`);
   const userId = await requireUserId(req, res);
   if (!userId) return;
@@ -109,3 +111,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(405).json({ error: 'Method not allowed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

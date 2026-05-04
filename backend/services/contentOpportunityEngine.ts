@@ -4,7 +4,8 @@
  * New layer after strategic_themes. Does not modify existing intelligence pipeline.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const OPPORTUNITY_TYPES = [
   'thought_leadership',

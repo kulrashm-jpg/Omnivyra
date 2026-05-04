@@ -7,11 +7,11 @@
  * Allowed: post, tweet, short_story, article, poll
  * Excluded formats: blog (800-1500 words, too long), white_paper (too formal/heavy),
  *   story (visual-first), and all media/visual content types.
- * Excluded platforms: YouTube, TikTok (video-first)
+ * Excluded platforms: YouTube, TikTok (video-first), Instagram, Pinterest (media-required)
  */
 
-/** Platforms excluded from BOLT (video-first social platforms). */
-export const BOLT_EXCLUDED_PLATFORMS = new Set(['youtube', 'tiktok']);
+/** Platforms excluded from BOLT (no native text-only posts). */
+export const BOLT_EXCLUDED_PLATFORMS = new Set(['youtube', 'tiktok', 'instagram', 'pinterest']);
 
 /** Content types allowed for BOLT (text-based, ≤800 words). */
 export const BOLT_TEXT_CONTENT_TYPES = new Set([
@@ -125,8 +125,8 @@ export function filterBoltContentTypeMix(mix: string[] | undefined | null): stri
   return result.length > 0 ? result : ['post'];
 }
 
-/** Excluded platforms for BOLT (video-first). */
-const BOLT_EXCLUDED_PLATFORMS_LIST = ['youtube', 'tiktok'];
+/** Excluded platforms for BOLT (no native text-only posts). */
+const BOLT_EXCLUDED_PLATFORMS_LIST = ['youtube', 'tiktok', 'instagram', 'pinterest'];
 
 /** Content type strings that indicate non-text (excluded from BOLT). */
 const BOLT_EXCLUDED_CONTENT_SUBSTRINGS = ['video', 'reel', 'carousel', 'slider', 'image', 'banner', 'short'];

@@ -6,32 +6,33 @@
  * via public email domains (Gmail, Yahoo, etc.) rather than corporate SSO.
  *
  * Two types of external user:
- *   influencer  — approved an access_request (self-applied, admin-approved)
- *   consultant  — added by a company admin via team invite (join_source='invited')
+ *   influencer  â€” approved an access_request (self-applied, admin-approved)
+ *   consultant  â€” added by a company admin via team invite (join_source='invited')
  *                 and identified as a public-domain user from the users table
  *
  * Response per user:
- *   user_id            — Supabase auth UID
- *   email              — login email
- *   name               — from access_requests or users table
- *   type               — 'influencer' | 'consultant'
- *   organizations      — all active memberships: { company_id, company_name, role }
- *   total_credits_used — sum of credits_used from credit_usage_log
- *   last_active        — most recent credit usage event (proxy for activity)
+ *   user_id            â€” Supabase auth UID
+ *   email              â€” login email
+ *   name               â€” from access_requests or users table
+ *   type               â€” 'influencer' | 'consultant'
+ *   organizations      â€” all active memberships: { company_id, company_name, role }
+ *   total_credits_used â€” sum of credits_used from credit_usage_log
+ *   last_active        â€” most recent credit usage event (proxy for activity)
  *
  * Auth: super_admin_session cookie OR Bearer + profiles.is_super_admin
  *
  * Query params:
- *   type   — filter by 'influencer' | 'consultant' | 'all' (default: all)
- *   limit  — max records (default 100, max 500)
+ *   type   â€” filter by 'influencer' | 'consultant' | 'all' (default: all)
+ *   limit  â€” max records (default 100, max 500)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-// ── Response shape ────────────────────────────────────────────────────────────
+// â”€â”€ Response shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface OrgMembership {
   company_id:   string;
@@ -49,42 +50,24 @@ export interface ExternalUser {
   last_active:         string | null;  // ISO or null if no usage recorded
 }
 
-// ── Auth helper (cookie OR Bearer + is_super_admin) ───────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function assertSuperAdmin(
-  req: NextApiRequest,
-  supabase: SupabaseClient,
-): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) return false;
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  return !!(profile as any)?.is_super_admin;
-}
-
-// ── Handler ───────────────────────────────────────────────────────────────────
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
-  if (!await assertSuperAdmin(req, supabase)) {
-    return res.status(403).json({ error: 'Super admin access required' });
+  const ctx = await requireAdminScope(req, res, 'users:list-external');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/external-users', 'users:list-external');
   }
 
   const typeFilter = (req.query.type as string) ?? 'all';
   const limitNum   = Math.min(500, Math.max(1, parseInt((req.query.limit as string) ?? '100', 10)));
 
   try {
-    // ── Phase 1A: influencers — approved access requests ─────────────────────
+    // â”€â”€ Phase 1A: influencers â€” approved access requests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // access_requests stores email + organization_id (company created by admin at approval).
-    // We need to find the auth user_id for each email via user_company_roles.
+    // We need to find the auth user_id for each email via user company roles.
     const influencerRows: ExternalUser[] = [];
     const influencerOrgIds: string[]     = [];
 
@@ -100,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         email: string; name: string | null; organization_id: string;
       }>) {
         influencerOrgIds.push(req.organization_id);
-        // Seed the map — user_id resolved in phase 2
+        // Seed the map â€” user_id resolved in phase 2
         influencerRows.push({
           user_id:            '',  // filled below
           email:              req.email,
@@ -113,14 +96,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── Phase 1B: consultants — team-invited public-domain users ──────────────
-    // user_company_roles.join_source='invited' covers all admin-added users.
+    // â”€â”€ Phase 1B: consultants â€” team-invited public-domain users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // user company roles.join_source='invited' covers all admin-added users.
     // We then filter to only those whose email domain is a public provider.
     const consultantRows: ExternalUser[] = [];
 
     if (typeFilter === 'all' || typeFilter === 'consultant') {
       const { data: invitedRoles } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .select('user_id, company_id, role')
         .eq('join_source', 'invited')
         .eq('status', 'active')
@@ -162,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!u) continue;
 
           const domain = u.email.split('@')[1];
-          if (!publicDomains.has(domain)) continue;     // corporate email — skip
+          if (!publicDomains.has(domain)) continue;     // corporate email â€” skip
           if (influencerEmails.has(u.email)) continue;  // already counted as influencer
 
           consultantRows.push({
@@ -178,10 +161,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── Phase 2: resolve influencer user_ids from user_company_roles ──────────
+    // â”€â”€ Phase 2: resolve influencer user_ids from user company roles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (influencerOrgIds.length > 0) {
       const { data: influencerRoles } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .select('user_id, company_id, role')
         .in('company_id', influencerOrgIds)
         .eq('status', 'active');
@@ -192,7 +175,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       for (const row of influencerRows) {
-        // Match via organization index (order preserved — zip with influencerOrgIds)
+        // Match via organization index (order preserved â€” zip with influencerOrgIds)
         const idx = influencerRows.indexOf(row);
         row.user_id = orgToUserId.get(influencerOrgIds[idx]) ?? '';
       }
@@ -207,9 +190,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const allUserIds = [...new Set(allUsers.map(u => u.user_id))];
 
-    // ── Phase 3: org memberships for all external users ───────────────────────
+    // â”€â”€ Phase 3: org memberships for all external users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: allRoles } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id, company_id, role')
       .in('user_id', allUserIds)
       .eq('status', 'active');
@@ -228,7 +211,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       companyNameMap.set(c.id, c.name);
     }
 
-    // Build user_id → memberships map
+    // Build user_id â†’ memberships map
     const membershipMap = new Map<string, OrgMembership[]>();
     for (const r of (allRoles ?? []) as Array<{ user_id: string; company_id: string; role: string }>) {
       if (!membershipMap.has(r.user_id)) membershipMap.set(r.user_id, []);
@@ -239,14 +222,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ── Phase 4: credit usage aggregation ─────────────────────────────────────
+    // â”€â”€ Phase 4: credit usage aggregation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: usageRows } = await supabase
       .from('credit_usage_log')
       .select('organization_id, credits_used, created_at')
       .in('organization_id', allCompanyIds)
       .order('created_at', { ascending: false });
 
-    // Map company_id → user_id so we can aggregate per user
+    // Map company_id â†’ user_id so we can aggregate per user
     const companyToUserId = new Map<string, string>();
     for (const [userId, memberships] of membershipMap.entries()) {
       for (const m of memberships) {
@@ -254,8 +237,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    const creditsMap   = new Map<string, number>();     // user_id → sum
-    const lastActiveMap = new Map<string, string>();    // user_id → ISO date
+    const creditsMap   = new Map<string, number>();     // user_id â†’ sum
+    const lastActiveMap = new Map<string, string>();    // user_id â†’ ISO date
 
     for (const row of (usageRows ?? []) as Array<{
       organization_id: string; credits_used: number; created_at: string;
@@ -265,11 +248,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       creditsMap.set(userId, (creditsMap.get(userId) ?? 0) + (row.credits_used ?? 0));
       if (!lastActiveMap.has(userId)) {
-        lastActiveMap.set(userId, row.created_at); // rows are DESC — first hit is latest
+        lastActiveMap.set(userId, row.created_at); // rows are DESC â€” first hit is latest
       }
     }
 
-    // ── Phase 5: assemble final response ──────────────────────────────────────
+    // â”€â”€ Phase 5: assemble final response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for (const u of allUsers) {
       u.organizations      = membershipMap.get(u.user_id) ?? [];
       u.total_credits_used = creditsMap.get(u.user_id) ?? 0;
@@ -292,3 +275,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

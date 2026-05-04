@@ -23,7 +23,7 @@ export default function ExternalApisTabContent({ d }: { d: ExternalApisState }) 
     editingId, setEditingId, isSaving, isLoading, errorMessage, setErrorMessage,
     successMessage, setSuccessMessage, expandedCardIds, setExpandedCardIds,
     accountsByApiId, accountsLoadingId,
-    fetchWithAuth, loadApis, loadAccounts, saveApi, deleteApi, startEdit, addBlankApi,
+    apiFetch, loadApis, loadAccounts, saveApi, deleteApi, startEdit, addBlankApi,
     testConnectionApi, testConnectionLoadingId, testResult,
     testGeo, setTestGeo, testExistingApi, testFetch,
     testAllRunning, testAllSummary, runAllTests,

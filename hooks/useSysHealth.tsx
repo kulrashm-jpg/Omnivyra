@@ -1,11 +1,12 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+﻿import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import OrgServiceDrilldown, { type ServiceKey } from '../components/super-admin/OrgServiceDrilldown';
 import RailwayEfficiencyPanel from '../components/super-admin/RailwayEfficiencyPanel';
 import RailwayCompanyCostsPanel from '../components/super-admin/RailwayCompanyCostsPanel';
+import { apiFetch } from '../lib/apiFetch';
 
-// ── Activity Breakdown type ────────────────────────────────────────────────────
+// â”€â”€ Activity Breakdown type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 interface ActivityBreakdown {
   period: { year: number; month: number };
   system_costs: {
@@ -19,7 +20,7 @@ interface ActivityBreakdown {
   by_platform_content: { platform: string; content_type: string; post_count: number; published_count: number }[];
 }
 
-// ── Intelligence types ────────────────────────────────────────────────────────
+// â”€â”€ Intelligence types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface ServiceCost { service: string; estimatedMonthly: number; breakdown: Record<string,number>; notes: string[]; hasData: boolean }
 interface CostEstimate {
@@ -33,7 +34,6 @@ interface IntelligenceData {
   metrics: {
     redis?:    { totalOps: number; opsPerMin: number; peakOpsPerMin: number; storageBytesUsed: number; topFeatures: {feature:string;total:number;pct:number}[]; topCommands:{command:string;total:number;pct:number}[] } | null;
     supabase?: { reads: number; writes: number; errors: number; queriesPerMin: number; avgReadLatency: number|null; avgWriteLatency: number|null; available: boolean } | null;
-    firebase?: { tokenVerifications: number; revokedChecks: number; authErrors: number; signIns: number; verificationsPerMin: number; avgVerifyLatencyMs: number|null } | null;
     api?:      { totalCalls: number; callsPerMin: number; errors4xx: number; errors5xx: number; errorRate: number; avgLatencyMs: number|null; p95LatencyMs: number|null; topEndpoints:{endpoint:string;calls:number;avgLatencyMs:number|null}[] } | null;
     external?: { totalExternalCalls: number; topServices:{service:string;calls:number;errors:number;avgLatencyMs:number|null}[] } | null;
   };
@@ -42,7 +42,7 @@ interface IntelligenceData {
   errors?: Record<string, string>;
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type Severity = 'CRITICAL' | 'WARNING' | 'INFO';
 
@@ -82,7 +82,7 @@ interface SystemHealthData {
   baselines: Record<string, number>;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const SEVERITY_CONFIG: Record<Severity, { bg: string; text: string; dot: string; label: string }> = {
   CRITICAL: { bg: 'bg-red-50',    text: 'text-red-600',    dot: 'bg-red-600',    label: 'CRITICAL' },
@@ -111,7 +111,7 @@ function StatusDot({ status }: { status: 'ok' | 'degraded' }) {
 
 function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }) {
   const [open, setOpen] = useState(false);
-  if (!metadata || Object.keys(metadata).length === 0) return <span className="text-slate-500 text-xs">—</span>;
+  if (!metadata || Object.keys(metadata).length === 0) return <span className="text-slate-500 text-xs">â€”</span>;
   return (
     <div>
       <button
@@ -132,9 +132,9 @@ function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }
 const STATE_CONFIG: Record<SystemStatus, {
   border: string; bg: string; icon: string; label: string; textColor: string;
 }> = {
-  healthy:  { border: 'border-green-300',  bg: 'bg-green-50',  icon: '✓', label: 'System Healthy',   textColor: 'text-green-600'  },
-  degraded: { border: 'border-yellow-300', bg: 'bg-yellow-50', icon: '⚠', label: 'System Degraded',  textColor: 'text-yellow-600' },
-  critical: { border: 'border-red-300',    bg: 'bg-red-50',    icon: '✕', label: 'System Critical',  textColor: 'text-red-600'    },
+  healthy:  { border: 'border-green-300',  bg: 'bg-green-50',  icon: 'âœ“', label: 'System Healthy',   textColor: 'text-green-600'  },
+  degraded: { border: 'border-yellow-300', bg: 'bg-yellow-50', icon: 'âš ', label: 'System Degraded',  textColor: 'text-yellow-600' },
+  critical: { border: 'border-red-300',    bg: 'bg-red-50',    icon: 'âœ•', label: 'System Critical',  textColor: 'text-red-600'    },
 };
 
 function SystemStateBanner({ state }: { state: SystemHealthData['systemState'] }) {
@@ -151,7 +151,7 @@ function SystemStateBanner({ state }: { state: SystemHealthData['systemState'] }
             ))}
           </ul>
         ) : (
-          <p className="text-xs text-slate-500 mt-0.5">No active alerts · All systems operational</p>
+          <p className="text-xs text-slate-500 mt-0.5">No active alerts Â· All systems operational</p>
         )}
       </div>
       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.textColor} border ${cfg.border} whitespace-nowrap`}>
@@ -167,7 +167,7 @@ function fmt(iso: string) {
   });
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Tabs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type Tab = 'all' | 'user' | 'company' | 'system' | 'railway' | 'cache';
 const TABS: { key: Tab; label: string }[] = [
@@ -175,11 +175,11 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'user',    label: 'User'    },
   { key: 'company', label: 'Company' },
   { key: 'system',  label: 'System'  },
-  { key: 'railway', label: '🚂 Railway Efficiency' },
-  { key: 'cache',   label: '🗄 Cache' },
+  { key: 'railway', label: 'ðŸš‚ Railway Efficiency' },
+  { key: 'cache',   label: 'ðŸ—„ Cache' },
 ];
 
-// ── Cache types ───────────────────────────────────────────────────────────────
+// â”€â”€ Cache types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface CacheData {
   redis: {
@@ -205,7 +205,7 @@ interface CacheData {
   collected_at: string;
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 export function useSysHealth() {
@@ -230,7 +230,7 @@ export function useSysHealth() {
   const [cacheLoading, setCacheLoading] = useState(false);
   const [cacheMsg,     setCacheMsg]     = useState<string | null>(null);
 
-  // Drilldown — which service card is open
+  // Drilldown â€” which service card is open
   const [drilldown, setDrilldown] = useState<{
     serviceKey: ServiceKey;
     serviceLabel: string;
@@ -242,8 +242,8 @@ export function useSysHealth() {
   const [drillMonth, setDrillMonth] = useState(now2.getMonth() + 1);
   const [railwayView, setRailwayView] = useState<'efficiency' | 'company-costs'>('company-costs');
 
-  // ── Auth gate ────────────────────────────────────────────────────────────
-  // Effect 1: check super_admin_session cookie once on mount (HttpOnly — server only)
+  // â”€â”€ Auth gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Effect 1: check super_admin_session cookie once on mount (HttpOnly â€” server only)
   useEffect(() => {
     fetch('/api/admin/check-super-admin', { credentials: 'include' })
       .then(r => r.json())
@@ -272,12 +272,12 @@ export function useSysHealth() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cookieChecked, authResolved, ctxLoading, isAuthenticated, userRole]);
 
-  // ── Data fetch ──────────────────────────────────────────────────────────
+  // â”€â”€ Data fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res  = await fetch('/api/super-admin/system-health');
+      const res  = await apiFetch('/api/super-admin/system-health');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as SystemHealthData;
       setData(json);
@@ -291,12 +291,12 @@ export function useSysHealth() {
   const fetchIntelligence = useCallback(async () => {
     setIntelLoading(true);
     try {
-      const res = await fetch('/api/super-admin/system-intelligence');
-      if (!res.ok) return; // partial failure — silently degrade
+      const res = await apiFetch('/api/super-admin/system-intelligence');
+      if (!res.ok) return; // partial failure â€” silently degrade
       const json = await res.json() as IntelligenceData;
       setIntel(json);
     } catch {
-      // silently degrade — intelligence panel shows "unavailable"
+      // silently degrade â€” intelligence panel shows "unavailable"
     } finally {
       setIntelLoading(false);
     }
@@ -353,12 +353,12 @@ export function useSysHealth() {
     return () => clearInterval(id);
   }, [isSuperAdmin, fetchData, fetchIntelligence, fetchActivityBreakdown]);
 
-  // ── Filtered anomaly list ───────────────────────────────────────────────
+  // â”€â”€ Filtered anomaly list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const filtered = (data?.anomalies ?? []).filter(
     a => tab === 'all' || a.entity_type === tab,
   );
 
-  // ── Render ──────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const _notReady = !authResolved;
 
 
@@ -412,3 +412,4 @@ export function useSysHealth() {
     tab,
   };
 }
+

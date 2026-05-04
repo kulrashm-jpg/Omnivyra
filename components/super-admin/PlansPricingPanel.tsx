@@ -5,7 +5,7 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { RefreshCw, AlertCircle, CheckCircle, Pencil, X, Save } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 
 interface Plan {
   id: string;
@@ -56,9 +56,7 @@ export default function PlansPricingPanel() {
     setLoading(true);
     setError(null);
     try {
-      const token = await getAuthToken();
-      const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await fetch('/api/super-admin/plans/list', { credentials: 'include', headers: authHeader });
+      const res = await apiFetch('/api/super-admin/plans/list');
       if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to load plans');
       const json = await res.json();
       const fetched: PlanWithLimits[] = (json.plans ?? []).map((p: Plan) => ({
@@ -101,13 +99,10 @@ export default function PlansPricingPanel() {
     setError(null);
     setSuccess(null);
     try {
-      const token = await getAuthToken();
-      const res = await fetch('/api/super-admin/plans/create', {
+      const res = await apiFetch('/api/super-admin/plans/create', {
         method: 'POST',
-        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           plan_key: plan.plan_key,

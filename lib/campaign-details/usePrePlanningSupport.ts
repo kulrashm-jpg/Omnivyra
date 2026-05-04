@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { exportWizardToSaveWizardStatePayload } from '../../lib/wizard/campaignWizardAdapter';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
@@ -38,7 +38,7 @@ export function usePrePlanningSupport(params: {
 
   useEffect(() => {
     if (!params.effectiveCompanyId) return;
-    fetchWithAuth(
+    apiFetch(
       `/api/company-plan-duration-limit?companyId=${encodeURIComponent(params.effectiveCompanyId)}`,
     )
       .then((r) => (r.ok ? r.json() : null))
@@ -63,7 +63,7 @@ export function usePrePlanningSupport(params: {
             .filter(Boolean)
         : ['linkedin'];
       const duration = params.requestedWeeksForPreplan || 12;
-      fetchWithAuth('/api/campaigns/validate-frequency', {
+      apiFetch('/api/campaigns/validate-frequency', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -164,7 +164,7 @@ export function usePrePlanningSupport(params: {
             cross_platform_sharing_enabled: params.crossPlatformSharingEnabled,
             updated_at: new Date().toISOString(),
           };
-      fetchWithAuth(`/api/campaigns/${encodeURIComponent(params.campaignId!)}/save-wizard-state`, {
+      apiFetch(`/api/campaigns/${encodeURIComponent(params.campaignId!)}/save-wizard-state`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

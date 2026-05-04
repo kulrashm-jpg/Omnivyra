@@ -12,6 +12,8 @@ import {
   createMockRes,
   notificationStore,
   resetCommunityAiStores,
+  seedConnectedAccount,
+  seedPlaybook,
   scheduledPostStore,
   setRole,
   tokenStore,
@@ -40,12 +42,22 @@ jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
   executeAction: jest.fn().mockResolvedValue({ ok: true, platform: 'linkedin' }),
 }));
 
+jest.mock('../../auth/tokenStore', () => ({
+  getToken: jest.fn(async (socialAccountId: string) => {
+    const { socialAccountStore } = jest.requireActual('./communityAiTestHarness');
+    const row = socialAccountStore.find((account: any) => account.id === socialAccountId);
+    return row?.access_token ? { access_token: row.access_token, refresh_token: row.refresh_token ?? null } : null;
+  }),
+  isTokenExpiringSoon: jest.fn(() => false),
+}));
+
 const { supabase } = jest.requireMock('../../db/supabaseClient');
 
 describe('Community-AI Notifications', () => {
   beforeEach(() => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => buildQuery(table));
     resetCommunityAiStores();
+    seedPlaybook();
   });
 
   it('creates notification on execution success', async () => {
@@ -56,6 +68,7 @@ describe('Community-AI Notifications', () => {
       platform: 'linkedin',
       access_token: 'token-1',
     });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     actionStore.set('notify-1', {
       id: 'notify-1',
       tenant_id: 'tenant-1',
@@ -85,6 +98,7 @@ describe('Community-AI Notifications', () => {
       platform: 'linkedin',
       access_token: 'token-1',
     });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     (executeLinkedinAction as jest.Mock).mockResolvedValueOnce({ success: false, error: 'boom' });
     actionStore.set('notify-2', {
       id: 'notify-2',

@@ -1,3 +1,5 @@
+﻿// AUTH EXEMPT: non-route API helper module without default handler
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 export function buildSeoVisuals(report: any): any {
   const visuals = report.visual_intelligence;
   if (!visuals) return undefined;
@@ -390,3 +392,4 @@ export function buildCompetitorIntelligenceSummary(report: any): any {
     confidence,
   };
 }
+

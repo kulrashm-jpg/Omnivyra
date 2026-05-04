@@ -8,7 +8,8 @@
  * No company_id — global config only (SaaS Layer 1).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { decryptCredential } from '../auth/credentialEncryption';
 
 export type PlatformOAuthConfig = {

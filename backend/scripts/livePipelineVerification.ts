@@ -4,7 +4,8 @@
  * Read-only. Requires: SUPABASE_*, REDIS_URL (optional)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getIntelligencePollingQueue } from '../queue/intelligencePollingQueue';
 
 async function countSince(table: string, dateCol: string, hoursAgo: number, pkCol = 'id'): Promise<number> {

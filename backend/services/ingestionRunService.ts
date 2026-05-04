@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { logger } from './logger';
 import type { UnifiedSource } from './sourceNormalizationService';
 
 export type IngestionSource = 'crawler' | 'ga4' | 'gsc' | 'crm' | 'ads';
@@ -56,6 +58,17 @@ export async function beginIngestionRun(params: {
     cursor_payload: params.cursorPayload ?? {},
     ...(params.unifiedSource ? { unified_source: params.unifiedSource } : {}),
   };
+  const { data: existing, error: existingError } = await supabase
+    .from('ingestion_runs')
+    .select('id, status')
+    .eq('company_id', params.companyId)
+    .eq('source', params.source)
+    .eq('idempotency_key', params.idempotencyKey)
+    .maybeSingle();
+
+  if (existingError) {
+    throw new Error(`Failed to check ingestion idempotency for ${params.source}: ${existingError.message}`);
+  }
 
   const { data, error } = await supabase
     .from('ingestion_runs')
@@ -65,6 +78,16 @@ export async function beginIngestionRun(params: {
 
   if (error) {
     throw new Error(`Failed to begin ingestion run for ${params.source}: ${error.message}`);
+  }
+
+  if (existing?.id) {
+    logger.info('ingestion_run_idempotency_conflict_handled', {
+      companyId: params.companyId,
+      source: params.source,
+      ingestionRunId: existing.id,
+      previousStatus: existing.status ?? null,
+      conflictTarget: 'company_id,source,idempotency_key',
+    });
   }
 
   return data as IngestionRunRecord;

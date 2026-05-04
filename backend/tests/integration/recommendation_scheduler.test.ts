@@ -1,5 +1,6 @@
 import { runWeeklyRecommendationRefresh, runCompanyProfileTriggeredRefresh } from '../../services/recommendationScheduler';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { fetchTrendsFromApis } from '../../services/externalApiService';
 import { generateRecommendations } from '../../services/recommendationEngine';
 import { getProfile } from '../../services/companyProfileService';

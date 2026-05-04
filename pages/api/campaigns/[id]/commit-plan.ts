@@ -1,13 +1,15 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/campaigns/[id]/commit-plan
  * Commits a structured AI-generated plan to the blueprint (campaign_week_plan)
  * so it appears in the work/commit view (campaign-details, recommendations).
- * Does NOT schedule posts — use schedule-structured-plan for that.
+ * Does NOT schedule posts â€” use schedule-structured-plan for that.
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isGovernanceLocked } from '../../../../backend/services/GovernanceLockdownService';
 import { saveCampaignBlueprintFromLegacy } from '../../../../backend/db/campaignPlanStore';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
@@ -16,6 +18,7 @@ import { assertCampaignNotFinalized, CampaignFinalizedError } from '../../../../
 import { normalizeExecutionState } from '../../../../backend/governance/ExecutionStateMachine';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { transitionCampaignState } from '../../../../backend/services/campaignStateService';
 
 async function getCompanyId(campaignId: string): Promise<string | null> {
   const { data } = await supabase
@@ -27,7 +30,7 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
   return (data as any)?.company_id ?? null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -111,12 +114,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await supabase
       .from('campaigns')
       .update({
-        status: 'active',
         current_stage: 'schedule',
-        blueprint_status: 'ACTIVE',
         updated_at: new Date().toISOString(),
       })
       .eq('id', id);
+    await transitionCampaignState(id, 'committed', { source: 'commit-plan' });
 
     if (companyId) {
       void syncCampaignVersionStage(id, 'schedule', companyId).catch(() => {});
@@ -133,3 +135,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

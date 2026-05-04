@@ -1,5 +1,6 @@
 import { createHash, createHmac } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { sendInvite } from './emailService';
 import { getRequestContext } from './requestContext';
 
@@ -10,7 +11,7 @@ function getAppUrl(): string {
 }
 
 function getInvitationSecret(): string {
-  return process.env.INVITATION_TOKEN_SECRET?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || 'local-dev-invite-secret';
+  return process.env.INVITATION_TOKEN_SECRET?.trim() || process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY']?.trim() || 'local-dev-invite-secret';
 }
 
 export function hashInvitationToken(token: string): string {

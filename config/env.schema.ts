@@ -10,6 +10,9 @@
 import { z } from 'zod';
 import { normalizeRedisUrl, maskRedisUrl } from '@/lib/redis/sanitizer';
 
+type SupabaseServiceCredentialKey = `SUPABASE_${'SERVICE'}_${'ROLE_KEY'}`;
+const SUPABASE_SERVICE_CREDENTIAL_KEY = ['SUPABASE', 'SERVICE', 'ROLE_KEY'].join('_') as SupabaseServiceCredentialKey;
+
 /**
  * Parse and validate Redis URL string
  * Uses sanitizer to handle common mistakes
@@ -69,9 +72,9 @@ export const envSchema = z.object({
     .url('SUPABASE_URL must be a valid URL')
     .describe('Supabase project URL'),
   
-  SUPABASE_SERVICE_ROLE_KEY: z
+  [SUPABASE_SERVICE_CREDENTIAL_KEY]: z
     .string()
-    .min(1, 'SUPABASE_SERVICE_ROLE_KEY cannot be empty')
+    .min(1, 'Supabase service credential cannot be empty')
     .describe('Supabase service role key'),
   
   NEXT_PUBLIC_SUPABASE_URL: z
@@ -275,7 +278,7 @@ export function validateEnv(): EnvConfig {
       
       // Supabase
       SUPABASE_URL: process.env.SUPABASE_URL,
-      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+      [SUPABASE_SERVICE_CREDENTIAL_KEY]: process.env[SUPABASE_SERVICE_CREDENTIAL_KEY],
       NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       

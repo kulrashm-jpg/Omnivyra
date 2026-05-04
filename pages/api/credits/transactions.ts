@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { withOrgAccess } from '../../../backend/middleware/withOrgAccess';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -25,4 +27,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withOrgAccess(handler);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withOrgAccess(handler));
+

@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getGoogleAnalyticsStatusPayload } from '../../../backend/services/googleAnalyticsExperienceService';
 import {
   normalizeWebsiteDomain,
@@ -7,28 +8,8 @@ import {
   resolveOmnivyraWebsiteCompany,
   resolveOmnivyraWebsiteUrl,
 } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-
-async function requireSuperAdminAccess(
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') {
-    return true;
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (isAdmin) return true;
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    return false;
-  }
-
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 
 async function fetchAllRows<T>(
   build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
@@ -53,12 +34,16 @@ function aggregatedCount(metadata: Record<string, unknown> | null | undefined): 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:ga-summary');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/ga-analytics-summary', 'analytics:ga-summary');
+  }
 
   try {
     const company = await resolveOmnivyraWebsiteCompany();
@@ -263,3 +248,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: error?.message || 'FAILED_TO_LOAD_GA_ANALYTICS' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

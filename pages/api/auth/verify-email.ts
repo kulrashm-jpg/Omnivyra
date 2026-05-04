@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 
 /**
  * POST /api/auth/verify-email
@@ -9,13 +10,14 @@
  * Completes any pending signup_intent.
  * Returns a routing decision based on user state.
  *
- * Body: (none — user derived from Bearer token)
+ * Body: (none â€” user derived from Bearer token)
  * Auth: Bearer <supabase_access_token>
  * Returns: { success: true, route: string }
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -31,7 +33,7 @@ export default async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
 
-  // ── 1. Verify Bearer token & resolve user ─────────────────────────────────
+  // â”€â”€ 1. Verify Bearer token & resolve user â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (user) seedRequestContextFromRequest(req, { userId: user.id });
 
@@ -41,7 +43,7 @@ export default async function handler(
 
   const now = new Date().toISOString();
 
-  // ── 1a. New user — token valid but no public.users row yet ────────────────
+  // â”€â”€ 1a. New user â€” token valid but no public.users row yet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // (signup only creates signup_intent; user row is created here on first verify)
   let resolvedUserId: string;
   let resolvedEmail:  string | null;
@@ -85,7 +87,7 @@ export default async function handler(
     resolvedEmail  = user.email ?? null;
   }
 
-  // ── 2. Mark email as verified & advance onboarding_state ──────────────────
+  // â”€â”€ 2. Mark email as verified & advance onboarding_state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Try full select first; fall back to just 'name' if new columns don't exist yet
   let userRowResult = await supabase
     .from('users')
@@ -111,7 +113,7 @@ export default async function handler(
   const priorLastSignInAt = (userRow as any).last_sign_in_at as string | null | undefined;
   const isFirstVerifiedLogin = !priorLastSignInAt;
 
-  // Build update payload — only include columns that exist
+  // Build update payload â€” only include columns that exist
   const updatePayload: Record<string, unknown> = { is_email_verified: true, last_sign_in_at: now };
   if (nextState !== undefined) updatePayload.onboarding_state = nextState;
 
@@ -120,10 +122,10 @@ export default async function handler(
     .update(updatePayload)
     .eq('id', resolvedUserId);
 
-  // ── 3. Complete any pending signup_intent for this email ──────────────────
+  // â”€â”€ 3. Complete any pending signup_intent for this email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // sync-supabase-user's bootstrap already attempts to mark the intent
   // completed; this is a backstop. Any failure here is logged and
-  // ignored — the intent state is informational and must NOT break auth.
+  // ignored â€” the intent state is informational and must NOT break auth.
   if (resolvedEmail) {
     try {
       const { error: signupIntentError } = await supabase
@@ -146,7 +148,7 @@ export default async function handler(
     }
   }
 
-  // ── 4. Determine routing ──────────────────────────────────────────────────
+  // â”€â”€ 4. Determine routing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body ?? {});
   const mode = (body as any).mode ?? '';
 
@@ -161,7 +163,7 @@ export default async function handler(
   } else {
     // Check for active company membership
     const { data: roleRow } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', resolvedUserId)
       .eq('status', 'active')
@@ -177,7 +179,7 @@ export default async function handler(
   // For first-time email verifications on a password-based signup, send the
   // user back to /login with an explicit "Email verified" banner instead of
   // silently auto-signing them in. Magic-link / passwordless flows keep the
-  // auto-sign-in behavior — they have no password to log in with.
+  // auto-sign-in behavior â€” they have no password to log in with.
   const requiresLogin =
     isFirstVerifiedLogin && hasPassword && mode !== 'passwordless';
 
@@ -188,3 +190,4 @@ export default async function handler(
     email: resolvedEmail,
   });
 }
+

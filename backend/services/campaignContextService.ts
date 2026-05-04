@@ -16,7 +16,8 @@
  *   full context for injection into a NEW campaign's planning prompt.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { AccountContext } from '../types/accountContext';
 import type { CampaignValidation } from '../lib/validation/campaignValidator';
 import type { PaidRecommendation } from '../lib/ads/paidAmplificationEngine';

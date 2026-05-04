@@ -8,7 +8,8 @@ import { Queue } from 'bullmq';
 import { getConnectionConfig, applyQueueProtection } from './bullmqClient';
 import { instrumentQueue } from './queueInstrumentation';
 import { calculateEngagementScore } from '../services/engagementScoreService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const QUEUE_NAME = 'engagement-signals';
 const BATCH_SIZE = 50;

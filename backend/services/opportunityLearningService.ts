@@ -4,7 +4,8 @@
  * Extended metrics: average_confidence_score, average_time_to_campaign, average_time_to_completion.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type LearningMetrics = {
   organization_id: string;

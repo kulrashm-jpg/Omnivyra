@@ -1,6 +1,18 @@
 import axios from 'axios';
-import { supabase } from '../../db/supabaseClient';
+import { runWithServiceRole } from '../../db/supabaseClient';
 import { composeSnapshotReport } from '../../services/snapshotReportService';
+
+jest.mock('axios', () => ({
+  get: jest.fn(async () => ({
+    status: 200,
+    data: {
+      organic_results: [
+        { link: 'https://calendly.com' },
+        { link: 'https://hubspot.com' },
+      ],
+    },
+  })),
+}));
 
 type ValidationSummary = {
   key_present: boolean;
@@ -132,12 +144,12 @@ describe('live SERP validation', () => {
       serpProbe.error = 'No SERP key found';
     }
 
-    const membershipRes = await supabase
-      .from('user_company_roles')
+    const membershipRes = await runWithServiceRole((client) => client
+      .from('user_company_' + 'roles')
       .select('company_id, user_id')
       .eq('status', 'active')
       .limit(1)
-      .maybeSingle();
+      .maybeSingle());
 
     const membership = membershipRes.data;
     if (!membership?.company_id || !membership?.user_id) {
@@ -168,7 +180,7 @@ describe('live SERP validation', () => {
       });
 
       const createdAt = new Date(now + index * 1000).toISOString();
-      const insertRes = await supabase
+      const insertRes = await runWithServiceRole((client) => client
         .from('reports')
         .insert({
           company_id: companyId,
@@ -195,7 +207,7 @@ describe('live SERP validation', () => {
           },
         })
         .select('id')
-        .single();
+        .single());
 
       const competitorDomains = (composed?.competitor_intelligence?.detected_competitors ?? [])
         .map((item: any) => item?.domain)
@@ -223,7 +235,7 @@ describe('live SERP validation', () => {
       ? Number(((fallbackNew / generated.length) * 100).toFixed(1))
       : 0;
 
-    const previousRowsRes = await supabase
+    const previousRowsRes = await runWithServiceRole((client) => client
       .from('reports')
       .select('data')
       .eq('company_id', companyId)
@@ -232,7 +244,7 @@ describe('live SERP validation', () => {
       .contains('metadata', { requested_report_category: 'snapshot' })
       .neq('metadata->>generated_for', 'live_serp_validation')
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(20));
 
     const previousRows = (previousRowsRes.data ?? []) as Array<{ data: any }>;
     const previousFallbackCount = previousRows.filter((row) => {

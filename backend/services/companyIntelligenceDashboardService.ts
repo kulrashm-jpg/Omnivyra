@@ -3,7 +3,8 @@
  * Phase-4: Aggregates company signals into dashboard categories.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { refineLanguageOutput } from './languageRefinementService';
 
 const SIGNALS_PER_CATEGORY = 10;

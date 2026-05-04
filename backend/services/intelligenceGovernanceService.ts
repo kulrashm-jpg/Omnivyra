@@ -10,7 +10,8 @@
  * Does NOT call external APIs. Database only.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type IntelligenceCategory = {
   id: string;

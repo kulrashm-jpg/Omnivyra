@@ -2,10 +2,11 @@
  * Full Intelligence System Verification Audit
  * Run: npx ts-node backend/scripts/fullIntelligenceSystemVerification.ts
  *
- * Requires: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (or NEXT_PUBLIC_SUPABASE_URL)
+ * Requires: SUPABASE_URL, Supabase service credential (or NEXT_PUBLIC_SUPABASE_URL)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function countSince(
   table: string,

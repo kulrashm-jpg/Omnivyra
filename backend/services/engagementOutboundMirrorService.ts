@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type ThreadCandidate = {
   id: string;
@@ -242,6 +243,7 @@ async function writeOutboundDmToThread(input: {
 export async function mirrorOutboundDmAction(input: {
   organizationId: string;
   actionId: string;
+  threadId?: string | null;
   platform: string | null | undefined;
   targetId: string | null | undefined;
   text: string | null | undefined;
@@ -251,16 +253,35 @@ export async function mirrorOutboundDmAction(input: {
 }): Promise<MirrorResult> {
   const platform = (input.platform ?? '').trim().toLowerCase();
   const targetId = (input.targetId ?? '').trim();
+  const threadId = (input.threadId ?? '').trim();
   const text = (input.text ?? '').trim();
-  if (!input.organizationId || !platform || !targetId || !text) {
+  if (!input.organizationId || !platform || (!targetId && !threadId) || !text) {
     return { mirrored: false };
   }
 
-  const thread = await findThreadForOutboundDm({
-    organizationId: input.organizationId,
-    platform,
-    targetId,
-  });
+  let thread: ThreadCandidate | null = null;
+  if (threadId) {
+    const { data, error } = await supabase
+      .from('engagement_threads')
+      .select('id, platform_thread_id, raw_payload, updated_at')
+      .eq('id', threadId)
+      .eq('organization_id', input.organizationId)
+      .eq('platform', platform)
+      .maybeSingle();
+    if (error) {
+      console.warn('[engagement/outbound-mirror] exact thread lookup failed:', error.message);
+    } else if (data) {
+      thread = data as ThreadCandidate;
+    }
+  }
+
+  if (!thread && targetId) {
+    thread = await findThreadForOutboundDm({
+      organizationId: input.organizationId,
+      platform,
+      targetId,
+    });
+  }
   if (!thread) {
     return { mirrored: false, error: 'THREAD_NOT_FOUND' };
   }

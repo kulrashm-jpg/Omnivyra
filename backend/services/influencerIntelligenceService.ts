@@ -5,7 +5,8 @@
  * Uses engagement_messages, engagement_threads, engagement_opportunities, and canonical lead signals.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const MESSAGE_WEIGHT = 0.25;
 const THREAD_WEIGHT = 0.2;

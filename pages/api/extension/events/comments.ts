@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/extension/events/comments
  *
@@ -5,10 +6,10 @@
  * script visits the user's activity / posts pages, walks the DOM
  * for each post, extracts the comment list, and POSTs here.
  *
- *   engagement_threads  — one row per *post* the user owns
+ *   engagement_threads  â€” one row per *post* the user owns
  *                         (platform_thread_id = post URN, e.g.
  *                          urn:li:activity:1234567890).
- *   engagement_messages — one row per comment on that post
+ *   engagement_messages â€” one row per comment on that post
  *                         (message_type='comment',
  *                          platform_message_id = comment URN).
  *
@@ -26,7 +27,7 @@
  *       comment_count?: number
  *     }>,
  *     comments: Array<{
- *       post_urn: string,            // FK → posts above
+ *       post_urn: string,            // FK â†’ posts above
  *       comment_urn: string,         // unique per comment
  *       author_name?: string,
  *       author_handle?: string,
@@ -44,7 +45,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   isExtensionCommentPlatform,
   normalizeExtensionPlatform,
@@ -115,7 +117,7 @@ function isSyncValidationError(err: unknown): boolean {
   return /\b(required|must be|parent_id not found)\b/i.test(message);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -156,10 +158,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         sourceId = insertedSource?.id ?? null;
       }
     } catch {
-      /* non-fatal — FK is nullable */
+      /* non-fatal â€” FK is nullable */
     }
 
-    // ── Threads (one per post URN) ─────────────────────────────────────────
+    // â”€â”€ Threads (one per post URN) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const threadIdByPostUrn: Record<string, string> = {};
     let threadsUpserted = 0;
 
@@ -218,7 +220,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── Messages (one per comment) ────────────────────────────────────────
+    // â”€â”€ Messages (one per comment) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let messagesUpserted = 0;
     let duplicatesUpdated = 0;
     let duplicatesRejected = 0;
@@ -267,7 +269,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let threadUuid = threadIdByPostUrn[postUrn];
       if (!threadUuid) {
-        // Comment arrived without its post in the batch — backfill a minimal
+        // Comment arrived without its post in the batch â€” backfill a minimal
         // thread row so the comment has a home.
         const { data: existing } = await supabase
           .from('engagement_threads')
@@ -418,3 +420,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

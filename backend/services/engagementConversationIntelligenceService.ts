@@ -6,7 +6,8 @@
  * Does NOT execute actions automatically — classification only.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { evaluateCommunityAiEngagement, isOmnivyraEnabled } from './omnivyraClientV1';
 import { getProfile } from './companyProfileService';
 

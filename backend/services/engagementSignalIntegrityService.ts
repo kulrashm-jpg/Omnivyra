@@ -3,7 +3,8 @@
  * Validates signal-activity mappings and detects orphan/invalid data.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type IntegrityIssue = {
   type: 'orphan_signal' | 'invalid_activity' | 'missing_campaign';

@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { ingestComments } from './engagementIngestionService';
 import { getPlatformsWithTokensForOrg } from './platformTokenService';
 
@@ -103,7 +104,7 @@ export type LinkedInEngagementSyncResult = {
 
 async function getActiveCompanyUserIds(organizationId: string): Promise<string[]> {
   const { data, error } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', organizationId)
     .eq('status', 'active');

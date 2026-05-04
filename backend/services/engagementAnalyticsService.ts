@@ -3,7 +3,8 @@
  * Dashboard analytics: categories, sentiment, strategy performance, trends.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type CategoryDistribution = { classification_category: string; count: number };
 export type SentimentDistribution = { sentiment: string; count: number };

@@ -462,6 +462,16 @@ export function getWorker(
 
   worker.on('failed', (job, err) => {
     console.error(`❌ Job ${job?.id} failed:`, err.message);
+    import('../jobs/dlqService')
+      .then(({ writeDeadLetter }) => writeDeadLetter({
+        job_id: queueName,
+        queue_name: queueName,
+        payload: (job?.data ?? {}) as Record<string, unknown>,
+        error_message: err.message,
+        idempotency_key: (job?.data as any)?.idempotency_key ?? null,
+        trigger_source: (job?.data as any)?.trigger_source ?? 'worker',
+      }))
+      .catch(() => {});
   });
 
   worker.on('error', (err) => {
@@ -495,6 +505,16 @@ export function getEngagementPollingWorker(): Worker {
 
   worker.on('failed', (job, err) => {
     console.error(`❌ Engagement polling job ${job?.id} failed:`, err.message);
+    import('../jobs/dlqService')
+      .then(({ writeDeadLetter }) => writeDeadLetter({
+        job_id: 'engagement_polling',
+        queue_name: 'engagement-polling',
+        payload: (job?.data ?? {}) as Record<string, unknown>,
+        error_message: err.message,
+        idempotency_key: (job?.data as any)?.idempotency_key ?? null,
+        trigger_source: (job?.data as any)?.trigger_source ?? 'worker',
+      }))
+      .catch(() => {});
   });
 
   worker.on('error', (err) => {
@@ -597,6 +617,16 @@ export function createWorker(
       name: job?.name,
       err: err?.message,
     }));
+    import('../jobs/dlqService')
+      .then(({ writeDeadLetter }) => writeDeadLetter({
+        job_id: name,
+        queue_name: name,
+        payload: (job?.data ?? {}) as Record<string, unknown>,
+        error_message: err?.message ?? 'Worker failed',
+        idempotency_key: (job?.data as any)?.idempotency_key ?? null,
+        trigger_source: (job?.data as any)?.trigger_source ?? 'worker',
+      }))
+      .catch(() => {});
   });
 
   worker.on('completed', (job) => {

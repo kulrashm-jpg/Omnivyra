@@ -13,6 +13,7 @@ import { useRouter } from 'next/router';
 import Link from 'next/link';
 import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server, Database, BarChart, SlidersHorizontal } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { apiFetch } from '../../lib/apiFetch';
 import { getAuthToken } from '../../utils/getAuthToken';
 import LLMConsumptionPanel from '../../components/super-admin/LLMConsumptionPanel';
 import ApiConsumptionPanel from '../../components/super-admin/ApiConsumptionPanel';
@@ -101,7 +102,7 @@ export default function ConsumptionPage() {
   // Load org list for super admin org selector
   useEffect(() => {
     if (tier !== 'super_admin') return;
-    fetch('/api/super-admin/companies', { credentials: 'include' })
+    apiFetch('/api/super-admin/companies')
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.companies) setOrgs(d.companies.map((c: any) => ({ id: c.id, name: c.name, website: c.website || '' }))); })
       .catch(() => {});

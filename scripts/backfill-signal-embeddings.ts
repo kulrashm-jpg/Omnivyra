@@ -7,14 +7,15 @@
  * Run: npx ts-node scripts/backfill-signal-embeddings.ts
  * Or:  npx tsx scripts/backfill-signal-embeddings.ts
  *
- * Env: OPENAI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY)
+ * Env: OPENAI_API_KEY, SUPABASE_URL, Supabase service credential (or SUPABASE_ANON_KEY)
  */
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generateTopicEmbedding, embeddingToPgVector } from '../backend/services/signalEmbeddingService';
 
 const BATCH_SIZE = 50;

@@ -4,7 +4,8 @@
  * Supports save, get, and search operations.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type MemoryType =
   | 'campaign_outcome'

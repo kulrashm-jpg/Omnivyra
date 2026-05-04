@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/bolt/execute
@@ -7,7 +8,8 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getBoltQueue } from '../../../backend/queue/boltQueue';
 import { getUserFriendlyMessage } from '../../../backend/utils/userFriendlyErrors';
@@ -19,7 +21,7 @@ function normalizeOptionalUuid(value: unknown): string | null {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text) ? text : null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -59,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       source_blog_type: resolvedBoltBlogType,
     };
 
-    // ── Blog source integrity validation ────────────────────────────────────
+    // â”€â”€ Blog source integrity validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if (payload.source_blog_id && payload.source_blog_type) {
       const blogTable = payload.source_blog_type === 'company' ? 'blogs' : 'public_blogs';
       const { data: blogRow, error: blogErr } = await supabase
@@ -136,7 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (!queuedViaBullMQ) {
-      // No workers running (ENABLE_AUTO_WORKERS not set or Redis unavailable) — run the pipeline
+      // No workers running (ENABLE_AUTO_WORKERS not set or Redis unavailable) â€” run the pipeline
       // directly in the background. The 'running' guard in executeBoltPipeline prevents double
       // execution if a BullMQ worker picks it up later.
       console.log(`[bolt/execute] Running pipeline directly for run ${runId}`);
@@ -155,3 +157,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: userMsg });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

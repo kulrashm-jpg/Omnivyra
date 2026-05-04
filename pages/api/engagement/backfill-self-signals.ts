@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/engagement/backfill-self-signals
  *
@@ -9,14 +10,14 @@
  * Behaviour:
  *   1. If `self_profile_url` (or `self_profile_slug`) is provided in the
  *      request body, persist it on social_accounts for (org's user, linkedin)
- *      so all future logic — inbox.ts, getOrgAuthorIds, engagement_authors
- *      matching — has a stable anchor.
+ *      so all future logic â€” inbox.ts, getOrgAuthorIds, engagement_authors
+ *      matching â€” has a stable anchor.
  *
  *   2. For every engagement_message in the org's threads, check if the
  *      sender matches the stored self profile URL via:
  *        raw_payload.sender_profile_url (canonical, set by new scraper)
  *        raw_payload.sender_username    (slug, set by new scraper)
- *      If yes → flip direction='outgoing' and stamp author_self=true on
+ *      If yes â†’ flip direction='outgoing' and stamp author_self=true on
  *      raw_payload. Display-name comparison is intentionally NOT used
  *      because two LinkedIn members can share a display name.
  *
@@ -36,7 +37,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isAuthorSelf } from '../../../lib/engagement/messageRoles';
 
 function normalizeLinkedInProfileUrl(input: string | null | undefined): { url: string; slug: string } | null {
@@ -62,7 +64,7 @@ function normalizeLinkedInProfileUrl(input: string | null | undefined): { url: s
   return null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -81,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await enforceCompanyAccess({ req, res, companyId: organizationId });
   if (!access) return;
 
-  // ── Identity resolution ─────────────────────────────────────────────────
+  // â”€â”€ Identity resolution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Stable per-person LinkedIn identity. Display name is intentionally NOT
   // accepted because it collides when two real people share a name (the
   // exact bug this backfill was added to fix). We only accept a profile
@@ -105,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('platform', 'linkedin')
       .maybeSingle();
     if (existingAccount?.id) {
-      // Only update if the stored value differs — keeps updated_at noise low.
+      // Only update if the stored value differs â€” keeps updated_at noise low.
       if ((existingAccount as { platform_user_id: string }).platform_user_id !== provided.url) {
         await supabase
           .from('social_accounts')
@@ -138,7 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     selfSlug = storedNorm?.slug ?? null;
   }
 
-  // ── Identity-driven message reclassification ───────────────────────────
+  // â”€â”€ Identity-driven message reclassification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // For every message in the org's threads, if the sender's profile URL
   // or username (slug) matches selfUrl/selfSlug, mark it outgoing+self.
   // Without an identity anchor we can't safely re-classify any rows, so
@@ -174,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Pull all messages for the org's threads in chunks; identity match in
   // JS. (PostgREST .or() over jsonb -> text with URLs has URL-escaping
-  // pitfalls — easier and just as fast to do the match here.)
+  // pitfalls â€” easier and just as fast to do the match here.)
   let messagesReclassified = 0;
   const CHUNK = 200;
   for (let i = 0; i < threadIds.length; i += CHUNK) {
@@ -229,7 +231,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── Recompute thread-level last_message_self ───────────────────────────
+  // â”€â”€ Recompute thread-level last_message_self â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const threadsNeedingBackfill = force
     ? threads
     : threads.filter((t) => {
@@ -281,7 +283,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       raw_payload: Record<string, unknown> | null;
       platform_created_at: string | null;
     }>) {
-      // First seen wins — query is ordered DESC, so first row per
+      // First seen wins â€” query is ordered DESC, so first row per
       // thread_id is the latest.
       if (!latestByThread.has(m.thread_id)) {
         latestByThread.set(m.thread_id, {
@@ -375,3 +377,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

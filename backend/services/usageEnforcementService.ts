@@ -3,7 +3,8 @@
  * Uses usage_meter_monthly and resolveOrganizationPlanLimits. No ledger/alert coupling.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { resolveOrganizationPlanLimits } from './planResolutionService';
 
 export type EnforcementResult =

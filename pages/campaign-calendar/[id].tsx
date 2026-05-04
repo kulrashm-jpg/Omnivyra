@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCampaignResume } from '../../hooks/useCampaignResume';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 /** Repurpose progress dots — unique = ●, repurposed = ● ● ○ etc. */
 function RepurposeDots({ index, total, contentType }: { index: number; total: number; contentType?: string }) {

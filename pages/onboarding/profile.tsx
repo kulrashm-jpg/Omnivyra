@@ -153,7 +153,7 @@ export default function ProfilePage() {
                     Complete your profile
                   </h1>
                   <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">
-                    Help us personalise your experience and claim your 300 free credits.
+                    Help us personalise your experience and claim your 50 free credits.
                   </p>
                 </div>
 
@@ -195,7 +195,7 @@ export default function ProfilePage() {
 
                   <button type="submit" disabled={loading || !accessToken}
                     className="w-full rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3.5 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed">
-                    {loading ? 'Setting up your account…' : 'Claim 300 free credits →'}
+                    {loading ? 'Setting up your account…' : 'Claim 50 free credits →'}
                   </button>
                 </form>
               </div>

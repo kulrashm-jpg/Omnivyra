@@ -1,5 +1,5 @@
+﻿// AUTH EXEMPT: non-route API helper module without default handler
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import {
@@ -111,7 +111,7 @@ export function deriveSynthOutcomePromise(topic: string, contentType: string): s
   return `Reader understands ${safe}, why it matters now, and the next concrete step to take.`;
 }
 
-// ─── STOP WORDS for keyword extraction ─────────────────────────────────────
+// â”€â”€â”€ STOP WORDS for keyword extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const STOP_WORDS = new Set([
   'this','that','with','from','have','will','your','their','about','what','when','where',
   'which','there','these','those','some','into','over','than','then','them','they',
@@ -141,7 +141,7 @@ export function deriveKeywords(topic: string, objective: string = ''): string[] 
 export function deriveHashtags(topic: string, contentType: string, objective: string = ''): string[] {
   const t = String(topic ?? '').trim();
   const ct = String(contentType ?? '').toLowerCase();
-  // Topic words → PascalCase tag
+  // Topic words â†’ PascalCase tag
   const topicTag = t.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join('').replace(/[^a-zA-Z0-9]/g, '');
   // Content type tag
   const ctTag: Record<string, string> = {
@@ -161,10 +161,10 @@ export function deriveHashtags(topic: string, contentType: string, objective: st
 export function deriveTextHook(topic: string, contentType: string): string {
   const t = String(topic ?? '').trim();
   const ct = String(contentType ?? '').toLowerCase();
-  if (!t) return 'Here is what most marketers get wrong — and how to fix it.';
+  if (!t) return 'Here is what most marketers get wrong â€” and how to fix it.';
   if (ct === 'poll') return `Quick question: how do you currently approach ${t}?`;
-  if (ct === 'thread') return `A thread on ${t} — everything you need to know in 10 tweets. 🧵`;
-  if (ct === 'newsletter') return `This week we're breaking down ${t} — and why it matters more than ever.`;
+  if (ct === 'thread') return `A thread on ${t} â€” everything you need to know in 10 tweets. ðŸ§µ`;
+  if (ct === 'newsletter') return `This week we're breaking down ${t} â€” and why it matters more than ever.`;
   if (ct === 'article' || ct === 'blog') return `Most businesses get ${t} completely wrong. Here's the framework that actually works.`;
   // Generic social post hooks
   const hooks = [
@@ -176,7 +176,7 @@ export function deriveTextHook(topic: string, contentType: string): string {
   return hooks[Math.abs(t.length) % hooks.length]!;
 }
 
-/** Derive 4–5 key points to build content from. */
+/** Derive 4â€“5 key points to build content from. */
 export function deriveKeyPoints(topic: string, objective: string, contentType: string): string[] {
   const t = String(topic ?? '').trim();
   const ct = String(contentType ?? '').toLowerCase();
@@ -204,7 +204,7 @@ export function deriveRepurposeAngles(topic: string, contentType: string): strin
   const angles: string[] = [];
   if (ct === 'article' || ct === 'blog') {
     angles.push(`Break into 5-tweet thread highlighting each key point`);
-    angles.push(`Turn statistics/frameworks into LinkedIn carousel (5–7 slides)`);
+    angles.push(`Turn statistics/frameworks into LinkedIn carousel (5â€“7 slides)`);
     angles.push(`Extract 3 pull quotes for standalone social posts`);
     angles.push(`Record a 60-second video summary for Reels/Shorts`);
     angles.push(`Condense into a LinkedIn newsletter intro with link-back`);
@@ -235,14 +235,14 @@ export function deriveSEOFocus(topic: string, objective: string = ''): string {
   const t = String(topic ?? '').trim();
   if (!t) return 'Brand authority and thought leadership';
   const tl = t.toLowerCase();
-  if (tl.includes('how to') || tl.includes('guide') || tl.includes('step')) return `How-to search intent: "${t}" — target informational queries`;
+  if (tl.includes('how to') || tl.includes('guide') || tl.includes('step')) return `How-to search intent: "${t}" â€” target informational queries`;
   if (tl.includes('vs') || tl.includes('compare') || tl.includes('best')) return `Comparison intent: position for "${t}" decision-stage queries`;
   if (tl.includes('what is') || tl.includes('definition') || tl.includes('meaning')) return `Educational intent: own the definition of "${t}"`;
   if (tl.includes('tool') || tl.includes('software') || tl.includes('platform')) return `Commercial intent: target buyers searching "${t} tools"`;
-  return `Thought leadership on "${t}" — target informational + branded queries`;
+  return `Thought leadership on "${t}" â€” target informational + branded queries`;
 }
 
-// ─── CREATOR-SPECIFIC derivation ───────────────────────────────────────────
+// â”€â”€â”€ CREATOR-SPECIFIC derivation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Derive a visual hook (first 3 seconds). */
 export function deriveVisualHook(topic: string, contentType: string): string {
@@ -251,14 +251,14 @@ export function deriveVisualHook(topic: string, contentType: string): string {
   const safe = t || 'this topic';
   if (ct === 'reel' || ct === 'video') {
     const hooks = [
-      `Open on creator looking directly at camera: "You're probably getting ${safe} completely wrong — here's proof."`,
+      `Open on creator looking directly at camera: "You're probably getting ${safe} completely wrong â€” here's proof."`,
       `Quick-cut montage of the problem, then freeze frame with text: "The fix is simpler than you think."`,
-      `Start mid-action: show a before/after result for ${safe} with no intro — let the result hook the viewer.`,
+      `Start mid-action: show a before/after result for ${safe} with no intro â€” let the result hook the viewer.`,
       `Creator asks direct question to camera: "How much are you spending on ${safe} with zero ROI?" Pause. "Watch this."`,
     ];
     return hooks[Math.abs(topic.length) % hooks.length]!;
   }
-  if (ct === 'carousel') return `Slide 1: Bold headline — "${safe}" with a single striking stat or question. No fluff, immediate value signal.`;
+  if (ct === 'carousel') return `Slide 1: Bold headline â€” "${safe}" with a single striking stat or question. No fluff, immediate value signal.`;
   if (ct === 'story') return `Frame 1: Single striking stat or bold claim about ${safe} over a high-contrast background. Text only, 3 words max.`;
   return `Open with the most surprising fact or contrarian statement about ${safe} to stop the scroll.`;
 }
@@ -273,7 +273,7 @@ export function deriveImagePrompt(topic: string, contentType: string, platforms:
   const styleBase = isLinkedIn
     ? 'clean, professional, minimal, corporate photography style, soft shadows'
     : 'vibrant, modern, social-first design, bold typography overlay possible';
-  return `${aspectRatio} format — ${styleBase}. Subject: visual representation of "${t}". Mood: confident, forward-looking. No text overlays. High contrast. Real people or abstract concept art preferred. Brand-safe, no stock photo clichés.`;
+  return `${aspectRatio} format â€” ${styleBase}. Subject: visual representation of "${t}". Mood: confident, forward-looking. No text overlays. High contrast. Real people or abstract concept art preferred. Brand-safe, no stock photo clichÃ©s.`;
 }
 
 /** Derive video/reel direction for creator. */
@@ -281,9 +281,9 @@ export function deriveVideoPrompt(topic: string, contentType: string, platforms:
   const t = String(topic ?? '').trim();
   const ct = String(contentType ?? '').toLowerCase();
   const isTikTok = platforms.some(p => String(p).toLowerCase().includes('tiktok'));
-  const duration = isTikTok ? '15–30s' : ct === 'reel' ? '30–60s' : '60–90s';
+  const duration = isTikTok ? '15â€“30s' : ct === 'reel' ? '30â€“60s' : '60â€“90s';
   const ratio = isTikTok || ct === 'reel' ? '9:16 vertical' : '16:9 horizontal';
-  return `${duration} ${ratio} video. Hook (0–3s): pattern interrupt — bold statement or surprising visual about "${t}". Build (3–20s): explain the core insight or process with on-screen text/b-roll. Payoff (final 5s): clear call to action — follow, comment, or click link. Captions: always on. Pacing: fast cuts (every 2–4s). Energy: confident, direct to camera or strong voiceover.`;
+  return `${duration} ${ratio} video. Hook (0â€“3s): pattern interrupt â€” bold statement or surprising visual about "${t}". Build (3â€“20s): explain the core insight or process with on-screen text/b-roll. Payoff (final 5s): clear call to action â€” follow, comment, or click link. Captions: always on. Pacing: fast cuts (every 2â€“4s). Energy: confident, direct to camera or strong voiceover.`;
 }
 
 /** Derive scene-by-scene direction for longer creator content. */
@@ -294,29 +294,29 @@ export function deriveSceneDirection(topic: string, contentType: string): string
   if (ct === 'carousel') {
     return [
       `Slide 1 (Hook): Bold headline stating the core problem or insight about ${safe}. One sentence, large text.`,
-      `Slide 2 (Context): Why this matters now — 1–2 sentences + supporting stat or data point.`,
-      `Slide 3–5 (Core value): Each slide covers one key point with a short headline + 2–3 bullet sub-points.`,
+      `Slide 2 (Context): Why this matters now â€” 1â€“2 sentences + supporting stat or data point.`,
+      `Slide 3â€“5 (Core value): Each slide covers one key point with a short headline + 2â€“3 bullet sub-points.`,
       `Slide 6 (Case/example): Brief real-world example or before/after scenario.`,
-      `Slide 7 (CTA): Clear next step — "Save this", "Follow for more", or "Comment your question below".`,
+      `Slide 7 (CTA): Clear next step â€” "Save this", "Follow for more", or "Comment your question below".`,
     ].join('\n');
   }
   if (ct === 'video' || ct === 'reel') {
     return [
-      `Scene 1 (0–3s): Creator on camera or bold text-over — hook statement about ${safe}.`,
-      `Scene 2 (3–10s): Quick "here's what I mean" — show the problem visually or state a stat.`,
-      `Scene 3 (10–25s): The solution/framework — 3 rapid points with screen text reinforcing each.`,
-      `Scene 4 (25–35s): Proof — show a result, testimonial quote, or before/after.`,
-      `Scene 5 (35–end): CTA — "Comment X if you want the full guide" or "Follow for part 2".`,
+      `Scene 1 (0â€“3s): Creator on camera or bold text-over â€” hook statement about ${safe}.`,
+      `Scene 2 (3â€“10s): Quick "here's what I mean" â€” show the problem visually or state a stat.`,
+      `Scene 3 (10â€“25s): The solution/framework â€” 3 rapid points with screen text reinforcing each.`,
+      `Scene 4 (25â€“35s): Proof â€” show a result, testimonial quote, or before/after.`,
+      `Scene 5 (35â€“end): CTA â€” "Comment X if you want the full guide" or "Follow for part 2".`,
     ].join('\n');
   }
   if (ct === 'story') {
     return [
-      `Frame 1: Single bold question about ${safe} — high contrast background, minimal text.`,
+      `Frame 1: Single bold question about ${safe} â€” high contrast background, minimal text.`,
       `Frame 2: Quick "here's the truth" statement with a striking visual or colour block.`,
-      `Frame 3: The one thing to do differently — swipe-up or sticker CTA.`,
+      `Frame 3: The one thing to do differently â€” swipe-up or sticker CTA.`,
     ].join('\n');
   }
-  return `Open with hook about ${safe} → deliver core value in 3 clear beats → close with CTA.`;
+  return `Open with hook about ${safe} â†’ deliver core value in 3 clear beats â†’ close with CTA.`;
 }
 
 export function normalizeTopicKey(topic: string): string {
@@ -354,7 +354,7 @@ export function pickContentType(contentTypeMix: string[] | undefined, index: num
  * The angles are deterministic (no AI call) and rotate based on slot index.
  */
 const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) => string>> = {
-  // ── Text content types ──────────────────────────────────────────────
+  // â”€â”€ Text content types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   post: [
     (t, a) => `Why ${t} matters for ${a}`,
     (t, a) => `Common ${t.toLowerCase()} mistakes ${a} should avoid`,
@@ -384,17 +384,17 @@ const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) =
   ],
   thread: [
     (t, a) => `Thread: ${t} explained in simple terms`,
-    (t, a) => `${t} breakdown — what ${a} get wrong`,
+    (t, a) => `${t} breakdown â€” what ${a} get wrong`,
     (t, a) => `A thread on ${t.toLowerCase()} that every ${a} should bookmark`,
     (t, a) => `Unpacking ${t.toLowerCase()}: the thread ${a} need`,
     (t, a) => `Here's what I learned about ${t.toLowerCase()} (thread)`,
     (t, a) => `The ${t.toLowerCase()} thread: myths vs reality`,
-    (t, a) => `Thread: ${t.toLowerCase()} — step by step for ${a}`,
+    (t, a) => `Thread: ${t.toLowerCase()} â€” step by step for ${a}`,
   ],
   blog: [
     (t, a) => `The definitive blog post on ${t.toLowerCase()} for ${a}`,
     (t, a) => `${t}: what every ${a} should know in 2026`,
-    (t, a) => `How to master ${t.toLowerCase()} — a guide for ${a}`,
+    (t, a) => `How to master ${t.toLowerCase()} â€” a guide for ${a}`,
     (t, a) => `${t} best practices: what the data says`,
     (t, a) => `Why ${a} are rethinking ${t.toLowerCase()}`,
     (t, a) => `${t}: lessons from the field`,
@@ -407,36 +407,36 @@ const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) =
     (t, a) => `The ${a} whitepaper on ${t.toLowerCase()} strategy`,
     (t, a) => `${t}: emerging trends and opportunities for ${a}`,
   ],
-  // ── Creator content types ───────────────────────────────────────────
+  // â”€â”€ Creator content types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   video: [
-    (t, a) => `Watch: ${t} — what ${a} need to see`,
+    (t, a) => `Watch: ${t} â€” what ${a} need to see`,
     (t, a) => `Video explainer: ${t.toLowerCase()} in under 3 minutes`,
     (t, a) => `Behind the scenes of ${t.toLowerCase()}`,
     (t, a) => `${t}: the visual breakdown for ${a}`,
     (t, a) => `Day in the life: putting ${t.toLowerCase()} into practice`,
-    (t, a) => `${t} explained — visual guide for ${a}`,
+    (t, a) => `${t} explained â€” visual guide for ${a}`,
     (t, a) => `Talking head: why ${t.toLowerCase()} changes everything`,
   ],
   reel: [
-    (t, a) => `60s reel: ${t} — the quick take`,
+    (t, a) => `60s reel: ${t} â€” the quick take`,
     (t, a) => `Reel: 3 facts about ${t.toLowerCase()} ${a} miss`,
-    (t, a) => `${t} in 30 seconds — hook, story, CTA`,
+    (t, a) => `${t} in 30 seconds â€” hook, story, CTA`,
     (t, a) => `Quick reel: the ${t.toLowerCase()} myth vs reality`,
     (t, a) => `Reel: before vs after ${t.toLowerCase()}`,
     (t, a) => `Trending reel: ${t.toLowerCase()} challenge for ${a}`,
     (t, a) => `${t}: the reel every ${a} should share`,
   ],
   reels: [
-    (t, a) => `60s reel: ${t} — the quick take`,
+    (t, a) => `60s reel: ${t} â€” the quick take`,
     (t, a) => `Reel: 3 facts about ${t.toLowerCase()} ${a} miss`,
-    (t, a) => `${t} in 30 seconds — hook, story, CTA`,
+    (t, a) => `${t} in 30 seconds â€” hook, story, CTA`,
     (t, a) => `Quick reel: the ${t.toLowerCase()} myth vs reality`,
     (t, a) => `Reel: before vs after ${t.toLowerCase()}`,
     (t, a) => `Trending reel: ${t.toLowerCase()} challenge for ${a}`,
     (t, a) => `${t}: the reel every ${a} should share`,
   ],
   carousel: [
-    (t, a) => `Carousel: ${t} — swipe for the full story`,
+    (t, a) => `Carousel: ${t} â€” swipe for the full story`,
     (t, a) => `5 slides on ${t.toLowerCase()} every ${a} should see`,
     (t, a) => `${t} step-by-step carousel guide`,
     (t, a) => `Carousel: myths vs facts about ${t.toLowerCase()}`,
@@ -463,9 +463,9 @@ const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) =
     (t, a) => `Story countdown: ${t.toLowerCase()} launch`,
   ],
   shorts: [
-    (t, a) => `Short: ${t} — the 60-second version`,
+    (t, a) => `Short: ${t} â€” the 60-second version`,
     (t, a) => `YouTube Short: ${t.toLowerCase()} hack for ${a}`,
-    (t, a) => `${t} in under a minute — watch now`,
+    (t, a) => `${t} in under a minute â€” watch now`,
     (t, a) => `Short: top takeaway on ${t.toLowerCase()}`,
     (t, a) => `Quick short: why ${a} care about ${t.toLowerCase()}`,
     (t, a) => `${t}: the short that stops the scroll`,
@@ -474,14 +474,14 @@ const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) =
   image: [
     (t, a) => `Infographic: ${t} at a glance`,
     (t, a) => `Visual: ${t.toLowerCase()} data ${a} should know`,
-    (t, a) => `${t} — the image that tells the story`,
+    (t, a) => `${t} â€” the image that tells the story`,
     (t, a) => `Quote card: the best insight on ${t.toLowerCase()}`,
     (t, a) => `Visual breakdown: ${t.toLowerCase()} for ${a}`,
     (t, a) => `${t}: the chart every ${a} needs to see`,
     (t, a) => `Infographic: ${t.toLowerCase()} before vs after`,
   ],
   banner: [
-    (t, a) => `Banner: ${t} — your visual hook`,
+    (t, a) => `Banner: ${t} â€” your visual hook`,
     (t, a) => `Cover image: ${t.toLowerCase()} campaign for ${a}`,
     (t, a) => `${t} banner: designed to stop the scroll`,
     (t, a) => `Profile banner: ${t.toLowerCase()} statement`,
@@ -492,34 +492,34 @@ const SUB_TOPIC_ANGLES: Record<string, Array<(theme: string, audience: string) =
     (t, a) => `Vote: the #1 ${t.toLowerCase()} priority for ${a}`,
     (t, a) => `Quick poll: how do ${a} rank ${t.toLowerCase()} tactics?`,
     (t, a) => `Poll: which ${t.toLowerCase()} approach wins for ${a}?`,
-    (t, a) => `Tell us: ${t} — where does your team stand?`,
+    (t, a) => `Tell us: ${t} â€” where does your team stand?`,
     (t, a) => `Reader poll: the most underrated ${t.toLowerCase()} habit`,
-    (t, a) => `Poll: ${t.toLowerCase()} — budget, people, or tools first?`,
+    (t, a) => `Poll: ${t.toLowerCase()} â€” budget, people, or tools first?`,
   ],
   short_story: [
     (t, a) => `Short story: the day ${t.toLowerCase()} clicked for me`,
-    (t, a) => `A founder's tale — ${t.toLowerCase()} lessons from the trenches`,
+    (t, a) => `A founder's tale â€” ${t.toLowerCase()} lessons from the trenches`,
     (t, a) => `True story: how ${a} fixed their ${t.toLowerCase()} approach`,
     (t, a) => `The moment ${t.toLowerCase()} changed our ${a} playbook`,
-    (t, a) => `Short story: ${t.toLowerCase()} — from confusion to clarity`,
+    (t, a) => `Short story: ${t.toLowerCase()} â€” from confusion to clarity`,
     (t, a) => `A coffee-shop lesson in ${t.toLowerCase()} for ${a}`,
     (t, a) => `Narrative: the quiet turning point in ${t.toLowerCase()}`,
   ],
   tweet: [
     (t, a) => `Tweet: one hot take on ${t.toLowerCase()} ${a} won't admit`,
-    (t, a) => `${t.toLowerCase()} — in one sentence for ${a}`,
+    (t, a) => `${t.toLowerCase()} â€” in one sentence for ${a}`,
     (t, a) => `Tweet: the most counterintuitive truth about ${t.toLowerCase()}`,
     (t, a) => `Short tweet: ${t} in plain English`,
-    (t, a) => `Tweet: ${t.toLowerCase()} — what ${a} wish they knew sooner`,
+    (t, a) => `Tweet: ${t.toLowerCase()} â€” what ${a} wish they knew sooner`,
     (t, a) => `A single tweet-sized insight on ${t.toLowerCase()}`,
-    (t, a) => `Tweet drop: ${t} — the no-fluff version`,
+    (t, a) => `Tweet drop: ${t} â€” the no-fluff version`,
   ],
 };
 
 const DEFAULT_ANGLES: Array<(theme: string, audience: string) => string> = [
   (t, a) => `${t}: what ${a} need to know`,
   (t, a) => `Practical ${t.toLowerCase()} insights for ${a}`,
-  (t, a) => `${t} — the ${a} perspective`,
+  (t, a) => `${t} â€” the ${a} perspective`,
   (t, a) => `Understanding ${t.toLowerCase()}: a guide for ${a}`,
   (t, a) => `How to approach ${t.toLowerCase()} effectively`,
   (t, a) => `${t}: strategies that deliver results`,
@@ -638,7 +638,7 @@ export function buildCreatorCard(
       ? [JSON.stringify(enrichedItem.format_requirements)]
       : [];
 
-  // ── TEXT enrichment ────────────────────────────────────────────────────
+  // â”€â”€ TEXT enrichment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const hook = !isCreatorType
     ? (typeof (intent as any)?.hook === 'string' && (intent as any).hook.trim()
         ? String((intent as any).hook).trim()
@@ -658,24 +658,24 @@ export function buildCreatorCard(
     ? deriveRepurposeAngles(topicStr, contentType)
     : undefined;
 
-  // ── CREATOR enrichment ─────────────────────────────────────────────────
+  // â”€â”€ CREATOR enrichment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const itemPlatforms = Array.isArray(item?.platformTargets) ? item.platformTargets : [];
   const visual_hook = isCreatorType ? deriveVisualHook(topicStr, contentType) : undefined;
   const image_prompt = isCreatorType ? deriveImagePrompt(topicStr, contentType, itemPlatforms) : undefined;
   const video_prompt = (isCreatorType && contentType !== 'carousel') ? deriveVideoPrompt(topicStr, contentType, itemPlatforms) : undefined;
   const scene_direction = isCreatorType ? deriveSceneDirection(topicStr, contentType) : undefined;
 
-  // ── Creator instructions block (rich) ──────────────────────────────────
+  // â”€â”€ Creator instructions block (rich) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const instructionsParts: string[] = [];
   if (objective) instructionsParts.push(`Objective: ${objective}`);
   if (summary) instructionsParts.push(`Brief: ${summary}`);
   if (target_audience) instructionsParts.push(`Audience: ${target_audience}`);
   if (item?.desiredAction || intent?.cta_type) {
-    instructionsParts.push(`CTA: ${String(item?.desiredAction || intent?.cta_type || '').trim() || '—'}`);
+    instructionsParts.push(`CTA: ${String(item?.desiredAction || intent?.cta_type || '').trim() || 'â€”'}`);
   }
   if (item?.narrativeStyle) instructionsParts.push(`Tone: ${item.narrativeStyle}`);
   if (isCreatorType) {
-    if (visual_hook) instructionsParts.push(`Visual hook (0–3s): ${visual_hook}`);
+    if (visual_hook) instructionsParts.push(`Visual hook (0â€“3s): ${visual_hook}`);
     if (scene_direction) instructionsParts.push(`\nScene direction:\n${scene_direction}`);
     if (image_prompt) instructionsParts.push(`\nImage prompt: ${image_prompt}`);
     if (video_prompt) instructionsParts.push(`\nVideo direction: ${video_prompt}`);
@@ -686,7 +686,7 @@ export function buildCreatorCard(
       instructionsParts.push(`Key points to cover:\n${key_points.map((p, i) => `  ${i + 1}. ${p}`).join('\n')}`);
     }
     if (repurpose_angles && repurpose_angles.length > 0) {
-      instructionsParts.push(`Repurpose as:\n${repurpose_angles.map(a => `  • ${a}`).join('\n')}`);
+      instructionsParts.push(`Repurpose as:\n${repurpose_angles.map(a => `  â€¢ ${a}`).join('\n')}`);
     }
   }
   const instructions_for_creator = instructionsParts.join('\n');
@@ -969,3 +969,4 @@ export interface GenerateWeeklyStructureInput {
 }
 
 /** Core logic for generating weekly structure. Callable from API or BOLT pipeline. */
+

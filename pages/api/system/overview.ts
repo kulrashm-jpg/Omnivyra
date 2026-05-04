@@ -1,11 +1,13 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * System overview API — super admin only. Read-only projections over existing tables.
- * No schema changes. No writes. Missing table → zeros.
+ * System overview API â€” super admin only. Read-only projections over existing tables.
+ * No schema changes. No writes. Missing table â†’ zeros.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignCount } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
@@ -60,19 +62,9 @@ async function requireSuperAdminAccess(
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  const { requireAdminScope } = await import('../../../backend/services/requestAccessService');
+  const ctx = await requireAdminScope(req, res, 'health:system');
+  return !!ctx;
 }
 
 function parseRange(range: string | string[] | undefined): number {
@@ -81,7 +73,7 @@ function parseRange(range: string | string[] | undefined): number {
   return [7, 30, 90].includes(n) ? n : 7;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -372,7 +364,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }));
       }
     } catch (_) {
-      // table missing or query failed → keep empty array
+      // table missing or query failed â†’ keep empty array
     }
 
   } catch (err) {
@@ -390,3 +382,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json(body);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

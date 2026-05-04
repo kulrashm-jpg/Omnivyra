@@ -1,6 +1,7 @@
 // Reproduce the exact fetchGa4EventRows payload to capture the 400 body.
 import { getValidAccessTokenForIntegration } from '../backend/services/analyticsIntegrationService';
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function main() {
   const { data: integrations } = await supabase

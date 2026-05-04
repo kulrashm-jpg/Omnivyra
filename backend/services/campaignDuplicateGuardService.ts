@@ -3,7 +3,8 @@
  * Before creating campaign from opportunity: check if similar topic exists within 30 days.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const DAYS_LOOKBACK = 30;
 

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/track/verify?account_id=xxx
@@ -7,9 +8,10 @@
  * Used by the Blog Intelligence wizard to verify script installation.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const accountId = typeof req.query.account_id === 'string' ? req.query.account_id.trim() : null;
@@ -23,3 +25,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ active: (count ?? 0) > 0 });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -3,7 +3,8 @@
  * Persists content opportunities and manages status updates.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type ContentOpportunityStatus =
   | 'new'

@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { encodeOAuthState } from '../../../../backend/auth/oauthState';
@@ -11,7 +12,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const credentials = await getOAuthCredentialsForPlatform('pinterest');
     if (!credentials?.client_id) {
-      return res.status(400).json({ error: 'Pinterest OAuth not configured — ask your Super Admin to add credentials.' });
+      return res.status(400).json({ error: 'Pinterest OAuth not configured â€” ask your Super Admin to add credentials.' });
     }
 
     const companyId = (req.query.companyId as string) || undefined;

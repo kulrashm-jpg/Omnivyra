@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/track/clusters?account_id=xxx&days=30
@@ -14,14 +15,15 @@
  *     total_views:  number,
  *     avg_scroll:   number,
  *     avg_time:     number,
- *     intent_score: number,           // 0–100, based on cta+copy+form signals
+ *     intent_score: number,           // 0â€“100, based on cta+copy+form signals
  *   }],
  *   top_cluster:  string | null,      // best performing cluster name
  *   bottom_cluster: string | null,
  * }
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 interface ClusterResult {
@@ -46,7 +48,7 @@ function slugMatches(urlSlug: string, blogSlug: string): boolean {
          normalized.endsWith('/' + blogSlug);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const accountId = typeof req.query.account_id === 'string' ? req.query.account_id.trim() : null;
@@ -58,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const days  = Math.min(90, Math.max(1, parseInt(String(req.query.days ?? '30'), 10) || 30));
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
 
-  // ── Fetch blog metadata ────────────────────────────────────────────────
+  // â”€â”€ Fetch blog metadata â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: blogs } = await supabase
     .from('blogs')
     .select('id, slug, tags, category')
@@ -69,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ clusters: [], top_cluster: null, bottom_cluster: null });
   }
 
-  // ── Fetch analytics data ───────────────────────────────────────────────
+  // â”€â”€ Fetch analytics data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [pvRes, lvRes, intentRes] = await Promise.all([
     supabase.from('blog_analytics').select('url_slug').eq('account_id', accountId).eq('event_type', 'pageview').gte('created_at', since),
     supabase.from('blog_analytics').select('url_slug, time_on_page, scroll_depth').eq('account_id', accountId).eq('event_type', 'pageleave').gte('created_at', since),
@@ -92,7 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const maxViews = Math.max(1, ...slugViews.values());
 
-  // ── Build clusters ──────────────────────────────────────────────────────
+  // â”€â”€ Build clusters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const clusterMap = new Map<string, {
     name: string; type: 'tag' | 'category';
     views: number[]; times: number[]; scrolls: number[]; intents: number;
@@ -151,3 +153,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     bottom_cluster: ranked[ranked.length - 1]?.name ?? null,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

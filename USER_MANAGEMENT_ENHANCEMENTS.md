@@ -1,4 +1,4 @@
-# User Management & Company Registration Enhancements
+﻿# User Management & Company Registration Enhancements
 
 **Date**: March 21, 2026  
 **Changes**: Unassigned user deletion + Company name collection for free credits
@@ -16,15 +16,15 @@
 ```
 DELETE /api/super-admin/users
 Body: { userId, companyId }
-→ Only deleted user from company
-→ Required BOTH userId and companyId
+â†’ Only deleted user from company
+â†’ Required BOTH userId and companyId
 ```
 
 #### After (Optional companyId)
 ```
 DELETE /api/super-admin/users
-Body: { userId } — delete unassigned user
-Body: { userId, companyId } — delete from company (original behavior)
+Body: { userId } â€” delete unassigned user
+Body: { userId, companyId } â€” delete from company (original behavior)
 ```
 
 ### Behavior
@@ -34,8 +34,8 @@ Body: { userId, companyId } — delete from company (original behavior)
 POST /api/super-admin/users
 Body: { userId: "xyz", companyId: "abc" }
 
-→ Removes user_company_roles entry
-→ User may still appear if unassigned elsewhere
+â†’ Removes user_company_roles entry
+â†’ User may still appear if unassigned elsewhere
 ```
 
 **Route 2: Delete Unassigned User Entirely**
@@ -43,9 +43,9 @@ Body: { userId: "xyz", companyId: "abc" }
 POST /api/super-admin/users
 Body: { userId: "xyz" }  // NO companyId
 
-→ Deletes from users table
-→ Attempts to delete from Supabase Auth
-→ User is completely removed from system
+â†’ Deletes from users table
+â†’ Attempts to delete from Supabase Auth
+â†’ User is completely removed from system
 ```
 
 ### Audit Logging
@@ -82,11 +82,11 @@ Body: { companyName: string }
 ```
 
 **Validation Rules**:
-- ✅ Minimum 2 characters
-- ✅ Maximum 100 characters
-- ✅ Case-insensitive search (Acme ≠ ACME = duplicate)
-- ✅ Checks both `companies` and `company_profiles` tables
-- ✅ User-friendly error messages
+- âœ… Minimum 2 characters
+- âœ… Maximum 100 characters
+- âœ… Case-insensitive search (Acme â‰  ACME = duplicate)
+- âœ… Checks both `companies` and `company_profiles` tables
+- âœ… User-friendly error messages
 
 **Example**:
 ```typescript
@@ -131,15 +131,15 @@ Body: { companyName: string }
    useEffect(() => {
      // As user types, validate company name
      // Shows "Checking..." indicator
-     // Displays ✓ when available
+     // Displays âœ“ when available
      // Shows error message when taken
    }, [companyName])
    ```
 
 4. **Step flow**:
    ```
-   company (NEW) → phone → otp → done
-   Step 1 of 3 → Step 2 of 3 → Almost there… → Done
+   company (NEW) â†’ phone â†’ otp â†’ done
+   Step 1 of 3 â†’ Step 2 of 3 â†’ Almost thereâ€¦ â†’ Done
    ```
 
 5. **Company name form UI**:
@@ -147,7 +147,7 @@ Body: { companyName: string }
    - Checkmark icon when available
    - Error message when taken
    - Button disabled until name is available
-   - Continue → Phone verification
+   - Continue â†’ Phone verification
 
 6. **Pass company name to API**:
    ```typescript
@@ -155,8 +155,6 @@ Body: { companyName: string }
      method: 'POST',
      body: JSON.stringify({
        phoneNumber,
-       firebaseUid,
-       firebaseIdToken,
        companyName: companyName.trim(),  // NEW
        intentGoals,
        intentTeam,
@@ -231,38 +229,38 @@ Body: { companyName: string }
 
 ```
 User starts signup
-  ↓
+  â†“
 /create-account
-  → Email validation
-  → Send magic link
-  ↓
-Click magic link → /auth/callback
-  → PKCE code exchange
-  → Redirect to /onboarding/phone
-  ↓
+  â†’ Email validation
+  â†’ Send magic link
+  â†“
+Click magic link â†’ /auth/callback
+  â†’ PKCE code exchange
+  â†’ Redirect to /onboarding/phone
+  â†“
 [NEW STEP] Company name entry
-  → User enters "Acme Corp"
-  → Real-time validation: "Checking..."
-  → ✓ Available
-  → Click Continue
-  ↓
+  â†’ User enters "Acme Corp"
+  â†’ Real-time validation: "Checking..."
+  â†’ âœ“ Available
+  â†’ Click Continue
+  â†“
 Phone verification
-  → Enter phone number
-  → Get SMS OTP
-  → Enter 6-digit code
-  ↓
+  â†’ Enter phone number
+  â†’ Get SMS OTP
+  â†’ Enter 6-digit code
+  â†“
 Call /api/onboarding/complete
-  → ✓ Validate company name (must exist)
-  → Create company if not exists
-  → Create free_credit_profiles
-  → Create user_company_roles
-  → Grant 300 credits to organization
-  → Log claim
-  ↓
+  â†’ âœ“ Validate company name (must exist)
+  â†’ Create company if not exists
+  â†’ Create free_credit_profiles
+  â†’ Create user_company_roles
+  â†’ Grant 300 credits to organization
+  â†’ Log claim
+  â†“
 Success page
-  → Show 300 credits claimed
-  → Show ways to earn more
-  → Continue to dashboard
+  â†’ Show 300 credits claimed
+  â†’ Show ways to earn more
+  â†’ Continue to dashboard
 ```
 
 ### Database Changes
@@ -313,11 +311,11 @@ free_credit_profiles {
 ## 4. API Changes Summary
 
 ### New Endpoints
-- `POST /api/onboarding/validate-company-name` — Check company name availability
+- `POST /api/onboarding/validate-company-name` â€” Check company name availability
 
 ### Modified Endpoints
-- `DELETE /api/super-admin/users` — Now handles unassigned users
-- `POST /api/onboarding/complete` — Now requires + validates company name
+- `DELETE /api/super-admin/users` â€” Now handles unassigned users
+- `POST /api/onboarding/complete` â€” Now requires + validates company name
 
 ### Request/Response Changes
 
@@ -361,8 +359,6 @@ Content-Type: application/json
 
 {
   "phoneNumber": "+44...",
-  "firebaseUid": "...",
-  "firebaseIdToken": "...",
   "companyName": "Acme Corp",  // NEW - REQUIRED
   "intentGoals": [],
   "intentTeam": "",
@@ -402,7 +398,7 @@ Expected:
 ```
 Scenario A: New company name
 User enters: "TechStartup Inc"
-Validate: Available ✓
+Validate: Available âœ“
 Create company: YES
 Company created in database
 
@@ -416,10 +412,10 @@ Uses existing company
 
 ### Scenario 3: Free Credits Signup with Company
 ```
-1. Email: john@company.com → Magic link
-2. Company: "Acme Corp" → Validation ✓
-3. Phone: +44 7911 123456 → SMS OTP
-4. Verify: 123456 → Success
+1. Email: john@company.com â†’ Magic link
+2. Company: "Acme Corp" â†’ Validation âœ“
+3. Phone: +44 7911 123456 â†’ SMS OTP
+4. Verify: 123456 â†’ Success
 5. Result:
    - User created in Supabase Auth
    - Company "Acme Corp" created
@@ -447,8 +443,8 @@ companies table:
   - updated_at (TIMESTAMP)
 
 free_credit_profiles:
-  - company_name (TEXT) — NEW FIELD
-  - organization_id (UUID) — ENSURE NOT NULL
+  - company_name (TEXT) â€” NEW FIELD
+  - organization_id (UUID) â€” ENSURE NOT NULL
 
 user_company_roles:
   - Already exists, no changes needed
@@ -475,20 +471,20 @@ user_company_roles:
 ## 8. Support & Troubleshooting
 
 ### User deletion not showing in UI
-→ Refresh the page or clear browser cache
-→ Check that both users table and auth deletion completed
+â†’ Refresh the page or clear browser cache
+â†’ Check that both users table and auth deletion completed
 
 ### Company name validation timeout
-→ Check that `/api/onboarding/validate-company-name` is accessible
-→ Verify Supabase is responding (check network tab)
+â†’ Check that `/api/onboarding/validate-company-name` is accessible
+â†’ Verify Supabase is responding (check network tab)
 
 ### User cannot proceed past company name
-→ Ensure company name is at least 2 characters
-→ Try a different company name (may already be taken)
-→ Check for typos or special characters
+â†’ Ensure company name is at least 2 characters
+â†’ Try a different company name (may already be taken)
+â†’ Check for typos or special characters
 
 ### Credits not granted
-→ Check that organization_id is set in free_credit_profiles
-→ Verify user_company_roles entry exists
-→ Check RPC `apply_credit_transaction` permissions
+â†’ Check that organization_id is set in free_credit_profiles
+â†’ Verify user_company_roles entry exists
+â†’ Check RPC `apply_credit_transaction` permissions
 

@@ -3,7 +3,8 @@
  * Phase 6: Evaluates performance of strategies from recommendations, outcomes, and feedback.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type StrategyPerformanceResult = {
   strategy_performance_score: number;

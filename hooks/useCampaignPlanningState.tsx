@@ -22,7 +22,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import CampaignAIChat from '../components/CampaignAIChat';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import AIContentIntegration from '../components/AIContentIntegration';
 import ContentCreationPanel from '../components/ContentCreationPanel';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';
@@ -410,7 +410,7 @@ export function useCampaignPlanningState() {
   const fetchStrategyStatus = async (id: string) => {
     setIsStrategyStatusLoading(true);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/strategy-status`);
+      const response = await apiFetch(`/api/campaigns/${id}/strategy-status`);
       if (!response.ok) {
         setStrategyStatus(null);
         return;
@@ -427,7 +427,7 @@ export function useCampaignPlanningState() {
 
   const fetchReapprovalStatus = async (id: string) => {
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/reapproval-status`);
+      const response = await apiFetch(`/api/campaigns/${id}/reapproval-status`);
       if (!response.ok) {
         setReapprovalStatus(null);
         return;
@@ -444,7 +444,7 @@ export function useCampaignPlanningState() {
     setIsAiImprovementsLoading(true);
     setAiImprovementsError(null);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/ai-improvements`);
+      const response = await apiFetch(`/api/campaigns/${id}/ai-improvements`);
       if (!response.ok) {
         setAiImprovements([]);
         setAiImprovementsError('Failed to load AI suggestions.');
@@ -468,7 +468,7 @@ export function useCampaignPlanningState() {
     setIsForecastLoading(true);
     setForecastError(null);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/forecast-vs-actual`);
+      const response = await apiFetch(`/api/campaigns/${id}/forecast-vs-actual`);
       if (!response.ok) {
         setForecastVsActual(null);
         setForecastError('Failed to load forecast accuracy.');
@@ -489,7 +489,7 @@ export function useCampaignPlanningState() {
     setIsOptimizationLoading(true);
     setOptimizationError(null);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/optimization-advice`);
+      const response = await apiFetch(`/api/campaigns/${id}/optimization-advice`);
       if (!response.ok) {
         setOptimizationAdvice(null);
         setOptimizationError('Failed to load optimization advice.');
@@ -510,7 +510,7 @@ export function useCampaignPlanningState() {
     setIsViralTopicLoading(true);
     setViralTopicError(null);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/viral-topic-memory`);
+      const response = await apiFetch(`/api/campaigns/${id}/viral-topic-memory`);
       if (!response.ok) {
         setViralTopicMemory(null);
         setViralTopicError('Failed to load viral topic memory.');
@@ -531,7 +531,7 @@ export function useCampaignPlanningState() {
     setIsLeadIntelLoading(true);
     setLeadIntelError(null);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/lead-conversion-intelligence`);
+      const response = await apiFetch(`/api/campaigns/${id}/lead-conversion-intelligence`);
       if (!response.ok) {
         setLeadConversionIntel(null);
         setLeadIntelError('Failed to load lead conversion intelligence.');
@@ -552,7 +552,7 @@ export function useCampaignPlanningState() {
     setIsMomentumLoading(true);
     setMomentumError(null);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/momentum-amplifier`);
+      const response = await apiFetch(`/api/campaigns/${id}/momentum-amplifier`);
       if (!response.ok) {
         setMomentumData(null);
         setMomentumError('Failed to load momentum insights.');
@@ -573,7 +573,7 @@ export function useCampaignPlanningState() {
     setIsPlatformAdviceLoading(true);
     setPlatformAdviceError(null);
     try {
-      const response = await fetchWithAuth(`/api/campaigns/${id}/platform-allocation-advice`);
+      const response = await apiFetch(`/api/campaigns/${id}/platform-allocation-advice`);
       if (!response.ok) {
         setPlatformAdvice(null);
         setPlatformAdviceError('Failed to load platform allocation advice.');
@@ -890,7 +890,7 @@ export function useCampaignPlanningState() {
       const campaignsUrl = companyId
         ? `/api/campaigns?type=campaign&campaignId=${id}&companyId=${encodeURIComponent(companyId)}`
         : `/api/campaigns?type=campaign&campaignId=${id}`;
-      const response = await fetchWithAuth(campaignsUrl);
+      const response = await apiFetch(campaignsUrl);
       console.log('Campaign API response status:', response.status);
       
       if (response.ok) {
@@ -921,7 +921,7 @@ export function useCampaignPlanningState() {
         const goalsUrl = companyId
           ? `/api/campaigns?type=goals&campaignId=${id}&companyId=${encodeURIComponent(companyId)}`
           : `/api/campaigns?type=goals&campaignId=${id}`;
-        const goalsResponse = await fetchWithAuth(goalsUrl);
+        const goalsResponse = await apiFetch(goalsUrl);
         if (goalsResponse.ok) {
           const goalsResult = await goalsResponse.json();
           setCampaignData(prev => ({

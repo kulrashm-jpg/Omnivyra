@@ -4,7 +4,8 @@
  * Inserts into engagement_signals. Placeholder when APIs not configured.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const ENGAGEMENT_TYPES = ['likes', 'comments', 'shares', 'reposts', 'clicks'] as const;
 

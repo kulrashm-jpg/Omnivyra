@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
 import { usePlannerSession, type IdeaSpine } from './plannerSessionStore';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface IdeaSpineStepProps {
   /** Prefilled from recommendation context */
@@ -77,7 +77,7 @@ export function IdeaSpineStep({
     setRefining(true);
     setRefineError(null);
     try {
-      const res = await fetchWithAuth('/api/campaign-planner/refine-idea', {
+      const res = await apiFetch('/api/campaign-planner/refine-idea', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

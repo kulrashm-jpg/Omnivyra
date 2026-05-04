@@ -1,12 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { detectExecutionDrift, type PublishedContent } from '../../../backend/services/executionDriftDetector';
 import type { WeekPlanLike } from '../../../backend/services/executionMomentumTracker';
 import { computeExecutionHealthScore, type ExecutionPressure, type ExecutionMomentum, type ExecutionDrift } from '../../../backend/services/executionHealthScorer';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -17,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const access = await requireCampaignAccess(req, res, campaignId);
     if (!access) return;
 
-    // Blueprint (campaign_week_plan) is source of truth for committed plans — check first
+    // Blueprint (campaign_week_plan) is source of truth for committed plans â€” check first
     const blueprint = await getUnifiedCampaignBlueprint(access.campaignId);
     const rawFlag = Array.isArray(raw) ? raw[0] : raw;
     const wantsRawBlueprint =
@@ -187,3 +189,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

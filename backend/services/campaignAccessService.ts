@@ -5,7 +5,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUserCompanyRole, getCompanyRoleIncludingInvited, Role } from './rbacService';
 import {
   resolveEffectiveCampaignRole,

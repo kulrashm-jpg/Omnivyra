@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const sharp = require('sharp') as typeof import('sharp');

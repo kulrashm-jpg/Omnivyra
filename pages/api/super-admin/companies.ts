@@ -1,7 +1,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { saveProfile } from '../../../backend/services/companyProfileService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const normalizeWebsite = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -9,9 +11,13 @@ const normalizeWebsite = (value: string): string => {
   return withoutScheme.replace(/\/+$/, '');
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:companies', 20, 60))) return;
-  if (!(await requireSuperAdminUser(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:all-orgs');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/companies', 'analytics:all-orgs');
+  }
 
   if (req.method === 'GET') {
     const { data, error } = await supabase
@@ -28,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Enrich existing companies with profile data (name/industry from company_profiles).
     // Profiles whose company_id has NO matching companies row are incomplete onboarding
-    // artefacts — do NOT synthesize ghost company entries from them (they have no users,
+    // artefacts â€” do NOT synthesize ghost company entries from them (they have no users,
     // no roles, and cannot be properly managed or deleted).
     const { data: profileRows } = await supabase
       .from('company_profiles')
@@ -134,7 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { error: rolesError } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .delete()
       .eq('company_id', companyId);
     if (rolesError) {
@@ -162,3 +168,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

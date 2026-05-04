@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/guides/generate
  *
@@ -18,7 +19,7 @@ import {
 import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
 import { isValidGuideFormat } from '../../../lib/blog/blogStructureTemplates';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -44,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!topic || typeof topic !== 'string' || !topic.trim())
     return res.status(400).json({ error: 'topic required' });
 
-  // ── 1. Auth ─────────────────────────────────────────────────────────────────
+  // â”€â”€ 1. Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
@@ -54,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   if (!roleGate) return;
 
-  // ── 2. Enrich with company context ──────────────────────────────────────────
+  // â”€â”€ 2. Enrich with company context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let builtContext: Awaited<ReturnType<typeof buildContentContext>> | undefined;
 
   try {
@@ -63,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.warn('[guides/generate] profile enrichment failed:', err);
   }
 
-  // ── 3. Route based on mode ────────────────────────────────────────────────
+  // â”€â”€ 3. Route based on mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const resolvedMode = mode === 'angles' || mode === 'full' ? mode : undefined;
 
   if (resolvedMode) {
@@ -105,6 +106,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // No mode — guides always use the modal flow
+  // No mode â€” guides always use the modal flow
   return res.status(400).json({ error: 'mode required (angles or full)' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

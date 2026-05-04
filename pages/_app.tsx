@@ -1,4 +1,4 @@
-import '../styles/globals.css';
+﻿import '../styles/globals.css';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import Script from 'next/script';
@@ -14,7 +14,6 @@ import { WEBSITE_GA_MEASUREMENT_ID } from '../lib/websiteAnalytics';
 // NOTE: clearSupabaseSession() was removed here.  It wiped sb-* localStorage
 // keys (including PKCE code-verifiers) on every page load, which broke magic-
 // link / password-reset flows and prevented sessions from persisting across
-// refreshes.  The Firebase→Supabase migration it was originally added for is
 // long complete.
 
 const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
@@ -143,7 +142,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const showLandingNavbar = LANDING_PUBLIC_ROUTES.includes(router.pathname) || isBlogRoute || isAuditRoute;
 
   // After auth settles: redirect unauthenticated users away from protected routes.
-  // Must be a useEffect — calling router.replace() synchronously during render causes
+  // Must be a useEffect â€” calling router.replace() synchronously during render causes
   // Next.js to attempt a hard navigation while a soft navigation is in flight, which
   // triggers "Invariant: attempted to hard navigate to the same URL".
   useEffect(() => {

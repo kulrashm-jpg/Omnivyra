@@ -1,5 +1,6 @@
 import type { NextApiRequest } from 'next';
-import { supabase as db } from '../db/supabaseClient';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { runWithServiceRole } from '../db/supabaseClient';
 import { logger } from './logger';
 
 export const extractAccessToken = (req: NextApiRequest): string | null => {
@@ -75,10 +76,10 @@ function decodeJwtClaims(token: string): { sub?: string; email?: string | null }
 }
 
 async function resolveAuthUser(token: string): Promise<{ id: string; email?: string | null } | null> {
-  let authResult: Awaited<ReturnType<typeof db.auth.getUser>>;
+  let authResult: Awaited<ReturnType<SupabaseClient['auth']['getUser']>>;
   try {
     authResult = await Promise.race([
-      db.auth.getUser(token),
+      runWithServiceRole('Resolve Supabase auth user from bearer token', (client) => client.auth.getUser(token)),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Supabase auth timeout')), 5_000)),
     ]);
   } catch (error) {
@@ -135,11 +136,14 @@ export const getSupabaseUserFromRequest = async (
   const supabaseUid = authUser.id;
   const email = authUser.email ?? null;
 
-  const { data: uidRow } = await db
-    .from('users')
-    .select('id, email, is_deleted')
-    .eq('supabase_uid', supabaseUid)
-    .maybeSingle();
+  const { data: uidRow } = await runWithServiceRole(
+    'Resolve internal user by Supabase uid',
+    (client) => client
+      .from('users')
+      .select('id, email, is_deleted')
+      .eq('supabase_uid', supabaseUid)
+      .maybeSingle(),
+  );
 
   if (uidRow) {
     if ((uidRow as any).is_deleted) return { user: null, error: 'ACCOUNT_DELETED' };
@@ -147,15 +151,21 @@ export const getSupabaseUserFromRequest = async (
   }
 
   if (email) {
-    const { data: emailRow } = await db
-      .from('users')
-      .select('id, email, is_deleted')
-      .eq('email', email.toLowerCase())
-      .maybeSingle();
+    const { data: emailRow } = await runWithServiceRole(
+      'Resolve internal user by email fallback',
+      (client) => client
+        .from('users')
+        .select('id, email, is_deleted')
+        .eq('email', email.toLowerCase())
+        .maybeSingle(),
+    );
 
     if (emailRow) {
       if ((emailRow as any).is_deleted) return { user: null, error: 'ACCOUNT_DELETED' };
-      await db.from('users').update({ supabase_uid: supabaseUid }).eq('id', (emailRow as any).id);
+      await runWithServiceRole(
+        'Backfill Supabase uid after email fallback auth resolution',
+        (client) => client.from('users').update({ supabase_uid: supabaseUid }).eq('id', (emailRow as any).id),
+      );
       return { user: { id: (emailRow as any).id, email: (emailRow as any).email }, error: null };
     }
   }

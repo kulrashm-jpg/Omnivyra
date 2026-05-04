@@ -1,17 +1,19 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Public endpoint — no auth required.
+ * Public endpoint â€” no auth required.
  * Returns a published blog post by ID or slug.
  * Used by /company-blog/[slug].
  *
  * Query:
- *   ?id=<uuid>        — look up by primary key
- *   ?slug=<slug>&company_id=<uuid> — look up by slug within company
+ *   ?id=<uuid>        â€” look up by primary key
+ *   ?slug=<slug>&company_id=<uuid> â€” look up by slug within company
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const idParam   = typeof req.query.id        === 'string' ? req.query.id        : null;
@@ -35,3 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ post: data });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

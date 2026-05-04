@@ -57,7 +57,8 @@ jest.mock('../../chatGovernance', () => ({
   validateAndModerateUserMessage: jest.fn().mockResolvedValue({ allowed: true, reason: null, code: null }),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const COMPANY_ID = 'company-sim-1';
 const CAMPAIGN_ID = 'campaign-sim-theme-1';

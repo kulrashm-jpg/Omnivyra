@@ -7,7 +7,8 @@
  * Deterministic rebuild: only when latest != last_processed and message distance >= 5.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { runCompletionWithOperation } from './aiGateway';
 
 const MESSAGE_LIMIT = 10;

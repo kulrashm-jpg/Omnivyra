@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/companies/:id/intelligence
@@ -7,7 +8,7 @@
  *   - Market positioning
  *   - Competitor intelligence
  *   - Strategy evolution (latest)
- *   - Portfolio decision (if ≥ 2 campaigns)
+ *   - Portfolio decision (if â‰¥ 2 campaigns)
  *   - "Why AI did this" / "What changed" / "What is improving"
  *
  * Auth: Bearer token
@@ -25,7 +26,7 @@ import { getDecisionLog } from '@/backend/services/autonomousDecisionLogger';
 import { getEffectiveLearnings } from '@/backend/services/learningDecayService';
 import { injectGlobalPatternsIntoPrompt } from '@/backend/services/globalPatternService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user } = await getSupabaseUserFromRequest(req);
@@ -57,7 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     include.has('global')     ? injectGlobalPatternsIntoPrompt(['linkedin', 'instagram']).catch(() => '') : Promise.resolve(''),
   ]);
 
-  // ── "What changed this week" ──────────────────────────────────────────────
+  // â”€â”€ "What changed this week" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const oneWeekAgo = new Date(Date.now() - 7 * 86400_000).toISOString();
   const recentChanges = (recentDecisions as any[])
     .filter((d: any) => d.created_at >= oneWeekAgo)
@@ -67,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       when: d.created_at,
     }));
 
-  // ── "What is improving" ──────────────────────────────────────────────────
+  // â”€â”€ "What is improving" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const improving = (topLearnings as any[])
     .filter((l: any) => l.engagement_impact > 0 && l.times_reinforced > 0)
     .slice(0, 5)
@@ -78,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       times_reinforced: l.times_reinforced,
     }));
 
-  // ── "Why AI did this" — last 3 major decisions ────────────────────────────
+  // â”€â”€ "Why AI did this" â€” last 3 major decisions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const whyAiDidThis = (recentDecisions as any[])
     .filter((d: any) => ['generate', 'scale', 'pause', 'recover', 'optimize'].includes(d.decision_type))
     .slice(0, 3)
@@ -106,3 +107,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

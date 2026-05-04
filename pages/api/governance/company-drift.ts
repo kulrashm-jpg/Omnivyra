@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/governance/company-drift
- * Stage 25 — Company-wide drift detection. Read-only.
+ * Stage 25 â€” Company-wide drift detection. Read-only.
  * Stage 28: Latest audit status from governance_audit_runs.
  * RBAC: COMPANY_ADMIN minimum.
  */
@@ -10,7 +11,8 @@ import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
 import { getCompanyGovernanceAnalytics } from '../../../backend/services/GovernanceAnalyticsService';
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -66,4 +68,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]));
+

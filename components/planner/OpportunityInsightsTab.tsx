@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Target, Check, X, Loader2, Sparkles } from 'lucide-react';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface OpportunityInsightsTabProps {
   companyId?: string | null;
@@ -51,7 +51,7 @@ export function OpportunityInsightsTab({
     });
     if (campaignId) params.set('campaignId', campaignId);
 
-    fetchWithAuth(`/api/engagement/opportunity-radar?${params}`)
+    apiFetch(`/api/engagement/opportunity-radar?${params}`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -78,7 +78,7 @@ export function OpportunityInsightsTab({
     if (!campaignId) return;
     setApplyingId(oppId);
     try {
-      const res = await fetchWithAuth('/api/campaigns/planner/apply-opportunity', {
+      const res = await apiFetch('/api/campaigns/planner/apply-opportunity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaignId, opportunityId: oppId, companyId }),
@@ -96,7 +96,7 @@ export function OpportunityInsightsTab({
   const handleIgnore = async (oppId: string) => {
     setIgnoringId(oppId);
     try {
-      const res = await fetchWithAuth('/api/campaigns/planner/ignore-opportunity', {
+      const res = await apiFetch('/api/campaigns/planner/ignore-opportunity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ opportunityId: oppId, companyId }),

@@ -15,7 +15,7 @@
  * 
  * Environment Variables:
  * - SUPABASE_URL (required)
- * - SUPABASE_SERVICE_ROLE_KEY (required)
+ * - Supabase service credential (required)
  * - REDIS_URL (required)
  * - CRON_INTERVAL_SECONDS=60 (optional, default 60)
  */
@@ -60,10 +60,15 @@ import { runCampaignHealthEvaluation } from '../jobs/campaignHealthEvaluationJob
 import { runEngagementSignalScheduler } from '../jobs/engagementSignalScheduler';
 import { archiveOldSignals } from '../jobs/engagementSignalArchiveJob';
 import { runEngagementOpportunityScanner } from '../jobs/engagementOpportunityScanner';
-import { runDailyIntelligence } from '../schedulers/intelligenceScheduler';
+import {
+  getClosedLoopIntelligenceIntervalMs,
+  runClosedLoopIntelligenceScheduler,
+  runDailyIntelligence,
+} from '../schedulers/intelligenceScheduler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
+import { runMetaTokenRefreshJob } from '../jobs/metaTokenRefreshJob';
 import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
@@ -116,6 +121,7 @@ const PERFORMANCE_INGESTION_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
 const PERFORMANCE_AGGREGATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const CAMPAIGN_HEALTH_EVALUATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const DAILY_INTELLIGENCE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 3 AM daily (0 3 * * *)
+const CLOSED_LOOP_INTELLIGENCE_INTERVAL_MS = getClosedLoopIntelligenceIntervalMs();
 const INTELLIGENCE_EVENT_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const WEEKLY_PRICING_ANALYSIS_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // weekly
 const ENGAGEMENT_DIGEST_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
@@ -125,6 +131,7 @@ const ENGAGEMENT_OPPORTUNITY_SCANNER_INTERVAL_MS = 4 * 60 * 60 * 1000; // every 
 // community_ai_platform_tokens no longer stores tokens — only metadata.
 // All token refresh runs through SOCIAL_ACCOUNT_TOKEN_REFRESH below.
 const SOCIAL_ACCOUNT_TOKEN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;      // every 10 minutes (X tokens expire in 2h)
+const META_TOKEN_REFRESH_INTERVAL_MS           = 6 * 60 * 60 * 1000;  // every 6 hours (Meta long-lived tokens, 7-day buffer)
 const GA4_INGESTION_INTERVAL_MS                = 6 * 60 * 60 * 1000;  // every 6 hours
 const CONFIDENCE_CALIBRATION_INTERVAL_MS       = 7 * 24 * 60 * 60 * 1000; // weekly
 const COMMUNITY_AI_LEASE_REAP_INTERVAL_MS      = 30 * 1000;               // every 30 seconds
@@ -245,6 +252,7 @@ let lastEngagementSignalSchedulerRun = 0;
 let lastEngagementSignalArchiveRun = 0;
 let lastEngagementOpportunityScannerRun = 0;
 let lastSocialAccountTokenRefreshRun = 0;
+let lastMetaTokenRefreshRun = 0;
 let lastGa4IngestionRun = 0;
 let lastLeadThreadQueueCleanupRun = 0;
 let lastConfidenceCalibrationRun = 0;
@@ -338,6 +346,7 @@ async function startCron() {
     lastEngagementSignalArchiveRun      = saved.engagementSignalArchive     ?? 0;
     lastEngagementOpportunityScannerRun = saved.engagementOpportunityScanner ?? 0;
     lastSocialAccountTokenRefreshRun    = saved.socialAccountTokenRefresh   ?? 0;
+    lastMetaTokenRefreshRun             = saved.metaTokenRefresh             ?? 0;
     lastGa4IngestionRun                 = saved.ga4Ingestion                ?? 0;
     lastLeadThreadQueueCleanupRun       = saved.leadThreadQueueCleanup      ?? 0;
     console.info('[cron-guard] last-run timestamps restored — tasks will respect their intervals on startup');
@@ -368,6 +377,36 @@ async function startCron() {
   }, BASE_TICK_MS);
 
   // All recurring workers — defined once via scheduleWorker(fn, intervalMs, label, logFields, jitterMs)
+  scheduleWorker(
+    async () => {
+      const result = await runClosedLoopIntelligenceScheduler();
+      return {
+        companies_processed: result.companies_processed,
+        companies_failed: result.companies_failed,
+        expected_events_missed: result.expected_events_missed,
+        gaps_created: result.gaps_created,
+        gaps_resolved: result.gaps_resolved,
+        actions_completed: result.actions_completed,
+        prompts_responded: result.prompts_responded,
+        errors: result.errors.length,
+        skipped: result.skipped ? 1 : 0,
+      };
+    },
+    CLOSED_LOOP_INTELLIGENCE_INTERVAL_MS, 'closedLoopIntelligence',
+    [
+      'companies_processed',
+      'companies_failed',
+      'expected_events_missed',
+      'gaps_created',
+      'gaps_resolved',
+      'actions_completed',
+      'prompts_responded',
+      'errors',
+      'skipped',
+    ],
+    Math.min(CLOSED_LOOP_INTELLIGENCE_INTERVAL_MS * 0.1, 60 * 1000)
+  );
+
   // Safety-net: enqueue a BullMQ drain job every 5 min in case the event-driven
   // path missed any rows (e.g. transient Redis error). The worker process in
   // main.ts does the actual work — cron only fires the trigger.
@@ -696,6 +735,7 @@ async function runSchedulerCycle() {
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
     socialAccountTokenRefresh:    lastSocialAccountTokenRefreshRun,
+    metaTokenRefresh:             lastMetaTokenRefreshRun,
     ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
@@ -1172,6 +1212,23 @@ async function runSchedulerCycle() {
     }
   }
 
+  // Meta long-lived token refresh: every 6 hours, refresh any
+  // meta_oauth_connections row whose token_expires_at < now()+7d. Cascades
+  // refreshed Page / IG / Threads tokens into all child social_accounts rows.
+  if (shouldRunCronJob("metaTokenRefresh", META_TOKEN_REFRESH_INTERVAL_MS, lastMetaTokenRefreshRun)) {
+    lastMetaTokenRefreshRun = Date.now();
+    try {
+      const result = await runMetaTokenRefreshJob();
+      if (result.refreshed > 0 || result.failed > 0) {
+        console.log(
+          `✅ Meta token refresh: scanned=${result.scanned} refreshed=${result.refreshed} failed=${result.failed}`
+        );
+      }
+    } catch (error: any) {
+      console.error('❌ Meta token refresh error:', error.message);
+    }
+  }
+
   // Run GA4 -> canonical ingestion every 6 hours for all companies with an active GA integration
   if (shouldRunCronJob("ga4Ingestion", GA4_INGESTION_INTERVAL_MS, lastGa4IngestionRun)) {
     lastGa4IngestionRun = Date.now();
@@ -1254,6 +1311,7 @@ async function runSchedulerCycle() {
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
     socialAccountTokenRefresh:    lastSocialAccountTokenRefreshRun,
+    metaTokenRefresh:             lastMetaTokenRefreshRun,
     ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,
@@ -1291,6 +1349,7 @@ async function runSchedulerCycle() {
     engagementSignalArchive:      lastEngagementSignalArchiveRun,
     engagementOpportunityScanner: lastEngagementOpportunityScannerRun,
     socialAccountTokenRefresh:    lastSocialAccountTokenRefreshRun,
+    metaTokenRefresh:             lastMetaTokenRefreshRun,
     ga4Ingestion:                 lastGa4IngestionRun,
     leadThreadQueueCleanup:       lastLeadThreadQueueCleanupRun,
     confidenceCalibration:        lastConfidenceCalibrationRun,

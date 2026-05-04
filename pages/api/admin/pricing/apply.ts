@@ -16,26 +16,27 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
 import {
   requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
+  requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { applyActionPricingChange } from '../../../../backend/services/actionPricingApplyService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { logger } from '../../../../backend/services/logger';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function pricingApplyHandler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:pricing_apply', 20, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
+  const ctx = await requireAdminScope(req, res, 'pricing:apply');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/pricing/apply', 'pricing:apply');
   }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
@@ -96,7 +97,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .from('pricing_adjustment_queue')
     .update({
       status:              'applied',
-      reviewed_by_user_id: user.id,
+      reviewed_by_user_id: ctx.id,
       reviewed_at:         now,
       applied_at:          now,
     })
@@ -113,7 +114,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     .from('pricing_adjustment_queue')
     .update({
       status:              'superseded',
-      reviewed_by_user_id: user.id,
+      reviewed_by_user_id: ctx.id,
       reviewed_at:         now,
     })
     .eq('action_key', queueRow.action_key)
@@ -123,7 +124,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   // ── 5. Audit trail ─────────────────────────────────────────────────────
   await recordAdminAudit({
-    actorUserId: user.id,
+    actorUserId: ctx.id,
     action:      'ADMIN_PRICING_APPLY_QUEUED',
     targetType:  'action_pricing_config',
     targetId:    newPricingRowId,
@@ -148,4 +149,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withIdempotency(handler, { scope: 'admin-pricing-apply', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(withIdempotency(pricingApplyHandler, { scope: 'admin-pricing-apply', methods: ['POST'] }));

@@ -8,7 +8,8 @@
  * 3. On resume: resolveOrphanedCheckpoints(campaignId) then resume
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getContentAssetById, listContentAssets } from '../db/contentAssetStore';
 import { markDayComplete, getCampaignState } from './campaignExecutionStateService';
 

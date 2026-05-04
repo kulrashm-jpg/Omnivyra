@@ -276,7 +276,7 @@ export default function PricingPage() {
             </p>
             <p className="mt-1 text-xs text-[#6B7C93]/70">
               Try free first &rarr;{' '}
-              <Link href="/get-free-credits" className="text-[#0A66C2] hover:underline">Get 300 free credits</Link>
+              <Link href="/get-free-credits" className="text-[#0A66C2] hover:underline">Get 50 free credits</Link>
             </p>
           </div>
         </section>

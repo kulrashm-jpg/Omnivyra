@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
 import { isSuperAdmin } from '../../backend/services/rbacService';
 import {
@@ -20,7 +22,7 @@ const defaultWeights: RecommendationPolicyWeights = {
   effort_penalty: 0.1,
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
   if (authError || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -77,3 +79,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/governance/restore-snapshot
- * Stage 30 — Restore governance from snapshot. SUPER_ADMIN only.
+ * Stage 30 â€” Restore governance from snapshot. SUPER_ADMIN only.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -46,4 +47,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

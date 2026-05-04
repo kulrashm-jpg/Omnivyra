@@ -3,7 +3,8 @@
  * AI classification of engagement threads for inbox grouping and prioritization.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getThreadMemory } from './conversationMemoryService';
 import { runCompletionWithOperation } from './aiGateway';
 

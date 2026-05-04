@@ -1,7 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // API Endpoint for Platform Account Management
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getPlatformRules } from '@/backend/services/platformIntelligenceService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
@@ -14,7 +16,7 @@ async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise
   return user.id;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { platform } = req.query;
 
   if (!platform || typeof platform !== 'string') {
@@ -148,3 +150,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -290,7 +290,7 @@ export default function ExtApisAccessView({ d }: { d: S }) {
     configModalApiId,
     drafts,
     expandedUsageId,
-    fetchWithAuth,
+    apiFetch,
     globalPresets,
     isLoading,
     isReadOnly,

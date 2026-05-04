@@ -17,7 +17,8 @@
  *   and safe to call frequently.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type AlertType = 'low_20pct' | 'low_10pct' | 'depleted' | 'auto_topup';
 

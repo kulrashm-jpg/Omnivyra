@@ -5,7 +5,8 @@
  * Do NOT auto-register. No campaign mutations.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { runGovernanceAudit } from '../services/GovernanceAuditService';
 import type { GovernanceAuditResult } from '../services/GovernanceAuditService';
 

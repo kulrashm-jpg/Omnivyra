@@ -5,40 +5,34 @@
  * Returns Railway compute cost intelligence for the Super Admin dashboard.
  *
  * Query params:
- *   hours=24       — Time window (default 24)
- *   feature=...    — Filter by feature
+ *   hours=24       â€” Time window (default 24)
+ *   feature=...    â€” Filter by feature
  *
  * Response:
- *   overview       — Total cost, avg request time, request count
- *   topExpensive   — Feature costs breakdown
- *   bySourceType   — API vs Queue vs Cron breakdown
- *   apiEndpoints   — Drill-down into slowest/most-called endpoints
- *   queueJobs      — Drill-down into queue job costs
- *   cronJobs       — Drill-down into cron job costs
- *   insights       — Generated optimization recommendations
- *   controls       — Available optimization actions
+ *   overview       â€” Total cost, avg request time, request count
+ *   topExpensive   â€” Feature costs breakdown
+ *   bySourceType   â€” API vs Queue vs Cron breakdown
+ *   apiEndpoints   â€” Drill-down into slowest/most-called endpoints
+ *   queueJobs      â€” Drill-down into queue job costs
+ *   cronJobs       â€” Drill-down into cron job costs
+ *   insights       â€” Generated optimization recommendations
+ *   controls       â€” Available optimization actions
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getComputeMetricsReport } from '../../../lib/instrumentation/railwayComputeInstrumentation';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:railway-efficiency');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/railway-efficiency', 'analytics:railway-efficiency');
+  }
 
   try {
     const hours = parseInt(req.query.hours as string) || 24;
@@ -166,3 +160,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -15,7 +15,8 @@
  *   - UI insight surfacing
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { contributePattern } from './globalPatternService';
 import { upsertLearning } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';

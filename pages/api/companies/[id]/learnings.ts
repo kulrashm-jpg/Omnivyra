@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/companies/[id]/learnings?limit=<n>
@@ -7,7 +8,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getEffectiveLearnings } from '../../../../backend/services/learningDecayService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const companyId = req.query.id as string;
@@ -20,3 +21,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

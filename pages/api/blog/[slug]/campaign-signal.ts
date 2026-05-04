@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/blog/[slug]/campaign-signal
  *
@@ -25,7 +26,8 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { Role } from '../../../../backend/services/rbacService';
@@ -40,7 +42,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Slug required' });
   }
 
-  // ── Resolve company from session ─────────────────────────────────────────
+  // â”€â”€ Resolve company from session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { user } = await getSupabaseUserFromRequest(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -57,7 +59,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(200).json({ found: false, blog: null, signals: [] });
   }
 
-  // ── Resolve the blog (public_blogs only — global knowledge layer) ─────────
+  // â”€â”€ Resolve the blog (public_blogs only â€” global knowledge layer) â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: blog } = await supabase
     .from('public_blogs')
     .select('id, title, tags')
@@ -69,7 +71,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(200).json({ found: false, blog: null, signals: [] });
   }
 
-  // ── 1. Direct source: campaigns this company linked to this blog ──────────
+  // â”€â”€ 1. Direct source: campaigns this company linked to this blog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: directCampaigns } = await supabase
     .from('campaigns')
     .select('id, name, topic_seed')
@@ -87,7 +89,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     companyDirectIds = (versionCheck ?? []).map((v: any) => v.campaign_id as string);
   }
 
-  // ── 2. Campaigns where blog was in campaign_snapshot.blog_context ──────────
+  // â”€â”€ 2. Campaigns where blog was in campaign_snapshot.blog_context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: contextVersions } = await supabase
     .from('campaign_versions')
     .select('campaign_id')
@@ -129,7 +131,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // ── 3. Fetch performance records — scoped to this company ────────────────
+  // â”€â”€ 3. Fetch performance records â€” scoped to this company â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: performances } = await supabase
     .from('campaign_performance')
     .select(`
@@ -184,4 +186,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]));
+

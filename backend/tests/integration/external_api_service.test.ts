@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { fetchTrendsFromApis } from '../../services/externalApiService';
 import { createApiRequestMock } from '../utils';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import externalApisHandler from '../../../pages/api/external-apis/index';
 import validateHandler from '../../../pages/api/external-apis/[id]/validate';
 import trendsFetchHandler from '../../../pages/api/trends/fetch';
@@ -21,6 +22,9 @@ jest.mock('../../services/rbacService', () => ({
 }));
 jest.mock('../../services/userContextService', () => ({
   resolveUserContext: jest.fn(),
+}));
+jest.mock('../../middleware/withRBAC', () => ({
+  withRBAC: (handler: any) => handler,
 }));
 
 const { getSupabaseUserFromRequest } = jest.requireMock('../../services/supabaseAuthService');
@@ -53,6 +57,7 @@ const buildQuery = (table: string) => {
     order: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     single: jest.fn().mockReturnThis(),
+    maybeSingle: jest.fn(async () => resolveQuery(table, state)),
     insert: jest.fn((payload: any) => {
       state.op = 'insert';
       state.payload = payload;
@@ -239,6 +244,7 @@ describe('External API service', () => {
 
   it('validate endpoint updates external_api_health', async () => {
     (isSuperAdmin as jest.Mock).mockResolvedValue(true);
+    (getUserRole as jest.Mock).mockResolvedValue({ role: 'SUPER_ADMIN', error: null });
     (resolveUserContext as jest.Mock).mockResolvedValue({
       userId: 'user-1',
       defaultCompanyId: 'company-1',

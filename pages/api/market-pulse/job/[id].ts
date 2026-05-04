@@ -1,6 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type ConsolidatedTopic = {
   topic: string;
@@ -29,7 +31,7 @@ function getDecayMultiplier(ageDays: number): number {
   return 0.4;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -124,3 +126,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     completed_at: job.completed_at,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * Company Intelligence Signals API
  * Phase-4: Dashboard-ready aggregated signals by category
@@ -52,4 +53,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALLOWED_ROLES);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, ALLOWED_ROLES));
+

@@ -3,7 +3,8 @@
  * Phase 7: Ranks strategies/recommendations by predicted impact.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { ImpactForecast } from './impactForecastEngine';
 import { predictOutcomeProbability } from './impactForecastEngine';
 

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/track/ai-insights
@@ -7,7 +8,7 @@
  * strategic observations, patterns, and recommendations.
  *
  * Body: { account_id, metrics: AnalyticsSummary }
- * (Caller passes analytics data it already fetched — no double query)
+ * (Caller passes analytics data it already fetched â€” no double query)
  *
  * Response:
  * {
@@ -22,7 +23,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export interface AiInsightInput {
   total_views:     number;
@@ -43,7 +44,7 @@ export interface AiInsightOutput {
   priority_action: string | null;
 }
 
-// ── Prompt ────────────────────────────────────────────────────────────────
+// â”€â”€ Prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildSystemPrompt(): string {
   return `You are a content strategy analyst for B2B marketing teams.
@@ -51,15 +52,15 @@ function buildSystemPrompt(): string {
 You receive blog analytics data and return sharp, actionable strategic insights.
 
 RULES:
-- Base ALL observations strictly on the provided data — no invented statistics
+- Base ALL observations strictly on the provided data â€” no invented statistics
 - Be specific: reference actual slugs, clusters, percentages from the data
-- Be concise: each observation ≤ 25 words, each recommendation ≤ 30 words
+- Be concise: each observation â‰¤ 25 words, each recommendation â‰¤ 30 words
 - Prioritise the single highest-leverage action
-- Return ONLY valid JSON matching this schema — no markdown, no prose:
+- Return ONLY valid JSON matching this schema â€” no markdown, no prose:
 
 {
-  "observations":    ["string", "string", "string"],   // 2–4 observations
-  "recommendations": ["string", "string", "string"],   // 2–3 recommendations
+  "observations":    ["string", "string", "string"],   // 2â€“4 observations
+  "recommendations": ["string", "string", "string"],   // 2â€“3 recommendations
   "strongest_hook":  "string or null",                 // what content pattern works best
   "weakest_pattern": "string or null",                 // what pattern to stop or fix
   "priority_action": "string or null"                  // single most important next step
@@ -113,28 +114,28 @@ TRENDING RIGHT NOW:
 Based on this data, identify patterns and give actionable strategy advice.`;
 }
 
-// ── Fallback ──────────────────────────────────────────────────────────────
+// â”€â”€ Fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildFallback(input: AiInsightInput): AiInsightOutput {
   const obs: string[] = [];
-  if (input.total_views < 10) obs.push('Early-stage data — baseline is forming.');
-  if (input.avg_scroll > 70)  obs.push(`Strong scroll depth (${input.avg_scroll}%) — readers are engaged.`);
-  if (input.avg_scroll < 30)  obs.push(`Low scroll depth (${input.avg_scroll}%) — intros may need work.`);
-  if (input.intent_counts.cta_click > 0) obs.push(`${input.intent_counts.cta_click} CTA clicks recorded — high intent audience.`);
+  if (input.total_views < 10) obs.push('Early-stage data â€” baseline is forming.');
+  if (input.avg_scroll > 70)  obs.push(`Strong scroll depth (${input.avg_scroll}%) â€” readers are engaged.`);
+  if (input.avg_scroll < 30)  obs.push(`Low scroll depth (${input.avg_scroll}%) â€” intros may need work.`);
+  if (input.intent_counts.cta_click > 0) obs.push(`${input.intent_counts.cta_click} CTA clicks recorded â€” high intent audience.`);
 
   const top = input.top_pages[0];
   return {
-    observations:    obs.length > 0 ? obs : ['Collecting data — check back as traffic grows.'],
-    recommendations: top ? [`Promote "${top.slug}" — it has the highest content score.`] : ['Publish consistently to build baseline data.'],
+    observations:    obs.length > 0 ? obs : ['Collecting data â€” check back as traffic grows.'],
+    recommendations: top ? [`Promote "${top.slug}" â€” it has the highest content score.`] : ['Publish consistently to build baseline data.'],
     strongest_hook:  input.clusters[0]?.name ?? null,
     weakest_pattern: null,
-    priority_action: input.hot_slugs[0] ? `Boost "${input.hot_slugs[0]}" — it\'s trending now.` : null,
+    priority_action: input.hot_slugs[0] ? `Boost "${input.hot_slugs[0]}" â€” it\'s trending now.` : null,
   };
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { account_id, metrics } = req.body ?? {};
@@ -180,3 +181,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json(buildFallback(input));
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

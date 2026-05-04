@@ -1,4 +1,4 @@
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { Campaign, DailyPlan, WeeklyPlan } from './types';
 
 type Notify = (type: 'success' | 'error' | 'info', message: string) => void;
@@ -55,7 +55,7 @@ export function useWeeklyAiActions({
     const weekPlan = weeklyPlans.find((week) => week.weekNumber === weekNumber);
     setIsGeneratingWeek(weekNumber);
     try {
-      const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
+      const response = await apiFetch('/api/campaigns/generate-weekly-structure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -78,7 +78,7 @@ export function useWeeklyAiActions({
         });
         notify('success', `Week ${weekNumber} has been enhanced with AI.`);
       } else {
-        const fallbackRes = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+        const fallbackRes = await apiFetch('/api/campaigns/generate-ai-daily-plans', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -135,7 +135,7 @@ export function useWeeklyAiActions({
           } catch {}
         }
       }
-      const res = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
+      const res = await apiFetch('/api/campaigns/regenerate-blueprint', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -175,7 +175,7 @@ export function useWeeklyAiActions({
     try {
       for (const weekNumber of allWeeks) {
         const weekPlan = weeklyPlans.find((week) => week.weekNumber === weekNumber);
-        const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
+        const response = await apiFetch('/api/campaigns/generate-weekly-structure', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -189,7 +189,7 @@ export function useWeeklyAiActions({
           }),
         });
         if (!response.ok) {
-          const fallbackRes = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+          const fallbackRes = await apiFetch('/api/campaigns/generate-ai-daily-plans', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ campaignId: id, weekNumber, companyId: effectiveCompanyId, provider: 'demo' }),
@@ -221,7 +221,7 @@ export function useWeeklyAiActions({
     }
     setIsSavingWeekPlan(weekNumber);
     try {
-      const response = await fetchWithAuth('/api/campaigns/save-week-daily-plan', {
+      const response = await apiFetch('/api/campaigns/save-week-daily-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

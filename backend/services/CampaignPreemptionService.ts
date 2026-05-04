@@ -5,7 +5,8 @@
  * Stage 9C-B: Preemption cooldown window (7 days) to prevent thrashing.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordGovernanceEvent } from './GovernanceEventService';
 import {
   assertValidExecutionTransition,

@@ -1,14 +1,18 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getRbacConfig, saveRbacConfig } from '../../../backend/services/rbacService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { logger } from '../../../backend/services/logger';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:rbac', 20, 60))) return;
-  const admin = await requireSuperAdminUser(req, res);
+  const admin = await requireAdminScope(req, res, 'config:rbac');
   if (!admin) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/rbac', 'config:rbac');
+  }
 
   if (req.method === 'GET') {
     try {
@@ -50,4 +54,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'super-admin-rbac', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

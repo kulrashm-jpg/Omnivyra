@@ -7,7 +7,7 @@
 import { useRef, useState } from 'react';
 import { Loader2, Send, Sparkles, RefreshCw, X } from 'lucide-react';
 import { usePlannerSession, type StrategicThemeEntry } from './plannerSessionStore';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import ChatVoiceButton from '../ChatVoiceButton';
 
 interface ChatTurn { role: 'user' | 'assistant'; text: string; }
@@ -43,7 +43,7 @@ export function StrategyAIChat({ companyId, selectedWeek, onClearSelection }: Pr
     scroll();
 
     try {
-      const res = await fetchWithAuth('/api/planner/chat-themes', {
+      const res = await apiFetch('/api/planner/chat-themes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

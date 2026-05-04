@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { hasUsageAccess } from '../../../backend/services/usageAccessService';
@@ -14,9 +16,6 @@ const requireAuth = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<{ userId: string | null; isSuperAdmin: boolean } | null> => {
-  if (req.cookies?.super_admin_session === '1') {
-    return { userId: null, isSuperAdmin: true };
-  }
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (!error && user?.id) {
     const isAdmin = await isPlatformSuperAdmin(user.id);
@@ -26,7 +25,7 @@ const requireAuth = async (
   return null;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -140,3 +139,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

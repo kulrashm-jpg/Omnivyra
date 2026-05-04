@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
-import { supabase } from '../utils/supabaseClient';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { supabase as browserSupabase } from '../utils/supabaseClient';
+const supabase = browserSupabase;
+import { apiFetch } from '@/lib/apiFetch';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';
 import {
   buildTrendSourceCounts,

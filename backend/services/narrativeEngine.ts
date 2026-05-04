@@ -4,7 +4,8 @@
  * New layer after content_opportunities. Does not modify existing intelligence pipeline.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const NARRATIVE_ANGLES = [
   'founder_insight',

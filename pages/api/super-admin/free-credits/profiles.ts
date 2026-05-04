@@ -7,23 +7,18 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'Forbidden' });
-  return false;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!await requireSuperAdmin(req, res)) return;
+  if (!isContentArchitectSession(req)) {
+    const ctx = await requireAdminScope(req, res, 'credits:view');
+    if (!ctx) return;
+  }
 
   const { page = '1', limit = '50', search = '' } = req.query as Record<string, string>;
   const pageNum = Math.max(1, parseInt(page, 10));
@@ -65,3 +60,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ profiles: enriched, total: count, page: pageNum, limit: limitNum });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

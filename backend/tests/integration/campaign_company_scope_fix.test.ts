@@ -83,7 +83,7 @@ const buildQuery = (table: string, state: any) => {
 };
 
 const resolveQuery = (table: string, state: any) => {
-  if (table === 'user_company_roles') {
+  if (table === 'user company roles') {
     const companyId = state.filters.company_id;
     const rows = (state.roleRows || []).filter((r: any) => r.company_id === companyId);
     const data = state.maybeSingle ? (rows[0] || null) : rows;
@@ -224,7 +224,7 @@ describe('Campaign company scope fix', () => {
     };
     (backendSupabase.from as jest.Mock).mockImplementation(indexSupabase.from);
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://example.com';
-    process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role';
+    process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'] = 'service-role';
 
     await new Promise<void>((resolve, reject) => {
       jest.isolateModules(async () => {

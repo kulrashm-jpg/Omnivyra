@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * PATCH /api/user/preferences/command-center
@@ -27,7 +28,7 @@ type ErrorResponse = {
   code?: string;
 };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -35,14 +36,14 @@ export default async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ── 1. Verify user is authenticated ───────────────────────────────────────
+  // â”€â”€ 1. Verify user is authenticated â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
 
   if (userErr || !user) {
     return res.status(401).json({ error: 'Unauthorized', code: 'INVALID_SESSION' });
   }
 
-  // ── 2. Parse request body ─────────────────────────────────────────────────
+  // â”€â”€ 2. Parse request body â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { command_center_pinned } = body as { command_center_pinned?: boolean };
 
@@ -53,7 +54,7 @@ export default async function handler(
     });
   }
 
-  // ── 3. Update preferences ─────────────────────────────────────────────────
+  // â”€â”€ 3. Update preferences â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   try {
     const updated = await toggleCommandCenter(user.id, command_center_pinned);
 
@@ -76,3 +77,8 @@ export default async function handler(
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

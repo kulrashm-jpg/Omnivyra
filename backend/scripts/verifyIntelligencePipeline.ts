@@ -6,7 +6,8 @@
  * Requires: COMPANY_ID env or pass as arg. Uses first company if none provided.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { runIntelligenceCycle } from '../services/intelligenceCoreEngine';
 
 const REQUIRED_TABLES = [

@@ -30,7 +30,8 @@ export default function CreateAccountPage() {
   const [error, setError]             = useState<string | null>(null);
   const [sent, setSent]               = useState(false);
   const [claimed, setClaimed]   = useState<{
-    alreadyReferred: boolean;
+    companyName: string | null;
+    adminName: string | null;
     adminEmailMasked: string | null;
   } | null>(null);
 
@@ -113,7 +114,8 @@ export default function CreateAccountPage() {
         }
         if (json.code === 'COMPANY_CLAIMED') {
           setClaimed({
-            alreadyReferred: !!json.alreadyReferred,
+            companyName: json.companyName ?? null,
+            adminName: json.adminName ?? null,
             adminEmailMasked: json.adminEmailMasked ?? null,
           });
           setLoading(false);
@@ -163,6 +165,8 @@ export default function CreateAccountPage() {
 
   // ── Domain already claimed by another company admin ─────────────────────
   if (claimed) {
+    const orgLabel = claimed.companyName?.trim() || 'your company';
+    const adminLabel = claimed.adminName?.trim() || null;
     return (
       <>
         <Head><title>Company already on Omnivyra | Omnivyra</title></Head>
@@ -175,24 +179,25 @@ export default function CreateAccountPage() {
           <main className="flex flex-1 items-center justify-center px-6 py-12">
             <div className="w-full max-w-md text-center animate-fadeIn">
               <div className="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-50 text-3xl">🏢</div>
-              <h2 className="text-2xl font-bold text-[#0B1F33]">Your company is already on Omnivyra</h2>
-              {claimed.alreadyReferred ? (
-                <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">
-                  Your administrator&apos;s contact details were already shared with you at{' '}
-                  <strong className="text-[#0B1F33]">{email}</strong>. If you need help, email{' '}
-                  <a href="mailto:support@omnivyra.com" className="font-medium text-[#0A66C2] hover:underline">
-                    support@omnivyra.com
-                  </a>.
-                </p>
-              ) : (
-                <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">
-                  {claimed.adminEmailMasked ? (
-                    <>We&apos;ve emailed <strong className="text-[#0B1F33]">{email}</strong> with your administrator&apos;s contact details ({claimed.adminEmailMasked}). Please reach out to them to request access.</>
-                  ) : (
-                    <>We&apos;ve emailed <strong className="text-[#0B1F33]">{email}</strong> — please check your inbox for next steps.</>
+              <h2 className="text-2xl font-bold text-[#0B1F33]">{orgLabel} is already on Omnivyra</h2>
+              <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">
+                A teammate from <strong className="text-[#0B1F33]">{email.split('@')[1] || 'your domain'}</strong> already registered this workspace. To join, ask your admin to invite you from their Omnivyra dashboard.
+              </p>
+              {(adminLabel || claimed.adminEmailMasked) && (
+                <div className="mx-auto mt-5 max-w-sm rounded-xl border border-blue-100 bg-white px-4 py-3 text-left shadow-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-[#6B7C93]">Your admin</p>
+                  <p className="mt-1 text-sm font-semibold text-[#0B1F33]">
+                    {adminLabel ?? 'Company admin'}
+                  </p>
+                  {claimed.adminEmailMasked && (
+                    <p className="mt-0.5 text-sm text-[#6B7C93]">{claimed.adminEmailMasked}</p>
                   )}
-                </p>
+                </div>
               )}
+              <p className="mx-auto mt-4 max-w-sm text-xs leading-relaxed text-[#6B7C93]">
+                Need help? Email{' '}
+                <a href="mailto:support@omnivyra.com" className="font-medium text-[#0A66C2] hover:underline">support@omnivyra.com</a>.
+              </p>
               <div className="mt-8 flex flex-col items-center gap-3">
                 <Link href="/login"
                   className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95">
@@ -270,7 +275,7 @@ export default function CreateAccountPage() {
             <div className="mb-8 text-center">
               <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-2xl shadow-lg">🎁</div>
               <h1 className="text-2xl font-bold tracking-tight text-[#0B1F33]">Create your account</h1>
-              <p className="mt-2 text-sm text-[#6B7C93]">Start with 300 free credits — no card required.</p>
+              <p className="mt-2 text-sm text-[#6B7C93]">Start with 50 free credits — no card required.</p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">

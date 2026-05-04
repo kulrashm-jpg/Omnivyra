@@ -4,7 +4,8 @@
  * Reuses CampaignPrePlanningService. No LLM. Deterministic only.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { runPrePlanning } from './CampaignPrePlanningService';
 import { normalizeGovernanceDecision } from './GovernanceExplanationService';
 import type { DurationEvaluationResult } from '../types/CampaignDuration';

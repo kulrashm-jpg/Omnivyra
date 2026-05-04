@@ -1,8 +1,12 @@
 import axios from 'axios';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isConversionEvent } from './conversionRegistry';
 import { ensureCanonicalDomain, hashKey, normalizeUrl, resolveCompanyWebsite, safeInteger, safeNumber, todayIsoDate } from './ingestionUtils';
 import { resolveGa4IngestionContext } from './analyticsIntegrationService';
+import { logger } from './logger';
+import { normalizeSource as normalizeUnifiedSource } from './sourceNormalizationService';
+import { bulkCreateTouchpoints, type TouchpointInput, type TouchpointWriteResult } from './touchpointService';
 
 export interface Ga4SessionRow {
   sessionDate: string;
@@ -60,7 +64,30 @@ export interface Ga4IngestionResult {
   eventsProcessed: number;
   eventsInserted: number;
   conversionsInserted: number;
+  touchpointsCreated?: number;
+  touchpointsSkipped?: number;
 }
+
+type CanonicalEventRef = {
+  id: string;
+  session_id: string;
+  event_name: string;
+  event_timestamp: string;
+};
+
+type CanonicalConversionRef = {
+  id: string;
+  session_id: string;
+  conversion_name: string;
+  conversion_timestamp: string;
+};
+
+type Ga4SessionTouchpointInput = {
+  companyId: string;
+  sessionId: string;
+  sessionKey: string;
+  row: Pick<Ga4SessionRow, 'sessionDate' | 'trafficSource' | 'trafficMedium' | 'campaignName'>;
+};
 
 function normalizePath(path: string | null | undefined): string {
   const value = String(path ?? '/').trim();
@@ -75,6 +102,65 @@ function buildStableExternalKey(prefix: string, parts: Array<string | null | und
     .map((part) => (part.length > 0 ? part : 'na'));
 
   return `${prefix}|${normalized.join('|')}`;
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return Array.from(
+    new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))
+  );
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function normalizeTimestampKey(value: unknown): string {
+  const parsed = new Date(String(value ?? ''));
+  return Number.isNaN(parsed.getTime()) ? String(value ?? '').trim() : parsed.toISOString();
+}
+
+function recordText(record: Record<string, unknown>, key: string): string {
+  return String(record[key] ?? '').trim();
+}
+
+function eventRecordKey(record: Record<string, unknown>): string {
+  return [
+    recordText(record, 'company_id'),
+    recordText(record, 'session_id'),
+    recordText(record, 'event_name'),
+    normalizeTimestampKey(record.event_timestamp),
+  ].join('|');
+}
+
+function eventRefKey(row: CanonicalEventRef, companyId: string): string {
+  return [
+    companyId,
+    row.session_id,
+    row.event_name,
+    normalizeTimestampKey(row.event_timestamp),
+  ].join('|');
+}
+
+function conversionRecordKey(record: Record<string, unknown>): string {
+  return [
+    recordText(record, 'company_id'),
+    recordText(record, 'session_id'),
+    recordText(record, 'conversion_name'),
+    normalizeTimestampKey(record.conversion_timestamp),
+  ].join('|');
+}
+
+function conversionRefKey(row: CanonicalConversionRef, companyId: string): string {
+  return [
+    companyId,
+    row.session_id,
+    row.conversion_name,
+    normalizeTimestampKey(row.conversion_timestamp),
+  ].join('|');
 }
 
 function normalizeGaDate(value: string | null | undefined): string {
@@ -491,6 +577,31 @@ function buildCanonicalConversionRecord(input: {
   };
 }
 
+function buildGa4SessionTouchpoint(input: Ga4SessionTouchpointInput): TouchpointInput {
+  const channel = normalizeSource(input.row.trafficSource);
+  const unifiedSource = normalizeUnifiedSource('ga4', {
+    sourceType: 'integration',
+    channel: channel === 'unknown' ? undefined : channel,
+  });
+
+  return {
+    companyId: input.companyId,
+    unifiedPersonId: null,
+    source: 'ga4',
+    unifiedSource,
+    touchpointType: 'session',
+    referenceTable: 'canonical_sessions',
+    referenceId: input.sessionId,
+    occurredAt: new Date(normalizeGaDate(input.row.sessionDate)).toISOString(),
+    metadata: {
+      source: input.row.trafficSource ?? null,
+      medium: input.row.trafficMedium ?? null,
+      campaign: input.row.campaignName ?? null,
+      external_session_key: input.sessionKey,
+    },
+  };
+}
+
 async function persistBehavioralBatch(input: {
   events: Record<string, unknown>[];
   conversions: Record<string, unknown>[];
@@ -512,6 +623,121 @@ async function persistBehavioralBatch(input: {
     eventsInserted: Number((data as { events_inserted?: number } | null)?.events_inserted ?? 0),
     conversionsInserted: Number((data as { conversions_inserted?: number } | null)?.conversions_inserted ?? 0),
   };
+}
+
+async function loadCanonicalEventRefs(
+  companyId: string,
+  records: Record<string, unknown>[]
+): Promise<CanonicalEventRef[]> {
+  if (records.length === 0) return [];
+
+  const refsById = new Map<string, CanonicalEventRef>();
+  for (const recordChunk of chunk(records, 250)) {
+    const expectedKeys = new Set(recordChunk.map(eventRecordKey));
+    const { data, error } = await supabase
+      .from('canonical_events')
+      .select('id, session_id, event_name, event_timestamp')
+      .eq('company_id', companyId)
+      .in('session_id', uniqueStrings(recordChunk.map((record) => record.session_id)))
+      .in('event_name', uniqueStrings(recordChunk.map((record) => record.event_name)))
+      .in('event_timestamp', uniqueStrings(recordChunk.map((record) => normalizeTimestampKey(record.event_timestamp))));
+
+    if (error) {
+      throw new Error(`Failed to load canonical GA4 events for touchpoints: ${error.message}`);
+    }
+
+    for (const row of (data ?? []) as CanonicalEventRef[]) {
+      if (expectedKeys.has(eventRefKey(row, companyId))) {
+        refsById.set(row.id, row);
+      }
+    }
+  }
+
+  return [...refsById.values()];
+}
+
+async function loadCanonicalConversionRefs(
+  companyId: string,
+  records: Record<string, unknown>[]
+): Promise<CanonicalConversionRef[]> {
+  if (records.length === 0) return [];
+
+  const refsById = new Map<string, CanonicalConversionRef>();
+  for (const recordChunk of chunk(records, 250)) {
+    const expectedKeys = new Set(recordChunk.map(conversionRecordKey));
+    const { data, error } = await supabase
+      .from('canonical_conversions')
+      .select('id, session_id, conversion_name, conversion_timestamp')
+      .eq('company_id', companyId)
+      .in('session_id', uniqueStrings(recordChunk.map((record) => record.session_id)))
+      .in('conversion_name', uniqueStrings(recordChunk.map((record) => record.conversion_name)))
+      .in('conversion_timestamp', uniqueStrings(recordChunk.map((record) => normalizeTimestampKey(record.conversion_timestamp))));
+
+    if (error) {
+      throw new Error(`Failed to load canonical GA4 conversions for touchpoints: ${error.message}`);
+    }
+
+    for (const row of (data ?? []) as CanonicalConversionRef[]) {
+      if (expectedKeys.has(conversionRefKey(row, companyId))) {
+        refsById.set(row.id, row);
+      }
+    }
+  }
+
+  return [...refsById.values()];
+}
+
+async function createGa4BehaviorTouchpoints(input: {
+  companyId: string;
+  sessionTouchpoints: TouchpointInput[];
+  eventRecords: Record<string, unknown>[];
+  conversionRecords: Record<string, unknown>[];
+}): Promise<TouchpointWriteResult> {
+  const [eventRefs, conversionRefs] = await Promise.all([
+    loadCanonicalEventRefs(input.companyId, input.eventRecords),
+    loadCanonicalConversionRefs(input.companyId, input.conversionRecords),
+  ]);
+  const unifiedSource = normalizeUnifiedSource('ga4', { sourceType: 'integration' });
+  const touchpoints = [
+    ...input.sessionTouchpoints,
+    ...eventRefs.map((event) => ({
+      companyId: input.companyId,
+      unifiedPersonId: null,
+      source: 'ga4',
+      unifiedSource,
+      touchpointType: 'event',
+      referenceTable: 'canonical_events',
+      referenceId: event.id,
+      occurredAt: event.event_timestamp,
+      metadata: {
+        event_name: event.event_name,
+        session_id: event.session_id,
+      },
+    })),
+    ...conversionRefs.map((conversion) => ({
+      companyId: input.companyId,
+      unifiedPersonId: null,
+      source: 'ga4',
+      unifiedSource,
+      touchpointType: 'conversion',
+      referenceTable: 'canonical_conversions',
+      referenceId: conversion.id,
+      occurredAt: conversion.conversion_timestamp,
+      metadata: {
+        conversion_name: conversion.conversion_name,
+        session_id: conversion.session_id,
+      },
+    })),
+  ];
+
+  return bulkCreateTouchpoints(touchpoints, {
+    companyId: input.companyId,
+    source: 'ga4',
+    service: 'ga4IngestionService',
+    sessionTouchpointsAttempted: input.sessionTouchpoints.length,
+    eventTouchpointsAttempted: eventRefs.length,
+    conversionTouchpointsAttempted: conversionRefs.length,
+  });
 }
 
 export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4IngestionResult> {
@@ -544,6 +770,7 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
   let sessionsInserted = 0;
   let usersUpserted = 0;
   let pageViewsInserted = 0;
+  const sessionTouchpoints: TouchpointInput[] = [];
   const eventRecords: Record<string, unknown>[] = [];
   const conversionRecords: Record<string, unknown>[] = [];
 
@@ -558,6 +785,14 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
       sessionKey,
       row,
     });
+    sessionTouchpoints.push(
+      buildGa4SessionTouchpoint({
+        companyId: input.companyId,
+        sessionId,
+        sessionKey,
+        row,
+      })
+    );
 
     await upsertUser({
       companyId: input.companyId,
@@ -651,6 +886,19 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
         userId: row.userId ?? null,
       },
     });
+    sessionTouchpoints.push(
+      buildGa4SessionTouchpoint({
+        companyId: input.companyId,
+        sessionId,
+        sessionKey,
+        row: {
+          sessionDate,
+          trafficSource: row.trafficSource,
+          trafficMedium: row.trafficMedium,
+          campaignName: row.campaignName,
+        },
+      })
+    );
 
     const userId = await upsertUser({
       companyId: input.companyId,
@@ -706,6 +954,26 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
     events: eventRecords,
     conversions: conversionRecords,
   });
+  let touchpointsCreated: number | undefined;
+  let touchpointsSkipped: number | undefined;
+
+  try {
+    const touchpointResult = await createGa4BehaviorTouchpoints({
+      companyId: input.companyId,
+      sessionTouchpoints,
+      eventRecords,
+      conversionRecords,
+    });
+    touchpointsCreated = touchpointResult.created;
+    touchpointsSkipped = touchpointResult.skipped;
+  } catch (error) {
+    logger.error('ga4_behavior_touchpoints_failed', {
+      companyId: input.companyId,
+      events: eventRecords.length,
+      conversions: conversionRecords.length,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   return {
     source: 'ga4',
@@ -716,6 +984,8 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
     eventsProcessed: eventRows.reduce((sum, row) => sum + Math.max(1, safeInteger(row.eventCount, 1)), 0),
     eventsInserted,
     conversionsInserted,
+    touchpointsCreated,
+    touchpointsSkipped,
   };
 }
 

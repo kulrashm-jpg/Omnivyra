@@ -3,7 +3,8 @@
  */
 
 import { analyzeSignalInfluence } from '../../services/signalSchedulingInfluence';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },

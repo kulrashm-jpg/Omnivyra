@@ -13,7 +13,8 @@ jest.mock('../../services/GovernanceReplayService', () => ({
   replayGovernanceEvent: jest.fn().mockResolvedValue({ statusMatch: true }),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignRoiIntelligence } from '../../services/CampaignRoiIntelligenceService';
 import { getCompanyGovernanceAnalytics } from '../../services/GovernanceAnalyticsService';
 import campaignRoiHandler from '../../../pages/api/analytics/campaign-roi';

@@ -1,19 +1,25 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function currentYearMonth(): { year: number; month: number } {
   const now = new Date();
   return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:usage-alerts', 30, 60))) return;
 
-  if (!(await requireSuperAdminUser(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:usage-alerts');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/usage-alerts', 'analytics:usage-alerts');
+  }
 
   const { year: defaultYear, month: defaultMonth } = currentYearMonth();
   const organizationId = req.query.organization_id as string | undefined;
@@ -60,3 +66,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

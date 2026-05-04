@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { ingestUnifiedData } from './unifiedIngestionService';
 import {
   hashKey,
@@ -20,6 +21,7 @@ export interface CrmLeadRecord {
   revenue?: number | string | null;
   currencyCode?: string | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
   campaignId?: string | null;
   metadata?: Record<string, unknown> | null;
 }
@@ -44,6 +46,11 @@ type CrmRowsIngestionOptions = {
   emitTouchpoints?: boolean;
 };
 
+type CanonicalLeadUpsertResult = {
+  id: string;
+  previousStatus: string | null;
+};
+
 function normalizeCrmRow(row: Record<string, unknown>): CrmLeadRecord {
   const lower = lowerCaseKeys(row);
   return {
@@ -56,6 +63,15 @@ function normalizeCrmRow(row: Record<string, unknown>): CrmLeadRecord {
     revenue: (lower.revenue ?? lower.amount ?? lower.deal_value ?? null) as string | number | null,
     currencyCode: String(lower.currencycode ?? lower.currency_code ?? lower.currency ?? 'USD').trim() || 'USD',
     createdAt: String(lower.createdat ?? lower.created_at ?? '').trim() || null,
+    updatedAt:
+      String(
+        lower.updatedat ??
+          lower.updated_at ??
+          lower.modifiedat ??
+          lower.modified_at ??
+          lower.status_updated_at ??
+          ''
+      ).trim() || null,
     campaignId: String(lower.campaignid ?? lower.campaign_id ?? '').trim() || null,
     metadata: typeof lower.metadata === 'object' && lower.metadata ? (lower.metadata as Record<string, unknown>) : {},
   };
@@ -86,6 +102,24 @@ function buildCrmIdentityExternalKeys(row: CrmLeadRecord): IdentityExternalKeys 
       external_id: externalId,
     },
   };
+}
+
+function normalizeStatus(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function statusesDiffer(existingStatus: unknown, incomingStatus: unknown): boolean {
+  const existing = normalizeStatus(existingStatus);
+  const incoming = normalizeStatus(incomingStatus);
+  return Boolean(existing && incoming && existing.toLowerCase() !== incoming.toLowerCase());
+}
+
+function safeTimestampOrNow(value: string | null | undefined): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return new Date().toISOString();
+
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date().toISOString();
 }
 
 async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSource: UnifiedSource): Promise<void> {
@@ -178,7 +212,7 @@ async function upsertCanonicalLead(params: {
   row: CrmLeadRecord;
   unifiedSource: UnifiedSource;
   unifiedPersonId: string;
-}): Promise<string> {
+}): Promise<CanonicalLeadUpsertResult> {
   const payload = {
     company_id: params.companyId,
     user_id: params.userId,
@@ -194,7 +228,7 @@ async function upsertCanonicalLead(params: {
 
   const { data: existing, error: existingError } = await supabase
     .from('canonical_leads')
-    .select('id')
+    .select('id, lead_status')
     .eq('company_id', params.companyId)
     .eq('external_lead_key', params.leadKey)
     .maybeSingle();
@@ -203,19 +237,44 @@ async function upsertCanonicalLead(params: {
     throw new Error(`Failed to check CRM lead: ${existingError.message}`);
   }
 
-  if (existing?.id) {
-    const { error } = await supabase.from('canonical_leads').update(payload).eq('id', existing.id);
+  let matchedLead = existing as { id: string; lead_status?: string | null } | null;
+  if (!matchedLead?.id && params.row.email?.trim()) {
+    const { data: emailMatchedLead, error: emailMatchError } = await supabase
+      .from('canonical_leads')
+      .select('id, lead_status')
+      .eq('company_id', params.companyId)
+      .eq('user_id', params.userId)
+      .eq('source', params.source)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (emailMatchError) {
+      throw new Error(`Failed to check CRM lead by email identity: ${emailMatchError.message}`);
+    }
+
+    matchedLead = emailMatchedLead as { id: string; lead_status?: string | null } | null;
+  }
+
+  if (matchedLead?.id) {
+    const { error } = await supabase.from('canonical_leads').update(payload).eq('id', matchedLead.id);
     if (error) {
       throw new Error(`Failed to update CRM lead: ${error.message}`);
     }
-    return existing.id;
+    return {
+      id: matchedLead.id,
+      previousStatus: matchedLead.lead_status ?? null,
+    };
   }
 
   const { data, error } = await supabase.from('canonical_leads').insert(payload).select('id').single();
   if (error) {
     throw new Error(`Failed to insert CRM lead: ${error.message}`);
   }
-  return (data as { id: string }).id;
+  return {
+    id: (data as { id: string }).id,
+    previousStatus: null,
+  };
 }
 
 async function upsertRevenueEvent(params: {
@@ -303,7 +362,7 @@ async function ingestCrmRows(
 
     const qualificationScore = row.revenue != null ? Math.min(100, Math.max(40, Math.round(safeNumber(row.revenue, 0) / 100))) : 40;
 
-    const leadId = await upsertCanonicalLead({
+    const leadResult = await upsertCanonicalLead({
       companyId,
       userId,
       leadKey,
@@ -314,6 +373,7 @@ async function ingestCrmRows(
       unifiedSource,
       unifiedPersonId: identity.unifiedPersonId,
     });
+    const leadId = leadResult.id;
 
     await upsertLegacyLead(companyId, row, unifiedSource);
 
@@ -336,6 +396,26 @@ async function ingestCrmRows(
           ingestion_run_id: options.ingestionRunId ?? null,
         },
       });
+
+      if (statusesDiffer(leadResult.previousStatus, row.status)) {
+        touchpoints.push({
+          companyId,
+          unifiedPersonId: identity.unifiedPersonId,
+          source,
+          unifiedSource,
+          touchpointType: 'lead_status_updated',
+          referenceTable: 'canonical_leads',
+          referenceId: leadId,
+          occurredAt: safeTimestampOrNow(row.updatedAt),
+          metadata: {
+            old_status: normalizeStatus(leadResult.previousStatus),
+            new_status: normalizeStatus(row.status),
+            external_lead_key: leadKey,
+            crm_external_id: row.externalId ?? null,
+            ingestion_run_id: options.ingestionRunId ?? null,
+          },
+        });
+      }
     }
 
     if (row.revenue != null && safeNumber(row.revenue, 0) > 0) {

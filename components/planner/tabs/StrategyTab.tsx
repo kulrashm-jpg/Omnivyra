@@ -9,7 +9,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { usePlannerSession, type StrategicThemeEntry } from '../plannerSessionStore';
 import { OpportunityInsightsTab } from '../OpportunityInsightsTab';
 import { MultiSelectDropdown } from '../../ui/dropdown';
-import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { Sparkles, Loader2, Palette, RotateCcw, Trash2, Target, Layers } from 'lucide-react';
 
 const CAMPAIGN_GOAL_OPTIONS = [
@@ -93,7 +93,7 @@ export function StrategyTab({
   useEffect(() => {
     if (!companyId) { setStrategicConfig(null); return; }
     let cancelled = false;
-    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (cancelled) return;
@@ -209,7 +209,7 @@ export function StrategyTab({
     let cancelled = false;
     setSuggestionsLoading(true);
     setSuggestionsError(null);
-    fetchWithAuth('/api/planner/suggest-campaigns', {
+    apiFetch('/api/planner/suggest-campaigns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ companyId }),
@@ -266,7 +266,7 @@ export function StrategyTab({
     setThemesError(null);
     setGeneratedThemes([]);
     try {
-      const res = await fetchWithAuth('/api/planner/generate-themes', {
+      const res = await apiFetch('/api/planner/generate-themes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

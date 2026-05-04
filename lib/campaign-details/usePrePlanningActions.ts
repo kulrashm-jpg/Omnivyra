@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { clearWizardState } from '../../utils/campaignWizardStorage';
 import type { Campaign, RecommendationSummary } from './types';
 
@@ -58,7 +58,7 @@ export function usePrePlanningActions({
     setAiSuggestionLoading(true);
     setAiSuggestion(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/suggest-duration', {
+      const res = await apiFetch('/api/campaigns/suggest-duration', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -85,7 +85,7 @@ export function usePrePlanningActions({
       setPrePlanningLoading(true);
       setPrePlanningResult(null);
       try {
-        const res = await fetchWithAuth('/api/campaigns/run-preplanning', {
+        const res = await apiFetch('/api/campaigns/run-preplanning', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -112,7 +112,7 @@ export function usePrePlanningActions({
       if (!campaign || !effectiveCompanyId) return;
       setPrePlanningLoading(true);
       try {
-        const res = await fetchWithAuth('/api/campaigns/update-duration', {
+        const res = await apiFetch('/api/campaigns/update-duration', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -159,7 +159,7 @@ export function usePrePlanningActions({
               if (typeof window !== 'undefined') {
                 sessionStorage.setItem(`campaign_planning_context_${campaign.id}`, JSON.stringify(planningContext));
               }
-              const regRes = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
+              const regRes = await apiFetch('/api/campaigns/regenerate-blueprint', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

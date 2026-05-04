@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCommunityAiActionById } from '../../../../backend/db/communityAiActionStore';
 import { enforceActionRole, requireTenantScope } from '../utils';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
@@ -19,7 +21,7 @@ function readIdempotencyKey(req: NextApiRequest, body: ApproveRequest): string |
   return candidate.length > 0 ? candidate : null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -54,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (action.status === 'approved' && action.approved_at) {
-    // Already approved — return the current row so the client can treat
+    // Already approved â€” return the current row so the client can treat
     // duplicate clicks as successful (matches the idempotency contract).
     return res.status(200).json({ ...action, idempotent: true });
   }
@@ -133,3 +135,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json(updated);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

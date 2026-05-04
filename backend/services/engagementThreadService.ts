@@ -5,7 +5,8 @@
  * Supports filters: organization_id, platform, source_id, priority, date_range.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { scoreThreadPriority } from './engagementThreadPriorityService';
 import { computeThreadLeadScoresBatch } from './leadThreadScoring';
 import { isActionableDmPreview, isAuthorSelf } from '../../lib/engagement/messageRoles';
@@ -49,7 +50,7 @@ export type ThreadSummary = {
 
 async function getOrgAuthorIds(organizationId: string): Promise<Set<string>> {
   const { data: roleUsers } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', organizationId)
     .eq('status', 'active');

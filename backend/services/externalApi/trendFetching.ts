@@ -12,6 +12,7 @@ import {
   getCacheStats,
   clearLastRateLimitedSources,
   getLastRateLimitedSources,
+  addRateLimitedSource,
 } from '../redisExternalApiCache';
 import { updateApiHealth } from '../externalApiHealthService';
 import { insertFromTrendApiResults } from '../intelligenceSignalStore';
@@ -24,7 +25,7 @@ import type {
   ExternalApiFetchSummary,
 } from './types';
 import { buildUsageUserId, logExternalApiUsage } from './usageLogging';
-import { buildProfileRuntimeValues, DEFAULT_CACHE_TTL_MS } from './internalHelpers';
+import { buildProfileRuntimeValues, DEFAULT_CACHE_TTL_MS, DEFAULT_RATE_LIMIT_PER_MIN, isRateLimited } from './internalHelpers';
 import { getExternalApiSourcesForUser } from './userAccess';
 import { getHealthForSource } from './dbHelpers';
 import { executeWithAccountLoop, buildExternalApiRequest } from './execution';
@@ -78,6 +79,15 @@ export async function fetchTrendsFromApis(
     const reliability = health?.reliability_score ?? 1;
     if (reliability < minReliability) {
       console.warn('EXTERNAL_API_SKIP_UNRELIABLE', { source: source.name });
+      continue;
+    }
+
+    const rateLimitKey = primaryAccountId
+      ? `${primaryAccountId}:${usageUserId}`
+      : `src:${source.id}:${usageUserId}`;
+    const limitPerMin = source.rate_limit_per_min ?? DEFAULT_RATE_LIMIT_PER_MIN;
+    if (await isRateLimited(rateLimitKey, limitPerMin)) {
+      addRateLimitedSource(`${source.name}:${primaryAccountId ?? 'default'}`);
       continue;
     }
 

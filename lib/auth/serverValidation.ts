@@ -1,11 +1,11 @@
-/**
+﻿/**
  * Server-side auth validation helpers.
- * These run in Next.js API routes only — never imported by client code.
+ * These run in Next.js API routes only â€” never imported by client code.
  */
 
-import { supabase as supabaseAdmin } from '../../backend/db/supabaseClient';
+import { runWithServiceRole } from '../../backend/db/supabaseClient';
 
-// ── Domain blocklist ──────────────────────────────────────────────────────────
+// â”€â”€ Domain blocklist â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const BLOCKED_DOMAINS = new Set([
   'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
   'icloud.com', 'protonmail.com', 'mail.com', 'yandex.com', '163.com',
@@ -34,7 +34,10 @@ export async function verifySupabaseAuthHeader(
     throw new Error('Missing or malformed Authorization header.');
   }
   const token = authHeader.slice(7);
-  const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+  const { data: { user }, error } = await runWithServiceRole(
+    'Validate Supabase JWT for API authentication',
+    (client) => client.auth.getUser(token),
+  );
   if (error || !user) throw new Error('Invalid or expired session.');
   if (!user.email) throw new Error('No email associated with this account.');
   return {
@@ -44,7 +47,6 @@ export async function verifySupabaseAuthHeader(
   };
 }
 
-// Legacy alias — kept so callers migrating from Firebase still compile
 export const verifyAuthHeader = async (authHeader: string | undefined) => {
   const u = await verifySupabaseAuthHeader(authHeader);
   return { uid: u.id, email: u.email, emailVerified: u.emailVerified };

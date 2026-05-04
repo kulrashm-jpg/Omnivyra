@@ -1,7 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/blogs/optimize
  *
- * Targeted regeneration engine — applies a list of OptimizationActions to
+ * Targeted regeneration engine â€” applies a list of OptimizationActions to
  * specific parts of a blog post without overwriting the entire content_blocks.
  *
  * Auth:   COMPANY_ADMIN only + enforceCompanyAccess
@@ -12,7 +13,7 @@
  *   company_id: string,
  *   blog_id:    string,
  *   actions:    OptimizationAction[],
- *   save?:      boolean   // default true — set false for preview mode
+ *   save?:      boolean   // default true â€” set false for preview mode
  * }
  *
  * Response:
@@ -27,7 +28,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   applyOptimizationActions,
   type BlogForRegeneration,
@@ -35,7 +37,7 @@ import {
 import type { ContentBlock } from '../../../lib/blog/blockTypes';
 import type { OptimizationAction } from '../../../lib/blog/optimizationEngine';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -45,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     save = true,
   } = req.body ?? {};
 
-  // ── Input validation ─────────────────────────────────────────────────────────
+  // â”€â”€ Input validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   if (!company_id || typeof company_id !== 'string')
     return res.status(400).json({ error: 'company_id required' });
@@ -63,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── Auth ─────────────────────────────────────────────────────────────────────
+  // â”€â”€ Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
@@ -76,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   if (!roleGate) return;
 
-  // ── Fetch blog ────────────────────────────────────────────────────────────────
+  // â”€â”€ Fetch blog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const { data: blog, error: blogError } = await supabase
     .from('blogs')
@@ -93,7 +95,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'Access denied: blog does not belong to this company' });
   }
 
-  // ── Execute actions ───────────────────────────────────────────────────────────
+  // â”€â”€ Execute actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const blogForRegen: BlogForRegeneration = {
     id:             blog.id as string,
@@ -109,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     actions as OptimizationAction[],
   );
 
-  // ── Optional save ─────────────────────────────────────────────────────────────
+  // â”€â”€ Optional save â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   if (save) {
     const patch: Record<string, unknown> = {
@@ -133,7 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── Response ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Response â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   return res.status(200).json({
     updated_blocks: result.updated_blocks,
@@ -142,3 +144,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     saved:          save,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

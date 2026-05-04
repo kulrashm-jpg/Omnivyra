@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getOAuthCredentialsForPlatform } from '../../../backend/auth/oauthCredentialResolver';
 import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
@@ -29,9 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const state = encodeOAuthState({ companyId, userId, returnTo });
 
     const redirectUri = `${getBaseUrl(req)}/api/auth/linkedin/callback`;
-    console.log('[LinkedIn OAuth] ── credentials source:', credentials?.source);
-    console.log('[LinkedIn OAuth] ── client_id:', clientId);
-    console.log('[LinkedIn OAuth] ── redirect_uri:', redirectUri);
+    console.log('[LinkedIn OAuth] â”€â”€ credentials source:', credentials?.source);
+    console.log('[LinkedIn OAuth] â”€â”€ client_id:', clientId);
+    console.log('[LinkedIn OAuth] â”€â”€ redirect_uri:', redirectUri);
 
     const params = new URLSearchParams({
       response_type: 'code',
@@ -48,3 +49,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: error.message });
   }
 }
+

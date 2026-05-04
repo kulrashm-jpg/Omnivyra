@@ -1,8 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * GET  /api/campaigns/:id/prediction        — fetch latest stored prediction
- * POST /api/campaigns/:id/prediction        — run a new prediction
- * POST /api/campaigns/:id/prediction/accuracy — evaluate predicted vs actual
+ * GET  /api/campaigns/:id/prediction        â€” fetch latest stored prediction
+ * POST /api/campaigns/:id/prediction        â€” run a new prediction
+ * POST /api/campaigns/:id/prediction/accuracy â€” evaluate predicted vs actual
  *
  * Auth: requireAuth + requireCompanyAccess (company membership verified)
  */
@@ -11,22 +12,25 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { predictCampaignOutcome, type CampaignPlanInput } from '@/backend/services/campaignPredictionEngine';
 import { evaluatePredictionAccuracy } from '@/backend/services/predictionAccuracyService';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
-import { supabase as adminSupabase } from '@/backend/db/supabaseClient';
+import { runWithServiceRole } from '@/backend/db/supabaseClient';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const campaignId = req.query.id as string;
   if (!campaignId) return res.status(400).json({ error: 'Campaign ID required' });
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const auth = await requireAuth(req, res);
   if (!auth) return;
 
   // Look up campaign's company (service-role to guarantee lookup succeeds)
-  const { data: campaign, error: campaignErr } = await adminSupabase
-    .from('campaigns')
-    .select('id, company_id, name, status')
-    .eq('id', campaignId)
-    .maybeSingle();
+  const { data: campaign, error: campaignErr } = await runWithServiceRole(
+    'Load campaign for prediction org guard',
+    (client) => client
+      .from('campaigns')
+      .select('id, company_id, name, status')
+      .eq('id', campaignId)
+      .maybeSingle(),
+  );
 
   if (campaignErr || !campaign) {
     return res.status(404).json({ error: 'Campaign not found' });
@@ -35,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const allowed = await requireCompanyAccess(auth.user.id, campaign.company_id, res);
   if (!allowed) return;
 
-  // ── POST .../accuracy ─────────────────────────────────────────────────────
+  // â”€â”€ POST .../accuracy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST' && req.url?.includes('/accuracy')) {
     try {
       const result = await evaluatePredictionAccuracy(campaignId);
@@ -47,36 +51,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── GET — fetch latest stored prediction ──────────────────────────────────
+  // â”€â”€ GET â€” fetch latest stored prediction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
-    const { data: prediction } = await adminSupabase
-      .from('campaign_predictions')
-      .select('*')
-      .eq('campaign_id', campaignId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const { data: prediction } = await runWithServiceRole(
+      'Fetch latest campaign prediction after org guard',
+      (client) => client
+        .from('campaign_predictions')
+        .select('*')
+        .eq('campaign_id', campaignId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    );
 
     if (!prediction) {
-      return res.status(404).json({ error: 'No prediction found — POST to generate one' });
+      return res.status(404).json({ error: 'No prediction found â€” POST to generate one' });
     }
     return res.status(200).json({ success: true, data: prediction });
   }
 
-  // ── POST — run a fresh prediction ─────────────────────────────────────────
+  // â”€â”€ POST â€” run a fresh prediction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body ?? {};
 
     // Load strategy context from DB if not provided
     let strategyContext = body.strategy_context;
     if (!strategyContext) {
-      const { data: strategy } = await adminSupabase
-        .from('campaign_strategies')
-        .select('platforms, posting_frequency, content_mix, duration_weeks, campaign_goal, target_audience')
-        .eq('campaign_id', campaignId)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data: strategy } = await runWithServiceRole(
+        'Load campaign strategy context for prediction after org guard',
+        (client) => client
+          .from('campaign_strategies')
+          .select('platforms, posting_frequency, content_mix, duration_weeks, campaign_goal, target_audience')
+          .eq('campaign_id', campaignId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      );
 
       strategyContext = strategy ?? {
         platforms:         ['linkedin'],
@@ -88,11 +98,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let description = body.description ?? '';
     if (!description) {
-      const { data: company } = await adminSupabase
-        .from('companies')
-        .select('description, name')
-        .eq('id', campaign.company_id)
-        .maybeSingle();
+      const { data: company } = await runWithServiceRole(
+        'Load company description for campaign prediction after org guard',
+        (client) => client
+          .from('companies')
+          .select('description, name')
+          .eq('id', campaign.company_id)
+          .maybeSingle(),
+      );
       description = (company as any)?.description ?? (company as any)?.name ?? '';
     }
 
@@ -117,3 +130,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -1,12 +1,12 @@
 /**
  * BoltCampaignChat
  * AI chat panel for brainstorming/refining campaign topics in the BOLT strategy builder.
- * Built on the same structure as StrategyAIChat — uses ChatVoiceButton + fetchWithAuth.
+ * Built on the same structure as StrategyAIChat — uses ChatVoiceButton + apiFetch.
  */
 
 import { useRef, useState } from 'react';
 import { Loader2, Send, Sparkles } from 'lucide-react';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import ChatVoiceButton from '../ChatVoiceButton';
 
 interface ChatTurn { role: 'user' | 'assistant'; text: string; }
@@ -56,7 +56,7 @@ export function BoltCampaignChat({ companyId, context, onApplyTopic }: Props) {
     scroll();
 
     try {
-      const res = await fetchWithAuth('/api/bolt/campaign-chat', {
+      const res = await apiFetch('/api/bolt/campaign-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

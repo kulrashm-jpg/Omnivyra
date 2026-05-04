@@ -80,11 +80,11 @@ function InfluencerCard({
 }
 
 export default function InfluencersTab(props: OpportunityTabProps) {
-  const { companyId, onPromote, onAction, fetchWithAuth, overrideText = '', onOverrideChange } = props;
+  const { companyId, onPromote, onAction, apiFetch, overrideText = '', onOverrideChange } = props;
   const { opportunities, loading, error, runEngine, hasRun, refetch, refetchGetOnly } = useOpportunities(
     companyId,
     TYPE,
-    fetchWithAuth
+    apiFetch
   );
 
   const wrappedOnPromote = async (id: string) => {
@@ -124,7 +124,7 @@ export default function InfluencersTab(props: OpportunityTabProps) {
 
   return (
     <div className="space-y-4">
-      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineContextPanel companyId={companyId} apiFetch={apiFetch} />
       <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
       <div>
         <button

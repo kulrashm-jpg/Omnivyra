@@ -1,13 +1,13 @@
-/**
- * k6 Load Test — Login Burst
+﻿/**
+ * k6 Load Test â€” Login Burst
  *
  * Simulates a burst of users hitting the post-login-route API simultaneously,
  * as happens after a marketing campaign drives a spike in email link clicks.
  *
  * Stages:
- *   0 → 200 VUs over 30s  (ramp up)
+ *   0 â†’ 200 VUs over 30s  (ramp up)
  *   200 VUs for 60s        (sustained burst)
- *   200 → 0 VUs over 15s  (ramp down)
+ *   200 â†’ 0 VUs over 15s  (ramp down)
  *
  * Pass criteria:
  *   - p95 latency < 1000 ms  (routing lookup must be fast)
@@ -52,9 +52,8 @@ export const options = {
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000';
 
-// In a real test: generate per-VU Firebase tokens. Here we use a shared test
-// token — swap for token generation logic when running against real Firebase.
-const TEST_TOKEN = __ENV.TEST_FIREBASE_TOKEN || 'MISSING_TOKEN';
+// Token must be a valid Supabase bearer token for protected-route testing.
+const TEST_TOKEN = __ENV.TEST_AUTH_TOKEN || 'MISSING_TOKEN';
 
 export default function () {
   const params = {
@@ -119,3 +118,4 @@ export function handleSummary(data) {
             `PASS: ${summary.results.pass}\n`,
   };
 }
+

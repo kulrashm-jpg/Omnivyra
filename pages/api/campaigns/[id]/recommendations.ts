@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignById } from '../../../../backend/db/campaignStore';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
@@ -21,7 +23,7 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
   return camp?.company_id ? (camp.company_id as string) : null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Campaign ID required' });
@@ -62,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const resolved = (blueprint as any)?.duration_weeks ?? camp?.duration_weeks ?? committedWeeks.length;
       const durationWeeks = resolved && resolved > 0 ? resolved : 12;
 
-      // Fetch recommendations — use latest session if none specified to avoid duplicate weeks
+      // Fetch recommendations â€” use latest session if none specified to avoid duplicate weeks
       let recs = await fetchRecommendationWeeks({
         campaignId,
         sessionId: resolvedSessionId,
@@ -113,3 +115,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

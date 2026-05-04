@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /**
  * RPA session storage. Playwright's `storageState` is a JSON blob holding

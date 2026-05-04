@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireManageConnectors } from './utils';
 import { getPlatformsWithTokensForOrg } from '../../../../backend/services/platformTokenService';
@@ -7,12 +8,12 @@ import { getCompanyConfiguredPlatformsForConnectors } from '../../../../backend/
  * GET /api/community-ai/connectors/status
  *
  * Returns the platforms connected for an org. Tokens live exclusively in
- * social_accounts since the community_ai_platform_tokens consolidation —
+ * social_accounts since the community_ai_platform_tokens consolidation â€”
  * getPlatformsWithTokensForOrg now reads from there. expires_at is reported
  * as null because the canonical expiry is on social_accounts.token_expires_at
  * and not surfaced through this status shape today.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -43,3 +44,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

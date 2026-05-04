@@ -1,6 +1,10 @@
 /**
  * Phase 6A: Store an example scheduling signal.
- * Run after migration: database/scheduling_intelligence_signals.sql
+ *
+ * Schema source: scheduling_intelligence_signals table is currently absent from
+ * canonical migrations and from prod (audited 2026-05-04). This script will
+ * fail until a migration creates the table. Re-enable by adding it to
+ * supabase/migrations/ first.
  *
  * Usage: npx ts-node -r tsconfig-paths/register backend/scripts/storeExampleSchedulingSignal.ts
  * Optional: EXAMPLE_COMPANY_ID=uuid node ...

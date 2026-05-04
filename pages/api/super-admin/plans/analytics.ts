@@ -14,8 +14,10 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 interface PlanAnalytics {
   plan_id: string;
@@ -43,30 +45,7 @@ interface PlanAnalyticsResponse {
   };
 }
 
-async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
-  // Check for super_admin_session cookie
-  if (req.cookies?.super_admin_session === '1') {
-    return true;
-  }
-
-  // Check Firebase user role
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (error || !user) return false;
-
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('is_super_admin')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    return profile?.is_super_admin === true;
-  } catch {
-    return false;
-  }
-}
-
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<PlanAnalyticsResponse | { error: string }>
 ) {
@@ -74,9 +53,10 @@ export default async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const isSuperAdmin = await checkSuperAdmin(req);
-  if (!isSuperAdmin) {
-    return res.status(403).json({ error: 'Unauthorized' });
+  const ctx = await requireAdminScope(req, res, 'plans:analytics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/plans/analytics', 'plans:analytics');
   }
 
   try {
@@ -145,7 +125,7 @@ export default async function handler(
     // Track free credit orgs separately
     const freeCreditsOrgIds = new Set((freeCreditGrants || []).map(g => g.organization_id));
 
-    // Get usage metrics (mock data structure — in production, join with consumption logs)
+    // Get usage metrics (mock data structure â€” in production, join with consumption logs)
     let usageData: any[] = [];
     try {
       const result = await supabase.rpc('get_organization_monthly_usage', {
@@ -154,7 +134,7 @@ export default async function handler(
       });
       usageData = result.data || [];
     } catch (e) {
-      // Fallback if RPC doesn't exist — use mock data
+      // Fallback if RPC doesn't exist â€” use mock data
       usageData = [];
     }
 
@@ -303,3 +283,9 @@ export default async function handler(
     return res.status(500).json({ error: error.message || 'Failed to fetch plan analytics' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -4,7 +4,8 @@
  * Runs every 6 hours. Generates engagement insights (trend analysis).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generateInsights } from '../services/insightIntelligenceService';
 import { runInBackgroundJobContext } from '../services/intelligenceExecutionContext';
 import { enforceDecisionGenerationThrottle } from '../services/decisionGenerationControlService';

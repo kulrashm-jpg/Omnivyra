@@ -70,7 +70,8 @@ import regenerateBlueprintHandler from '../../../pages/api/campaigns/regenerate-
 import negotiateDurationHandler from '../../../pages/api/campaigns/negotiate-duration';
 import scheduleStructuredPlanHandler from '../../../pages/api/campaigns/[id]/schedule-structured-plan';
 import { recordGovernanceEvent, recordCampaignCompletedEvent } from '../../services/GovernanceEventService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const COMPANY_ID = 'company-final-123';
 const CAMPAIGN_ID = 'campaign-final-456';

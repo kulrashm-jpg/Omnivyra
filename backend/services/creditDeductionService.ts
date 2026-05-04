@@ -15,7 +15,8 @@
  * This file MUST NOT call any credit-mutating RPC or insert any rows.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkDomainEligibility } from './domainEligibilityService';
 import { getTotalAvailable } from './creditPriorityService';
 

@@ -10,7 +10,8 @@ import { GOVERNANCE_EVALUATION_ORDER } from '../governance/GovernanceContract';
 import { recordGovernanceEvent } from './GovernanceEventService';
 import { evaluatePortfolioConstraints } from './PortfolioConstraintEvaluator';
 import { generateTradeOffOptions, rankTradeOffOptions } from './TradeOffGenerator';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export interface HorizonConstraintParams {
   requested_weeks: number;

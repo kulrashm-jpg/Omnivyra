@@ -5,14 +5,24 @@
  * Super-admin only.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireSuperAdmin } from '@/backend/middleware/requireSuperAdmin';
+import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { getImageServiceMetrics } from '@/backend/services/imageService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const isAdmin = await requireSuperAdmin(req, res);
-  if (!isAdmin) return;
+  const ctx = await requireAdminScope(req, res, 'health:images');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/images/health', 'health:images');
+  }
 
   return res.status(200).json(getImageServiceMetrics());
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

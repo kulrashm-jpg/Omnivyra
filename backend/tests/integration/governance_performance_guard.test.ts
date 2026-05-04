@@ -19,7 +19,8 @@ jest.mock('../../services/GovernanceAuditService', () => ({
 }));
 jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordGovernanceEvent } from '../../services/GovernanceEventService';
 import {
   tryConsumeProjectionToken,

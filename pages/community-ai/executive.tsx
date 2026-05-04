@@ -7,7 +7,7 @@ import NetworkHealth from '../../components/community-ai/NetworkHealth';
 import PlaybookPerformance from '../../components/community-ai/PlaybookPerformance';
 import PlatformMix from '../../components/community-ai/PlatformMix';
 import RecentMomentum from '../../components/community-ai/RecentMomentum';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type ExecutiveSummary = {
   total_discovered_users: number;
@@ -133,47 +133,47 @@ export default function ExecutiveDashboard() {
           recommendationsResponse,
         ] =
           await Promise.all([
-          fetchWithAuth(
+          apiFetch(
             `/api/community-ai/executive-summary?tenant_id=${encodeURIComponent(
               tenantId
             )}&organization_id=${encodeURIComponent(tenantId)}`
           ),
-          fetchWithAuth(
+          apiFetch(
             `/api/community-ai/playbook-effectiveness?tenant_id=${encodeURIComponent(
               tenantId
             )}&organization_id=${encodeURIComponent(tenantId)}`
           ),
-          fetchWithAuth(
+          apiFetch(
             `/api/community-ai/executive-narrative?tenant_id=${encodeURIComponent(
               tenantId
             )}&organization_id=${encodeURIComponent(tenantId)}`
           ),
-          fetchWithAuth(
+          apiFetch(
             `/api/community-ai/wow-comparison?tenant_id=${encodeURIComponent(
               tenantId
             )}&organization_id=${encodeURIComponent(tenantId)}`
           ),
-            fetchWithAuth(
+            apiFetch(
               `/api/community-ai/mom-comparison?tenant_id=${encodeURIComponent(
                 tenantId
               )}&organization_id=${encodeURIComponent(tenantId)}`
             ),
-            fetchWithAuth(
+            apiFetch(
               `/api/community-ai/campaign-baseline?tenant_id=${encodeURIComponent(
                 tenantId
               )}&organization_id=${encodeURIComponent(tenantId)}`
             ),
-            fetchWithAuth(
+            apiFetch(
               `/api/community-ai/executive-alerts?tenant_id=${encodeURIComponent(
                 tenantId
               )}&organization_id=${encodeURIComponent(tenantId)}`
             ),
-            fetchWithAuth(
+            apiFetch(
               `/api/community-ai/playbook-learning?tenant_id=${encodeURIComponent(
                 tenantId
               )}&organization_id=${encodeURIComponent(tenantId)}`
             ),
-            fetchWithAuth(
+            apiFetch(
               `/api/community-ai/recommendations?tenant_id=${encodeURIComponent(
                 tenantId
               )}&organization_id=${encodeURIComponent(tenantId)}`

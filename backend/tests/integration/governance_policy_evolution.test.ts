@@ -14,7 +14,8 @@ jest.mock('../../services/CampaignPrePlanningService', () => ({
 }));
 jest.mock('../../middleware/withRBAC', () => ({ withRBAC: (h: any) => h }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersionByCampaignId } from '../../db/campaignVersionStore';
 import { runPrePlanning } from '../../services/CampaignPrePlanningService';
 import {

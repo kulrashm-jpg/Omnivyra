@@ -16,10 +16,11 @@
  * 
  * Environment Variables:
  * - SUPABASE_URL (required)
- * - SUPABASE_SERVICE_ROLE_KEY (required)
+ * - Supabase service credential (required)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document';
 

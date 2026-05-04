@@ -1,6 +1,7 @@
 import handler from '../../../pages/api/recommendations/simulate';
 import { simulateRecommendations } from '../../services/recommendationSimulationService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getProfile } from '../../services/companyProfileService';
 import { fetchTrendsFromApis } from '../../services/externalApiService';
 import { getActivePolicy } from '../../services/recommendationPolicyService';

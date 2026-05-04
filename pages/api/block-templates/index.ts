@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import {
@@ -5,14 +6,14 @@ import {
   createBlockTemplate,
 } from '../../../backend/services/blockTemplateService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId = (req.query.company_id ?? req.body?.company_id) as string | undefined;
   if (!companyId) return res.status(400).json({ error: 'company_id required' });
 
   const auth = await enforceCompanyAccess({ req, res, companyId });
   if (!auth) return;
 
-  // ── GET: list templates ────────────────────────────────────────────────────
+  // â”€â”€ GET: list templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     try {
       const templates = await listBlockTemplates(companyId, {
@@ -25,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── POST: create template ──────────────────────────────────────────────────
+  // â”€â”€ POST: create template â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const { name, description, content_type, format_type, content_blocks, tags, is_public } = req.body;
     if (!name || !content_blocks || !Array.isArray(content_blocks)) {
@@ -49,3 +50,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

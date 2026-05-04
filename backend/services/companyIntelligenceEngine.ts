@@ -4,7 +4,8 @@
  * Filters and scores using company industry, competitors, keywords, region, product focus.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type CompanyIntelligenceContext = {
   industryTerms: string[];

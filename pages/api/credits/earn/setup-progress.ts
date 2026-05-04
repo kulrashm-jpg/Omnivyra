@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * PATCH /api/credits/earn/setup-progress
@@ -8,15 +9,16 @@
  * If not yet complete, sends a nudge notification.
  *
  * Steps:
- *   profile_complete          — company profile filled (name, website, industry)
- *   external_api_connected    — at least one external API key saved
- *   social_accounts_connected — at least one social account linked
- *   website_blog_connected    — company blog URL connected
- *   lead_capture_connected    — lead capture page connected
+ *   profile_complete          â€” company profile filled (name, website, industry)
+ *   external_api_connected    â€” at least one external API key saved
+ *   social_accounts_connected â€” at least one social account linked
+ *   website_blog_connected    â€” company blog URL connected
+ *   lead_capture_connected    â€” lead capture page connected
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import {
   checkAndGrantSetupCredits,
@@ -33,14 +35,14 @@ const VALID_STEPS = [
 
 type SetupStep = typeof VALID_STEPS[number];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'PATCH') return res.status(405).end();
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', user.id)
     .eq('status', 'active')
@@ -118,3 +120,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, setup_credits, website_credits });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

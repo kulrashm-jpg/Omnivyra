@@ -1,13 +1,14 @@
+﻿// AUTH EXEMPT: external webhook endpoint verifies provider signature separately
 /**
- * GET  /api/whatsapp/webhook   — Meta webhook verification (hub.challenge)
- * POST /api/whatsapp/webhook   — Incoming Meta webhook events (async)
+ * GET  /api/whatsapp/webhook   â€” Meta webhook verification (hub.challenge)
+ * POST /api/whatsapp/webhook   â€” Incoming Meta webhook events (async)
  *
  * POST flow:
  *   1. Verify X-Hub-Signature-256 (HMAC-SHA256)
  *   2. Enqueue raw payload to whatsapp-webhook queue (jobId = sha256(body) for dedup)
- *   3. Return 200 immediately — processing happens in whatsappWebhookProcessor
+ *   3. Return 200 immediately â€” processing happens in whatsappWebhookProcessor
  *
- * Replay protection: identical payloads produce same jobId — BullMQ ignores duplicates.
+ * Replay protection: identical payloads produce same jobId â€” BullMQ ignores duplicates.
  * Security: APP_SECRET required in production; dev-only bypass if unset.
  */
 
@@ -47,7 +48,7 @@ function verifySignature(rawBody: Buffer, signature: string): boolean {
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
 
-  // ── GET: hub.challenge verification ──────────────────────────────────────
+  // â”€â”€ GET: hub.challenge verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
     if (mode === 'subscribe' && token === VERIFY_TOKEN) {
@@ -56,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'Verification failed' });
   }
 
-  // ── POST: enqueue and ack immediately ────────────────────────────────────
+  // â”€â”€ POST: enqueue and ack immediately â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const rawBody = await readRawBody(req);
     const sig = (req.headers['x-hub-signature-256'] as string) ?? '';
@@ -72,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Invalid JSON' });
     }
 
-    // Dedup key: sha256(rawBody hex) — identical replays from Meta produce same jobId
+    // Dedup key: sha256(rawBody hex) â€” identical replays from Meta produce same jobId
     const jobId = 'wa-webhook-' + crypto.createHash('sha256').update(rawBody).digest('hex');
 
     try {
@@ -84,14 +85,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         backoff: { type: 'exponential', delay: 2000 },
       });
     } catch (err) {
-      // Log but still ack — prevents Meta from retrying a payload we may have partially queued
+      // Log but still ack â€” prevents Meta from retrying a payload we may have partially queued
       console.error('[whatsapp-webhook] enqueue failed', err);
     }
 
-    // Ack immediately — Meta requires 200 within ~5s
+    // Ack immediately â€” Meta requires 200 within ~5s
     return res.status(200).json({ received: true });
   }
 
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+

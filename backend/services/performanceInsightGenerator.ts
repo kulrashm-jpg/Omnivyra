@@ -6,7 +6,8 @@
  * next campaign planning prompt via `previous_performance_insights`.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type PerformanceInsights = {
   campaign_id: string;

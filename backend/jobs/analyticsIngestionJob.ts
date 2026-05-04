@@ -11,7 +11,8 @@
  * Both are idempotent: upserts on unique indexes prevent duplicate rows.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getToken } from '../auth/tokenStore';
 import {
   ingestLinkedInPost, ingestLinkedInGrowth,

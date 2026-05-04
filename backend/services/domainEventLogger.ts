@@ -19,7 +19,8 @@
  *   - metadata is small (single-row JSON, no nested objects > 1 level if avoidable)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 
 export type DomainEventType =

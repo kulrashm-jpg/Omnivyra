@@ -140,7 +140,7 @@ export default function AdminBlogListPage() {
               <p className="font-medium">{error}</p>
               {(error.includes('does not exist') || error.toLowerCase().includes('public_blogs')) && (
                 <p className="mt-2 text-red-600">
-                  Run the blog table migration in Supabase: open <code className="rounded bg-red-100 px-1">database/public_blogs.sql</code> in your project and execute it in the Supabase SQL Editor.
+                  Schema mismatch: the <code className="rounded bg-red-100 px-1">public_blogs</code> table is not present. Apply migration <code className="rounded bg-red-100 px-1">20260504010004_fix_public_blogs.sql</code> via the Supabase CLI.
                 </p>
               )}
             </div>

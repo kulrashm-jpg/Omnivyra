@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getTrendSnapshots } from '../../../backend/db/campaignVersionStore';
 import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
@@ -7,7 +8,8 @@ import { getCampaignMemory } from '../../../backend/services/campaignMemoryServi
 import { getLatestAnalyticsReport } from '../../../backend/db/performanceStore';
 import { generateCampaignForecast } from '../../../backend/services/campaignForecastService';
 import { saveCampaignForecast } from '../../../backend/db/forecastStore';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
 const resolvePlaybookReferenceId = (snapshot: any): string | null =>
@@ -25,7 +27,7 @@ const fetchPlaybookContext = async (companyId: string, playbookId: string | null
   return { id: data.id, name: data.name, objective: data.objective };
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -89,3 +91,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: error?.message || 'Failed to generate forecast' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

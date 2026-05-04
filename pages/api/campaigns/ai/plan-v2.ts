@@ -1,13 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Campaign Planner v2 — Async Enqueue Endpoint
+ * Campaign Planner v2 â€” Async Enqueue Endpoint
  *
  * POST /api/campaigns/ai/plan-v2
  *
  * Edge cases fixed:
- *   #2 — Race condition: DB "existing job" check removed — BullMQ jobId dedup is the lock
- *   #6 — 429 UX contract: product-friendly response shape with suggestion
- *   #7 — Cache version: day-bucket (YYYY-MM-DD) not raw updated_at
+ *   #2 â€” Race condition: DB "existing job" check removed â€” BullMQ jobId dedup is the lock
+ *   #6 â€” 429 UX contract: product-friendly response shape with suggestion
+ *   #7 â€” Cache version: day-bucket (YYYY-MM-DD) not raw updated_at
  *
  * Response: 202 { jobId, pollUrl, estimatedMs }
  * Error codes: 400 | 402 | 429 | 500
@@ -18,13 +19,14 @@ import { getAiHeavyQueue, makeStableJobId } from '../../../../backend/queue/bull
 import { safeEnqueue } from '../../../../backend/middleware/queueBackpressure';
 import { quickEstimateCost } from '../../../../backend/services/jobCostEstimator';
 import { resolveOrganizationPlanLimits } from '../../../../backend/services/planResolutionService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUserCompanyRole } from '../../../../backend/services/rbacService';
 import type { CampaignPlanningJobPayload } from '../../../../backend/queue/jobProcessors/campaignPlanningProcessor';
 
 const BLOCKED_PLANS = new Set(['free', 'trial']);
 
-// ── Edge case #7: coarse day-bucket version ───────────────────────────────────
+// â”€â”€ Edge case #7: coarse day-bucket version â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function toDayBucket(isoDate?: string | null): string {
   try {
@@ -34,7 +36,7 @@ function toDayBucket(isoDate?: string | null): string {
   }
 }
 
-// ── Input validation ──────────────────────────────────────────────────────────
+// â”€â”€ Input validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function validateInput(body: unknown): body is Record<string, unknown> {
   if (!body || typeof body !== 'object') return false;
@@ -49,14 +51,14 @@ function validateInput(body: unknown): body is Record<string, unknown> {
   return true;
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // â”€â”€ Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const body = req.body || {};
   const companyIdRaw = typeof body.companyId === 'string' ? body.companyId.trim() : '';
   if (!companyIdRaw) return res.status(400).json({ error: 'companyId is required' });
@@ -65,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const userId = access.userId;
   if (!userId) return res.status(401).json({ error: 'UNAUTHORIZED' });
 
-  // ── Validate input ────────────────────────────────────────────────────────
+  // â”€â”€ Validate input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (!validateInput(body)) {
     return res.status(400).json({
       error: 'Invalid input: campaignId, companyId, spine, and strategyContext (with platforms[] and duration_weeks) are required.',
@@ -83,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     industry,
   } = body as Record<string, unknown>;
 
-  // ── Plan tier ─────────────────────────────────────────────────────────────
+  // â”€â”€ Plan tier â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let planTier = 'growth';
   try {
     const resolved = await resolveOrganizationPlanLimits(companyId as string);
@@ -99,14 +101,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // ── Cost estimation ───────────────────────────────────────────────────────
+  // â”€â”€ Cost estimation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const estimatedUsd = quickEstimateCost(
     process.env.OPENAI_MODEL || 'gpt-4o-mini',
     JSON.stringify({ spine, strategyContext }),
     'generateCampaignPlan',
   );
 
-  // ── Stable job ID — this IS the deduplication lock (edge case #2) ─────────
+  // â”€â”€ Stable job ID â€” this IS the deduplication lock (edge case #2) â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // BullMQ silently ignores add() when a job with this jobId already exists
   // in waiting/active/delayed. No separate DB check needed.
   const jobId = makeStableJobId('campaign-plan', {
@@ -117,7 +119,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     goal:      (strategyContext as any).campaign_goal ?? '',
   });
 
-  // ── Edge case #7: day-bucket cache version ────────────────────────────────
+  // â”€â”€ Edge case #7: day-bucket cache version â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let cacheVersion = toDayBucket();
   try {
     const { data: campaign } = await supabase
@@ -128,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (campaign?.updated_at) cacheVersion = toDayBucket(campaign.updated_at);
   } catch { /* use today's bucket */ }
 
-  // ── Plan version: increment over existing (idempotent persist, edge case #1) ─
+  // â”€â”€ Plan version: increment over existing (idempotent persist, edge case #1) â”€
   let planVersion = 1;
   try {
     const { data: existingPlan } = await supabase
@@ -141,8 +143,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     planVersion = existingVersion + 1;
   } catch { /* default to 1 */ }
 
-  // ── Create job status row (advisory — poller can find it immediately) ──────
-  // OK if concurrent request also upserts — idempotent by design
+  // â”€â”€ Create job status row (advisory â€” poller can find it immediately) â”€â”€â”€â”€â”€â”€
+  // OK if concurrent request also upserts â€” idempotent by design
   try {
     await supabase.from('campaign_plan_jobs').upsert({
       id:          jobId,
@@ -150,9 +152,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       status:      'pending',
       updated_at:  new Date().toISOString(),
     }, { onConflict: 'id' });
-  } catch { /* advisory — non-fatal */ }
+  } catch { /* advisory â€” non-fatal */ }
 
-  // ── Build payload ─────────────────────────────────────────────────────────
+  // â”€â”€ Build payload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const payload: CampaignPlanningJobPayload = {
     jobId,
     campaignId:    campaignId as string,
@@ -169,7 +171,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     previousCampaignContext: previousCampaignContext as CampaignPlanningJobPayload['previousCampaignContext'],
   };
 
-  // ── Enqueue (BullMQ drops duplicate jobId silently — edge case #2) ────────
+  // â”€â”€ Enqueue (BullMQ drops duplicate jobId silently â€” edge case #2) â”€â”€â”€â”€â”€â”€â”€â”€
   const queue    = getAiHeavyQueue();
   const enqueued = await safeEnqueue(
     queue,
@@ -198,3 +200,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     pollUrl:      `/api/campaigns/ai/plan-status/${jobId}`,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

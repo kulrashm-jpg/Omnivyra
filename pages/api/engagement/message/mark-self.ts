@@ -1,10 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/engagement/message/mark-self
  *
  * Manual override for "this message was actually sent by me, not the
  * person LinkedIn attributed it to." Needed when two people in a thread
  * share a display name (or any case where the scraper couldn't determine
- * authorship reliably) — the thread otherwise gets stuck in Needs
+ * authorship reliably) â€” the thread otherwise gets stuck in Needs
  * Response indefinitely because the system thinks the user's own reply
  * is from the other party.
  *
@@ -25,14 +26,15 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type Body = {
   organization_id?: string;
   message_id?: string;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -91,3 +93,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, message_id: messageId });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -6,7 +6,8 @@
  * and activity workspace to show repurposed content instead of placeholders.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { updateActivity } from './executionPlannerPersistence';
 import { generateMasterContentFromIntent } from './contentGenerationPipeline';
 import { buildPlatformVariantsFromMaster } from './contentGenerationPipeline';

@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
-import { supabase } from '../utils/supabaseClient';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { supabase as browserSupabase } from '../utils/supabaseClient';
+const supabase = browserSupabase;
+import { apiFetch } from '@/lib/apiFetch';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';
 import {
   buildTrendSourceCounts,
@@ -289,7 +290,7 @@ export function useRecommendationsState() {
     const loadCampaigns = async () => {
       setIsCampaignLoading(true);
       try {
-        const response = await fetchWithAuth(`/api/campaigns?companyId=${encodeURIComponent(selectedCompanyId)}`);
+        const response = await apiFetch(`/api/campaigns?companyId=${encodeURIComponent(selectedCompanyId)}`);
         if (!response.ok) {
           throw new Error('Failed to load campaigns');
         }
@@ -319,7 +320,7 @@ export function useRecommendationsState() {
 
   const handleOpportunityPromote = async (opportunityId: string) => {
     if (!selectedCompanyId) return;
-    const res = await fetchWithAuth(`/api/opportunities/${opportunityId}/action`, {
+    const res = await apiFetch(`/api/opportunities/${opportunityId}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'PROMOTED', companyId: selectedCompanyId }),
@@ -347,7 +348,7 @@ export function useRecommendationsState() {
     if (!selectedCompanyId) {
       throw new Error('companyId required');
     }
-    const res = await fetchWithAuth(`/api/opportunities/${opportunityId}/action`, {
+    const res = await apiFetch(`/api/opportunities/${opportunityId}/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, companyId: selectedCompanyId, ...opts }),
@@ -367,7 +368,7 @@ export function useRecommendationsState() {
       }
       try {
         setIsApiLoading(true);
-        const response = await fetchWithAuth(
+        const response = await apiFetch(
           `/api/external-apis/access?companyId=${encodeURIComponent(selectedCompanyId)}`
         );
         if (!response.ok) {
@@ -423,7 +424,7 @@ export function useRecommendationsState() {
       setIsLoading(true);
       setErrorMessage(null);
       setExpandedTrendKey(null);
-      const response = await fetchWithAuth('/api/recommendations/generate', {
+      const response = await apiFetch('/api/recommendations/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -472,7 +473,7 @@ export function useRecommendationsState() {
     try {
       setIsLoading(true);
       setErrorMessage(null);
-      const response = await fetchWithAuth('/api/recommendations/refresh', {
+      const response = await apiFetch('/api/recommendations/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

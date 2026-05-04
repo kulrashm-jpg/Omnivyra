@@ -1,10 +1,12 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // Rate-limit: max body size check
-const MAX_TIME = 3600; // 1 hour — cap absurd values
+const MAX_TIME = 3600; // 1 hour â€” cap absurd values
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const slug = (req.query.slug as string)?.trim();
@@ -32,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!blog) return res.status(404).json({ error: 'Post not found' });
 
-    // Upsert — create or update the session record
+    // Upsert â€” create or update the session record
     const { error } = await supabase
       .from('blog_read_sessions')
       .upsert(
@@ -48,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
     if (error) {
-      // Silently ignore duplicate/constraint errors — not critical
+      // Silently ignore duplicate/constraint errors â€” not critical
       if (error.code !== '23505') {
         console.error('Track error:', error.message);
       }
@@ -56,8 +58,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(204).end();
   } catch (err: unknown) {
-    // Non-critical endpoint — always return 204 to avoid client noise
+    // Non-critical endpoint â€” always return 204 to avoid client noise
     console.error('Track error:', err);
     return res.status(204).end();
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

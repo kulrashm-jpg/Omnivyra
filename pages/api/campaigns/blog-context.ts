@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { Role } from '../../../backend/services/rbacService';
@@ -13,12 +15,12 @@ import { extractBlogContext } from '../../../lib/blog/blockExtractor';
  *
  * Response:
  * {
- *   company_blogs: BlogContextItem[],   — company's own published blogs
- *   omnivyra_blogs: BlogContextItem[]   — platform knowledge library (public_blogs)
+ *   company_blogs: BlogContextItem[],   â€” company's own published blogs
+ *   omnivyra_blogs: BlogContextItem[]   â€” platform knowledge library (public_blogs)
  * }
  *
  * Each item includes: key_insights, summary, h2_headings, source.
- * Optional query param: ?q=<search> — filters by title, tags, category across both sources.
+ * Optional query param: ?q=<search> â€” filters by title, tags, category across both sources.
  */
 
 interface BlogContextItem {
@@ -65,7 +67,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     companyId = membership?.company_id ?? null;
   }
 
-  // ── 1. Company blogs ──────────────────────────────────────────────────────
+  // â”€â”€ 1. Company blogs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const companyBlogsRaw: BlogContextItem[] = [];
 
   if (companyId) {
@@ -96,7 +98,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // ── 2. Omnivyra platform blogs (public_blogs — unchanged) ─────────────────
+  // â”€â”€ 2. Omnivyra platform blogs (public_blogs â€” unchanged) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: pBlogs, error: pError } = await supabase
     .from('public_blogs')
     .select('id, title, slug, tags, category, excerpt, content_blocks, views_count, likes_count')
@@ -130,4 +132,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]));
+

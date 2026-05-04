@@ -14,7 +14,8 @@
  */
 
 import crypto from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getActiveTemplate } from './whatsappTemplateService';
 import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimiter';
 import { getValidAccessToken } from '../auth/metaAuthService';

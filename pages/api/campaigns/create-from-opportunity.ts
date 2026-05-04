@@ -1,15 +1,16 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/campaigns/create-from-opportunity
  * Create a campaign from a campaign opportunity (intelligence pipeline).
- * Flow: Campaign Opportunity → Campaign Blueprint → Campaign Builder.
+ * Flow: Campaign Opportunity â†’ Campaign Blueprint â†’ Campaign Builder.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateCampaignFromOpportunity } from '../../../backend/services/opportunityCampaignGenerator';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -58,3 +59,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

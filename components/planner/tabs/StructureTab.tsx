@@ -10,7 +10,7 @@ import { weeksToCalendarPlan } from '../calendarPlanConverter';
 import { CampaignTypeSelector } from '../CampaignTypeSelector';
 import { PlatformContentMatrix } from '../PlatformContentMatrix';
 import { CAMPAIGN_PRESETS } from '../platformContentPresets';
-import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 const DURATION_OPTIONS = [1, 2, 4, 6, 8, 10, 12] as const;
 const DEFAULT_DURATION_WEEKS = 6;
@@ -120,7 +120,7 @@ export function StructureTab({ companyId, onGenerate }: StructureTabProps) {
         body.prefilledPlanning = { strategic_themes: state.strategic_themes.map((t) => t.title) };
       }
 
-      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
+      const res = await apiFetch('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

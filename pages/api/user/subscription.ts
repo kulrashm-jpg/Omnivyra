@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/user/subscription?company_id=xxx
  * Returns the subscription tier for the authenticated user's company.
@@ -7,9 +8,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveOrganizationPlanLimits } from '../../../backend/services/planResolutionService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -37,7 +39,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err) {
     console.error('[api/user/subscription]', (err as Error)?.message);
-    // Fail gracefully — return free tier so UI doesn't break
+    // Fail gracefully â€” return free tier so UI doesn't break
     return res.status(200).json({ ok: true, data: { tier: 'free', plan_key: 'free', limits: null } });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

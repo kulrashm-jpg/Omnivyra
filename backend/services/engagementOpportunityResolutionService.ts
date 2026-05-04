@@ -3,7 +3,8 @@
  * Tracks when opportunities are acted upon.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export async function resolveOpportunityByReply(
   thread_id: string,

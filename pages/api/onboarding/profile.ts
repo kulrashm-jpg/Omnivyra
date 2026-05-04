@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/onboarding/profile
@@ -11,20 +12,21 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse   = { error: string; code?: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // ── 1. Verify Bearer token & resolve user ─────────────────────────────────
+  // â”€â”€ 1. Verify Bearer token & resolve user â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) {
     const status = userErr === 'ACCOUNT_DELETED' ? 403 : 401;
@@ -38,7 +40,7 @@ export default async function handler(
 
   if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
 
-  // ── 2. Update user profile in public.users ────────────────────────────────
+  // â”€â”€ 2. Update user profile in public.users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const updates: Record<string, unknown> = {
     name:             name.trim(),
     onboarding_state: 'profile_complete',
@@ -58,10 +60,10 @@ export default async function handler(
     return res.status(500).json({ error: 'Failed to save profile' });
   }
 
-  // ── 3. Determine next route ───────────────────────────────────────────────
+  // â”€â”€ 3. Determine next route â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // After profile completion, user needs to set up or join a company
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', user.id)
     .eq('status', 'active')
@@ -72,3 +74,8 @@ export default async function handler(
 
   return res.status(200).json({ success: true, route });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

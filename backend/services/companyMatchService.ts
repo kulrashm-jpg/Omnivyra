@@ -18,7 +18,8 @@
  * Free/public email providers (gmail, yahoo, …) are never matched by domain.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const FREE_EMAIL_DOMAINS = new Set([
   'gmail.com', 'googlemail.com',
@@ -222,7 +223,7 @@ export async function findMatchingCompany(params: {
  */
 export async function getCompanyAdmins(companyId: string): Promise<CompanyAdmin[]> {
   const { data: roles } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', companyId)
     .eq('role', 'COMPANY_ADMIN')

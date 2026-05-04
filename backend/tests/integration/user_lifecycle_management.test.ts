@@ -111,7 +111,7 @@ const buildQuery = (table: string) => {
       return query;
     }),
     then: (resolve: any) => {
-      if (table === 'user_company_roles') {
+      if (table === 'user company roles') {
         if (state.op === 'update' && state.updatePayload) {
           roleRows.forEach((row) => {
             if (

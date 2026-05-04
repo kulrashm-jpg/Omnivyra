@@ -5,7 +5,7 @@ import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
 import type { PendingAction } from '../../components/community-ai/types';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 const tabTypes = ['Text', 'Image', 'Video', 'Banner', 'Threads'];
 
@@ -75,7 +75,7 @@ export default function CommunityAiPlatform() {
       setIsLoading(true);
       setErrorMessage(null);
       try {
-        const response = await fetchWithAuth(
+        const response = await apiFetch(
           `/api/community-ai/platform/${encodeURIComponent(
             platform
           )}?tenant_id=${encodeURIComponent(tenantId)}&organization_id=${encodeURIComponent(
@@ -104,7 +104,7 @@ export default function CommunityAiPlatform() {
         return;
       }
       try {
-        const response = await fetchWithAuth(
+        const response = await apiFetch(
           `/api/community-ai/content-kpis?tenant_id=${encodeURIComponent(
             tenantId
           )}&organization_id=${encodeURIComponent(tenantId)}&platform=${encodeURIComponent(

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Trash2 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
 import { navigateToCampaign } from '../lib/campaignResumeStore';
 import EmptyState from '../components/shared/EmptyState';
@@ -149,7 +149,7 @@ export default function CampaignsList() {
     setIsDeletingCampaign(true);
     try {
       const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
-      const deleteResponse = await fetchWithAuth(deleteUrl, {
+      const deleteResponse = await apiFetch(deleteUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

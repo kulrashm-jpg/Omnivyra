@@ -1,12 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/campaigns/run-preplanning
- * Stage 11: Pre-planning gate — run duration evaluation without committing.
+ * Stage 11: Pre-planning gate â€” run duration evaluation without committing.
  * Returns structured result + AI explanation. Emits PRE_PLANNING_EVALUATED event.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isGovernanceLocked } from '../../../backend/services/GovernanceLockdownService';
 import { runPrePlanning } from '../../../backend/services/CampaignPrePlanningService';
 import { getUnifiedCampaignBlueprint, assertBlueprintMutable, BlueprintImmutableError, BlueprintExecutionFreezeError } from '../../../backend/services/campaignBlueprintService';
@@ -16,7 +18,7 @@ import { recordGovernanceEvent } from '../../../backend/services/GovernanceEvent
 import { generatePrePlanningExplanation } from '../../../backend/services/aiGateway';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -64,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    // DB first: if duration already set (e.g. after restart), return it — never contradict
+    // DB first: if duration already set (e.g. after restart), return it â€” never contradict
     const dbWeeks = typeof (campaign as { duration_weeks?: number }).duration_weeks === 'number' &&
       (campaign as { duration_weeks: number }).duration_weeks >= 1 &&
       (campaign as { duration_weeks: number }).duration_weeks <= 52
@@ -216,3 +218,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

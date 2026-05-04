@@ -22,31 +22,23 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin }       from '../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import {
   getReportFromRedis,
   getRecentCyclesFromRedis,
 } from '../../../backend/utils/cronInstrumentation';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { getSharedRedisClient } from '../../../backend/queue/bullmqClient';
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  } catch { /* deny */ }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-// ── Handler ───────────────────────────────────────────────────────────────────
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'health:cron-metrics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/cron-metrics', 'health:cron-metrics');
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const redis = getSharedRedisClient() as any;
@@ -93,3 +85,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     hasDuplicates:     report.duplicateInstances.length > 0,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -3,7 +3,8 @@
  * Prevents concurrent schedule-structured-plan executions per campaign.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { randomUUID } from 'crypto';
 
 /** Lock window: concurrent executions blocked within this period (minutes). */
@@ -27,42 +28,33 @@ export class SchedulerLockError extends Error {
  * @returns lockId to pass to releaseSchedulerLock
  */
 export async function acquireSchedulerLock(campaignId: string): Promise<string> {
-  const { data: campaign, error: fetchError } = await supabase
-    .from('campaigns')
-    .select('scheduler_lock_id, scheduler_locked_at')
-    .eq('id', campaignId)
-    .maybeSingle();
-
-  if (fetchError || !campaign) {
-    throw new Error('Campaign not found');
-  }
-
-  const lockId = (campaign as any).scheduler_lock_id;
-  const lockedAt = (campaign as any).scheduler_locked_at;
-
-  if (lockId && lockedAt) {
-    const lockedAtMs = new Date(lockedAt).getTime();
-    const ageMs = Date.now() - lockedAtMs;
-
-    if (ageMs < LOCK_WINDOW_MS) {
-      throw new SchedulerLockError('SCHEDULER_ALREADY_RUNNING');
-    }
-  }
-
   const newLockId = randomUUID();
   const now = new Date().toISOString();
+  const staleBefore = new Date(Date.now() - LOCK_WINDOW_MS).toISOString();
 
-  const { error: updateError } = await supabase
+  const { data: updated, error: updateError } = await supabase
     .from('campaigns')
     .update({
       scheduler_lock_id: newLockId,
       scheduler_locked_at: now,
       updated_at: now,
     })
-    .eq('id', campaignId);
+    .eq('id', campaignId)
+    .or(`scheduler_lock_id.is.null,scheduler_locked_at.lt.${staleBefore}`)
+    .select('id')
+    .maybeSingle();
 
   if (updateError) {
     throw new Error(`Failed to acquire scheduler lock: ${updateError.message}`);
+  }
+  if (!updated) {
+    const { data: exists, error: fetchError } = await supabase
+      .from('campaigns')
+      .select('id')
+      .eq('id', campaignId)
+      .maybeSingle();
+    if (fetchError || !exists) throw new Error('Campaign not found');
+    throw new SchedulerLockError('SCHEDULER_ALREADY_RUNNING');
   }
 
   return newLockId;

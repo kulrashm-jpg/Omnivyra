@@ -33,7 +33,7 @@ import {
 import CampaignAIChat from './CampaignAIChat';
 import AIGenerationProgress from './AIGenerationProgress';
 import { useCompanyContext } from './CompanyContext';
-import { fetchWithAuth } from './community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { GovernanceStatusCard } from './governance/GovernanceStatusCard';
 import { GovernanceAnalyticsCard } from './governance/GovernanceAnalyticsCard';
 import { GovernanceExplanationPanel, deriveFromEvent } from './governance/GovernanceExplanationPanel';
@@ -691,7 +691,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                           }
                         }
                       }
-                      const res = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
+                      const res = await apiFetch('/api/campaigns/regenerate-blueprint', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -1053,7 +1053,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                   autoOptimizationEligibility={governanceAnalytics?.autoOptimizationEligibility}
                   onToggleAutoOptimize={async (enabled) => {
                     if (!id || !effectiveCompanyId) return;
-                    const res = await fetchWithAuth('/api/analytics/toggle-auto-optimize', {
+                    const res = await apiFetch('/api/analytics/toggle-auto-optimize', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ campaignId: id, companyId: effectiveCompanyId, enabled }),
@@ -1100,7 +1100,7 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                           setNegotiationLoading(true);
                           setNegotiationResult(null);
                           try {
-                            const res = await fetchWithAuth('/api/campaigns/negotiate-duration', {
+                            const res = await apiFetch('/api/campaigns/negotiate-duration', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({
@@ -1118,9 +1118,9 @@ export default function CampaignDetailsContent({ d }: { d: S }) {
                                 evaluation: data.evaluation,
                               });
                               const [statusRes, eventsRes, analyticsRes] = await Promise.all([
-                                fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
-                                fetchWithAuth(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(id as string)}`),
-                                fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`),
+                                apiFetch(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
+                                apiFetch(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(id as string)}`),
+                                apiFetch(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`),
                               ]);
                               if (statusRes.ok) {
                                 const statusData = await statusRes.json();

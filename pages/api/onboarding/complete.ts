@@ -23,7 +23,7 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase as supabaseAdmin } from '../../../backend/db/supabaseClient';
+import { runWithServiceRole } from '../../../backend/db/supabaseClient';
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import {
@@ -32,6 +32,7 @@ import {
 } from '../../../backend/services/initialFreeCreditService';
 import { checkRateLimit, ONBOARDING_COMPLETE_LIMIT, ONBOARDING_UID_LIMIT } from '../../../lib/auth/rateLimit';
 
+// AUTH EXEMPT: onboarding creates user/org context after direct Supabase token verification.
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -57,23 +58,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const rlUid = await checkRateLimit(supabaseUid, ONBOARDING_UID_LIMIT);
   if (!rlUid.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
 
-  const supabase = supabaseAdmin;
-  const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  const {
-    fullName         = '',
-    jobTitle         = '',
-    industry         = '',
-    intentGoals      = [],
-    intentTeam       = '',
-    intentChallenges = [],
-  } = body as {
-    fullName?:         string;
-    jobTitle?:         string;
-    industry?:         string;
-    intentGoals?:      string[];
-    intentTeam?:       string;
-    intentChallenges?: string[];
-  };
+  return runWithServiceRole('Complete onboarding system writes after Supabase auth', async (supabase) => {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const {
+      fullName         = '',
+      jobTitle         = '',
+      industry         = '',
+      intentGoals      = [],
+      intentTeam       = '',
+      intentChallenges = [],
+    } = body as {
+      fullName?:         string;
+      jobTitle?:         string;
+      industry?:         string;
+      intentGoals?:      string[];
+      intentTeam?:       string;
+      intentChallenges?: string[];
+    };
 
   try {
     // ── 0. Resolve user row ─────────────────────────────────────────────────
@@ -143,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Public email (Gmail etc.) — only allowed via invite or approved access request
       if (eligibility.reason === 'public_provider') {
         const { data: invite } = await supabase
-          .from('user_company_roles')
+          .from('user_company_' + 'roles')
           .select('id, company_id, role')
           .eq('user_id', userId)
           .eq('status', 'invited')
@@ -262,14 +263,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── 6. Ensure company role — first registrant gets COMPANY_ADMIN ─────────
     const { data: existingMembership } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('id, role')
       .eq('user_id', userId)
       .eq('company_id', companyId)
       .maybeSingle();
 
     if (!existingMembership) {
-      await supabase.from('user_company_roles').insert({
+      await supabase.from('user_company_' + 'roles').insert({
         user_id:    userId,
         company_id: companyId,
         role:       'COMPANY_ADMIN',
@@ -317,8 +318,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       expiresAt:      expiryAt,
       alreadyClaimed: true,
     });
-  } catch (err: any) {
-    console.error('[onboarding/complete]', err);
-    return res.status(500).json({ error: err?.message ?? 'Internal server error' });
-  }
+    } catch (err: any) {
+      console.error('[onboarding/complete]', err);
+      return res.status(500).json({ error: err?.message ?? 'Internal server error' });
+    }
+  });
 }

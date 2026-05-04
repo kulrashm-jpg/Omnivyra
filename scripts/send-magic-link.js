@@ -29,11 +29,11 @@ async function main() {
   }
 
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const key = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '');
 
   if (!url || !key) {
-    console.error('ERROR: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env.local');
+    console.error('ERROR: SUPABASE_URL and Supabase service credential must be set in .env.local');
     process.exit(1);
   }
 

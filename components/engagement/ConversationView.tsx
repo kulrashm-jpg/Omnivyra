@@ -300,6 +300,7 @@ export const ConversationView = React.memo(function ConversationView({
 
   const handleInsertSuggestion = useCallback((text: string) => {
     setReplyText(text);
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent('engagement:focus-reply')), 0);
   }, []);
 
   const handleMarkResolved = useCallback(async () => {

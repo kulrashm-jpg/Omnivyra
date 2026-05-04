@@ -3,7 +3,8 @@
  * Scans engagement_messages and detects opportunities.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   detectEngagementOpportunity,
   type EngagementMessageRow,

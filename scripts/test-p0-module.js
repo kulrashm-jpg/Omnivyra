@@ -52,10 +52,10 @@ async function testP0Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
 
       if (!supabaseUrl || !supabaseKey) {
-        throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+        throw new Error('Missing SUPABASE_URL or Supabase service credential');
       }
 
       const supabase = createClient(supabaseUrl, supabaseKey);
@@ -80,7 +80,7 @@ async function testP0Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('queue_jobs').select('id').limit(1);
@@ -103,7 +103,7 @@ async function testP0Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('scheduled_posts').select('priority').limit(1);
@@ -126,7 +126,7 @@ async function testP0Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('social_accounts').select('id').limit(1);

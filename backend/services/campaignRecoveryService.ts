@@ -11,7 +11,8 @@
  *   - Short 4-week duration (rapid test)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getTopLearnings } from './campaignLearningsStore';
 import { rankPlatformsByPerformance } from './platformPerformanceRanker';
 import { logDecision } from './autonomousDecisionLogger';

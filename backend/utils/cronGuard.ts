@@ -17,7 +17,7 @@
  *   // At the end of runSchedulerCycle(), persist current state:
  *   void cronGuard.save({ signalClustering: lastSignalClusteringRun, ... });
  *
- * Falls back silently when Redis is unavailable — no behaviour change.
+ * Fails closed when Redis is unavailable.
  */
 
 import IORedis from 'ioredis';
@@ -55,10 +55,13 @@ export class CronGuard {
   /**
    * Load previously persisted last-run timestamps.
    * Returns a record of taskName → timestamp (ms since epoch).
-   * Returns {} when Redis is unavailable (safe fallback).
+   * Returns {} when Redis is unavailable.
    */
   async load(): Promise<Record<string, number>> {
-    if (!this.client || !this.available) return {};
+    if (!this.client || !this.available) {
+      console.error('[cron-guard] Redis unavailable; last-run state not loaded');
+      return {};
+    }
     try {
       const raw = await this.client.get(REDIS_KEY);
       if (!raw) return {};
@@ -78,7 +81,10 @@ export class CronGuard {
    * Fire-and-forget — call with void at end of each scheduler cycle.
    */
   async save(state: Record<string, number>): Promise<void> {
-    if (!this.client || !this.available) return;
+    if (!this.client || !this.available) {
+      console.error('[cron-guard] Redis unavailable; last-run state not saved');
+      return;
+    }
     try {
       await this.client.set(REDIS_KEY, JSON.stringify(state), 'EX', STATE_TTL_SECONDS);
     } catch (err: any) {
@@ -94,12 +100,16 @@ export class CronGuard {
    * Stores instanceId as value so releaseLock() can safely delete only its own lock.
    */
   async tryAcquireLock(instanceId: string): Promise<boolean> {
-    if (!this.client || !this.available) return true; // Redis down → allow (single-instance safe)
+    if (!this.client || !this.available) {
+      console.error('[cron-guard] Redis unavailable; cron execution blocked');
+      return false;
+    }
     try {
       const result = await this.client.set(LOCK_KEY, instanceId, 'EX', LOCK_TTL_S, 'NX');
       return result === 'OK';
-    } catch {
-      return true; // Redis error → allow rather than block all cron work
+    } catch (err: any) {
+      console.error('[cron-guard] lock acquisition failed; cron execution blocked:', err?.message);
+      return false;
     }
   }
 

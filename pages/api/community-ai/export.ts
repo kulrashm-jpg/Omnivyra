@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import PDFDocument from 'pdfkit';
 import { getProfile } from '../../../backend/services/companyProfileService';
@@ -322,16 +323,16 @@ const renderPdf = async (
   if (data.type === 'insights' || data.type === 'full-report') {
     startSection('AI Insights');
     ensureSpace(80);
-    doc.fontSize(10).text(data.insights?.summary_insight || '—');
+    doc.fontSize(10).text(data.insights?.summary_insight || 'â€”');
     doc.moveDown();
     doc.fontSize(10).text('Key Findings');
     (data.insights?.key_findings || []).forEach((item: any) => {
-      doc.fontSize(9).text(`• ${typeof item === 'string' ? item : JSON.stringify(item)}`);
+      doc.fontSize(9).text(`â€¢ ${typeof item === 'string' ? item : JSON.stringify(item)}`);
     });
     doc.moveDown();
     doc.fontSize(10).text('Recommended Actions');
     (data.insights?.recommended_actions || []).forEach((item: any) => {
-      doc.fontSize(9).text(`• ${typeof item === 'string' ? item : JSON.stringify(item)}`);
+      doc.fontSize(9).text(`â€¢ ${typeof item === 'string' ? item : JSON.stringify(item)}`);
     });
     if (data.insights?.risks) {
       doc.moveDown();
@@ -349,7 +350,7 @@ const renderPdf = async (
   doc.end();
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -421,3 +422,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logoUrl,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

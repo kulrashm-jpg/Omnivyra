@@ -3,7 +3,8 @@
  * Aggregates governance metrics per company. Read-only, no constraint changes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignsByIds } from '../db/campaignStore';
 import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 

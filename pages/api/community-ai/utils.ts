@@ -1,3 +1,5 @@
+﻿// AUTH EXEMPT: non-route API helper module without default handler
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getProfile } from '../../../backend/services/companyProfileService';
@@ -67,4 +69,5 @@ export const enforceActionRole = async (input: {
     companyId: input.companyId,
     allowedRoles: input.allowedRoles,
   });
+
 

@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { encodeOAuthState } from '../../../../backend/auth/oauthState';
@@ -11,7 +12,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const credentials = await getOAuthCredentialsForPlatform('facebook');
     if (!credentials?.client_id) {
-      return res.status(400).json({ error: 'Facebook OAuth not configured — ask your Super Admin to add credentials.' });
+      return res.status(400).json({ error: 'Facebook OAuth not configured â€” ask your Super Admin to add credentials.' });
     }
 
     const companyId = (req.query.companyId as string) || undefined;
@@ -23,9 +24,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       client_id: credentials.client_id,
       redirect_uri: `${getBaseUrl(req)}/api/auth/facebook/callback`,
       // business_management is required when Pages are owned by a Business
-      // Portfolio — without it, /me/accounts returns empty for Business-owned
+      // Portfolio â€” without it, /me/accounts returns empty for Business-owned
       // Pages even when the OAuth user is admin.
-      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish,public_profile,business_management',
+      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_read_user_content,pages_messaging,instagram_basic,instagram_content_publish,business_management',
       response_type: 'code',
       state,
     });
@@ -36,3 +37,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: error.message });
   }
 }
+

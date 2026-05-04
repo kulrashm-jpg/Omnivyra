@@ -1,6 +1,8 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
 import axios from 'axios';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
@@ -201,3 +203,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
+

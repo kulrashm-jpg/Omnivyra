@@ -1,5 +1,6 @@
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type AnalyticsProviderKey = 'google_analytics';
 

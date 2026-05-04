@@ -114,7 +114,8 @@ export async function computeAnalytics(input: {
  * - Best performing content identification
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export interface EngagementMetrics {
   views: number;

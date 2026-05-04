@@ -1,7 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/engagement/inbox
- * SYSTEM 1: General Engagement Inbox — thread-based items from engagement_threads.
+ * SYSTEM 1: General Engagement Inbox â€” thread-based items from engagement_threads.
  * Used by: /engagement page, InboxDashboard, useEngagementInbox hook.
  * Returns: { items: InboxThread[] }
  */
@@ -9,7 +10,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getThreads } from '../../../backend/services/engagementThreadService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isActionableDmPreview, isAuthorSelf, isDmMessageType } from '../../../lib/engagement/messageRoles';
 import {
   resolveDmThreadIdentity,
@@ -78,7 +80,7 @@ function actionCoversLatestMessage(
   return actionMs >= latestMs;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -118,7 +120,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       exclude_ignored: true,
     });
 
-    // Drop empty threads — these are skeletal rows left behind when the
+    // Drop empty threads â€” these are skeletal rows left behind when the
     // last message was deleted or never arrived (the "Unknown with no
     // message" appearance the user reported). A thread with zero captured
     // messages has nothing actionable; the UI shouldn't render it.
@@ -151,7 +153,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const latestMessageByThread = new Map<string, DmIdentityMessage>();
     const dmMessagesByThread = new Map<string, DmIdentityMessage[]>();
     // For DM dedup we also need the participant author_id on each thread's
-    // latest message — the engagement_authors row is keyed on LinkedIn
+    // latest message â€” the engagement_authors row is keyed on LinkedIn
     // profile URL, so it's a stable per-person identifier across the
     // multiple thread rows the legacy ingester produced for one
     // conversation. Display name is intentionally NOT used as the dedup
@@ -259,7 +261,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     >();
     const threadRawPayloadByThread = new Map<string, Record<string, unknown>>();
     const platformThreadIdByThread = new Map<string, string | null>();
-    // Threads where the LinkedIn list preview was prefixed "You: …" — the
+    // Threads where the LinkedIn list preview was prefixed "You: â€¦" â€” the
     // DM scraper marks last_message_self=true on the thread row's raw_payload
     // for these. The user already replied directly in LinkedIn (outside
     // Omnivyra), so the thread should drop from Needs Response even though
@@ -478,7 +480,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       post_comment_count: postMetaByThread.get(t.thread_id)?.comment_count ?? null,
       post_stats_source: postMetaByThread.get(t.thread_id)?.ingested_via ?? null,
       // Engagement-author id of the OTHER party on the latest message.
-      // Used by the dedup pass below — multiple engagement_threads rows
+      // Used by the dedup pass below â€” multiple engagement_threads rows
       // for the same LinkedIn conversation (legacy ingester artefact)
       // collapse into a single inbox entry keyed on this id.
       counterparty_author_id:
@@ -491,7 +493,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Collapse legacy-split DM threads. The DM ingestion path historically
     // wrote one engagement_threads row per LinkedIn message preview, so a
     // single conversation with someone shows up as 2-3 sibling threads
-    // here. Group by (platform, counterparty_author_id) — author_id is
+    // here. Group by (platform, counterparty_author_id) â€” author_id is
     // engagement_authors.id which is keyed on LinkedIn profile URL, NOT
     // display name, so two real people sharing a name would have
     // different author_ids and remain separate rows.
@@ -500,7 +502,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // message (so the user clicks into the thread that holds the freshest
     // context), and sum message counts across siblings.
     //
-    // Comment / reaction / post-context threads are NOT collapsed — those
+    // Comment / reaction / post-context threads are NOT collapsed â€” those
     // genuinely have one platform_thread_id per post URN and the legacy
     // duplication issue doesn't apply.
     const isDmKind = (t: typeof allItems[number]) => isDmMessageType(t.latest_message_type);
@@ -518,7 +520,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     for (const row of dmRows) {
-      // Fall back to thread_id when there's no author_id — without an
+      // Fall back to thread_id when there's no author_id â€” without an
       // author_id alone misses self-latest rows, so this now prefers a
       // whole-thread counterparty key before falling back to thread_id.
       const nameOnlyIdentity = String(row.counterparty_identity_key ?? '').startsWith('name:')
@@ -586,3 +588,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

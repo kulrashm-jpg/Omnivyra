@@ -1,6 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getLatestApprovedCampaignVersion } from '../../../backend/db/campaignApprovedVersionStore';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { computeAnalytics } from '../../../backend/services/analyticsService';
 
 const resolvePlaybookReferenceId = (snapshot: any): string | null =>
@@ -18,7 +20,7 @@ const fetchPlaybookContext = async (companyId: string, playbookId: string | null
   return { id: data.id, name: data.name, objective: data.objective };
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -56,3 +58,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: error?.message || 'Failed to compute analytics' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

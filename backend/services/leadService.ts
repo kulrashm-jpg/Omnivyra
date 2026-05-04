@@ -2,7 +2,8 @@
  * Lead Capture Service — forms + leads tables
  * Handles: SaaS form builder, embed submissions, inbound webhook validation, manual entry
  */
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type FieldType = 'text' | 'email' | 'phone';
 

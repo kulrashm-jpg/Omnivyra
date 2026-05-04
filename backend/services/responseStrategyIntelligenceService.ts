@@ -3,7 +3,8 @@
  * Load top strategies for classification + sentiment to guide AI reply generation.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export const STRATEGY_TYPES = [
   'educational_reply',

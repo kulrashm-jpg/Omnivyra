@@ -3,7 +3,8 @@
  * Replaces duplicate inline queries in execute/approve routes.
  */
 
-import { supabase } from './supabaseClient';
+import { createServiceRoleMigrationProxy } from './supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /** Raw row from community_ai_actions. */
 export type CommunityAiActionRow = {

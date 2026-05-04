@@ -4,7 +4,8 @@
  * Does NOT change intelligence logic — only controls when processes execute.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type ExecutionType =
   | 'intelligence_cycle'

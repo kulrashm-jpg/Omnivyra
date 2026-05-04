@@ -16,7 +16,8 @@
  *   const metrics = computeAllMetrics(posts, seriesPostIds);
  */
 
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { PostPerformance } from './performanceEngine';
 
 // ── Raw DB row types ──────────────────────────────────────────────────────────

@@ -12,7 +12,8 @@
  * Competitor-name extraction is disabled; benchmark gaps remain name-free.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getPlatformBenchmark } from './globalPatternService';
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { rankPlatformsByPerformance } from './platformPerformanceRanker';

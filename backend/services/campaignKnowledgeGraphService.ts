@@ -9,7 +9,8 @@
  * All functions are async and use the server-side supabase client.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ---------------------------------------------------------------------------
 // In-memory cache for getBlogsForTopic results (TTL: 5 minutes per key)

@@ -11,7 +11,7 @@ import UnifiedContextModeSelector, {
   type ContextMode,
   type FocusModule,
 } from '../recommendations/engine-framework/UnifiedContextModeSelector';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 const TO_UNIFIED: Record<string, ContextMode> = {
   full_company_context: 'FULL',
@@ -69,7 +69,7 @@ export function StrategySetupPanel({ companyId }: StrategySetupPanelProps) {
       {contextMode === 'FOCUSED' && companyId && (
         <EngineContextPanel
           companyId={companyId}
-          fetchWithAuth={fetchWithAuth}
+          apiFetch={apiFetch}
           contextMode="FOCUSED"
           focusedModules={focusModules}
           additionalDirection=""

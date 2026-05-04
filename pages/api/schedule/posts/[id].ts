@@ -1,9 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // LEGACY ENGINE - DO NOT EXTEND
 // Scheduled for removal after DB-platform intelligence cutover.
 // API Endpoint for Individual Post Management
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   cancelLegacyScheduledPost,
   getLegacyScheduledPostById,
@@ -22,7 +24,7 @@ async function requireUserId(req: NextApiRequest, res: NextApiResponse): Promise
   return user.id;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log(`[NEW SCHEDULER ACTIVE] invoked pages/api/schedule/posts/[id].ts handler (${req.method || 'unknown'})`);
   const userId = await requireUserId(req, res);
   if (!userId) return;
@@ -158,3 +160,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -5,7 +5,8 @@
  * stage_campaign_plan_cost.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { calculateAiCost } from './usageLedgerService';
 
 /** Operation / context_type → stage for cost allocation */

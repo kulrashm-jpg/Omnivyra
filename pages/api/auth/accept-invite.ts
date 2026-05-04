@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 
 /**
  * POST /api/auth/accept-invite
@@ -12,7 +13,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
@@ -29,12 +31,12 @@ export default async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
 
-  // ── 1. Rate limit by IP ───────────────────────────────────────────────────
+  // â”€â”€ 1. Rate limit by IP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const ip = String(req.headers['x-forwarded-for'] ?? (req.socket as any)?.remoteAddress ?? 'unknown').split(',')[0].trim();
   const rl = await checkRateLimit(ip, ACCEPT_INVITE_LIMIT);
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 
-  // ── 2. Parse body ─────────────────────────────────────────────────────────
+  // â”€â”€ 2. Parse body â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { token } = body as { token?: string };
 
@@ -42,7 +44,7 @@ export default async function handler(
     return res.status(400).json({ error: 'Invalid invitation token', code: 'INVALID_TOKEN' });
   }
 
-  // ── 3. Hash token and look up invitation ──────────────────────────────────
+  // â”€â”€ 3. Hash token and look up invitation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const tokenHash = createHash('sha256').update(token).digest('hex');
 
   const { data: invitation } = await supabase
@@ -55,7 +57,7 @@ export default async function handler(
     return res.status(404).json({ error: 'Invitation not found or already used', code: 'NOT_FOUND' });
   }
 
-  // ── 4. Validate invitation status ─────────────────────────────────────────
+  // â”€â”€ 4. Validate invitation status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if ((invitation as any).accepted_at) {
     return res.status(400).json({ error: 'This invitation has already been accepted', code: 'ALREADY_ACCEPTED' });
   }
@@ -91,7 +93,7 @@ export default async function handler(
     return res.status(409).json({ error: 'This invitation link has already been used', code: 'ALREADY_USED' });
   }
 
-  // Send the magic link via Supabase Auth — Supabase delivers it through
+  // Send the magic link via Supabase Auth â€” Supabase delivers it through
   // the SMTP configured at the project level (your SES sender). This used
   // to wrap generateLink+SES SMTP in a custom transactional pipeline; that
   // is now redundant since Supabase SMTP handles delivery directly.
@@ -118,3 +120,4 @@ export default async function handler(
 
   return res.status(200).json({ ok: true, email: (invitation as any).email });
 }
+

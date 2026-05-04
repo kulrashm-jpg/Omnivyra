@@ -8,7 +8,8 @@
  * Does not apply to manual /api/community-ai/actions/execute.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type GuardrailResult = {
   allowed: boolean;

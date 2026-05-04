@@ -3,7 +3,8 @@
  * Phase 5: Persist recommendations for outcome/feedback linking.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type RecommendationPersistenceInput = {
   recommendation_type: string;

@@ -1,10 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/engagement/capabilities
  *
  * Returns the current (platform, action) capability matrix so any client
  * can gate its UI without duplicating the map. Static response in this
- * version — no per-org variance yet.
+ * version â€” no per-org variance yet.
  *
  * Shape:
  *   {
@@ -28,7 +29,7 @@ import {
   VERIFIED_PUBLISH_PLATFORMS,
 } from '../../../backend/services/engagementCapabilityMap';
 
-export default function handler(req: NextApiRequest, res: NextApiResponse) {
+function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -42,3 +43,9 @@ export default function handler(req: NextApiRequest, res: NextApiResponse) {
     matrix: ENGAGEMENT_CAPABILITY_MATRIX,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -10,9 +10,10 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase as supabaseAdmin } from '../../../backend/db/supabaseClient';
+import { getUserClient } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
+// AUTH EXEMPT: /api/auth/* routes are handled separately during auth callback/token migration.
 function maskPhone(phone: string): string {
   // e.g. +447911123456 → +44 ••• ••• 456
   if (phone.length < 4) return '•••';
@@ -35,7 +36,8 @@ export default async function handler(
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) return res.status(401).json({ error: 'Unauthorized' });
 
-  const { data, error: dbErr } = await supabaseAdmin
+  const userClient = getUserClient(req);
+  const { data, error: dbErr } = await userClient
     .from('free_credit_profiles')
     .select('phone_number')
     .eq('user_id', user.id)

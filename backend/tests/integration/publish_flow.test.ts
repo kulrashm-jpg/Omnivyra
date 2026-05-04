@@ -140,7 +140,8 @@ jest.mock('../../services/analyticsService', () => ({
 jest.mock('../../services/activityLogger', () => ({
   logActivity: jest.fn().mockResolvedValue(undefined),
 }));
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { findDuePostsAndEnqueue } from '../../scheduler/schedulerService';
 import { processPublishJob } from '../../queue/jobProcessors/publishProcessor';
 import { getScheduledPost } from '../../db/queries';

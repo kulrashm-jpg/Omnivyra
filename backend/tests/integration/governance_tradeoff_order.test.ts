@@ -10,7 +10,8 @@ jest.mock('../../services/PortfolioTimelineProjection', () => ({
   calculateEarliestViableStartDate: jest.fn().mockResolvedValue(new Date('2026-04-01')),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { evaluateCampaignDuration } from '../../services/HorizonConstraintEvaluator';
 import { TRADE_OFF_PRIORITY_ORDER } from '../../governance/GovernanceContract';
 

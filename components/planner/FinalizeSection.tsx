@@ -15,7 +15,7 @@ import { WhatIfPanel } from './WhatIfPanel';
 import type { CampaignValidation } from '../../backend/lib/validation/campaignValidator';
 import type { PaidRecommendation } from '../../backend/lib/ads/paidAmplificationEngine';
 import type { SimulatorBasePlan } from '../../backend/lib/simulation/scenarioSimulator';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
 export interface FinalizeSectionProps {
@@ -118,7 +118,7 @@ export function FinalizeSection({
     setGenerating(true);
     setFinalizeError(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
+      const res = await apiFetch('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -179,7 +179,7 @@ export function FinalizeSection({
     setFinalizing(true);
     setFinalizeError(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/planner-finalize', {
+      const res = await apiFetch('/api/campaigns/planner-finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

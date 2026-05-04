@@ -13,7 +13,7 @@ import { usePlannerSession, type StrategyContext } from './plannerSessionStore';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { PlatformContentMatrix } from './PlatformContentMatrix';
 import ChatVoiceButton from '../ChatVoiceButton';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
 const DEFAULT_DURATION_WEEKS = 4;
@@ -137,7 +137,7 @@ export function SkeletonBuilderPanel({
       if (platform_content_requests && Object.keys(platform_content_requests).length > 0) {
         body.platform_content_requests = platform_content_requests;
       }
-      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
+      const res = await apiFetch('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -202,7 +202,7 @@ export function SkeletonBuilderPanel({
 
       if (hasExisting) {
         // Use dedicated skeleton-command endpoint for modifications
-        const res = await fetchWithAuth('/api/planner/skeleton-command', {
+        const res = await apiFetch('/api/planner/skeleton-command', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -284,7 +284,7 @@ export function SkeletonBuilderPanel({
         if (platform_content_requests && Object.keys(platform_content_requests).length > 0) {
           body.platform_content_requests = platform_content_requests;
         }
-        const res = await fetchWithAuth('/api/campaigns/ai/plan', {
+        const res = await apiFetch('/api/campaigns/ai/plan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),

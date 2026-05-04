@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET  /api/automation/config?organization_id=...
  *   Returns the current automation config for the caller's org. If no
@@ -19,7 +20,7 @@
  * Safety:
  *   - Writes go through upsertAutomationConfig which narrows
  *     allowed_actions to the automatable whitelist AND validates
- *     min_confidence_level AND clamps daily_limit ≥ 0 BEFORE reaching
+ *     min_confidence_level AND clamps daily_limit â‰¥ 0 BEFORE reaching
  *     the DB CHECK constraints.
  *   - The GLOBAL_AUTOMATION_DISABLED env is reflected in the response
  *     so operators can see the kill switch is active.
@@ -62,7 +63,7 @@ function serialize(config: Awaited<ReturnType<typeof getAutomationConfig>>) {
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -83,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ success: true, ...serialize(config) });
     }
 
-    // POST — validate minimal shape, let the store do hard normalization.
+    // POST â€” validate minimal shape, let the store do hard normalization.
     const patch: AutomationConfigPatch = {};
     const fields: Array<keyof AutomationConfigPatch> = [
       'enabled',
@@ -113,3 +114,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (err as Error)?.message || 'automation config failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

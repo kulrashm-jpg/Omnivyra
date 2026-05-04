@@ -21,6 +21,7 @@ import {
   DollarSign,
   Activity,
 } from 'lucide-react';
+import { apiFetch } from '../../lib/apiFetch';
 
 interface PlanAnalytics {
   plan_id: string;
@@ -58,7 +59,7 @@ export default function PlanAnalyticsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/super-admin/plans/analytics', { credentials: 'include' });
+      const res = await apiFetch('/api/super-admin/plans/analytics');
       if (!res.ok) {
         const json = await res.json();
         throw new Error(json.error || 'Failed to load plan analytics');

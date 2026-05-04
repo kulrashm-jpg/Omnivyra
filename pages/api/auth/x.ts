@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 import { encodeOAuthState } from '../../../backend/auth/oauthState';
@@ -50,3 +51,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.status(500).json({ error: error.message });
   }
 }
+

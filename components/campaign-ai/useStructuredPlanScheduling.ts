@@ -1,4 +1,4 @@
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { StructuredPlan } from './types';
 
 type Params = {
@@ -31,7 +31,7 @@ export function useStructuredPlanScheduling({
       setUiErrorMessage(null);
       setUiSuccessMessage(null);
 
-      const response = await fetchWithAuth(`/api/campaigns/${campaignId}/schedule-structured-plan`, {
+      const response = await apiFetch(`/api/campaigns/${campaignId}/schedule-structured-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan: structuredPlan }),

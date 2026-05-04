@@ -1,8 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const company_id = (req.query.company_id || req.body?.company_id) as string | undefined;
@@ -15,7 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!auth) return;
 
   try {
-    // ── 1. All posts with block-level metadata ────────────────────────────
+    // â”€â”€ 1. All posts with block-level metadata â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: posts, error: postsErr } = await supabase
       .from('blogs')
       .select('id, title, slug, category, tags, status, views_count, likes_count, published_at, created_at, content_blocks, angle_type')
@@ -24,22 +26,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (postsErr) return res.status(500).json({ error: postsErr.message });
 
-    // ── 2. Series (company_blog_series — FK → blogs(id)) ─────────────────
+    // â”€â”€ 2. Series (company_blog_series â€” FK â†’ blogs(id)) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: seriesRows } = await supabase
       .from('company_blog_series')
       .select(`id, title, slug, description, cover_url, created_at, company_blog_series_posts(blog_id, position)`)
       .eq('company_id', company_id)
       .order('created_at', { ascending: false });
 
-    // ── 3. Relationships (company_blog_relationships — FK → blogs(id)) ────
+    // â”€â”€ 3. Relationships (company_blog_relationships â€” FK â†’ blogs(id)) â”€â”€â”€â”€
     const { data: relRows } = await supabase
       .from('company_blog_relationships')
       .select('id, source_blog_id, target_blog_id, relationship_type, created_at')
       .eq('company_id', company_id)
       .order('created_at', { ascending: false });
 
-    // ── 4. Performance summaries ──────────────────────────────────────────
-    // company_blog_performance_summary view includes company_id — no IN filter needed
+    // â”€â”€ 4. Performance summaries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // company_blog_performance_summary view includes company_id â€” no IN filter needed
     const { data: perfRows } = await supabase
       .from('company_blog_performance_summary')
       .select('blog_id, session_count, avg_time_seconds, avg_scroll_depth, completion_rate')
@@ -60,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ── 5. Comment counts per blog ────────────────────────────────────────
+    // â”€â”€ 5. Comment counts per blog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const postIds = (posts ?? []).map((p) => p.id);
     let commentMap = new Map<string, number>();
 
@@ -75,7 +77,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── 6. Annotate posts ─────────────────────────────────────────────────
+    // â”€â”€ 6. Annotate posts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const annotated = (posts ?? []).map((p) => {
       const blocks: { type: string; body?: string; slug?: string; items?: { title: string; url: string }[] }[] =
         Array.isArray(p.content_blocks) ? p.content_blocks : [];
@@ -126,3 +128,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

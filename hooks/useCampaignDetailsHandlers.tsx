@@ -34,7 +34,7 @@ import {
 import CampaignAIChat from '../components/CampaignAIChat';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { GovernanceStatusCard } from '../components/governance/GovernanceStatusCard';
 import { GovernanceAnalyticsCard } from '../components/governance/GovernanceAnalyticsCard';
 import { GovernanceExplanationPanel, deriveFromEvent } from '../components/governance/GovernanceExplanationPanel';
@@ -281,7 +281,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
 
   useEffect(() => {
     if (!effectiveCompanyId) return;
-    fetchWithAuth(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(effectiveCompanyId)}`)
+    apiFetch(`/api/company-plan-duration-limit?companyId=${encodeURIComponent(effectiveCompanyId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setPlanDurationLimit(d ? { max_campaign_duration_weeks: d.max_campaign_duration_weeks } : null))
       .catch(() => setPlanDurationLimit(null));
@@ -300,7 +300,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
         ? String((prefilledPlanning as any).platforms).split(',').map((p: string) => p.trim()).filter(Boolean)
         : ['linkedin'];
       const duration = requestedWeeksForPreplan || 12;
-      fetchWithAuth('/api/campaigns/validate-frequency', {
+      apiFetch('/api/campaigns/validate-frequency', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -396,7 +396,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
             cross_platform_sharing_enabled: crossPlatformSharingEnabled,
             updated_at: new Date().toISOString(),
           };
-      fetchWithAuth(`/api/campaigns/${encodeURIComponent(id)}/save-wizard-state`, {
+      apiFetch(`/api/campaigns/${encodeURIComponent(id)}/save-wizard-state`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -578,7 +578,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
         setIsLoading(false);
         return;
       }
-      const campaignResponse = await fetchWithAuth(
+      const campaignResponse = await apiFetch(
         `/api/campaigns?type=campaign&campaignId=${campaignId}&companyId=${encodeURIComponent(
           effectiveCompanyId
         )}`
@@ -651,7 +651,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
       }
 
       // Load weekly plans
-      const weeklyResponse = await fetchWithAuth(
+      const weeklyResponse = await apiFetch(
         `/api/campaigns/get-weekly-plans?campaignId=${campaignId}&companyId=${encodeURIComponent(
           effectiveCompanyId
         )}`
@@ -704,7 +704,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
       }
 
       // Load daily plans
-      const dailyResponse = await fetchWithAuth(
+      const dailyResponse = await apiFetch(
         `/api/campaigns/daily-plans?campaignId=${campaignId}&companyId=${encodeURIComponent(
           effectiveCompanyId
         )}`
@@ -714,7 +714,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
         setDailyPlans(dailyData);
       }
 
-      const readinessResponse = await fetchWithAuth(
+      const readinessResponse = await apiFetch(
         `/api/campaigns/${campaignId}/readiness?companyId=${encodeURIComponent(effectiveCompanyId)}`
       );
       if (readinessResponse.ok) {
@@ -722,7 +722,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
         setReadiness(readinessData);
       }
 
-      const gateResponse = await fetchWithAuth(`/api/campaigns/${campaignId}/virality/gate`, {
+      const gateResponse = await apiFetch(`/api/campaigns/${campaignId}/virality/gate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId: effectiveCompanyId, campaignId }),
@@ -732,7 +732,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
         setViralityGate(gateData);
       }
 
-      const diagnosticsResponse = await fetchWithAuth(`/api/campaigns/${campaignId}/virality/assess`, {
+      const diagnosticsResponse = await apiFetch(`/api/campaigns/${campaignId}/virality/assess`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId: effectiveCompanyId, campaignId }),
@@ -742,7 +742,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
         setViralityDiagnostics(diagnosticsData);
       }
 
-      const performanceResponse = await fetchWithAuth(
+      const performanceResponse = await apiFetch(
         `/api/performance/campaign/${campaignId}?companyId=${encodeURIComponent(effectiveCompanyId)}`
       );
       if (performanceResponse.ok) {
@@ -769,7 +769,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
     const weekPlan = weeklyPlans.find(w => w.weekNumber === weekNumber);
     setIsGeneratingWeek(weekNumber);
     try {
-      const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
+      const response = await apiFetch('/api/campaigns/generate-weekly-structure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -794,7 +794,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
       } else {
         // Blueprint-based generation failed (no blueprint, no execution items, etc.)
         // Always fall back to AI generation regardless of error type.
-        const fallbackRes = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+        const fallbackRes = await apiFetch('/api/campaigns/generate-ai-daily-plans', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -847,7 +847,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
           }
         }
       }
-      const res = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
+      const res = await apiFetch('/api/campaigns/regenerate-blueprint', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -892,7 +892,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
     try {
       for (const weekNumber of allWeeks) {
         const weekPlan = weeklyPlans.find((w) => w.weekNumber === weekNumber);
-        const response = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
+        const response = await apiFetch('/api/campaigns/generate-weekly-structure', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -907,7 +907,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
         });
         if (!response.ok) {
           // Blueprint-based generation failed — always fall back to AI for this week.
-          const fallbackRes = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+          const fallbackRes = await apiFetch('/api/campaigns/generate-ai-daily-plans', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ campaignId: id, weekNumber, companyId: effectiveCompanyId, provider: 'demo' }),
@@ -938,7 +938,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
     }
     setIsSavingWeekPlan(weekNumber);
     try {
-      const response = await fetchWithAuth('/api/campaigns/save-week-daily-plan', {
+      const response = await apiFetch('/api/campaigns/save-week-daily-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1084,7 +1084,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
     setPrePlanningLoading(true);
     setPrePlanningResult(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/run-preplanning', {
+      const res = await apiFetch('/api/campaigns/run-preplanning', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1107,7 +1107,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
     if (!campaign || !effectiveCompanyId) return;
     setPrePlanningLoading(true);
     try {
-      const res = await fetchWithAuth('/api/campaigns/update-duration', {
+      const res = await apiFetch('/api/campaigns/update-duration', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1154,7 +1154,7 @@ export function useCampaignDetailsHandlers(core: CoreState) {
             if (typeof window !== 'undefined') {
               sessionStorage.setItem(`campaign_planning_context_${campaign.id}`, JSON.stringify(planningContext));
             }
-            const regRes = await fetchWithAuth('/api/campaigns/regenerate-blueprint', {
+            const regRes = await apiFetch('/api/campaigns/regenerate-blueprint', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

@@ -2,7 +2,7 @@
 /**
  * GET /api/super-admin/system-trends
  *
- * Historical system metrics — returns slim snapshots from the last 24 h or 7 d.
+ * Historical system metrics â€” returns slim snapshots from the last 24 h or 7 d.
  *
  * v2: uses SlimSnapshot (lean scalar payloads ~600 bytes each vs ~8 KB previously).
  * Includes computed baselines and cost projection derived from the window.
@@ -27,27 +27,15 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest }   from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin }         from '../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { querySnapshots, type SlimSnapshot } from '../../../lib/instrumentation/metricsPersistence';
 import { computeBaselines }             from '../../../lib/instrumentation/baselineEngine';
 import { projectCost }                  from '../../../lib/instrumentation/costProjection';
 import { getSharedRedisClient }         from '../../../backend/queue/bullmqClient';
 import { RUNTIME_ENV }                  from '../../../lib/instrumentation/systemMetrics';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  } catch { /* deny */ }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-// ── Types ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface CostTrendPoint {
   ts:                   number;
@@ -66,7 +54,7 @@ interface TrendSummary {
   avgApiErrorRate:     number | null;
 }
 
-// ── Aggregation helpers ───────────────────────────────────────────────────────
+// â”€â”€ Aggregation helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function avg(values: number[]): number | null {
   if (values.length === 0) return null;
@@ -112,11 +100,15 @@ function buildCostTrend(snapshots: SlimSnapshot[]): CostTrendPoint[] {
   }));
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'system-trends:view');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/system-trends', 'system-trends:view');
+  }
 
   const windowParam = req.query.window === '7d' ? '7d' : '24h';
   const limitParam  = Math.min(parseInt(String(req.query.limit ?? '288'), 10) || 288, 2_016);
@@ -135,7 +127,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     queryError = String((err as Error)?.message ?? err);
   }
 
-  // Apply limit — keep most recent
+  // Apply limit â€” keep most recent
   if (snapshots.length > limitParam) snapshots = snapshots.slice(-limitParam);
 
   // Derive projection and baselines from the same window
@@ -160,3 +152,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ...(queryError ? { error: queryError } : {}),
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

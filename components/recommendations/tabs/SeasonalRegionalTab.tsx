@@ -128,11 +128,11 @@ function EventCard({
 }
 
 export default function SeasonalRegionalTab(props: OpportunityTabProps) {
-  const { companyId, regions, onPromote, onAction, fetchWithAuth, overrideText = '', onOverrideChange } = props;
+  const { companyId, regions, onPromote, onAction, apiFetch, overrideText = '', onOverrideChange } = props;
   const { opportunities, loading, error, runEngine, hasRun, refetch, refetchGetOnly } = useOpportunities(
     companyId,
     TYPE,
-    fetchWithAuth,
+    apiFetch,
     { getRegions: () => regions ?? null }
   );
 
@@ -161,7 +161,7 @@ export default function SeasonalRegionalTab(props: OpportunityTabProps) {
 
   return (
     <div className="space-y-4">
-      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineContextPanel companyId={companyId} apiFetch={apiFetch} />
       <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
       <div>
         <button

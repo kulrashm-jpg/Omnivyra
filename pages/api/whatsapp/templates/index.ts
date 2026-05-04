@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
- * GET  /api/whatsapp/templates   — list templates for a company
- * POST /api/whatsapp/templates   — submit a new template version to Meta
+ * GET  /api/whatsapp/templates   â€” list templates for a company
+ * POST /api/whatsapp/templates   â€” submit a new template version to Meta
  *
  * Query params (GET): company_id, status (optional), active_only (bool)
  */
@@ -8,14 +9,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   submitTemplate,
   type CreateTemplateInput,
 } from '../../../../backend/services/whatsappTemplateService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // ── GET: list templates ───────────────────────────────────────────────────
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // â”€â”€ GET: list templates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { company_id, status, active_only } = req.query as Record<string, string>;
 
@@ -40,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ templates: data ?? [] });
   }
 
-  // ── POST: submit template ─────────────────────────────────────────────────
+  // â”€â”€ POST: submit template â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const {
       company_id,
@@ -81,3 +83,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

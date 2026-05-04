@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/governance/unlock
- * Stage 29 — Release governance lockdown. SUPER_ADMIN only.
+ * Stage 29 â€” Release governance lockdown. SUPER_ADMIN only.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -23,4 +24,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ success: true });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

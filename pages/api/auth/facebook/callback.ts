@@ -1,12 +1,97 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
+import crypto from 'crypto';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { encryptTokenColumns } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
-import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
+import { META_GRAPH_VERSION } from '../../../../backend/auth/metaAuthService';
+import { saveToken as saveConnectorMetadata } from '../../../../backend/services/platformTokenService';
+
+const META_GRAPH = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+
+type MetaPage = {
+  id: string;
+  name?: string | null;
+  access_token?: string | null;
+  instagram_business_account?: { id?: string; username?: string | null; name?: string | null } | null;
+};
+
+type DebugTokenData = {
+  data?: {
+    is_valid?: boolean;
+    scopes?: string[];
+    expires_at?: number;
+    user_id?: string;
+  };
+};
+
+type RpcPagePayload = {
+  page_id: string;
+  page_name: string | null;
+  page_access_token: string;
+  username: string | null;
+};
+
+type RpcInstagramPayload = {
+  ig_business_id: string;
+  username: string | null;
+  name: string | null;
+  ig_user_token: string;
+  linked_page_id: string;
+};
+
+type RpcThreadsPayload = {
+  threads_user_id: string;
+  account_name: string;
+  username: string | null;
+  threads_token: string;
+  linked_page_id: string;
+  linked_ig_business_id: string;
+};
+
+function redirectError(res: NextApiResponse, dest: string, msg: string) {
+  return res.redirect(`${dest}?error=${encodeURIComponent(msg)}`);
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const err = (body as { error?: { message?: string } } | null)?.error?.message;
+    throw new Error(err ?? `Meta request failed (${res.status})`);
+  }
+  return body as T;
+}
+
+async function fetchPagesAndDerive(userToken: string): Promise<MetaPage[]> {
+  const url =
+    `${META_GRAPH}/me/accounts?` +
+    new URLSearchParams({
+      fields: 'id,name,access_token,instagram_business_account{id,username,name,profile_picture_url}',
+      access_token: userToken,
+      limit: '100',
+    });
+  const body = await fetchJson<{ data?: MetaPage[] }>(url);
+  return Array.isArray(body?.data) ? body.data : [];
+}
+
+async function fetchThreadsAccountId(igUserId: string, pageToken: string): Promise<string | null> {
+  const url =
+    `${META_GRAPH}/${encodeURIComponent(igUserId)}?` +
+    new URLSearchParams({ fields: 'threads_account', access_token: pageToken });
+  const res = await fetch(url);
+  const body = (await res.json().catch(() => null)) as
+    | { threads_account?: { id?: string } | null; error?: { message?: string } }
+    | null;
+  if (!res.ok || !body) return null;
+  const id = body?.threads_account?.id;
+  return typeof id === 'string' && id.trim() ? id.trim() : null;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -14,172 +99,195 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { code, state, error } = req.query;
-  const { returnTo: earlyReturnTo } = decodeOAuthState(state as string);
-  const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
+  const decodedState = decodeOAuthState(state as string);
+  const errDest =
+    decodedState.returnTo && decodedState.returnTo.startsWith('/')
+      ? decodedState.returnTo
+      : '/social-platforms';
 
-  if (error) {
-    return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
+  if (error) return redirectError(res, errDest, String(error));
+  if (!code || typeof code !== 'string') {
+    return redirectError(res, errDest, 'No authorization code received');
   }
-
-  if (!code) {
-    return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
+  if (!decodedState.valid) {
+    return redirectError(res, errDest, 'Invalid OAuth state');
   }
 
   try {
-    const platform = 'facebook';
-    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+    const { companyId, userId: stateUserId, returnTo } = decodedState;
 
     const oauthCredentials = await getOAuthCredentialsForPlatform('facebook');
     if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Facebook OAuth not configured — ask your Super Admin to add credentials.')}`);
+      return redirectError(res, errDest, 'Facebook OAuth not configured â€” ask your Super Admin to add credentials.');
     }
 
-    // Exchange code for access token
-    const tokenResponse = await fetch('https://graph.facebook.com/v22.0/oauth/access_token', {
+    const { user } = await getSupabaseUserFromRequest(req);
+    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+    if (!userId) {
+      return redirectError(res, errDest, 'Login session required â€” please log in and try again');
+    }
+    if (!companyId) {
+      return redirectError(res, errDest, 'Company context required â€” please reconnect from a workspace.');
+    }
+
+    const idempotencyKey = crypto
+      .createHash('sha256')
+      .update(`${state}|${code}`)
+      .digest('hex');
+
+    // â”€â”€ 1. Token exchange (short-lived) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const shortRes = await fetch(`${META_GRAPH}/oauth/access_token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: oauthCredentials.client_id,
         client_secret: oauthCredentials.client_secret,
         redirect_uri: `${getBaseUrl(req)}/api/auth/facebook/callback`,
-        code: code as string,
+        code,
       }),
     });
-
-    if (!tokenResponse.ok) {
-      const err = await tokenResponse.json().catch(() => ({}));
-      throw new Error(err?.error?.message ?? 'Token exchange failed');
+    if (!shortRes.ok) {
+      const body = await shortRes.json().catch(() => ({}));
+      throw new Error((body as { error?: { message?: string } })?.error?.message ?? 'Token exchange failed');
     }
+    const shortLived = (await shortRes.json()) as { access_token: string };
 
-    const tokenData = await tokenResponse.json();
-
-    // Exchange short-lived token for long-lived (60 days)
-    const longLivedResponse = await fetch(
-      `https://graph.facebook.com/v22.0/oauth/access_token?` +
-      new URLSearchParams({
-        grant_type: 'fb_exchange_token',
-        client_id: oauthCredentials.client_id,
-        client_secret: oauthCredentials.client_secret,
-        fb_exchange_token: tokenData.access_token,
-      })
-    );
-
-    const longLivedData = longLivedResponse.ok
-      ? await longLivedResponse.json()
-      : tokenData;
-
-    const accessToken = longLivedData.access_token ?? tokenData.access_token;
-    const expiresIn = longLivedData.expires_in ?? tokenData.expires_in ?? 5184000;
-    const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
-
-    // Get Facebook user profile
-    const profileResponse = await fetch(
-      `https://graph.facebook.com/v22.0/me?fields=id,name&access_token=${accessToken}`
-    );
-    const profile = await profileResponse.json();
-
-    if (!profile?.id) {
-      throw new Error('Failed to fetch Facebook profile');
-    }
-
-    const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
-
-    if (!userId) {
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
-    }
-
-    const accountName = profile.name || 'Facebook Account';
-
-    const tokenObj: TokenObject = {
-      access_token: accessToken,
-      expires_at: expiresAt,
-      token_type: 'Bearer',
-    };
-    const encryptedCols = encryptTokenColumns(tokenObj);
-
-    const { data: existingAccount } = await supabase
-      .from('social_accounts')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('platform', 'facebook')
-      .eq('platform_user_id', profile.id)
-      .single();
-
-    let accountId: string;
-
-    if (existingAccount) {
-      accountId = existingAccount.id;
-      await supabase
-        .from('social_accounts')
-        .update({
-          account_name: accountName,
-          is_active: true,
-          token_expires_at: expiresAt,
-          last_sync_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+    // â”€â”€ 2. Long-lived exchange â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const longLived = await fetchJson<{ access_token?: string; expires_in?: number }>(
+      `${META_GRAPH}/oauth/access_token?` +
+        new URLSearchParams({
+          grant_type: 'fb_exchange_token',
+          client_id: oauthCredentials.client_id,
+          client_secret: oauthCredentials.client_secret,
+          fb_exchange_token: shortLived.access_token,
         })
-        .eq('id', accountId);
-    } else {
-      const { data: newAccount, error: insertError } = await supabase
-        .from('social_accounts')
-        .insert({
-          user_id: userId,
-          company_id: companyId || null,
-          platform: 'facebook',
-          platform_user_id: profile.id,
-          account_name: accountName,
-          is_active: true,
-          token_expires_at: expiresAt,
-          last_sync_at: new Date().toISOString(),
-          access_token: encryptedCols.access_token,
-          refresh_token: encryptedCols.refresh_token,
+    );
+    const userAccessToken = longLived.access_token ?? shortLived.access_token;
+
+    // â”€â”€ 3. /debug_token: real granted scopes + accurate expiry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const debug = await fetchJson<DebugTokenData>(
+      `${META_GRAPH}/debug_token?` +
+        new URLSearchParams({
+          input_token: userAccessToken,
+          access_token: `${oauthCredentials.client_id}|${oauthCredentials.client_secret}`,
         })
-        .select('id')
-        .single();
+    );
+    const grantedScopes: string[] = Array.isArray(debug?.data?.scopes) ? (debug.data!.scopes as string[]) : [];
+    const debugExpiresAt = typeof debug?.data?.expires_at === 'number' ? debug!.data!.expires_at : 0;
+    const fallbackExpiresIn = longLived.expires_in ?? 5184000;
+    const tokenExpiresAtIso =
+      debugExpiresAt > 0
+        ? new Date(debugExpiresAt * 1000).toISOString()
+        : new Date(Date.now() + fallbackExpiresIn * 1000).toISOString();
 
-      if (insertError || !newAccount) {
-        throw new Error('Failed to create account');
-      }
+    // â”€â”€ 4. /me to capture fb_user_id â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const me = await fetchJson<{ id: string; name?: string }>(
+      `${META_GRAPH}/me?` + new URLSearchParams({ fields: 'id,name', access_token: userAccessToken })
+    );
+    const fbUserId = me.id;
 
-      accountId = newAccount.id;
-    }
+    // â”€â”€ 5. /me/accounts: pages + IG business accounts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const pages = await fetchPagesAndDerive(userAccessToken);
 
-    await setToken(accountId, tokenObj);
+    const pagesPayload: RpcPagePayload[] = pages
+      .filter((p) => typeof p.id === 'string' && p.id && typeof p.access_token === 'string' && p.access_token)
+      .map((p) => ({
+        page_id: String(p.id),
+        page_name: p.name ?? 'Facebook Page',
+        page_access_token: encryptTokenColumns({ access_token: String(p.access_token) }).access_token,
+        username: null,
+      }));
 
-    let derivedThreadsCount = 0;
-    try {
-      const syncResult = await syncInstagramAndThreadsFromMeta({
-        userId,
-        companyId: companyId || null,
-        accessToken,
-        expiresAt,
-        permissions: String(tokenData.scope || longLivedData.scope || '')
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
+    const instagramsPayload: RpcInstagramPayload[] = pages
+      .filter((p) => p.instagram_business_account?.id && typeof p.access_token === 'string' && p.access_token)
+      .map((p) => ({
+        ig_business_id: String(p.instagram_business_account!.id),
+        username: p.instagram_business_account?.username ?? null,
+        name: p.instagram_business_account?.name ?? null,
+        ig_user_token: encryptTokenColumns({ access_token: String(p.access_token) }).access_token,
+        linked_page_id: String(p.id),
+      }));
+
+    // â”€â”€ 6. Threads derivation (per IG account that has linkage) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const threadsPayload: RpcThreadsPayload[] = [];
+    for (const p of pages) {
+      const igId = p.instagram_business_account?.id;
+      const pageToken = p.access_token;
+      if (!igId || !pageToken) continue;
+      const threadsId = await fetchThreadsAccountId(igId, pageToken);
+      if (!threadsId) continue;
+      const igUsername = p.instagram_business_account?.username ?? null;
+      threadsPayload.push({
+        threads_user_id: threadsId,
+        account_name: igUsername ? `Threads via @${igUsername}` : `Threads via ${p.name ?? 'Page'}`,
+        username: igUsername,
+        threads_token: encryptTokenColumns({ access_token: pageToken }).access_token,
+        linked_page_id: String(p.id),
+        linked_ig_business_id: String(igId),
       });
-      derivedThreadsCount = syncResult.threadsAccounts.length;
-      if (syncResult.instagramAccounts.length > 0) {
-        console.log('Instagram/Threads derived accounts synced from Facebook:', syncResult);
-      }
-    } catch (syncError: any) {
-      console.warn('[facebook/callback] Instagram/Threads derivation skipped:', syncError?.message);
     }
 
-    console.log('✅ Facebook account saved successfully:', { accountId, accountName });
+    // â”€â”€ 7. Single-transaction RPC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const connectionPayload = {
+      user_id: userId,
+      company_id: companyId,
+      fb_user_id: fbUserId,
+      user_access_token: encryptTokenColumns({ access_token: userAccessToken }).access_token,
+      token_expires_at: tokenExpiresAtIso,
+      granted_scopes: grantedScopes,
+      idempotency_key: idempotencyKey,
+    };
+
+    const { data: rpcData, error: rpcError } = await supabase.rpc('meta_oauth_apply', {
+      p_connection: connectionPayload,
+      p_pages: pagesPayload,
+      p_instagrams: instagramsPayload,
+      p_threads: threadsPayload,
+    });
+
+    if (rpcError) {
+      console.error('meta_oauth_apply failed:', rpcError);
+      throw new Error(rpcError.message || 'OAuth persistence failed');
+    }
 
     if (companyId && userId) {
-      checkAndGrantSetupCredits(companyId, userId)
-        .catch(e => console.warn('[facebook/callback] setup credits check failed:', e?.message));
+      checkAndGrantSetupCredits(companyId, userId).catch((e) =>
+        console.warn('[facebook/callback] setup credits check failed:', e?.message)
+      );
+
+      await Promise.all([
+        saveConnectorMetadata(companyId, companyId, 'facebook', {
+          connected_by_user_id: userId,
+          scopes: grantedScopes,
+        }),
+        saveConnectorMetadata(companyId, companyId, 'instagram', {
+          connected_by_user_id: userId,
+          scopes: grantedScopes,
+        }),
+        saveConnectorMetadata(companyId, companyId, 'whatsapp', {
+          connected_by_user_id: userId,
+          scopes: grantedScopes,
+        }),
+      ]).catch((e) =>
+        console.warn('[facebook/callback] connector metadata save failed:', e?.message)
+      );
     }
 
-    const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
+    const successDest = returnTo && returnTo.startsWith('/') ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
-    return res.redirect(`${successDest}${sep}connected=${platform}&threads=${derivedThreadsCount > 0 ? 'enabled' : 'disabled'}&account=${encodeURIComponent(accountName)}&success=true`);
-
-  } catch (error: any) {
-    console.error('Facebook OAuth callback error:', error);
-    return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
+    const params = new URLSearchParams({
+      connected: 'facebook',
+      pages: String(pagesPayload.length),
+      instagrams: String(instagramsPayload.length),
+      threads: threadsPayload.length > 0 ? 'enabled' : 'disabled',
+      success: 'true',
+      connection: String(rpcData ?? ''),
+    });
+    return res.redirect(`${successDest}${sep}${params.toString()}`);
+  } catch (err: unknown) {
+    const msg = (err as Error)?.message || 'Connection failed';
+    console.error('Facebook OAuth callback error:', msg);
+    return redirectError(res, errDest, msg);
   }
 }
+

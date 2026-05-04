@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: OAuth callback handles external provider redirect
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
@@ -115,7 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // saveToken now writes ONLY metadata (connected_by_user_id, scopes, etc.)
-    // — see backend/services/platformTokenService.ts. The actual access /
+    // â€” see backend/services/platformTokenService.ts. The actual access /
     // refresh tokens land in social_accounts via dualWriteSocialAccount, which
     // is the single source of truth post-consolidation.
     await saveToken(tenantId, organizationId, 'linkedin', {
@@ -148,3 +149,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
   }
 }
+

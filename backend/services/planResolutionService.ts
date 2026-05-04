@@ -3,7 +3,8 @@
  * Merges plan defaults with organization overrides. No enforcement; declarative only.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /** Plan-based max campaign duration (weeks). Fallback when not in plan_limits. */
 export const PLAN_MAX_DURATION_WEEKS: Record<string, number> = {

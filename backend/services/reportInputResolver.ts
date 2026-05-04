@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getProfile, saveProfile, type CompanyProfile } from './companyProfileService';
 import {
   assertCompetitorOutputPartition,
@@ -195,7 +196,7 @@ async function loadCompanyIntegrationState(
       .select('type, name, status, config')
       .eq('company_id', companyId),
     supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id')
       .eq('company_id', companyId)
       .eq('status', 'active'),

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/extension/action-result
  *
@@ -36,7 +37,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash, randomUUID } from 'crypto';
 import { requireExtensionAuth } from '@/backend/middleware/extensionAuthMiddleware';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordOutcome } from '@/backend/services/extensionReliabilityService';
 import { persistExecutionResult, recordExecutionMetric } from '@/backend/services/communityAiActionExecutor';
 import { mirrorOutboundDmAction } from '@/backend/services/engagementOutboundMirrorService';
@@ -66,7 +68,7 @@ function readIdempotencyKey(req: NextApiRequest): string | null {
 }
 
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -172,7 +174,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Lifecycle validation: if the row already has a correlation id AND the
     // caller submitted one, they must match. A mismatch means the extension
-    // is closing a lifecycle that does not belong to this command — reject
+    // is closing a lifecycle that does not belong to this command â€” reject
     // and record the attempt.
     if (submittedCorrelationId && rowCorrelationId && submittedCorrelationId !== rowCorrelationId) {
       console.warn(
@@ -186,7 +188,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ── Chain-aware dispatch ──────────────────────────────────────────────
+    // â”€â”€ Chain-aware dispatch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // When the row carries a command_chain AND the just-completed step
     // is NOT the last one AND the outcome is success, advance the index
     // and re-open the row for the next /api/extension/commands poll
@@ -243,7 +245,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // All row writes flow through the executor's central pipeline. It
     // guards on (lease_id, holder_id), clears lease fields on terminal
     // transitions, stamps idempotency key, and emits success/failed metric
-    // events — all atomically.
+    // events â€” all atomically.
     const persistOutcome = await persistExecutionResult({
       actionId: commandId,
       organizationId: session.orgId,
@@ -321,3 +323,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ success: false, error: (error as Error)?.message || 'action-result failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

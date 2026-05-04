@@ -1,10 +1,10 @@
-/**
- * k6 Load Test — Concurrent Onboarding Completions
+﻿/**
+ * k6 Load Test â€” Concurrent Onboarding Completions
  *
  * Tests the /api/onboarding/complete endpoint under 100 concurrent virtual
  * users (VUs) each attempting to complete onboarding simultaneously.
  *
- * Pass criteria (enforced via thresholds — test fails if any breach):
+ * Pass criteria (enforced via thresholds â€” test fails if any breach):
  *   - p95 latency < 3000 ms
  *   - p99 latency < 5000 ms
  *   - error rate < 1% (status >= 400 excluding expected 409 duplication errors)
@@ -15,8 +15,6 @@
  *
  * Requires:
  *   - k6 installed (https://k6.io/docs/get-started/installation/)
- *   - TEST_EMAIL_FIREBASE_TOKEN env var (a valid Firebase ID token for a test user)
- *   - TEST_PHONE_FIREBASE_TOKEN env var (a valid Firebase phone auth token)
  *   - Staging environment (NOT production)
  */
 
@@ -24,13 +22,13 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
 
-// ── Custom metrics ────────────────────────────────────────────────────────────
+// â”€â”€ Custom metrics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const errorRate        = new Rate('auth_error_rate');
 const latencyTrend     = new Trend('onboarding_latency_ms', true);
 const creditGrantCount = new Counter('credit_grants_succeeded');
 const dupRejections    = new Counter('duplicate_rejections');
 
-// ── Test configuration ────────────────────────────────────────────────────────
+// â”€â”€ Test configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export const options = {
   scenarios: {
     concurrent_onboarding: {
@@ -65,16 +63,10 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000';
 
 // Each VU generates a unique synthetic identity to avoid cross-contamination.
-// In a real run, you would generate actual Firebase tokens per VU using the
-// Firebase REST API with test credentials.
 function makePayload(vuId) {
-  const emailToken  = __ENV.TEST_EMAIL_FIREBASE_TOKEN  || 'MISSING_EMAIL_TOKEN';
-  const phoneToken  = __ENV.TEST_PHONE_FIREBASE_TOKEN  || 'MISSING_PHONE_TOKEN';
 
   return JSON.stringify({
-    emailFirebaseToken: emailToken,
     phoneNumber:        `+1555000${String(vuId).padStart(4, '0')}`,
-    firebaseIdToken:    phoneToken,
     companyName:        `LoadTest Corp ${vuId}`,
     fullName:           `Load Test User ${vuId}`,
     jobTitle:           'QA Engineer',
@@ -85,7 +77,7 @@ function makePayload(vuId) {
   });
 }
 
-// ── Main VU function ──────────────────────────────────────────────────────────
+// â”€â”€ Main VU function â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function () {
   const vuId   = __VU;
   const params = {
@@ -99,7 +91,7 @@ export default function () {
 
   latencyTrend.add(elapsed);
 
-  // 409 = duplicate credit claim — this is expected and correct behaviour,
+  // 409 = duplicate credit claim â€” this is expected and correct behaviour,
   // NOT an error. A user who onboards twice should get a 409, not a 500.
   const isDuplicate = res.status === 409;
   const isSuccess   = res.status === 200 || res.status === 201;
@@ -154,3 +146,4 @@ export function handleSummary(data) {
             `PASS: ${summary.results.pass}\n`,
   };
 }
+

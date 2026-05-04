@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: OAuth callback handles external provider redirect
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../../backend/auth/oauthState';
@@ -44,8 +45,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const state = typeof req.query.state === 'string' ? req.query.state : undefined;
   const providerError = typeof req.query.error === 'string' ? req.query.error : '';
   const decodedState = decodeOAuthState(state);
-  const hasSuperAdminSession = req.cookies?.super_admin_session === '1';
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
+  const allowAdminReturnState = decodedState.returnTo?.startsWith('/super-admin') === true;
 
   console.log('[GA-OAUTH][callback] params', {
     code_present: Boolean(code),
@@ -56,12 +57,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     state_company_id: decodedState.companyId ?? null,
     state_user_id: decodedState.userId ?? null,
     state_return_to: decodedState.returnTo ?? null,
-    has_super_admin_session: hasSuperAdminSession,
     auth_user_id: user?.id ?? null,
     auth_error: authError ?? null,
   });
 
-  if (!hasSuperAdminSession && (authError || !user)) {
+  if (authError || !user) {
     console.warn('[GA-OAUTH][callback] failure_point=unauthorized');
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: 'unauthorized' }));
   }
@@ -69,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const invalidState =
     decodedState.valid !== true ||
     (
-      !hasSuperAdminSession &&
+      !allowAdminReturnState &&
       (!decodedState.userId || decodedState.userId !== user?.id)
     );
 
@@ -126,3 +126,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(buildRedirectUrl(decodedState.returnTo ?? null, { error: redirectError }));
   }
 }
+

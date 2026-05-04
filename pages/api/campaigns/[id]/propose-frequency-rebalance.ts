@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { getLatestCampaignVersion } from '../../../../backend/db/campaignVersionStore';
@@ -31,7 +33,7 @@ const applyFrequencyValue = (value: any, next: number) => {
 const buildOrigin = (req: NextApiRequest) =>
   req.headers.origin || `http://${req.headers.host}`;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -158,3 +160,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     impact_projection: impactProjection,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

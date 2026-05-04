@@ -2,6 +2,7 @@ import { validateCampaignHealth } from '../../services/campaignHealthService';
 import { detectTrendDrift } from '../../services/trendDriftService';
 import * as campaignOptimizationService from '../../services/campaignOptimizationService';
 import * as campaignVersionStore from '../../db/campaignVersionStore';
+import * as campaignApprovedVersionStore from '../../db/campaignApprovedVersionStore';
 import * as companyProfileService from '../../services/companyProfileService';
 
 jest.mock('../../db/campaignPlanStore', () => ({
@@ -16,35 +17,25 @@ jest.mock('../../db/campaignVersionStore', () => ({
   saveWeekVersions: jest.fn(),
   saveCampaignVersion: jest.fn(),
 }));
+jest.mock('../../db/campaignApprovedVersionStore', () => ({
+  getLatestApprovedCampaignVersion: jest.fn(),
+}));
 jest.mock('../../services/companyProfileService', () => ({
   getProfile: jest.fn(),
 }));
-jest.mock('openai', () => {
-  return class OpenAI {
-    chat = {
-      completions: {
-        create: jest.fn().mockResolvedValue({
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  optimized_week_plan: {
-                    theme: 'Theme 1 optimized',
-                    platforms: ['linkedin'],
-                    frequency_per_platform: { linkedin: 3 },
-                  },
-                  change_summary: 'Updated theme',
-                  confidence: 88,
-                }),
-              },
-            },
-          ],
-        }),
+jest.mock('../../services/aiGateway', () => ({
+  optimizeWeek: jest.fn().mockResolvedValue({
+    output: {
+      optimized_week_plan: {
+        theme: 'Theme 1 optimized',
+        platforms: ['linkedin'],
+        frequency_per_platform: { linkedin: 3 },
       },
-    };
-    constructor() {}
-  };
-});
+      change_summary: 'Updated theme',
+      confidence: 88,
+    },
+  }),
+}));
 
 describe('Campaign health layer', () => {
   const baseProfile: any = {
@@ -170,6 +161,16 @@ describe('Campaign week optimization', () => {
       industry_list: ['ai'],
     });
     (campaignVersionStore.getLatestCampaignVersion as jest.Mock).mockResolvedValue({
+      version: 1,
+      campaign_snapshot: {
+        weekly_plan: [
+          { week_number: 1, theme: 'Theme 1', version: 1, ai_optimized: false },
+          { week_number: 2, theme: 'Theme 2', version: 1, ai_optimized: false },
+        ],
+      },
+      status: 'draft',
+    });
+    (campaignApprovedVersionStore.getLatestApprovedCampaignVersion as jest.Mock).mockResolvedValue({
       version: 1,
       campaign_snapshot: {
         weekly_plan: [

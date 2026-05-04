@@ -1,4 +1,4 @@
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
@@ -132,7 +132,7 @@ export function useExternalApisState() {
     if (!isPlatformCatalogMode) return;
     setIsLoadingPlatformCompanies(true);
     try {
-      const response = await fetchWithAuth('/api/super-admin/companies');
+      const response = await apiFetch('/api/super-admin/companies');
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         throw new Error(errorBody?.error || 'Failed to load companies');
@@ -164,7 +164,7 @@ export function useExternalApisState() {
         ? `/api/external-apis?companyId=${companyContextId}${skipCache ? '&skipCache=1' : ''}`
         : '/api/external-apis?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         const errMsg = errorBody?.error || 'Failed to load APIs';
@@ -201,7 +201,7 @@ export function useExternalApisState() {
         ? `/api/external-apis/presets?companyId=${companyContextId}`
         : '/api/external-apis/presets?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         if (response.status === 401) {
@@ -277,7 +277,7 @@ export function useExternalApisState() {
         posting_constraints: {},
         requires_admin: true,
       };
-      const response = await fetchWithAuth('/api/external-apis?scope=platform', {
+      const response = await apiFetch('/api/external-apis?scope=platform', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -332,7 +332,7 @@ export function useExternalApisState() {
         return;
       }
       const desiredIds = selectable.filter((p) => presetSelection.has(p.id)).map((p) => p.id);
-      const response = await fetchWithAuth(`/api/external-apis/access?companyId=${encodeURIComponent(companyContextId)}`, {
+      const response = await apiFetch(`/api/external-apis/access?companyId=${encodeURIComponent(companyContextId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -366,7 +366,7 @@ export function useExternalApisState() {
         ? `/api/external-apis/requests?companyId=${companyContextId}`
         : '/api/external-apis/requests?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         if (response.status === 401) {
@@ -540,7 +540,7 @@ export function useExternalApisState() {
           ? `/api/external-apis?companyId=${companyContextId}`
           : '/api/external-apis?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url, {
+      const response = await apiFetch(url, {
         method: editingId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -589,7 +589,7 @@ export function useExternalApisState() {
           ? `/api/external-apis?companyId=${companyContextId}`
           : '/api/external-apis?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url, {
+      const response = await apiFetch(url, {
         method: editingPresetId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -616,7 +616,7 @@ export function useExternalApisState() {
         ? `/api/external-apis/${api.id}?companyId=${companyContextId}`
         : `/api/external-apis/${api.id}?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url, {
+      const response = await apiFetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(api),
@@ -644,7 +644,7 @@ export function useExternalApisState() {
         ? `/api/external-apis/${id}?companyId=${companyContextId}`
         : `/api/external-apis/${id}?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url, { method: 'DELETE' });
+      const response = await apiFetch(url, { method: 'DELETE' });
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         throw new Error(errorBody?.error || 'Failed to delete API');
@@ -662,7 +662,7 @@ export function useExternalApisState() {
   const loadAccounts = async (apiId: string) => {
     setAccountsLoadingId(apiId);
     try {
-      const res = await fetchWithAuth(`/api/provider-accounts?api_source_id=${apiId}`);
+      const res = await apiFetch(`/api/provider-accounts?api_source_id=${apiId}`);
       if (!res.ok) return;
       const data = await res.json();
       setAccountsByApiId((prev) => ({ ...prev, [apiId]: data.accounts || [] }));
@@ -731,13 +731,13 @@ export function useExternalApisState() {
 
       let res: Response;
       if (accountModal.mode === 'add') {
-        res = await fetchWithAuth('/api/provider-accounts', {
+        res = await apiFetch('/api/provider-accounts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...body, api_source_id: accountModal.apiId }),
         });
       } else {
-        res = await fetchWithAuth(`/api/provider-accounts/${accountModal.account!.id}`, {
+        res = await apiFetch(`/api/provider-accounts/${accountModal.account!.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -762,7 +762,7 @@ export function useExternalApisState() {
   const deleteAccount = async (apiId: string, accountId: string, accountName: string) => {
     if (!confirm(`Delete account "${accountName}"? This cannot be undone.`)) return;
     try {
-      const res = await fetchWithAuth(`/api/provider-accounts/${accountId}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/provider-accounts/${accountId}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete account');
       await loadAccounts(apiId);
       await loadApis();
@@ -778,7 +778,7 @@ export function useExternalApisState() {
       [apiId]: (prev[apiId] ?? []).map((a) => a.id === account.id ? { ...a, is_active: !account.is_active } : a),
     }));
     try {
-      const res = await fetchWithAuth(`/api/provider-accounts/${account.id}`, {
+      const res = await apiFetch(`/api/provider-accounts/${account.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_active: !account.is_active }),
@@ -811,7 +811,7 @@ export function useExternalApisState() {
     const updated = reordered.map((a, i) => ({ ...a, priority: i + 1 }));
     setAccountsByApiId((prev) => ({ ...prev, [apiId]: updated }));
     for (const acct of updated) {
-      await fetchWithAuth(`/api/provider-accounts/${acct.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priority: acct.priority }) }).catch(() => {});
+      await apiFetch(`/api/provider-accounts/${acct.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priority: acct.priority }) }).catch(() => {});
     }
   };
 
@@ -823,7 +823,7 @@ export function useExternalApisState() {
         ? `/api/external-apis/requests/${id}?companyId=${companyContextId}`
         : `/api/external-apis/requests/${id}?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url, {
+      const response = await apiFetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, rejection_reason }),
@@ -859,7 +859,7 @@ export function useExternalApisState() {
       resetMessages();
       setIsSubmittingRequest(true);
       const url = `/api/external-apis/requests?companyId=${encodeURIComponent(companyContextId)}`;
-      const response = await fetchWithAuth(url, {
+      const response = await apiFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -936,7 +936,7 @@ export function useExternalApisState() {
         ? `/api/external-apis/test?companyId=${companyContextId}`
         : '/api/external-apis/test?scope=platform';
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url, {
+      const response = await apiFetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -962,7 +962,7 @@ export function useExternalApisState() {
         ? `/api/external-apis/${id}/validate?companyId=${companyContextId}`
         : `/api/external-apis/${id}/validate?scope=platform`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       if (!response.ok) throw new Error('Failed to validate API');
       setSuccessMessage('API validation completed.');
       await loadApis();
@@ -980,7 +980,7 @@ export function useExternalApisState() {
       if (companyContextId) params.set('companyId', companyContextId);
       else params.set('scope', 'platform');
       const url = `/api/external-apis/${id}/test-connection?${params.toString()}`;
-      const response = await fetchWithAuth(url, { method: 'POST' });
+      const response = await apiFetch(url, { method: 'POST' });
       const data = await response.json();
       setApiTestResults((prev) => ({
         ...prev,
@@ -1013,7 +1013,7 @@ export function useExternalApisState() {
       if (scenario?.geo) params.set('geo', scenario.geo);
       const url = `/api/external-apis/${id}/test?${params.toString()}`;
       console.log('DASHBOARD_API_CALL', url);
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       const data = await response.json();
       setTestResult(data);
       setApiTestResults((prev) => ({ ...prev, [id]: data }));
@@ -1043,7 +1043,7 @@ export function useExternalApisState() {
         const url = companyContextId
           ? `/api/external-apis/${api.id}/test?companyId=${companyContextId}`
           : `/api/external-apis/${api.id}/test?scope=platform`;
-        const response = await fetchWithAuth(url);
+        const response = await apiFetch(url);
         const data = await response.json();
         setApiTestResults((prev) => ({ ...prev, [api.id]: data }));
         const ok = response.ok && data?.response?.ok;
@@ -1242,7 +1242,7 @@ export function useExternalApisState() {
     editingPresetId,
     errorMessage,
     expandedCardIds,
-    fetchWithAuth,
+    apiFetch,
     findPresetByName,
     form,
     formatPercent,

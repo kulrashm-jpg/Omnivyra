@@ -4,7 +4,8 @@
  * Injected inside insertFromTrendApiResults before database insert.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export const TAXONOMY_VALUES = [
   'TREND',

@@ -1,7 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { getExecutionCategoryForContentType, executionCategoryToAiGenerated } from '../../../backend/services/plannerActivityCardService';
 import { deriveCreatorAssetTypeFromIntent } from '../../../backend/services/creatorTemplateRegistryService';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import {
@@ -105,7 +107,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     cross_platform_sharing: crossPlatformSharingBody,
   } = body || {};
   // Only default to text-only when bolt_text_only is explicitly passed.
-  // Do NOT default to true just because bolt_run_id is set — creator campaigns run via BOLT too.
+  // Do NOT default to true just because bolt_run_id is set â€” creator campaigns run via BOLT too.
   const boltTextOnly = boltTextOnlyBody != null ? Boolean(boltTextOnlyBody) : false;
     const eligiblePlatforms: string[] | undefined =
       Array.isArray(eligiblePlatformsBody) && eligiblePlatformsBody.length > 0
@@ -113,7 +115,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         : undefined;
     const postsPerWeek: number | undefined =
       postsPerWeekBody != null && Number.isFinite(Number(postsPerWeekBody))
-        ? Math.max(2, Math.min(20, Math.floor(Number(postsPerWeekBody))))  // raised 7→14→20 to support up to 20 activity cards/week
+        ? Math.max(2, Math.min(20, Math.floor(Number(postsPerWeekBody))))  // raised 7â†’14â†’20 to support up to 20 activity cards/week
         : undefined;
   // Resolve format_frequency: Record<string, number> or null
   const formatFrequency: Record<string, number> | null =
@@ -465,7 +467,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           // short_story), deriveSubTopic wraps it in a content-type-specific angle
           // so Poll #1, Story #1 get different titles like "Poll: what's your..." vs
           // "Short story: the day...". We ALWAYS apply deriveSubTopic since:
-          //  (a) it's designed for this — each angle template is scoped by content_type
+          //  (a) it's designed for this â€” each angle template is scoped by content_type
           //  (b) topics from the AI plan are usually theme-level, not per-card unique
           //  (c) the prior gate (topics.length < totalCount) left duplicates unchanged
           //      when the AI returned exactly N unique topics for N slots
@@ -508,10 +510,10 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       }
     }
 
-    // ── DEDUPE GUARD: ensure no two activity cards share the same topic ──────
+    // â”€â”€ DEDUPE GUARD: ensure no two activity cards share the same topic â”€â”€â”€â”€â”€â”€
     // Whether topics came from synth or AI-provided execution_items, we must
     // guarantee each slot has a unique, content-type-appropriate title. Walk
-    // through every (content_type × slot) and rewrite duplicates via deriveSubTopic.
+    // through every (content_type Ã— slot) and rewrite duplicates via deriveSubTopic.
     {
       const seenTopics = new Set<string>();
       const synthAudience = compressedContext?.target_audience || 'our target audience';
@@ -525,7 +527,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           if (!currentTopic) continue;
           const key = currentTopic.toLowerCase();
           if (seenTopics.has(key)) {
-            // Duplicate topic — rewrite with content-type-specific angle
+            // Duplicate topic â€” rewrite with content-type-specific angle
             const derived = deriveSubTopic(currentTopic, ct, idx, synthAudience);
             slot.topic = derived;
             seenTopics.add(derived.toLowerCase());
@@ -726,7 +728,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     const autoRebalanceEffective = useExecutionItems ? false : autoRebalance;
     const autoOptimizeDistributionEffective = useExecutionItems ? false : autoOptimizeDistribution;
     // Per-platform counter so each platform rotates through its own best_days list
-    // (LinkedIn → Tue/Wed/Thu, Instagram → Wed/Fri/Sun, X → Tue/Thu, …) instead of
+    // (LinkedIn â†’ Tue/Wed/Thu, Instagram â†’ Wed/Fri/Sun, X â†’ Tue/Thu, â€¦) instead of
     // every platform clustering on item.dayIndex (which effectively picked Monday
     // for every post under sharing ON).
     const platformDayCursor = new Map<string, number>();
@@ -885,7 +887,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         executionValidationItems.push(enriched);
 
         // Use the ORIGINAL content type from the execution item (poll, short_story, etc.)
-        // not the validator's mapped type (which maps poll→post for platform constraints).
+        // not the validator's mapped type (which maps pollâ†’post for platform constraints).
         // daily_content_plans.content_type must preserve the user's selected format
         // so the block processor generates format-appropriate content.
         const contentType = String(item.contentType || 'post');
@@ -931,7 +933,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           brand_voice: item.narrativeStyle,
           format_notes: `${item.contentGuidance.primaryFormat}; max ${item.contentGuidance.maxWordTarget} words; highest limit: ${item.contentGuidance.platformWithHighestLimit}`,
           scheduled_time: platformScheduledTime,
-          posting_strategy: `Week ${weekNumber} Day ${item.dayIndex} — ${item.topicReference}`,
+          posting_strategy: `Week ${weekNumber} Day ${item.dayIndex} â€” ${item.topicReference}`,
           status: 'planned',
           priority: 'medium',
           ai_generated: aiGenerated,
@@ -1221,7 +1223,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -1241,4 +1243,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 // Removed legacy daily planning generator. Daily layer is execution-only.
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
 

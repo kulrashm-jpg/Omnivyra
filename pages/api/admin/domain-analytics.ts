@@ -9,21 +9,22 @@
  * SUPER_ADMIN only. Rate-limited per user.
  *
  * Query params:
- *   - top_limit (default 10) — passed to getTopFailingDomains
- *   - risk_threshold (default 5) — passed to getHighRiskCompanies
- *   - trend_days (default 7) — passed to getEventTrend
+ *   - top_limit (default 10) â€” passed to getTopFailingDomains
+ *   - risk_threshold (default 5) â€” passed to getHighRiskCompanies
+ *   - trend_days (default 7) â€” passed to getEventTrend
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
 import {
   getTopFailingDomains,
   getHighRiskCompanies,
   getEventTrend,
 } from '../../../backend/services/domainAnalyticsService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { logger } from '../../../backend/services/logger';
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
@@ -31,7 +32,11 @@ export default async function handler(
     return res.status(405).json({ error: 'Method not allowed' });
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:domain-analytics', 30, 60))) return;
-  if (!(await requireSuperAdminUser(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:domain-analytics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/domain-analytics', 'analytics:domain-analytics');
+  }
 
   const topLimit       = clampInt(req.query.top_limit as string | undefined, 10, 1, 100);
   const riskThreshold  = clampInt(req.query.risk_threshold as string | undefined, 5, 1, 1000);
@@ -65,3 +70,9 @@ function clampInt(raw: string | undefined, dflt: number, min: number, max: numbe
   if (Number.isNaN(n)) return dflt;
   return Math.min(max, Math.max(min, n));
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

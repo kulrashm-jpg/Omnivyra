@@ -5,7 +5,8 @@
  * No new tables; loads from community_ai_actions, decorates with priority and related data.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { decorateActionsWithPriority } from './engagementPriorityService';
 
 export type GetAiActivityQueueOptions = {

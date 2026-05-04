@@ -4,7 +4,8 @@
  * Sits between signal_intelligence / strategic_themes and the UI. Does not modify the intelligence pipeline.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const WEIGHT_KEYWORD = 0.5;
 const WEIGHT_COMPETITOR = 0;

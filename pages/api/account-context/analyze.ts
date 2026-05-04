@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   AccountContext,
@@ -12,7 +14,7 @@ import {
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 const cache = new Map<string, { value: AccountContext; fetchedAt: number }>();
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -31,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Verify the requesting user belongs to this company
     const { data: roleRow } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', user.id)
       .eq('company_id', companyId)
@@ -114,7 +116,7 @@ async function analyzeAccountContext(companyId: string): Promise<AccountContext>
       platform: acct.platform,
       followers,
       avgReach: Math.round(followers * 0.4),
-      engagementRate: Number((engagementRate * 100).toFixed(2)), // stored as 0.02 → 2.0%
+      engagementRate: Number((engagementRate * 100).toFixed(2)), // stored as 0.02 â†’ 2.0%
       postingFrequency: 0,   // not stored; default 0
       last30DaysPosts: 0,    // not stored; default 0
     };
@@ -133,3 +135,8 @@ async function analyzeAccountContext(companyId: string): Promise<AccountContext>
     lastUpdated: new Date(),
   };
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

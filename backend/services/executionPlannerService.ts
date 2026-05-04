@@ -13,7 +13,8 @@
  * Single read path: getDailyPlans().
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { generateDailyPlansWithAI } from './dailyPlanAiGenerator';
 import type { WeeklyGenerationContext } from './dailyPlanAiGenerator';
 import { getCampaignPlanningInputs } from './campaignPlanningInputsService';

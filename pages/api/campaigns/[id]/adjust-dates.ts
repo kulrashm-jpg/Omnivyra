@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Campaign Date Adjustment API
@@ -8,7 +9,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { adjustCampaignDates } from '../../../../backend/services/schedulingService';
 import { logActivity } from '../../../../backend/services/activityLogger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -47,3 +48,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

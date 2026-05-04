@@ -4,7 +4,8 @@
  */
 
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { executeAction } from './communityAiActionExecutor';
 import { listPlaybooks } from './playbooks/playbookService';
 import { recordReplyPerformance } from './responsePerformanceService';

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Planner Finalize API
@@ -9,7 +10,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignById } from '../../../backend/db/campaignStore';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
@@ -223,7 +225,7 @@ function buildPlannerVersionSnapshot(params: {
   return snapshot;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -243,7 +245,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       execution_handoff,
       cross_platform_sharing,
       calendar_plan: bodyCalendarPlan,
-      // Context snapshot fields — populated by FinalizeSection when preview was run first
+      // Context snapshot fields â€” populated by FinalizeSection when preview was run first
       account_context: bodyAccountContext,
       campaign_validation: bodyValidation,
       paid_recommendation: bodyPaidRecommendation,
@@ -502,7 +504,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     void syncCampaignVersionStage(campaignId, 'campaign_week_plan', companyId).catch(() => {});
 
     // -------------------------------------------------------------------------
-    // ADAPTER BRANCH (additive — does NOT modify the block below)
+    // ADAPTER BRANCH (additive â€” does NOT modify the block below)
     // Runs only when: request carries source='planner' AND the feature flag is
     // enabled AND a calendar plan is present.
     // On any failure, logs and falls through to the existing inline flow.
@@ -552,12 +554,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } else {
           console.error('[PLANNER][ADAPTER][ERROR] Unexpected error, falling back to existing flow:', adapterErr);
         }
-        // adapterHandledSlots remains false → existing flow below runs unchanged
+        // adapterHandledSlots remains false â†’ existing flow below runs unchanged
       }
     }
 
     // -------------------------------------------------------------------------
-    // EXISTING FLOW — completely unchanged; skipped only when adapter succeeded
+    // EXISTING FLOW â€” completely unchanged; skipped only when adapter succeeded
     // -------------------------------------------------------------------------
     if (!adapterHandledSlots && useCalendarPlanPath && hasCalendarPlan) {
       const activities = (bodyCalendarPlan as { activities: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string }> }).activities;
@@ -653,7 +655,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('id', campaignId);
     void syncCampaignVersionStage(campaignId, 'execution_ready', companyId).catch(() => {});
 
-    // ── Save context snapshot (non-fatal — never blocks the finalize response) ──
+    // â”€â”€ Save context snapshot (non-fatal â€” never blocks the finalize response) â”€â”€
     void saveCampaignContextSnapshot({
       campaignId: campaignId!,
       companyId,
@@ -671,3 +673,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: msg });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

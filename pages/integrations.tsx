@@ -19,7 +19,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type IntegrationType = 'lead_webhook' | 'wordpress' | 'custom_blog_api';
 type IntegrationStatus = 'connected' | 'failed' | 'pending';
@@ -778,7 +778,7 @@ export default function IntegrationsPage() {
     setGaLoading(true);
     setGaError(null);
     try {
-      const response = await fetchWithAuth(`/api/analytics/status?companyId=${encodeURIComponent(companyId)}`);
+      const response = await apiFetch(`/api/analytics/status?companyId=${encodeURIComponent(companyId)}`);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || 'Failed to load Google Analytics status');
@@ -827,7 +827,7 @@ export default function IntegrationsPage() {
     setGaConnecting(true);
     setGaError(null);
     try {
-      const response = await fetchWithAuth('/api/analytics/connect/google', {
+      const response = await apiFetch('/api/analytics/connect/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -855,7 +855,7 @@ export default function IntegrationsPage() {
     const requestStart = Date.now();
 
     try {
-      const response = await fetchWithAuth('/api/analytics/force-sync', {
+      const response = await apiFetch('/api/analytics/force-sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId }),
@@ -888,7 +888,7 @@ export default function IntegrationsPage() {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
 
         try {
-          const pollResponse = await fetchWithAuth(
+          const pollResponse = await apiFetch(
             `/api/analytics/status?companyId=${encodeURIComponent(companyId)}`,
           );
           if (!pollResponse.ok) continue;
@@ -933,7 +933,7 @@ export default function IntegrationsPage() {
     setGaSelectingProperty(true);
     setGaError(null);
     try {
-      const response = await fetchWithAuth('/api/analytics/select-property', {
+      const response = await apiFetch('/api/analytics/select-property', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

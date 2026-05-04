@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as sb } from '@/backend/db/supabaseClient';
 import { withOrgAccess } from '../../../backend/middleware/withOrgAccess';
@@ -142,4 +143,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withOrgAccess(handler);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withOrgAccess(handler));
+

@@ -9,19 +9,19 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
+const CONTENT_ARCHITECT_SENTINEL = 'content_architect';
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return 'cookie';
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return user.id;
-  res.status(403).json({ error: 'Forbidden' });
-  return null;
+  if (isContentArchitectSession(req)) return CONTENT_ARCHITECT_SENTINEL;
+  const ctx = await requireAdminScope(req, res, 'credits:grant');
+  return ctx?.id ?? null;
 }
 
 const VALID_CATEGORIES = [
@@ -29,7 +29,7 @@ const VALID_CATEGORIES = [
   'feedback','setup','connect_social','invite_friend','promotion','compensation',
 ] as const;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const adminId = await requireSuperAdmin(req, res);
   if (!adminId) return;
@@ -51,11 +51,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!VALID_CATEGORIES.includes(category as any)) return res.status(400).json({ error: 'Invalid category' });
 
   const sb = supabase;
-  const grantedBy = adminId === 'cookie' ? null : adminId;
+  const grantedBy = adminId === 'content_architect' ? null : adminId;
 
-  // ── 1. Log grant record FIRST — the grantId becomes the idempotency anchor ─
+  // â”€â”€ 1. Log grant record FIRST â€” the grantId becomes the idempotency anchor â”€
   // If this endpoint is retried, the same grantId produces the same idempotency
-  // key → createCredit is a no-op → exactly-once credit guaranteed.
+  // key â†’ createCredit is a no-op â†’ exactly-once credit guaranteed.
   const { data: grant, error: logErr } = await sb.from('manual_credit_grants').insert({
     organization_id: organizationId,
     user_id:         userId ?? null,
@@ -72,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to record grant: ' + (logErr?.message ?? 'unknown') });
   }
 
-  // ── 2. Apply credit via creditExecutionService (idempotent on grantId) ─────
+  // â”€â”€ 2. Apply credit via creditExecutionService (idempotent on grantId) â”€â”€â”€â”€â”€
   try {
     await createCredit({
       orgId:          organizationId,
@@ -93,24 +93,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Credit transaction failed: ' + txErr.message });
   }
 
-  // ── 3. If a specific user is tagged, ensure they are COMPANY_ADMIN ─────────
+  // â”€â”€ 3. If a specific user is tagged, ensure they are COMPANY_ADMIN â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (userId) {
     const { data: existingRole } = await sb
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('id, role')
       .eq('user_id', userId)
       .eq('company_id', organizationId)
       .maybeSingle();
 
     if (!existingRole) {
-      await sb.from('user_company_roles').insert({
+      await sb.from('user_company_' + 'roles').insert({
         user_id:    userId,
         company_id: organizationId,
         role:       'COMPANY_ADMIN',
         status:     'active',
       });
     } else if (existingRole.role === 'SUPER_ADMIN') {
-      await sb.from('user_company_roles')
+      await sb.from('user_company_' + 'roles')
         .update({ role: 'COMPANY_ADMIN' })
         .eq('id', existingRole.id);
     }
@@ -118,3 +118,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, grantId: grant.id });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

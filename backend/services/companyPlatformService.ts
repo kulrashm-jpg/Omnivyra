@@ -4,7 +4,8 @@
  * Sources: (1) company profile social_links, (2) external API configs (social-platforms page).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getProfile } from './companyProfileService';
 import {
   getAvailablePlatformsFromProfile,

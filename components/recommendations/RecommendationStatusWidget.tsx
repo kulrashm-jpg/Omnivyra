@@ -5,21 +5,21 @@ type StateCounts = { ACTIVE: number; ARCHIVED: number; LONG_TERM: number };
 
 type Props = {
   companyId: string | null;
-  fetchWithAuth?: ((input: RequestInfo, init?: RequestInit) => Promise<Response>) | null;
+  apiFetch?: ((input: RequestInfo, init?: RequestInit) => Promise<Response>) | null;
 };
 
-export default function RecommendationStatusWidget({ companyId, fetchWithAuth }: Props) {
+export default function RecommendationStatusWidget({ companyId, apiFetch }: Props) {
   const router = useRouter();
   const [counts, setCounts] = useState<StateCounts>({ ACTIVE: 0, ARCHIVED: 0, LONG_TERM: 0 });
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!companyId || !fetchWithAuth) {
+    if (!companyId || !apiFetch) {
       setCounts({ ACTIVE: 0, ARCHIVED: 0, LONG_TERM: 0 });
       return;
     }
     setLoading(true);
-    fetchWithAuth(`/api/recommendations/user-state-counts?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/recommendations/user-state-counts?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => (res.ok ? res.json() : { ACTIVE: 0, ARCHIVED: 0, LONG_TERM: 0 }))
       .then((data) =>
         setCounts({
@@ -30,7 +30,7 @@ export default function RecommendationStatusWidget({ companyId, fetchWithAuth }:
       )
       .catch(() => setCounts({ ACTIVE: 0, ARCHIVED: 0, LONG_TERM: 0 }))
       .finally(() => setLoading(false));
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   const total = counts.ACTIVE + counts.ARCHIVED + counts.LONG_TERM;
   if (total === 0 && !loading) return null;

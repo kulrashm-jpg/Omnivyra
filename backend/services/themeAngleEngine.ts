@@ -22,7 +22,6 @@ const THEME_ANGLES: ThemeAngle[] = [
 const ANGLE_TEMPLATES: Record<ThemeAngle, string[]> = {
   trend: [
     'Why {topic} Is Changing the Game',
-    'The Rise of {topic}',
     'How {topic} Is Reshaping the Landscape',
   ],
   problem: [

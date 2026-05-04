@@ -9,7 +9,7 @@ export type OpportunityTabProps = {
     action: string,
     opts?: { scheduled_for?: string }
   ) => Promise<void>;
-  fetchWithAuth: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  apiFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
   /** Strategic direction override text (local state, not persisted). */
   overrideText?: string;
   onOverrideChange?: (value: string) => void;

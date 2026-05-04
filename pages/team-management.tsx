@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { ArrowLeft, Shield, UserPlus, Users, RefreshCw } from 'lucide-react';
 import { getAuthToken } from '../utils/getAuthToken';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type TeamMember = {
   user_id?: string;
@@ -48,7 +48,7 @@ export default function TeamManagement() {
     if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/company/users?companyId=${selectedCompanyId}&ts=${Date.now()}`,
         { cache: 'no-store' }
       );
@@ -115,7 +115,7 @@ export default function TeamManagement() {
     if (!inviteForm.email || !inviteForm.role || !selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/company/users', {
+      const response = await apiFetch('/api/company/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -146,7 +146,7 @@ export default function TeamManagement() {
     if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/company/users', {
+      const response = await apiFetch('/api/company/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId: selectedCompanyId, role, userId }),
@@ -169,7 +169,7 @@ export default function TeamManagement() {
     if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/company/users', {
+      const response = await apiFetch('/api/company/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, role, name, companyId: selectedCompanyId }),
@@ -193,7 +193,7 @@ export default function TeamManagement() {
     if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/company/users', {
+      const response = await apiFetch('/api/company/users', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId: selectedCompanyId, role, userId, status: 'inactive' }),
@@ -218,7 +218,7 @@ export default function TeamManagement() {
     if (!window.confirm('Remove this user from the company?')) return;
     setIsLoading(true);
     try {
-      const response = await fetchWithAuth('/api/company/users', {
+      const response = await apiFetch('/api/company/users', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId: selectedCompanyId, userId }),

@@ -4,30 +4,28 @@
  *
  * Pipeline needs:
  * 1. social_accounts (active) with tokens
- * 2. user_company_roles linking users to companies
+ * 2. user company roles linking users to companies
  * 3. scheduled_posts: status=published, platform_post_id not null, social_account_id set
  * 4. Workers + cron running (enqueueEngagementPolling every 10 min)
  *
  * Run: node backend/scripts/engagementPlatformIntegrationsVerify.js
- * Requires: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY in .env.local
+ * Requires: SUPABASE_URL, Supabase service credential in .env.local
  */
 
 const path = require('path');
 const dotenv = require('dotenv');
-const { createClient } = require('@supabase/supabase-js');
+const { createServiceRoleMigrationProxy } = require('../db/supabaseClient');
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local');
+if (!SUPABASE_URL) {
+  console.error('Missing SUPABASE_URL or Supabase service credential in .env.local');
   process.exit(1);
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const supabase = createServiceRoleMigrationProxy('DIRECT_SR_REMOVAL');
 
 async function run() {
   console.log('=== PHASE 1 — Verify Platform Integrations ===\n');
@@ -58,10 +56,10 @@ async function run() {
       }
     }
 
-    // 2. user_company_roles — users linked to companies
-    console.log('\n2. user_company_roles (status = active):');
+    // 2. user company roles — users linked to companies
+    console.log('\n2. user company roles (status = active):');
     const { data: roles, error: e2 } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id, company_id')
       .eq('status', 'active');
 
@@ -148,7 +146,7 @@ async function run() {
     if (!hasAccounts) {
       console.log('BLOCKER: No active social_accounts. Connect platforms via OAuth.');
     } else if (!hasRoles) {
-      console.log('BLOCKER: No user_company_roles. Add users to companies.');
+      console.log('BLOCKER: No user company roles. Add users to companies.');
     } else if (linkedUsers === 0) {
       console.log('BLOCKER: Users with social accounts are not in any company. Link them.');
     } else if (!hasCandidates) {

@@ -15,6 +15,7 @@ import {
   ChevronDown, ChevronRight, Save, RotateCcw, AlertTriangle,
   CheckCircle2, XCircle, Building2,
 } from 'lucide-react';
+import { apiFetch } from '../../lib/apiFetch';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -133,7 +134,7 @@ function InfraLimitsSection({ companyId }: { companyId?: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/super-admin/activity-control?type=infra_limits', { credentials: 'include' });
+      const res = await apiFetch('/api/super-admin/activity-control?type=infra_limits');
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setConfig(data.config);
@@ -152,9 +153,8 @@ function InfraLimitsSection({ companyId }: { companyId?: string }) {
   async function save() {
     setSaving(true); setStatus('idle'); setErrMsg('');
     try {
-      const res = await fetch('/api/super-admin/activity-control', {
+      const res = await apiFetch('/api/super-admin/activity-control', {
         method: 'PATCH',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'update_infra_limits',
@@ -368,9 +368,8 @@ function ActivityRowEditor({
         body.job_type   = row.job_type;
         body.company_id = companyId;
       }
-      const res = await fetch('/api/super-admin/activity-control', {
+      const res = await apiFetch('/api/super-admin/activity-control', {
         method: 'PATCH',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });

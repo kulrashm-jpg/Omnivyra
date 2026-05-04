@@ -16,7 +16,7 @@ export type UseEngineJobPollingOptions = {
 export function useEngineJobPolling<T = Record<string, unknown>>(
   jobId: string | null,
   fetchUrl: string | null,
-  fetchWithAuth: (input: RequestInfo, init?: RequestInit) => Promise<Response>,
+  apiFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>,
   options: UseEngineJobPollingOptions = {}
 ): { job: T | null; loading: boolean; error: string | null } {
   const { enabled = true, pollInterval = POLL_INTERVAL_MS } = options;
@@ -26,9 +26,9 @@ export function useEngineJobPolling<T = Record<string, unknown>>(
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const poll = useCallback(async () => {
-    if (!jobId || !fetchUrl || !fetchWithAuth) return;
+    if (!jobId || !fetchUrl || !apiFetch) return;
     try {
-      const res = await fetchWithAuth(fetchUrl, { cache: 'no-store' as RequestCache });
+      const res = await apiFetch(fetchUrl, { cache: 'no-store' as RequestCache });
       if (res.status === 404) {
         setError('Job not found');
         if (intervalRef.current) {
@@ -53,7 +53,7 @@ export function useEngineJobPolling<T = Record<string, unknown>>(
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Poll failed');
     }
-  }, [jobId, fetchUrl, fetchWithAuth]);
+  }, [jobId, fetchUrl, apiFetch]);
 
   useEffect(() => {
     if (!enabled || !jobId || !fetchUrl) {

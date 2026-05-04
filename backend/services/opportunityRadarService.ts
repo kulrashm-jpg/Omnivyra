@@ -3,7 +3,8 @@
  * Cross-thread opportunity counts across the organization.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const BUYING_INTENT_LEAD_INTENTS = [
   'pricing_inquiry',

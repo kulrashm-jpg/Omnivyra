@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireManageConnectors } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
@@ -15,7 +16,7 @@ function normalizeXLocalHost(url: string) {
   return url.replace('://localhost:', '://127.0.0.1:');
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -71,3 +72,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const oauthUrl = `https://twitter.com/i/oauth2/authorize?${params.toString()}`;
   return res.redirect(oauthUrl);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

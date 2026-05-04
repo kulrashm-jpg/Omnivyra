@@ -3,7 +3,8 @@
  * Consolidates duplicate campaign loading across services.
  */
 
-import { supabase } from './supabaseClient';
+import { createServiceRoleMigrationProxy } from './supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /**
  * Get campaign status by id. Returns null if not found.

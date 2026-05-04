@@ -4,7 +4,8 @@ import * as path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 function isMissingTable(error: { message?: string; code?: string } | null | undefined, table: string): boolean {
   const message = String(error?.message ?? '').toLowerCase();

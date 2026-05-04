@@ -5,7 +5,8 @@
  * Batch processing: batch_size=100, max every 15 minutes
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { OutcomeRow } from './outcomeTrackingEngine';
 
 export const ADJUSTMENT_MIN = -0.25;

@@ -4,44 +4,39 @@
  * External API call consumption.
  *
  * Query params:
- *   companyId  – required unless super_admin all-orgs view
- *   year, month – optional, defaults to current month
+ *   companyId  â€“ required unless super_admin all-orgs view
+ *   year, month â€“ optional, defaults to current month
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, isSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { Role } from '../../../../backend/services/rbacPrimitives';
 import {
   getApiConsumption,
   getAllOrgsConsumption,
   ConsumptionTier,
 } from '../../../../backend/services/consumptionAnalyticsService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 async function resolveTier(
   req: NextApiRequest,
   res: NextApiResponse,
   companyId?: string
 ): Promise<{ tier: ConsumptionTier; orgId: string | null } | null> {
-  // Super admin cookie session (username/password login — no Supabase token)
-  if (req.cookies?.super_admin_session === '1') {
+  const ctx = await requireAdminScope(req, res, 'consumption:apis', { companyId });
+  if (!ctx) return null;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/consumption/apis', 'consumption:apis');
+  }
+  if (ctx.role === Role.SUPER_ADMIN) {
     return { tier: 'super_admin', orgId: companyId ?? null };
   }
-
-  const auth = await getSupabaseUserFromRequest(req);
-  if (auth.error || !auth.user) { res.status(401).json({ error: 'UNAUTHORIZED' }); return null; }
-  const userId = auth.user.id;
-
-  if ((await isPlatformSuperAdmin(userId)) || (await isSuperAdmin(userId))) {
-    return { tier: 'super_admin', orgId: companyId ?? null };
-  }
-  if (!companyId) { res.status(400).json({ error: 'companyId required' }); return null; }
-  const { role } = await getUserRole(userId, companyId);
-  if (!role) { res.status(403).json({ error: 'FORBIDDEN' }); return null; }
-  const tier: ConsumptionTier = role === 'COMPANY_ADMIN' || role === 'ADMIN' ? 'company_admin' : 'user';
-  return { tier, orgId: companyId };
+  // Non-super-admin scope already enforced companyId; downgrade tier by role.
+  const tier: ConsumptionTier = ctx.role === Role.COMPANY_ADMIN ? 'company_admin' : 'user';
+  return { tier, orgId: companyId ?? null };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
@@ -54,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { tier, orgId } = context;
 
-    // Super admin without companyId → all-orgs summary (API stats from same table)
+    // Super admin without companyId â†’ all-orgs summary (API stats from same table)
     if (tier === 'super_admin' && !orgId) {
       const rows = await getAllOrgsConsumption({ year, month });
       // Filter to API-relevant fields
@@ -77,3 +72,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

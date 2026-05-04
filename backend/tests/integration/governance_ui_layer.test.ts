@@ -10,7 +10,8 @@ jest.mock('../../db/campaignVersionStore', () => ({
   getLatestCampaignVersionByCampaignId: jest.fn(),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersionByCampaignId } from '../../db/campaignVersionStore';
 import campaignStatusHandler from '../../../pages/api/governance/campaign-status';
 import eventsHandler from '../../../pages/api/governance/events';

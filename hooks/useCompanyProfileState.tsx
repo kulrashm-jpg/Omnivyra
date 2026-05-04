@@ -1,4 +1,4 @@
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
@@ -144,9 +144,8 @@ export function useCompanyProfileState() {
     setCreateCompanyError(null);
     setCreateCompanyLoading(true);
     try {
-      const res = await fetch('/api/super-admin/companies', {
+      const res = await apiFetch('/api/super-admin/companies', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(createCompanyForm),
       });
@@ -239,7 +238,7 @@ export function useCompanyProfileState() {
           setIsLoading(false);
           return;
         }
-        const response = await fetchWithAuth(
+        const response = await apiFetch(
           `/api/company-profile?companyId=${encodeURIComponent(companyId)}&includeCompleteness=1`
         );
         setLastFetchStatus(response.status);
@@ -299,7 +298,7 @@ export function useCompanyProfileState() {
       try {
         if (isCompanyLoading || !isAuthenticated) return;
         if (!companyId) return;
-        const response = await fetchWithAuth(
+        const response = await apiFetch(
           companyId
             ? `/api/company-profile/refinements?companyId=${encodeURIComponent(companyId)}`
             : '/api/company-profile/refinements'
@@ -463,11 +462,15 @@ export function useCompanyProfileState() {
 
   const handleMissingAnswer = (field: string, values: string[]) => {
     const normalized = field.toLowerCase().replace(/\s+/g, '_');
+    const updated: CompanyProfile = { ...activeProfile };
+
     if (normalized.includes('competitor')) {
+      updated.competitors_list = values;
+      updated.competitors = values.join(', ');
       setMissingFieldAnswers((prev) => ({ ...prev, [field]: values }));
+      updateActiveProfile(updated);
       return;
     }
-    const updated: CompanyProfile = { ...activeProfile };
 
     if (normalized.includes('industry')) {
       updated.industry_list = values;
@@ -565,7 +568,7 @@ export function useCompanyProfileState() {
         transformation_mechanism: activeProfile.transformation_mechanism ?? null,
         authority_domains: Array.isArray(activeProfile.authority_domains) ? activeProfile.authority_domains : splitToList(String(activeProfile.authority_domains || '')),
       };
-      const response = await fetchWithAuth('/api/company-profile', {
+      const response = await apiFetch('/api/company-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -699,7 +702,7 @@ export function useCompanyProfileState() {
         transformation_mechanism: activeProfile.transformation_mechanism ?? null,
         authority_domains: Array.isArray(activeProfile.authority_domains) ? activeProfile.authority_domains : splitToList(String(activeProfile.authority_domains || '')),
       };
-      const response = await fetchWithAuth('/api/company-profile/refine', {
+      const response = await apiFetch('/api/company-profile/refine', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -752,7 +755,7 @@ export function useCompanyProfileState() {
     setTargetCustomerLoading(true);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/company-profile/define-target-customer?companyId=${encodeURIComponent(companyId)}`,
         {
           method: 'POST',
@@ -815,7 +818,7 @@ export function useCompanyProfileState() {
     setCampaignPurposeLoading(true);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/company-profile/define-campaign-purpose?companyId=${encodeURIComponent(companyId)}`,
         {
           method: 'POST',
@@ -882,7 +885,7 @@ export function useCompanyProfileState() {
         competitive_advantages: activeProfile.competitive_advantages ?? '',
         growth_priorities: activeProfile.growth_priorities ?? '',
       };
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/company-profile/define-marketing-intelligence?companyId=${encodeURIComponent(companyId)}`,
         {
           method: 'POST',
@@ -937,7 +940,7 @@ export function useCompanyProfileState() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/company-profile/problem-transformation-questions?companyId=${encodeURIComponent(companyId)}`
       );
       if (!res.ok) throw new Error('Failed to load questions');
@@ -969,7 +972,7 @@ export function useCompanyProfileState() {
     setProblemTransformationLoading(true);
     setErrorMessage(null);
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/company-profile/problem-transformation?companyId=${encodeURIComponent(companyId)}`,
         {
           method: 'POST',
@@ -1017,7 +1020,7 @@ export function useCompanyProfileState() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/company-profile/infer-problem-transformation?companyId=${encodeURIComponent(companyId)}`,
         {
           method: 'POST',
@@ -1148,7 +1151,7 @@ export function useCompanyProfileState() {
         authority_domains: source.authority_domains ?? [],
       };
       const conversation = nextMessages.map((m) => ({ role: m.role, content: m.content }));
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/company-profile/define-problem-transformation?companyId=${encodeURIComponent(companyId)}`,
         {
           method: 'POST',
@@ -1253,7 +1256,7 @@ export function useCompanyProfileState() {
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
-      const response = await fetchWithAuth(
+      const response = await apiFetch(
         `/api/company-profile/generate-marketing-intelligence?companyId=${encodeURIComponent(companyId)}`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId, company_id: companyId }) }
       );
@@ -1429,7 +1432,7 @@ export function useCompanyProfileState() {
     createCompanyLoading,
     draftProfile,
     errorMessage,
-    fetchWithAuth,
+    apiFetch,
     filteredCompanies,
     generateMarketingIntelligence,
     handleChange,

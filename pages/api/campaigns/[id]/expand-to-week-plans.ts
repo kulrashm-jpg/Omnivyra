@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
 import { blueprintWeeksToLegacyRefinements } from '../../../../backend/services/campaignBlueprintAdapter';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
@@ -9,7 +11,7 @@ import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersion
  * Converts 12-week blueprint into detailed weekly_content_refinements.
  * Call this after 12-week plan exists; creates/upserts one refinement per week.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -102,3 +104,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

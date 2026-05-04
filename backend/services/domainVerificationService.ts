@@ -23,7 +23,8 @@ import {
   normalizeDomain,
   safeDispatcher,
 } from './domainCanonicalService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { hashVerificationToken, constantTimeEqualHex } from './verificationSecret';
 import { logDomainEvent } from './domainEventLogger';
 

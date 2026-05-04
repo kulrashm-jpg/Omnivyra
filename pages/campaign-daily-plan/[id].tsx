@@ -15,7 +15,7 @@ import { buildRepurposingContext } from '@/lib/planning/repurposingContext';
 import { buildMasterContentDocument } from '@/lib/planning/masterContentDocument';
 import { CampaignDailyPlanSingleWeekView } from '@/components/campaign-daily-plan/CampaignDailyPlanSingleWeekView';
 import type { UnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
-import { fetchWithAuth } from '@/components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { useCampaignResume } from '@/hooks/useCampaignResume';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -92,11 +92,11 @@ export default function CampaignDailyPlanPage() {
     setError(null);
     try {
       const [planRes, weeklyRes, campaignRes, stageRes, dailyRes] = await Promise.all([
-        fetchWithAuth(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(id)}`),
-        fetchWithAuth(`/api/campaigns/get-weekly-plans?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`),
-        companyId ? fetchWithAuth(`/api/campaigns?type=campaign&campaignId=${encodeURIComponent(id)}&companyId=${encodeURIComponent(companyId)}`) : Promise.resolve(null),
-        fetchWithAuth(`/api/campaigns/stage-availability-batch?campaignIds=${encodeURIComponent(id)}`),
-        fetchWithAuth(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`),
+        apiFetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(id)}`),
+        apiFetch(`/api/campaigns/get-weekly-plans?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`),
+        companyId ? apiFetch(`/api/campaigns?type=campaign&campaignId=${encodeURIComponent(id)}&companyId=${encodeURIComponent(companyId)}`) : Promise.resolve(null),
+        apiFetch(`/api/campaigns/stage-availability-batch?campaignIds=${encodeURIComponent(id)}`),
+        apiFetch(`/api/campaigns/daily-plans?campaignId=${encodeURIComponent(id)}${companyId ? `&companyId=${encodeURIComponent(companyId)}` : ''}`),
       ]);
 
       if (stageRes?.ok) {
@@ -138,7 +138,7 @@ export default function CampaignDailyPlanPage() {
       let memoryProfile: { campaign_id: string; action_acceptance_rate: Record<string, number>; platform_confidence_average: Record<string, number>; total_events: number } | null = null;
       if (id) {
         try {
-          const profileRes = await fetchWithAuth(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(id)}`);
+          const profileRes = await apiFetch(`/api/intelligence/strategic-memory?campaignId=${encodeURIComponent(id)}`);
           if (profileRes?.ok) memoryProfile = await profileRes.json().catch(() => null);
         } catch {
           // non-blocking
@@ -246,7 +246,7 @@ export default function CampaignDailyPlanPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetchWithAuth(`/api/campaigns/${id}/repurpose-and-schedule`, {
+      const res = await apiFetch(`/api/campaigns/${id}/repurpose-and-schedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -275,7 +275,7 @@ export default function CampaignDailyPlanPage() {
     } finally {
       setIsRepurposeScheduling(false);
     }
-  }, [id, isRepurposeScheduling, fetchWithAuth]);
+  }, [id, isRepurposeScheduling, apiFetch]);
 
   useEffect(() => {
     loadData();
@@ -480,7 +480,7 @@ export default function CampaignDailyPlanPage() {
   const handleSaveDayChanges = useCallback(async (weekNumber: number, moves: Array<{ planId: string; day: string }>) => {
     if (!id || moves.length === 0) return;
     try {
-      const res = await fetchWithAuth('/api/campaigns/save-week-daily-plan', {
+      const res = await apiFetch('/api/campaigns/save-week-daily-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -499,7 +499,7 @@ export default function CampaignDailyPlanPage() {
     } catch (e) {
       setNotice({ type: 'error', message: e instanceof Error ? e.message : 'Failed to save day changes.' });
     }
-  }, [id, fetchWithAuth]);
+  }, [id, apiFetch]);
 
   /** Source B: AI expansion — single API call generates 7 days and persists to daily_content_plans */
   const handleGenerateFromAI = useCallback(async (weekNumber: number) => {
@@ -509,7 +509,7 @@ export default function CampaignDailyPlanPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/generate-ai-daily-plans', {
+      const res = await apiFetch('/api/campaigns/generate-ai-daily-plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -534,14 +534,14 @@ export default function CampaignDailyPlanPage() {
     } finally {
       setGeneratingFromAI(false);
     }
-  }, [id, companyId, fetchWithAuth, generatingFromAI]);
+  }, [id, companyId, apiFetch, generatingFromAI]);
 
   const handleRegenerateWeek = async (weekNumber: number) => {
     if (typeof window !== 'undefined') console.log('[DAILY_PLAN_TRACE] BUTTON_TRIGGERED Regenerate', { weekNumber });
     setRegeneratingWeek(weekNumber);
     setError(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/generate-weekly-structure', {
+      const res = await apiFetch('/api/campaigns/generate-weekly-structure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

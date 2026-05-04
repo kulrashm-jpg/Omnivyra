@@ -79,11 +79,15 @@ export const ReplyComposer = React.memo(function ReplyComposer({
       : capability.reason ?? `${capabilityAction === 'dm' ? 'DM' : 'Reply'} is not supported on this platform.`;
 
   const handleSend = useCallback(async () => {
-    const trimmed = text.trim();
+    const liveText = textareaRef.current?.value ?? text;
+    const trimmed = liveText.trim();
     if (!trimmed || sending || disabled) return;
     if (unsupportedReason) {
       setError(unsupportedReason);
       return;
+    }
+    if (liveText !== text) {
+      setText(liveText);
     }
 
     setSending(true);

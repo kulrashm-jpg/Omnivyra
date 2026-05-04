@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingResponse';
 
@@ -8,7 +10,7 @@ import { refineUserFacingResponse } from '@/backend/utils/refineUserFacingRespon
  * Returns saved plan (from content_plans / ai_threads) and committed plan (from blueprint).
  * Used to offer "Load saved plan" and "Load committed plan" with edit option.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -136,3 +138,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

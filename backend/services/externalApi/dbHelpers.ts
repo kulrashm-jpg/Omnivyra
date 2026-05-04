@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type {
   ExternalApiSource,
   ExternalApiUserAccess,
@@ -74,7 +75,7 @@ export async function recordApiHealth(
         (upsertError.message?.toLowerCase().includes('relation') && upsertError.message?.toLowerCase().includes('does not exist'));
       if (isSchemaError && !(globalThis as any).__external_api_health_schema_hint_shown) {
         (globalThis as any).__external_api_health_schema_hint_shown = true;
-        console.warn('external_api_health table not found. Run database/external_api_health.sql to create it.');
+        console.warn('Schema mismatch: external_api_health table missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql.');
       } else if (!isSchemaError) {
         console.warn('Failed to persist API health record', { source: source.name });
       }
@@ -204,7 +205,7 @@ export async function logExternalApiUsage(input: {
         (upsertError.message?.toLowerCase().includes('could not find the table') ?? false);
       if (isSchemaError && !(globalThis as any).__external_api_usage_schema_hint_shown) {
         (globalThis as any).__external_api_usage_schema_hint_shown = true;
-        console.warn('external_api_usage table not found. Run database/external-api-usage.sql to create it.');
+        console.warn('Schema mismatch: external_api_usage table missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql.');
       } else if (!isSchemaError) {
         console.warn('Failed to update API usage record', { apiSourceId: input.apiSourceId });
       }
@@ -266,7 +267,7 @@ export async function addSignalsGenerated(input: {
         (selectMsg.includes('relation') && selectMsg.includes('does not exist')));
     if (isSelectSchemaError && !(globalThis as any).__external_api_usage_signals_hint_shown) {
       (globalThis as any).__external_api_usage_signals_hint_shown = true;
-      console.warn('external_api_usage.signals_generated column missing. Run database/external_api_usage_signals_generated.sql.');
+      console.warn('Schema mismatch: external_api_usage.signals_generated column missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql.');
       return;
     }
 

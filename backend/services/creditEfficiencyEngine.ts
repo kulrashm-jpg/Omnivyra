@@ -12,7 +12,8 @@
  * Run after each campaign cycle or on-demand via API.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCreditCost } from './creditDeductionService';
 import { getCompanyOutcomeStats } from './outcomeTrackingService';
 import { amplifyWinningPatterns } from './patternAmplificationService';

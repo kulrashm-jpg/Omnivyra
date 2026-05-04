@@ -1,6 +1,7 @@
 import collectHandler from '../../../pages/api/performance/collect';
 import campaignHandler from '../../../pages/api/performance/campaign/[id]';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 jest.mock('../../db/supabaseClient', () => ({

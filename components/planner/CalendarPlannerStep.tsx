@@ -9,7 +9,7 @@ import { usePlannerSession } from './plannerSessionStore';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { buildPlannerExecutionHandoff } from '../../lib/plannerExecutionHandoff';
 
 export interface CalendarPlannerStepProps {
@@ -44,7 +44,7 @@ export function CalendarPlannerStep({
     if (campaignId && companyId) {
       setLoading(true);
       setError(null);
-      fetchWithAuth(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`)
+      apiFetch(`/api/campaigns/retrieve-plan?campaignId=${encodeURIComponent(campaignId)}`)
         .then((res) => res.ok ? res.json() : Promise.reject(new Error('Failed to load plan')))
         .then((data) => {
           const weeks =
@@ -74,7 +74,7 @@ export function CalendarPlannerStep({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/ai/plan', {
+      const res = await apiFetch('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -175,7 +175,7 @@ export function CalendarPlannerStep({
     setFinalizing(true);
     setFinalizeError(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/planner-finalize', {
+      const res = await apiFetch('/api/campaigns/planner-finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

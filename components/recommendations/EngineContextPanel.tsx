@@ -13,7 +13,7 @@ type CompanyContextApi = {
 
 type Props = {
   companyId: string | null;
-  fetchWithAuth: FetchWithAuth;
+  apiFetch: FetchWithAuth;
   contextMode?: ContextMode;
   focusedModules?: FocusModule[];
   additionalDirection?: string;
@@ -56,7 +56,7 @@ function formatValue(value: unknown): string {
 
 export default function EngineContextPanel({
   companyId,
-  fetchWithAuth,
+  apiFetch,
   contextMode = 'FULL',
   focusedModules = [],
   additionalDirection = '',
@@ -96,7 +96,7 @@ export default function EngineContextPanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchWithAuth(`/api/company-profile/context?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/company-profile/context?companyId=${encodeURIComponent(companyId)}`)
       .then(async (res) => {
         if (cancelled) return;
         if (!res.ok) throw new Error('Failed to load company context');
@@ -112,7 +112,7 @@ export default function EngineContextPanel({
     return () => {
       cancelled = true;
     };
-  }, [companyId, fetchWithAuth, refreshToken]);
+  }, [companyId, apiFetch, refreshToken]);
 
   const companyContext = (contextData?.company_context ?? {}) as Record<string, Record<string, unknown>>;
   const activeSectionKeys =

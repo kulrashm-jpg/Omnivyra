@@ -10,7 +10,8 @@
  * - Platform-specific templates
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { sanitizeTextArtifacts } from './export/renderTextSanitizer';
 
 export interface ContentTemplate {

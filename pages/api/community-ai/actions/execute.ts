@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCommunityAiActionById } from '../../../../backend/db/communityAiActionStore';
 import { enforceActionRole, requireTenantScope } from '../utils';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
@@ -26,13 +28,13 @@ type ExecuteRequest = {
 const EXECUTABLE_FROM_STATUSES = new Set(['pending', 'approved', 'scheduled']);
 
 function readIdempotencyKey(req: NextApiRequest, body: ExecuteRequest): string | null {
-  const headerVal = req.headers['idempotency-key'];
+  const headerVal = req.headers?.['idempotency-key'];
   const fromHeader = Array.isArray(headerVal) ? headerVal[0] : headerVal;
   const candidate = (fromHeader || body.idempotency_key || '').toString().trim();
   return candidate.length > 0 ? candidate : null;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -141,9 +143,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
-  // ── Atomic state-machine transition: pending/approved/scheduled → executing.
+  // â”€â”€ Atomic state-machine transition: pending/approved/scheduled â†’ executing.
   // Persists the executor's `execution_mode` choice up front and stamps
-  // `idempotency_key` (race-safe via the unique index — a concurrent caller
+  // `idempotency_key` (race-safe via the unique index â€” a concurrent caller
   // with the same key fails the update and we surface the prior row).
   const transitionAt = new Date().toISOString();
   const transitionPayload: Record<string, any> = {
@@ -249,7 +251,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'TERMINAL_WRITE_FAILED', execution: result });
   }
 
-  // Skip the outcome event for in-flight browser dispatches — the extension's
+  // Skip the outcome event for in-flight browser dispatches â€” the extension's
   // /action-result writes the real terminal event once the command lands.
   if (result.status !== 'dispatched') {
     await logCommunityAiActionEvent({
@@ -304,3 +306,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     execution: result,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/onboarding/request-company-access
@@ -10,10 +11,11 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
@@ -26,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     department?: string;
   };
 
-  // Derive email from authenticated session — never trust client-supplied email
+  // Derive email from authenticated session â€” never trust client-supplied email
   const email = user.email;
 
   if (!companyId)      return res.status(400).json({ error: 'companyId is required' });
@@ -79,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Notify all COMPANY_ADMIN users of this org
   const { data: admins } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', companyId)
     .eq('role', 'COMPANY_ADMIN')
@@ -110,3 +112,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, requestId });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 export interface CommunityHealthSummary {
   scope: 'company' | 'campaign';
@@ -42,7 +42,7 @@ export default function CommunityHealthPage() {
       return;
     }
     try {
-      const res = await fetchWithAuth(
+      const res = await apiFetch(
         `/api/campaigns?companyId=${encodeURIComponent(selectedCompanyId)}`
       );
       if (!res.ok) return;
@@ -85,7 +85,7 @@ export default function CommunityHealthPage() {
       } else {
         params.set('campaignId', campaignId);
       }
-      const res = await fetchWithAuth(`/api/community/health?${params.toString()}`);
+      const res = await apiFetch(`/api/community/health?${params.toString()}`);
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || 'Failed to load community health');

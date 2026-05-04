@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/credits/costs
@@ -9,9 +10,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getCreditCostTiers } from '../../../backend/services/creditDeductionService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
   const tiers = await getCreditCostTiers();
   return res.status(200).json(tiers);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

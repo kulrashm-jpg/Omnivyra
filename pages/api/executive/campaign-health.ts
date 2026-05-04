@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Executive Campaign Health API — read-only projection layer.
+ * Executive Campaign Health API â€” read-only projection layer.
  * Consolidates engagement, comments, stability, strategist acceptance, and alerts.
  * No mutations, no schema changes, no changes to distribution or evaluation logic.
  *
@@ -9,7 +10,8 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 import { computeDistributionStability } from '../../../lib/intelligence/distributionStability';
 import { buildStrategicMemoryProfile } from '../../../lib/intelligence/strategicMemory';
@@ -93,7 +95,7 @@ function buildAlerts(summary: {
   return out;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -337,7 +339,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
       }
     } catch (_) {
-      // table missing or query failed → keep zeros
+      // table missing or query failed â†’ keep zeros
     }
 
     let ai_budget: CampaignHealthSummary['ai_budget'] = {
@@ -354,7 +356,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .maybeSingle();
 
       if (campaignErr || !campaignRow) {
-        // campaign not found → keep NOT_CONFIGURED
+        // campaign not found â†’ keep NOT_CONFIGURED
       } else {
         const budgetAmount = campaignRow.ai_budget_monthly != null ? Number(campaignRow.ai_budget_monthly) : null;
         if (budgetAmount == null || !Number.isFinite(budgetAmount) || budgetAmount <= 0) {
@@ -433,3 +435,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

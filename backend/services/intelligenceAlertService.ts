@@ -7,7 +7,8 @@
  */
 
 import { createHash } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type AlertChannel = 'in_app' | 'email' | 'slack';
 

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { simulateRecommendations } from '../../../backend/services/recommendationSimulationService';
 import { validatePolicy, RecommendationPolicyWeights } from '../../../backend/services/recommendationPolicyService';
@@ -31,4 +32,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

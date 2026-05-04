@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type {
   GovernanceAnalytics,
   GovernanceEvent,
@@ -48,14 +48,14 @@ export function useGovernancePanel(params: {
     setGovernanceLoading(true);
     try {
       const [statusRes, eventsRes, analyticsRes, driftRes] = await Promise.all([
-        fetchWithAuth(
+        apiFetch(
           `/api/governance/campaign-status?campaignId=${encodeURIComponent(params.campaignId)}&companyId=${encodeURIComponent(params.effectiveCompanyId)}`,
         ),
-        fetchWithAuth(
+        apiFetch(
           `/api/governance/events?companyId=${encodeURIComponent(params.effectiveCompanyId)}&campaignId=${encodeURIComponent(params.campaignId)}`,
         ),
-        fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(params.campaignId)}`),
-        fetchWithAuth(`/api/governance/company-drift?companyId=${encodeURIComponent(params.effectiveCompanyId)}`),
+        apiFetch(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(params.campaignId)}`),
+        apiFetch(`/api/governance/company-drift?companyId=${encodeURIComponent(params.effectiveCompanyId)}`),
       ]);
       if (statusRes.ok) {
         const statusData = await statusRes.json();
@@ -109,7 +109,7 @@ export function useGovernancePanel(params: {
 
   useEffect(() => {
     if (!params.campaignId || !params.effectiveCompanyId) return;
-    fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(params.campaignId)}`)
+    apiFetch(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(params.campaignId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data) setGovernanceAnalytics(data);
@@ -119,7 +119,7 @@ export function useGovernancePanel(params: {
 
   useEffect(() => {
     if (!params.campaignId || !params.effectiveCompanyId) return;
-    fetchWithAuth(`/api/governance/company-drift?companyId=${encodeURIComponent(params.effectiveCompanyId)}`)
+    apiFetch(`/api/governance/company-drift?companyId=${encodeURIComponent(params.effectiveCompanyId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d) hydrateDriftState(d);
@@ -131,7 +131,7 @@ export function useGovernancePanel(params: {
     if (!params.effectiveCompanyId) return;
     const loadAdminStatus = async () => {
       try {
-        const response = await fetchWithAuth(
+        const response = await apiFetch(
           `/api/admin/check-super-admin?companyId=${encodeURIComponent(params.effectiveCompanyId)}`,
         );
         if (!response.ok) return;
@@ -146,7 +146,7 @@ export function useGovernancePanel(params: {
 
   useEffect(() => {
     if (!params.campaignId || !params.effectiveCompanyId) return;
-    fetchWithAuth(
+    apiFetch(
       `/api/governance/campaign-status?campaignId=${encodeURIComponent(params.campaignId)}&companyId=${encodeURIComponent(params.effectiveCompanyId)}`,
     )
       .then((r) => (r.ok ? r.json() : null))

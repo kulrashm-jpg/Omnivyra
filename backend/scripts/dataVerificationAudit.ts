@@ -4,7 +4,8 @@
  * Read-only. Requires: SUPABASE_*
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function countSince(table: string, dateCol: string, hoursAgo: number, pkCol = 'id'): Promise<number> {
   const since = new Date();

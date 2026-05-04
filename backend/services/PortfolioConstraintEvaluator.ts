@@ -4,7 +4,8 @@
  */
 
 import type { ConstraintResult, TradeOffOption } from '../types/CampaignDuration';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignsByIds } from '../db/campaignStore';
 import { recordGovernanceEvent } from './GovernanceEventService';
 import { calculateEarliestViableStartDate } from './PortfolioTimelineProjection';

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { buildExternalApiRequest, executeExternalApiRequest, validatePlatformConfig } from '../../../backend/services/externalApiService';
 import { buildCacheKey, getCacheStats, getCachedResponse, setCachedResponse } from '../../../backend/services/redisExternalApiCache';
@@ -165,4 +166,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

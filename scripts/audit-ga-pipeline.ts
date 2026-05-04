@@ -4,7 +4,8 @@
  * Run: node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/audit-ga-pipeline.ts
  */
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getGoogleAnalyticsStatus,
   getValidAccessTokenForIntegration,

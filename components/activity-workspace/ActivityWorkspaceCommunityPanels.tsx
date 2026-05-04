@@ -24,7 +24,7 @@ export default function ActivityWorkspaceCommunityPanels({ d }: { d: S }) {
             campaignId={payload.campaignId}
             activityId={queryExecutionId || payload.activityId || ''}
             currentUserId={user?.userId ?? ''}
-            fetchWithAuth={async (input, init) => {
+            apiFetch={async (input, init) => {
               const { getAuthToken } = await import('../../utils/getAuthToken');
               const token = await getAuthToken();
               return fetch(input, { ...init, headers: { ...(init?.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) } });

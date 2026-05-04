@@ -5,28 +5,29 @@
  * with breakdown by action / model / source_type.
  *
  * Query params:
- *   ?days=N  — override the window (default 28, max 90)
+ *   ?days=N  â€” override the window (default 28, max 90)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../../backend/services/rbacService';
 import {
   requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
+  requireAdminScope,
 } from '../../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { getOrgCostSummary } from '../../../../../backend/services/orgCostSummaryService';
-import { supabase } from '../../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from '../../../../../backend/services/logger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:org_econ', 60, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
+  const ctx = await requireAdminScope(req, res, 'org:economics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/org/[id]/economics', 'org:economics');
   }
 
   const orgId = String(req.query.id ?? '').trim();
@@ -66,3 +67,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

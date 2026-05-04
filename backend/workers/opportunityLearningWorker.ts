@@ -4,7 +4,8 @@
  * Runs every 30 minutes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { aggregateOpportunityLearning } from '../services/opportunityLearningService';
 
 export async function runOpportunityLearningWorker(): Promise<{

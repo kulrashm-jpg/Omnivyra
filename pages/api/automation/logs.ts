@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/automation/logs?organization_id=...&limit=50
  *
  * Returns the most recent automation decisions (allowed + blocked)
  * for the caller's organization. Used by the admin UI to surface the
- * audit trail — every allow/block carries its reason.
+ * audit trail â€” every allow/block carries its reason.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -11,7 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { readRecentAutomationLogs } from '../../../backend/services/automation/automationLogger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -36,3 +37,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (err as Error)?.message || 'failed to read automation logs' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

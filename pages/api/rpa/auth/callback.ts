@@ -1,10 +1,11 @@
+﻿// AUTH EXEMPT: OAuth callback handles external provider redirect
 /**
  * GET /api/rpa/auth/callback?session_token=...
  *
  * Convenience endpoint the login helper can hit after completing platform
  * login. Returns current registration status for the (organization_id,
  * platform) implied by the session_token. Does NOT accept storageState
- * here — that goes to /api/rpa/auth/save-session so the caller can hold
+ * here â€” that goes to /api/rpa/auth/save-session so the caller can hold
  * the blob in a secure context.
  *
  * Returns: { status: 'pending' | 'registered', last_login_at?, expires_at?, account_tier? }
@@ -13,7 +14,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { verifyRpaAuthToken } from '../../../../backend/services/rpaWorker/rpaAuthTokens';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -62,3 +64,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (err as Error)?.message || 'Callback failed' });
   }
 }
+

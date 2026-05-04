@@ -812,26 +812,6 @@ export function InboxDashboard({
     [extensionPanelPlatforms, getBrowserActionPlatform]
   );
 
-  const requiresVerifiedBrowserReply = useCallback((platform: string) => {
-    return ['linkedin', 'facebook', 'instagram', 'x'].includes(getBrowserActionPlatform(platform));
-  }, [getBrowserActionPlatform]);
-
-  const getVerifiedReplyRequirementMessage = useCallback((platform: string) => {
-    const normalized = getBrowserActionPlatform(platform);
-    if (normalized === 'linkedin') {
-      return 'LinkedIn DM and comment replies require a verified browser-assisted send. Open LinkedIn Messaging for DMs, or the relevant LinkedIn conversation surface, before sending.';
-    }
-    if (normalized === 'facebook') {
-      return 'Facebook replies and message actions require a verified browser-assisted send. Open Messenger or the relevant Facebook conversation surface before sending.';
-    }
-    if (normalized === 'instagram') {
-      return 'Instagram replies and direct-message actions require a verified browser-assisted send. Open Instagram Direct or the relevant thread before sending.';
-    }
-    if (normalized === 'x') {
-      return 'X replies and direct-message actions require a verified browser-assisted send. Open X Messages or the relevant reply surface before sending.';
-    }
-    return `${normalized} engagement actions require a verified browser-assisted send before Omnivyra can trust them.`;
-  }, [getBrowserActionPlatform]);
   const extensionUserLabel =
     extensionAuth?.user?.email ||
     extensionAuth?.user?.name ||
@@ -1141,6 +1121,7 @@ export function InboxDashboard({
       replyText: string;
       messageType?: string | null;
     }) => {
+      const deliveryPlatform = platform === 'x' ? 'twitter' : String(platform || '').trim().toLowerCase();
       // DMs and comment-replies route through the same /api/engagement/reply
       // endpoint, but the capability key differs: 'dm' vs 'reply'. The
       // server picks the action_type from message_type itself; this client
@@ -1148,15 +1129,15 @@ export function InboxDashboard({
       // unsupported for the action.
       const isDm = isDmMessageType(messageType);
       const capabilityAction = isDm ? 'dm' : 'reply';
-      const capability = resolveEngagementCapability(platform, capabilityAction);
+      const capability = resolveEngagementCapability(deliveryPlatform, capabilityAction);
       if (capability.status !== 'api_verified') {
         throw new Error(
-          capability.reason ?? `${isDm ? 'DM' : 'Reply'} is not supported on ${platform}.`
+          capability.reason ?? `${isDm ? 'DM' : 'Reply'} is not supported on ${deliveryPlatform || platform}.`
         );
       }
 
-      const niceLabel = platform === 'twitter' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
-      const browserPlatformState = getBrowserPlatformState(platform);
+      const niceLabel = deliveryPlatform === 'twitter' ? 'X' : deliveryPlatform.charAt(0).toUpperCase() + deliveryPlatform.slice(1);
+      const browserPlatformState = getBrowserPlatformState(deliveryPlatform);
 
       const res = await fetch('/api/engagement/reply', {
         method: 'POST',
@@ -1167,7 +1148,7 @@ export function InboxDashboard({
           thread_id: threadId,
           message_id: messageId,
           reply_text: replyText,
-          platform,
+          platform: deliveryPlatform,
         }),
       });
 
@@ -1198,7 +1179,7 @@ export function InboxDashboard({
           await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
           return {
             mode: 'browser_failed',
-            platform,
+            platform: deliveryPlatform,
             message: `${isDm ? 'DM' : 'Reply'} was queued, but browser delivery is disabled for ${niceLabel}.`,
           };
         }
@@ -1216,21 +1197,21 @@ export function InboxDashboard({
             hideThreadAfterResponse(threadId);
             return {
               mode: 'browser_dispatched',
-              platform,
+              platform: deliveryPlatform,
               message: `${isDm ? 'DM' : 'Reply'} confirmed on ${niceLabel}.`,
             };
           }
           if (actionStatus?.status === 'failed' || actionStatus?.status === 'blocked' || actionStatus?.status === 'skipped') {
             return {
               mode: 'browser_failed',
-              platform,
+              platform: deliveryPlatform,
               message: `${isDm ? 'DM' : 'Reply'} was not delivered on ${niceLabel}: ${actionStatus.error || actionStatus.status}.`,
             };
           }
           if (actionStatus?.status === 'sent_unverified') {
             return {
               mode: 'browser_unverified',
-              platform,
+              platform: deliveryPlatform,
               message: `${isDm ? 'DM' : 'Reply'} ran in the ${niceLabel} tab, but ${niceLabel} did not confirm delivery.`,
             };
           }
@@ -1246,13 +1227,13 @@ export function InboxDashboard({
           if (claimedByExtension) {
             return {
               mode: 'browser_pending',
-              platform,
+              platform: deliveryPlatform,
               message: `${isDm ? 'DM' : 'Reply'} was claimed by Omnivyra and is still waiting for ${niceLabel} to report delivery. Keep ${niceLabel} Messaging open and refresh in a moment.`,
             };
           }
           return {
             mode: 'browser_failed',
-            platform,
+            platform: deliveryPlatform,
             message:
               commandCount > 0 && dispatchedCount === 0
                 ? `Omnivyra found the queued ${isDm ? 'DM' : 'reply'}, but no ${niceLabel} tab accepted it. Open the ${niceLabel} Messaging thread and try Send again.`
@@ -1264,7 +1245,7 @@ export function InboxDashboard({
           await Promise.allSettled([refreshMessages(), refresh(), refreshCounts(), refreshWorkQueue()]);
           return {
             mode: 'browser_failed',
-            platform,
+            platform: deliveryPlatform,
             message: `${isDm ? 'DM' : 'Reply'} was queued, but delivery could not start: ${message}`,
           };
         }
@@ -1277,11 +1258,21 @@ export function InboxDashboard({
           : `Reply sent to ${niceLabel}. Awaiting platform confirmation.`;
       return {
         mode: json.confirmed ? 'api_confirmed' : 'api_sent',
-        platform,
+        platform: deliveryPlatform,
         message,
       };
     },
-    [bootstrapExtensionAuth, getBrowserPlatformState, hideThreadAfterResponse, organizationId, pollExtensionCommandsNow, refresh, refreshCounts, refreshMessages, refreshWorkQueue]
+    [
+      bootstrapExtensionAuth,
+      getBrowserPlatformState,
+      hideThreadAfterResponse,
+      organizationId,
+      pollExtensionCommandsNow,
+      refresh,
+      refreshCounts,
+      refreshMessages,
+      refreshWorkQueue,
+    ]
   );
 
   const handleRetryQueuedDelivery = useCallback(

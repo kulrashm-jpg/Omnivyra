@@ -4,7 +4,8 @@
  * Runs every 30 minutes. Aggregates engagement_opportunities by author + platform.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { calculateBuyerIntentAccounts } from '../services/buyerIntentIntelligenceService';
 
 export async function runBuyerIntentLearningWorker(): Promise<{

@@ -3,7 +3,8 @@
  * Phase 5: Feedback with spam protection (1 per recommendation per user per hour)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type FeedbackType = 'accepted' | 'ignored' | 'executed' | 'successful' | 'failed';
 

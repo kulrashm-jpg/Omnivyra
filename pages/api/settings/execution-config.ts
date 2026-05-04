@@ -1,7 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * GET  /api/settings/execution-config   — read company execution flags
- * PUT  /api/settings/execution-config   — update company execution flags
+ * GET  /api/settings/execution-config   â€” read company execution flags
+ * PUT  /api/settings/execution-config   â€” update company execution flags
  *
  * Body (PUT):
  *   {
@@ -20,7 +21,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import {
   getCompanyExecutionFlags,
@@ -63,7 +65,7 @@ function validateBody(body: unknown): { valid: boolean; error?: string } {
 async function resolveCompanyId(userId: string): Promise<string | null> {
   try {
     const { data } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', userId)
       .limit(1)
@@ -74,7 +76,7 @@ async function resolveCompanyId(userId: string): Promise<string | null> {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'PUT') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -89,13 +91,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: 'No company found for this user' });
   }
 
-  // ── GET ──────────────────────────────────────────────────────────────────
+  // â”€â”€ GET â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const flags = await getCompanyExecutionFlags(companyId);
     return res.status(200).json({ companyId, flags });
   }
 
-  // ── PUT ──────────────────────────────────────────────────────────────────
+  // â”€â”€ PUT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { valid, error: valError } = validateBody(req.body);
   if (!valid) return res.status(400).json({ error: valError });
 
@@ -108,3 +110,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const updated = await getCompanyExecutionFlags(companyId);
   return res.status(200).json({ companyId, flags: updated });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

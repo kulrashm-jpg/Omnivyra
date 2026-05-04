@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../backend/services/rbac/communityAiCapabilities';
 import { enforceActionRole, requireTenantScope } from './utils';
@@ -92,7 +93,7 @@ const computeRiskFlags = (baseline: any[], simulated: any[]) => {
   return flags;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -182,3 +183,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     risk_flags,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

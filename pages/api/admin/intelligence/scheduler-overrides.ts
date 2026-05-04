@@ -15,7 +15,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getAllGlobalConfigs,
   getCompanyOverrides,
@@ -25,10 +26,9 @@ import {
   type GlobalConfig,
   type CompanyOverride,
 } from '../../../../backend/services/intelligenceConfigService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 
 async function resolveUser(req: NextApiRequest): Promise<string> {
   const { getSupabaseUserFromRequest } = await import('../../../../backend/services/supabaseAuthService');
@@ -36,12 +36,14 @@ async function resolveUser(req: NextApiRequest): Promise<string> {
   return user?.email ?? user?.id ?? 'super_admin';
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'intelligence:scheduler-overrides');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/intelligence/scheduler-overrides', 'intelligence:scheduler-overrides');
   }
 
-  // ── GET ───────────────────────────────────────────────────────────────────
+  // â”€â”€ GET â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const companyId = typeof req.query.company_id === 'string' ? req.query.company_id.trim() : null;
     if (!companyId) return res.status(400).json({ error: 'company_id required' });
@@ -68,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── POST — upsert override ────────────────────────────────────────────────
+  // â”€â”€ POST â€” upsert override â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const { company_id, job_type, ...rest } = req.body ?? {};
 
@@ -101,7 +103,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── DELETE — remove override ──────────────────────────────────────────────
+  // â”€â”€ DELETE â€” remove override â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'DELETE') {
     const { company_id, job_type } = req.body ?? {};
 
@@ -119,3 +121,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

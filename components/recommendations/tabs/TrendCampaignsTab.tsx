@@ -65,7 +65,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
     executionSectionRefs,
     fastLoadingCardId,
     fetchProfile,
-    fetchWithAuth,
+    apiFetch,
     firstCardRef,
     focusFirstMissingExecutionField,
     focusedModules,
@@ -272,7 +272,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
       {validationError && <div className="text-sm text-red-600">{validationError}</div>}
       <TrendCampaignsRecommendationCards
         companyId={companyId}
-        fetchWithAuth={fetchWithAuth}
+        apiFetch={apiFetch}
         router={router}
         viewMode={viewMode}
         initialBlogId={initialBlogId}

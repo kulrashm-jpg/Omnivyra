@@ -3,7 +3,8 @@
  * Resolves from campaign_week_plan, campaign_versions.campaign_snapshot.weekly_plan, or weekly_content_refinements.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { BLUEPRINT_FREEZE_WINDOW_HOURS } from '../governance/GovernanceConfig';
 
 /** Stage 11: Deterministic guard — campaign must have duration_weeks set before blueprint resolution. */

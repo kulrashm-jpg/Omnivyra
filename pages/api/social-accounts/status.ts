@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/social-accounts/status
@@ -5,7 +6,8 @@
  * platform availability only, no user-specific connection data).
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { getUserRole } from '@/backend/services/rbacService';
 import { refreshExpiringSocialAccountsForCompany } from '@/backend/auth/tokenRefresh';
@@ -16,12 +18,12 @@ const SUPPORTED_PLATFORMS = [
   { key: 'linkedin',       label: 'LinkedIn',       authPath: '/api/auth/linkedin',  category: 'social' },
   { key: 'x',              label: 'X',              authPath: '/api/auth/x',         category: 'social' },
   { key: 'youtube',        label: 'YouTube',        authPath: '/api/auth/youtube',   category: 'social' },
-  { key: 'instagram',      label: 'Instagram',      authPath: '/api/auth/instagram', category: 'social' },
+  { key: 'instagram',      label: 'Instagram',      authPath: '/api/auth/facebook',  category: 'social' },
   { key: 'facebook',       label: 'Facebook',       authPath: '/api/auth/facebook',  category: 'social' },
-  { key: 'whatsapp',       label: 'WhatsApp',       authPath: null,                  category: 'social' },
+  { key: 'whatsapp',       label: 'WhatsApp',       authPath: '/api/auth/facebook',  category: 'social' },
   { key: 'tiktok',         label: 'TikTok',         authPath: '/api/auth/tiktok',    category: 'social' },
   { key: 'pinterest',      label: 'Pinterest',      authPath: '/api/auth/pinterest', category: 'social' },
-  { key: 'threads',        label: 'Threads',        authPath: '/api/auth/instagram', category: 'social' },
+  { key: 'threads',        label: 'Threads',        authPath: '/api/auth/facebook',  category: 'social' },
   { key: 'reddit',         label: 'Reddit',         authPath: '/api/community-ai/connectors/reddit/auth', category: 'social' },
   // Community platforms
   { key: 'github',         label: 'GitHub',         authPath: null,                  category: 'community' },
@@ -33,10 +35,10 @@ const SUPPORTED_PLATFORMS = [
   { key: 'quora',          label: 'Quora',          authPath: null,                  category: 'community' },
 ];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Try to get user — not required, just shows connection status if available
+  // Try to get user â€” not required, just shows connection status if available
   const { user } = await getSupabaseUserFromRequest(req).catch(() => ({ user: null, error: 'err' }));
   const userId = user?.id ?? null;
   const companyId = (req.query.companyId as string) || null;
@@ -49,7 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { role } = await getUserRole(userId, companyId).catch(() => ({ role: null, error: '' }));
       userRole = role ?? null;
     } else {
-      // No company scope — check if platform super admin
+      // No company scope â€” check if platform super admin
       try {
         const { data: sa } = await supabase
           .from('super_admins').select('id').eq('user_id', userId).limit(1).maybeSingle();
@@ -60,13 +62,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Pre-flight: refresh any expiring/expired social_accounts tokens for this company
   // through the centralized token refresh service.
-  // BEFORE we load and report status. Short-lived tokens (e.g. X — 2h expiry) would
+  // BEFORE we load and report status. Short-lived tokens (e.g. X â€” 2h expiry) would
   // otherwise show "Token Expired" on every dashboard load between sessions.
   if (userId && companyId && isValidUuid(companyId)) {
     try {
       await refreshExpiringSocialAccountsForCompany(companyId);
     } catch (e: any) {
-      // Non-fatal — fall through and report stale state if refresh fails.
+      // Non-fatal â€” fall through and report stale state if refresh fails.
       console.warn('[social-accounts/status] proactive refresh failed:', e?.message);
     }
   }
@@ -79,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const baseSelect = 'id, platform, account_name, username, is_active, token_expires_at, platform_user_id, company_id, access_token';
 
     if (companyId && isValidUuid(companyId)) {
-      // Company-scoped accounts — two typed queries to avoid text=uuid cast error
+      // Company-scoped accounts â€” two typed queries to avoid text=uuid cast error
       const [{ data: scopedAccounts }, { data: legacyAccounts }] = await Promise.all([
         supabase.from('social_accounts').select(baseSelect)
           .eq('user_id', userId).eq('is_active', true).eq('company_id', companyId)
@@ -184,8 +186,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const result = SUPPORTED_PLATFORMS.map((p) => {
     const acc = accountMap[p.key] ?? null;
     const inactiveAcc = inactiveAccountMap[p.key] ?? null;
-    const isThreads = p.key === 'threads';
-    const connected = isThreads ? !!acc : !!acc?.access_token;
+    const connected = !!acc?.access_token;
     const isExpired = acc?.token_expires_at && acc.token_expires_at < now;
     return {
       platform_key: p.key,
@@ -206,3 +207,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ accounts: result, user_role: userRole });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -5,7 +5,8 @@ import { randomUUID } from 'crypto';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { resolveLeadSignalWriteMode, writeLeadSignal } from '../backend/services/canonicalLeadSignalService';
 
 function arg(name: string): string | undefined {

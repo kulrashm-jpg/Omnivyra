@@ -1,4 +1,4 @@
-# SYSTEM INVENTORY
+﻿# SYSTEM INVENTORY
 Generated: 2026-03-29
 
 ---
@@ -10,7 +10,7 @@ Generated: 2026-03-29
 | **Name** | drishiq-admin-ui (Omnivyra) |
 | **Version** | 1.0.0 |
 | **Type** | Full-stack monorepo |
-| **Purpose** | AI-powered social media management and campaign orchestration platform — campaign planning, content generation, scheduling, engagement management, analytics across social platforms |
+| **Purpose** | AI-powered social media management and campaign orchestration platform â€” campaign planning, content generation, scheduling, engagement management, analytics across social platforms |
 | **Root** | `c:/virality` |
 
 ### Tech Stack
@@ -22,7 +22,6 @@ Generated: 2026-03-29
 | Database | Supabase (PostgreSQL) via service-role client |
 | Cache / Queue | Redis (Upstash), BullMQ 5.68.0, IORedis 5.9.3 |
 | AI / ML | OpenAI (gpt-4o-mini default), Anthropic Claude (optional) |
-| Auth | Supabase Auth, Firebase (phone OTP), OAuth 2.0 |
 | Validation | Zod, ESLint (custom runtime-enforcement plugin) |
 | State | Zustand |
 | PDF | PDFKit |
@@ -323,7 +322,7 @@ Generated: 2026-03-29
 
 | File | Purpose |
 |------|---------|
-| `main.ts` | **Unified worker entry point** — starts all queues in one process |
+| `main.ts` | **Unified worker entry point** â€” starts all queues in one process |
 | `healthServer.ts` | HTTP health check server on port 8080 |
 | `leadWorker.ts` | Lead detection and qualification |
 | `leadThreadRecomputeWorker.ts` | Event-driven lead thread scoring |
@@ -348,28 +347,28 @@ Generated: 2026-03-29
 | `posting` | 1 (highest) | Time-critical social media post publishing |
 | `ai-heavy` | 10 | Campaign planning, AI-intensive operations |
 | `publish` | default | General publishing |
-| `engagement-polling` | — | LinkedIn / Twitter engagement ingestion |
-| `lead-thread-recompute` | — | Event-driven thread scoring |
-| `conversation-memory-rebuild` | — | Event-driven conversation memory |
-| `engine-jobs` | — | LEAD and MARKET_PULSE processing |
-| `bolt-execution` | — | Workflow execution jobs |
-| `campaign-planning` | — | AI-heavy campaign planning |
-| `intelligence-polling` | — | External signal ingestion |
+| `engagement-polling` | â€” | LinkedIn / Twitter engagement ingestion |
+| `lead-thread-recompute` | â€” | Event-driven thread scoring |
+| `conversation-memory-rebuild` | â€” | Event-driven conversation memory |
+| `engine-jobs` | â€” | LEAD and MARKET_PULSE processing |
+| `bolt-execution` | â€” | Workflow execution jobs |
+| `campaign-planning` | â€” | AI-heavy campaign planning |
+| `intelligence-polling` | â€” | External signal ingestion |
 
 ### Cron Jobs
 
-**`backend/scheduler/cron.ts`** — Master cron (ticks every `CRON_INTERVAL_SECONDS`, default 60s)
+**`backend/scheduler/cron.ts`** â€” Master cron (ticks every `CRON_INTERVAL_SECONDS`, default 60s)
 
 | Interval | Tasks |
 |----------|-------|
-| 1–5 min | Lead thread recompute, conversation memory rebuild, engagement opportunity detection, conversation triage |
+| 1â€“5 min | Lead thread recompute, conversation memory rebuild, engagement opportunity detection, conversation triage |
 | 30 min | Signal clustering, engagement capture, engagement signal scheduling |
-| 1–2 hrs | Engagement polling, intelligence polling, signal intelligence, strategic theme engine |
-| 3–4 hrs | Community post engine, thread engine, content opportunity engine, narrative engine |
+| 1â€“2 hrs | Engagement polling, intelligence polling, signal intelligence, strategic theme engine |
+| 3â€“4 hrs | Community post engine, thread engine, content opportunity engine, narrative engine |
 | 6 hrs | Feedback intelligence, company trend relevance, performance ingestion, connector token refresh |
 | Daily | Auto-optimization, campaign health evaluation, performance aggregation, governance audits, learning decay |
 
-**`pages/api/cron/`** — HTTP-triggered cron routes (callable by Railway/Vercel cron)
+**`pages/api/cron/`** â€” HTTP-triggered cron routes (callable by Railway/Vercel cron)
 
 | File | Purpose |
 |------|---------|
@@ -387,16 +386,16 @@ Generated: 2026-03-29
 
 | File | Role |
 |------|------|
-| `instrumentation.ts` | Next.js startup hook — conditionally loads Node-only instrumentation |
-| `instrumentation.node.ts` | Node.js startup — starts Redis protection; starts workers+cron if `ENABLE_AUTO_WORKERS=1` |
-| `backend/workers/main.ts` | **Primary worker process** — starts health server + all BullMQ workers |
-| `backend/scheduler/cron.ts` | **Primary cron process** — 50+ scheduled tasks (1 replica only) |
-| `config/index.ts` | Configuration module — Zod-validated, deep-frozen, fail-fast on missing vars |
+| `instrumentation.ts` | Next.js startup hook â€” conditionally loads Node-only instrumentation |
+| `instrumentation.node.ts` | Node.js startup â€” starts Redis protection; starts workers+cron if `ENABLE_AUTO_WORKERS=1` |
+| `backend/workers/main.ts` | **Primary worker process** â€” starts health server + all BullMQ workers |
+| `backend/scheduler/cron.ts` | **Primary cron process** â€” 50+ scheduled tasks (1 replica only) |
+| `config/index.ts` | Configuration module â€” Zod-validated, deep-frozen, fail-fast on missing vars |
 | `pages/_app.tsx` | Next.js frontend entry point |
 
-**API Gateway:** No dedicated API gateway — all API routes are Next.js serverless functions under `pages/api/`.
+**API Gateway:** No dedicated API gateway â€” all API routes are Next.js serverless functions under `pages/api/`.
 
-**Health Check Endpoint:** `GET /health` → served by `backend/workers/healthServer.ts` on port 8080 (workers service only). Next.js rewrites `/health` → `/api/health`.
+**Health Check Endpoint:** `GET /health` â†’ served by `backend/workers/healthServer.ts` on port 8080 (workers service only). Next.js rewrites `/health` â†’ `/api/health`.
 
 ---
 
@@ -406,10 +405,10 @@ Generated: 2026-03-29
 
 | Item | Detail |
 |------|--------|
-| Client | `backend/db/supabaseClient.ts` — singleton, service-role key |
+| Client | `backend/db/supabaseClient.ts` â€” singleton, service-role key |
 | Pattern | Lazy initialization (deferred for Vercel build) |
 | Auth | Service role (RLS bypass for backend) + Anon key (frontend) |
-| Direct Postgres | `SUPABASE_DB_URL` — transaction pooler port 6543, migrations only |
+| Direct Postgres | `SUPABASE_DB_URL` â€” transaction pooler port 6543, migrations only |
 | Proxy | `.from()` calls intercepted to track read/write counts |
 
 **Migrations (`supabase/migrations/`)**
@@ -430,7 +429,7 @@ Generated: 2026-03-29
 | `20260428_feature_completion_tracking.sql` | Feature completion tracking |
 | `20260428_user_preferences.sql` | User preferences table |
 | `20260429_data_ingestion_layer.sql` | Data ingestion layer tables |
-| `supabase/rls_policies.sql` | Row-level security policies |
+| `supabase/migrations/20260504020001_rls_enable_off_tables.sql` + `â€¦020002_rls_add_service_role_policies.sql` | Row-level security policies (Phase D â€” replaced legacy `supabase/rls_policies.sql` draft) |
 
 ### Redis
 
@@ -440,9 +439,9 @@ Generated: 2026-03-29
 | Client library | IORedis 5.9.3 |
 | TLS | Auto-detected for `rediss://` URLs (Upstash) |
 | Client files | `lib/redis/client.ts`, `lib/redis/resilientClient.ts` |
-| Usage protection | `lib/redis/usageProtection.ts` — daily command limits, overflow buffering |
-| Instrumentation | `lib/redis/instrumentation.ts` — ops tracking |
-| Failure strategy | `lib/redis/failureStrategy.ts` — graceful degradation |
+| Usage protection | `lib/redis/usageProtection.ts` â€” daily command limits, overflow buffering |
+| Instrumentation | `lib/redis/instrumentation.ts` â€” ops tracking |
+| Failure strategy | `lib/redis/failureStrategy.ts` â€” graceful degradation |
 | Queue blocker | Queues blocked at critical Redis usage threshold |
 | Alert config | `.redis-usage-alert.json` |
 
@@ -453,7 +452,7 @@ Generated: 2026-03-29
 | Library | BullMQ 5.68.0 over IORedis |
 | Client | `backend/queue/bullmqClient.ts` |
 | Instrumentation | `backend/queue/queueInstrumentation.ts` |
-| Stable IDs | `makeStableJobId()` — prevents duplicate job enqueueing |
+| Stable IDs | `makeStableJobId()` â€” prevents duplicate job enqueueing |
 | Throttling | Fan-out capped during high Redis usage |
 
 ### Storage
@@ -470,7 +469,6 @@ Generated: 2026-03-29
 |---------|---------|
 | OpenAI | Primary AI (gpt-4o-mini default) |
 | Anthropic Claude | Optional AI |
-| Firebase | Phone OTP authentication |
 | LinkedIn v2 API | Social publishing + OAuth |
 | Twitter / X API v2 | Social publishing + OAuth |
 | Facebook Graph API v2.1 | Social publishing + OAuth |
@@ -497,8 +495,8 @@ Generated: 2026-03-29
 | `xAdapter.ts` | X (Twitter) | tweet.write, tweet.read |
 | `pinterestAdapter.ts` | Pinterest | pins:read, pins:write |
 | `spotifyAdapter.ts` | Spotify | playlist-modify-public/private |
-| `starmakerAdapter.ts` | StarMaker | — |
-| `sunoAdapter.ts` | Suno AI | — |
+| `starmakerAdapter.ts` | StarMaker | â€” |
+| `sunoAdapter.ts` | Suno AI | â€” |
 | `platformAdapter.ts` | Base interface | Abstract types + error handling |
 
 ---
@@ -533,8 +531,8 @@ Generated: 2026-03-29
 | Item | Detail |
 |------|--------|
 | Frontend | Vercel (Next.js) |
-| Workers | Railway — `Dockerfile.worker`, `railway.json` |
-| Cron | Railway — `Dockerfile.cron` (**must run as 1 replica**) |
+| Workers | Railway â€” `Dockerfile.worker`, `railway.json` |
+| Cron | Railway â€” `Dockerfile.cron` (**must run as 1 replica**) |
 | Redis | Upstash (managed, `rediss://` TLS) |
 | Database | Supabase (hosted PostgreSQL) |
 | Env file | Vercel / Railway dashboard env vars |
@@ -547,7 +545,7 @@ Generated: 2026-03-29
 | `Dockerfile.worker` | Multi-stage build for workers (node:20-alpine) |
 | `Dockerfile.cron` | Multi-stage build for cron (node:20-alpine, 1 replica) |
 | `docker-compose.yml` | Local dev Redis only |
-| `railway.json` | Railway config — Dockerfile.worker, restart on failure (max 5) |
+| `railway.json` | Railway config â€” Dockerfile.worker, restart on failure (max 5) |
 | `tsconfig.worker.json` | TypeScript config for worker builds |
 | `.env.example` | Canonical env var template |
 | `.env.local` | Local dev (git-ignored) |
@@ -603,14 +601,9 @@ Generated: 2026-03-29
 | `CRON_INTERVAL_SECONDS` | Cron tick interval (default: `60`) |
 | `PORT` | Worker health server port (default: `3001`) |
 
-### Firebase (Phone OTP)
 
 | Key | Description |
 |-----|-------------|
-| `NEXT_PUBLIC_FIREBASE_API_KEY` | Firebase API key |
-| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Firebase auth domain |
-| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Firebase project ID |
-| `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase app ID |
 
 ### Encryption
 
@@ -618,14 +611,14 @@ Generated: 2026-03-29
 |-----|-------------|
 | `ENCRYPTION_KEY` | 64-char hex string (256-bit AES key for credential encryption) |
 
-### OAuth — LinkedIn
+### OAuth â€” LinkedIn
 
 | Key | Description |
 |-----|-------------|
 | `LINKEDIN_CLIENT_ID` | LinkedIn OAuth client ID |
 | `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth client secret |
 
-### OAuth — Twitter / X
+### OAuth â€” Twitter / X
 
 | Key | Description |
 |-----|-------------|
@@ -634,7 +627,7 @@ Generated: 2026-03-29
 | `X_CLIENT_ID` | Alias for `TWITTER_CLIENT_ID` |
 | `X_CLIENT_SECRET` | Alias for `TWITTER_CLIENT_SECRET` |
 
-### OAuth — Facebook & Instagram
+### OAuth â€” Facebook & Instagram
 
 | Key | Description |
 |-----|-------------|
@@ -646,7 +639,7 @@ Generated: 2026-03-29
 | `INSTAGRAM_CLIENT_ID` | Instagram OAuth client ID |
 | `INSTAGRAM_CLIENT_SECRET` | Instagram OAuth client secret |
 
-### OAuth — YouTube
+### OAuth â€” YouTube
 
 | Key | Description |
 |-----|-------------|

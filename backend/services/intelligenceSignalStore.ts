@@ -6,7 +6,8 @@
  */
 
 import { createHash } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /** Input for a single normalized signal to insert */
 export type NormalizedSignalInput = {

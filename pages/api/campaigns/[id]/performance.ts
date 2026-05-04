@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET  /api/campaigns/[id]/performance
- *   → Returns the most recent performance snapshot + evaluation for this campaign.
+ *   â†’ Returns the most recent performance snapshot + evaluation for this campaign.
  *
  * POST /api/campaigns/[id]/performance
- *   → Records new raw metrics, runs evaluation, stores result.
+ *   â†’ Records new raw metrics, runs evaluation, stores result.
  *   Body: {
  *     total_reach?, total_impressions?, engagement_rate?, avg_likes?,
  *     total_likes?, total_comments?, total_clicks?, total_shares?, total_leads?
@@ -11,7 +12,8 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
 import { evaluateOutcome, getDefaultBenchmarks, type CampaignActuals } from '../../../../backend/lib/campaigns/outcomeEvaluator';
@@ -33,7 +35,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(404).json({ error: 'Campaign not found' });
   }
 
-  // ── GET ───────────────────────────────────────────────────────────────────
+  // â”€â”€ GET â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { data: latest } = await supabase
       .from('campaign_performance')
@@ -51,7 +53,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // ── POST ──────────────────────────────────────────────────────────────────
+  // â”€â”€ POST â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const body = req.body ?? {};
 
@@ -130,4 +132,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]));
+

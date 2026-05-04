@@ -1,5 +1,5 @@
 import type React from 'react';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { AIProvider, ChatMessage, StructuredPlan } from './types';
 
 type Setter<T> = React.Dispatch<React.SetStateAction<T>>;
@@ -151,7 +151,7 @@ export function useCampaignAiPlanPersistence({
       if (structuredPlanToSave?.weeks?.length) {
         const isEditOfCommitted = planSource === 'committed';
         const api = isEditOfCommitted ? '/api/campaigns/update-edited-committed' : '/api/campaigns/save-draft-plan';
-        const draftRes = await fetchWithAuth(api, {
+        const draftRes = await apiFetch(api, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ campaignId, structuredPlan: { weeks: structuredPlanToSave.weeks } }),
@@ -172,7 +172,7 @@ export function useCampaignAiPlanPersistence({
         return;
       }
 
-      const response = await fetchWithAuth('/api/campaigns/save-ai-content', {
+      const response = await apiFetch('/api/campaigns/save-ai-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaignId, aiContent: aiMessage, timestamp: new Date().toISOString(), provider: selectedProvider }),
@@ -214,7 +214,7 @@ export function useCampaignAiPlanPersistence({
     }));
     let saveSucceeded = false;
     try {
-      const saveRes = await fetchWithAuth('/api/campaigns/save-draft-plan', {
+      const saveRes = await apiFetch('/api/campaigns/save-draft-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaignId, structuredPlan: { weeks: weeksToSave } }),

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/planner/skeleton-command
@@ -5,7 +6,7 @@
  *
  * Intent is classified server-side before calling the AI.
  * REMOVE uses a filter object (platform/content_type/week_number/day) applied
- * deterministically server-side — no hallucinated execution_ids.
+ * deterministically server-side â€” no hallucinated execution_ids.
  * ADD and MOVE still use structured diffs returned by the AI.
  */
 
@@ -25,7 +26,7 @@ function resolveDay(raw: string): string {
   return match ?? raw;
 }
 
-/** Build a date→week reference table the AI can use to resolve "21st" / "March 21" etc. */
+/** Build a dateâ†’week reference table the AI can use to resolve "21st" / "March 21" etc. */
 function buildWeekCalendar(startDateStr: string, durationWeeks: number): string {
   try {
     const base = new Date(startDateStr + 'T00:00:00');
@@ -99,7 +100,7 @@ function applyRemoveFilter(actList: Activity[], filter: RemoveFilter): Set<strin
   return new Set(matched.map((a) => a.execution_id ?? '').filter(Boolean));
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -130,11 +131,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       weekCalendar,
     ].filter(Boolean).join('\n');
 
-    const activityFields = `execution_id, week_number (1–${durationWeeks}), platform, content_type, title, day (Monday–Sunday), theme, objective`;
+    const activityFields = `execution_id, week_number (1â€“${durationWeeks}), platform, content_type, title, day (Mondayâ€“Sunday), theme, objective`;
     const platforms      = 'linkedin, instagram, twitter, x, facebook, youtube, tiktok, pinterest, reddit';
     const contentTypes   = 'post, story, reel, video, carousel, image, thread, article, pin, live';
 
-    // ── Intent-specific prompts ──────────────────────────────────────────────
+    // â”€â”€ Intent-specific prompts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     let systemPrompt: string;
 
@@ -151,13 +152,13 @@ Content types: ${contentTypes}
 
 Rules:
 - Generate EXACTLY the number of activities the user requests. One day + one week = ONE activity. Do NOT multiply.
-- "one video on Saturday week 1" → exactly 1 activity (week_number=1, day=Saturday).
+- "one video on Saturday week 1" â†’ exactly 1 activity (week_number=1, day=Saturday).
 - "alternate days" means every other day: Monday, Wednesday, Friday (or Tuesday, Thursday, Saturday).
-- "every week" → one entry per week (${durationWeeks} total).
-- Use the date reference above to resolve dates like "21st" → correct week_number + day.
+- "every week" â†’ one entry per week (${durationWeeks} total).
+- Use the date reference above to resolve dates like "21st" â†’ correct week_number + day.
 - Generate unique execution_ids like "act-abc123".
 
-Respond with ONLY valid JSON — no markdown:
+Respond with ONLY valid JSON â€” no markdown:
 { "add": [ { "execution_id": "act-abc123", "week_number": 1, "platform": "linkedin", "content_type": "post", "title": "...", "day": "Monday" } ], "reply": "Added X activities." }`;
 
     } else if (intent === 'remove') {
@@ -175,7 +176,7 @@ Extract the deletion filter from the user's instruction:
 - week_number: integer week number. null if not specified (means ALL weeks).
 - day: day of week (e.g. "Monday"). null if not specified (means ALL days).
 
-Respond with ONLY valid JSON — no markdown:
+Respond with ONLY valid JSON â€” no markdown:
 { "filter": { "platform": "facebook", "content_type": "video", "week_number": 1, "day": null }, "reply": "Removed Facebook videos from week 1." }
 
 Use null for any field the user did NOT explicitly mention. Do not guess.`;
@@ -187,13 +188,13 @@ Do NOT add or delete anything.
 Campaign info:
 ${campaignCtx}
 
-Respond with ONLY valid JSON — no markdown:
+Respond with ONLY valid JSON â€” no markdown:
 { "move": [ { "id": "execution_id_1", "day": "Friday", "week_number": 2 } ], "reply": "Moved X activities." }
 
 Only provide the fields that change (day and/or week_number). Keep all other fields intact.`;
 
     } else {
-      // mixed / complex — handles "remove X and arrange/add Y", compound edits
+      // mixed / complex â€” handles "remove X and arrange/add Y", compound edits
       systemPrompt = `You are a campaign calendar assistant. Apply the user's compound instruction.
 
 Campaign info:
@@ -216,7 +217,7 @@ For MOVES list each change:
 
 "arrange on alternate days" means: delete existing, re-add on Monday, Wednesday, Friday.
 
-Respond with ONLY valid JSON — no markdown:
+Respond with ONLY valid JSON â€” no markdown:
 {
   "delete_filter": { "platform": null, "content_type": null, "week_number": null, "day": null },
   "add": [],
@@ -249,11 +250,11 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
       return res.status(500).json({ error: 'AI returned malformed JSON' });
     }
 
-    // ── Build delete set ─────────────────────────────────────────────────────
+    // â”€â”€ Build delete set â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let deleteSet = new Set<string>();
 
     if (intent === 'remove') {
-      // Filter-based deletion — deterministic, no hallucinated IDs
+      // Filter-based deletion â€” deterministic, no hallucinated IDs
       const filter = (parsed.filter ?? {}) as RemoveFilter;
       deleteSet = applyRemoveFilter(actList, filter);
     } else if (intent === 'mixed') {
@@ -308,3 +309,8 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

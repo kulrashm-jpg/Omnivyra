@@ -1,10 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { listPlaybooks } from '../../../../backend/services/playbooks/playbookService';
 import { evaluatePlaybookForEvent } from '../../../../backend/services/playbooks/playbookEvaluator';
 import { COMMUNITY_AI_CAPABILITIES } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { enforceActionRole, requireTenantScope } from '../utils';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -44,3 +45,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ...evaluation,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

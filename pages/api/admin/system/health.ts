@@ -1,4 +1,4 @@
-/**
+﻿/**
  * GET /api/admin/system/health
  *
  * Super-admin-only operator dashboard. One round-trip snapshot of:
@@ -9,28 +9,28 @@
  *   - high_risk_orgs          (is_high_risk=true)
  *   - blocked_orgs            (is_blocked=true)
  *
- * All reads hit unified_transactions + alerts + org_controls — the Phase 5
+ * All reads hit unified_transactions + alerts + org_controls â€” the Phase 5
  * single source of truth. No legacy ledger queries here.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
 import {
   requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
+  requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { runWithServiceRole } from '../../../../backend/db/supabaseClient';
 import { logger } from '../../../../backend/services/logger';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:sys_health', 60, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
+  const ctx = await requireAdminScope(req, res, 'health:system');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/system/health', 'health:system');
   }
 
   const dayStart = new Date();
@@ -38,26 +38,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const startIso = dayStart.toISOString();
 
   try {
-    const [today, alertsRes, highRiskRes, blockedRes] = await Promise.all([
-      supabase
-        .from('unified_transactions')
-        .select('api_cost_usd, credits_charged, credits_value_usd, margin_usd')
-        .eq('final_attempt', true)
-        .gte('created_at', startIso)
-        .limit(50_000),
-      supabase
-        .from('alerts')
-        .select('id', { count: 'exact', head: true })
-        .eq('acknowledged', false),
-      supabase
-        .from('org_controls')
-        .select('organization_id', { count: 'exact', head: true })
-        .eq('is_high_risk', true),
-      supabase
-        .from('org_controls')
-        .select('organization_id', { count: 'exact', head: true })
-        .eq('is_blocked', true),
-    ]);
+    const [today, alertsRes, highRiskRes, blockedRes] = await runWithServiceRole(
+      'Read admin system health snapshot',
+      (supabase) => Promise.all([
+        supabase
+          .from('unified_transactions')
+          .select('api_cost_usd, credits_charged, credits_value_usd, margin_usd')
+          .eq('final_attempt', true)
+          .gte('created_at', startIso)
+          .limit(50_000),
+        supabase
+          .from('alerts')
+          .select('id', { count: 'exact', head: true })
+          .eq('acknowledged', false),
+        supabase
+          .from('org_controls')
+          .select('organization_id', { count: 'exact', head: true })
+          .eq('is_high_risk', true),
+        supabase
+          .from('org_controls')
+          .select('organization_id', { count: 'exact', head: true })
+          .eq('is_blocked', true),
+      ]),
+    );
 
     let totalCost    = 0;
     let totalCredits = 0;
@@ -91,3 +94,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -5,7 +5,7 @@
  * Run: npx ts-node -r dotenv/config backend/scripts/engagementCommandCenterDiagnostics.ts
  * Or:  node --loader ts-node/esm backend/scripts/engagementCommandCenterDiagnostics.ts
  *
- * Requires: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY in .env.local
+ * Requires: SUPABASE_URL, Supabase service credential in .env.local
  */
 
 import dotenv from 'dotenv';
@@ -14,7 +14,8 @@ import path from 'path';
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getThreads } from '../services/engagementThreadService';
 
 async function run(): Promise<void> {

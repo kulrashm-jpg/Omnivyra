@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { runWithServiceRole } from '../db/supabaseClient';
 
 /**
  * ai_suggestions tracking — records when the UI shows an AI suggestion to
@@ -37,20 +37,23 @@ export type AiSuggestionRecord = {
 export async function recordSuggestionShown(input: AiSuggestionInput): Promise<AiSuggestionRecord | null> {
   const correlationId = input.execution_correlation_id || randomUUID();
   try {
-    const { data, error } = await supabase
-      .from('ai_suggestions')
-      .insert({
-        organization_id: input.organization_id,
-        platform: input.platform,
-        action_type: input.action_type,
-        target_id: input.target_id ?? null,
-        content: input.content ?? null,
-        model: input.model ?? null,
-        metadata: input.metadata ?? null,
-        execution_correlation_id: correlationId,
-      })
-      .select('id, execution_correlation_id')
-      .single();
+    const { data, error } = await runWithServiceRole(
+      'Record AI suggestion shown after org access guard',
+      (client) => client
+        .from('ai_suggestions')
+        .insert({
+          organization_id: input.organization_id,
+          platform: input.platform,
+          action_type: input.action_type,
+          target_id: input.target_id ?? null,
+          content: input.content ?? null,
+          model: input.model ?? null,
+          metadata: input.metadata ?? null,
+          execution_correlation_id: correlationId,
+        })
+        .select('id, execution_correlation_id')
+        .single(),
+    );
     if (error) {
       console.warn('[aiSuggestionTracking] shown insert failed:', error.message);
       return null;
@@ -77,24 +80,28 @@ export async function recordSuggestionAccepted(input: {
   action_id?: string | null;
 }): Promise<boolean> {
   const now = new Date().toISOString();
+  if (!input.suggestion_id && !input.correlation_id) return false;
   try {
-    let q = supabase
-      .from('ai_suggestions')
-      .update({
-        accepted_at: now,
-        action_id: input.action_id ?? null,
-        updated_at: now,
-      })
-      .is('accepted_at', null)
-      .is('rejected_at', null);
-    if (input.suggestion_id) {
-      q = q.eq('id', input.suggestion_id);
-    } else if (input.correlation_id) {
-      q = q.eq('execution_correlation_id', input.correlation_id);
-    } else {
-      return false;
-    }
-    const { error } = await q;
+    const { error } = await runWithServiceRole(
+      'Mark AI suggestion accepted',
+      (client) => {
+        let q = client
+          .from('ai_suggestions')
+          .update({
+            accepted_at: now,
+            action_id: input.action_id ?? null,
+            updated_at: now,
+          })
+          .is('accepted_at', null)
+          .is('rejected_at', null);
+        if (input.suggestion_id) {
+          q = q.eq('id', input.suggestion_id);
+        } else if (input.correlation_id) {
+          q = q.eq('execution_correlation_id', input.correlation_id);
+        }
+        return q;
+      },
+    );
     if (error) {
       console.warn('[aiSuggestionTracking] accept update failed:', error.message);
       return false;
@@ -112,24 +119,28 @@ export async function recordSuggestionRejected(input: {
   reason?: string;
 }): Promise<boolean> {
   const now = new Date().toISOString();
+  if (!input.suggestion_id && !input.correlation_id) return false;
   try {
-    let q = supabase
-      .from('ai_suggestions')
-      .update({
-        rejected_at: now,
-        rejected_reason: input.reason ?? null,
-        updated_at: now,
-      })
-      .is('accepted_at', null)
-      .is('rejected_at', null);
-    if (input.suggestion_id) {
-      q = q.eq('id', input.suggestion_id);
-    } else if (input.correlation_id) {
-      q = q.eq('execution_correlation_id', input.correlation_id);
-    } else {
-      return false;
-    }
-    const { error } = await q;
+    const { error } = await runWithServiceRole(
+      'Mark AI suggestion rejected',
+      (client) => {
+        let q = client
+          .from('ai_suggestions')
+          .update({
+            rejected_at: now,
+            rejected_reason: input.reason ?? null,
+            updated_at: now,
+          })
+          .is('accepted_at', null)
+          .is('rejected_at', null);
+        if (input.suggestion_id) {
+          q = q.eq('id', input.suggestion_id);
+        } else if (input.correlation_id) {
+          q = q.eq('execution_correlation_id', input.correlation_id);
+        }
+        return q;
+      },
+    );
     if (error) {
       console.warn('[aiSuggestionTracking] reject update failed:', error.message);
       return false;

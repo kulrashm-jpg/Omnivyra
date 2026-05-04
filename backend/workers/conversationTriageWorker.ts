@@ -4,7 +4,8 @@
  * Runs every 3 minutes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { classifyThread } from '../services/conversationTriageService';
 import { recordMetric } from '../services/systemHealthMetricsService';
 import { executeWithRetry } from '../services/workerRetryService';

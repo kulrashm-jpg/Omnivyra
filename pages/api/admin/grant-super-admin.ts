@@ -1,21 +1,18 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { user, error: authError } = await getSupabaseUserFromRequest(req);
-  if (authError || !user) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const superAdmin = await isSuperAdmin(user.id);
-  if (!superAdmin) {
-    return res.status(403).json({ error: 'Forbidden' });
+  const ctx = await requireAdminScope(req, res, 'users:super-admin-grant');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/grant-super-admin', 'users:super-admin-grant');
   }
 
   try {
@@ -29,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { data, error } = await supabase.rpc('grant_super_admin', {
       p_target_user_id: userId,
-      p_granted_by: user.id,
+      p_granted_by: ctx.id,
       p_expires_at: null // No expiration
     });
 
@@ -51,3 +48,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

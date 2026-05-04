@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from '@/backend/services/campaignBlueprintService';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import {
@@ -19,7 +21,7 @@ function nonEmpty(v: unknown): string {
   return String(v ?? '').trim();
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -250,7 +252,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Build schedules array — deduplicate by executionId+platform
+    // Build schedules array â€” deduplicate by executionId+platform
     const seenScheduleKeys = new Set<string>();
     const schedules = allTopicEntries
       .filter((entry) => {
@@ -325,3 +327,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

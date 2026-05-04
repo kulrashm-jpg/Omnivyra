@@ -6,16 +6,21 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { requireSuperAdmin } from '../../../../backend/middleware/requireSuperAdmin';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import {
   getCategories,
   createCategory,
   updateCategory,
   setCategoryEnabled,
 } from '../../../../backend/services/intelligenceGovernanceService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireSuperAdmin(req, res))) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'intelligence:categories');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/intelligence/categories', 'intelligence:categories');
+  }
 
   try {
     switch (req.method) {
@@ -58,3 +63,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

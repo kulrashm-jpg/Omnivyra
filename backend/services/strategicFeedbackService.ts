@@ -6,7 +6,8 @@
  * Foundation for weekly strategy integration.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 
 const NEGATIVE_SIGNALS = ['problem', 'bad', 'issue', 'not working'];

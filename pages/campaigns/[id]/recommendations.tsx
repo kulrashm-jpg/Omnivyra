@@ -16,7 +16,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useCompanyContext } from '../../../components/CompanyContext';
-import { fetchWithAuth } from '../../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface RecWeek {
   id: string;
@@ -64,7 +64,7 @@ export default function CampaignRecommendationsPage() {
 
   useEffect(() => {
     if (!campaignId) return;
-    fetchWithAuth(`/api/campaigns/${campaignId}`)
+    apiFetch(`/api/campaigns/${campaignId}`)
       .then((r) => r.ok ? r.json() : null)
       .then((d) => setCampaign(d?.campaign || { id: campaignId, name: 'Campaign' }))
       .catch(() => setCampaign({ id: campaignId, name: 'Campaign' }));
@@ -84,7 +84,7 @@ export default function CampaignRecommendationsPage() {
     const params = new URLSearchParams();
     if (sid) params.set('sessionId', sid);
     params.set('status', 'pending');
-    const res = await fetchWithAuth(`/api/campaigns/${campaignId}/recommendations?${params}`);
+    const res = await apiFetch(`/api/campaigns/${campaignId}/recommendations?${params}`);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
       setError(data?.error || 'Failed to fetch recommendations');
@@ -105,7 +105,7 @@ export default function CampaignRecommendationsPage() {
     setIsGenerating(true);
     setError(null);
     try {
-      const res = await fetchWithAuth(`/api/campaigns/${campaignId}/recommendations`, {
+      const res = await apiFetch(`/api/campaigns/${campaignId}/recommendations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(selectedCompanyId ? { companyId: selectedCompanyId } : {}),
@@ -131,7 +131,7 @@ export default function CampaignRecommendationsPage() {
     setIsMerging(true);
     setError(null);
     try {
-      const res = await fetchWithAuth(`/api/campaigns/${campaignId}/merge-recommendations`, {
+      const res = await apiFetch(`/api/campaigns/${campaignId}/merge-recommendations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

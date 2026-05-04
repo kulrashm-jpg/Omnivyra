@@ -4,7 +4,8 @@
  * Runs daily. Idempotent.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const LOOKBACK_DAYS = 90;
 

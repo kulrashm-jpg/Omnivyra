@@ -6,7 +6,8 @@
  */
 
 import type { CompanyProfile } from '../services/companyProfileService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const PLATFORM_URL_KEYS: Record<string, keyof CompanyProfile> = {
   linkedin: 'linkedin_url',

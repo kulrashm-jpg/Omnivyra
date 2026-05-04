@@ -9,6 +9,7 @@ import {
   createMockRes,
   playbookStore,
   resetCommunityAiStores,
+  seedConnectedAccount,
   seedPlaybook,
   setRole,
   tokenStore,
@@ -34,11 +35,20 @@ jest.mock('../../db/supabaseClient', () => ({
 }));
 
 jest.mock('../../services/platformConnectors/linkedinConnector', () => ({
-  executeAction: jest.fn().mockResolvedValue({ ok: true, platform: 'linkedin' }),
+  executeAction: jest.fn().mockResolvedValue({ success: true, platform: 'linkedin' }),
 }));
 
 jest.mock('../../services/rpaWorker/rpaWorkerService', () => ({
   executeRpaTask: jest.fn().mockResolvedValue({ success: true, screenshot_path: 'rpa-shot.png' }),
+}));
+
+jest.mock('../../auth/tokenStore', () => ({
+  getToken: jest.fn(async (socialAccountId: string) => {
+    const { socialAccountStore } = jest.requireActual('./communityAiTestHarness');
+    const row = socialAccountStore.find((account: any) => account.id === socialAccountId);
+    return row?.access_token ? { access_token: row.access_token, refresh_token: row.refresh_token ?? null } : null;
+  }),
+  isTokenExpiringSoon: jest.fn(() => false),
 }));
 
 const { supabase } = jest.requireMock('../../db/supabaseClient');
@@ -95,6 +105,7 @@ describe('Community-AI Scheduling', () => {
       platform: 'linkedin',
       access_token: 'token-1',
     });
+    seedConnectedAccount({ platform: 'linkedin', accessToken: 'token-1' });
     const past = new Date(Date.now() - 1000).toISOString();
     actionStore.set('action-11', {
       id: 'action-11',

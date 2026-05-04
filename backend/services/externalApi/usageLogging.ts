@@ -1,4 +1,5 @@
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Module-level state ────────────────────────────────────────────────────────
 export let lastSignalConfidenceSummary: { average: number; min: number; max: number } | null = null;
@@ -104,7 +105,7 @@ export async function logExternalApiUsage(input: {
       if (isSchemaError && !(globalThis as any).__external_api_usage_schema_hint_shown) {
         (globalThis as any).__external_api_usage_schema_hint_shown = true;
         console.warn(
-          'external_api_usage table not found. Run database/external-api-usage.sql to create it. API usage tracking will be skipped.'
+          'Schema mismatch: external_api_usage table missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql. API usage tracking will be skipped.'
         );
       } else if (!isSchemaError) {
         const err = upsertError as { code?: string; message?: string };
@@ -178,7 +179,7 @@ export async function addSignalsGenerated(input: {
     if (isSelectSchemaError && !(globalThis as any).__external_api_usage_signals_hint_shown) {
       (globalThis as any).__external_api_usage_signals_hint_shown = true;
       console.warn(
-        'external_api_usage.signals_generated column missing. Run database/external_api_usage_signals_generated.sql. Signals tracking will be skipped.'
+        'Schema mismatch: external_api_usage.signals_generated column missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql. Signals tracking will be skipped.'
       );
       return;
     }
@@ -208,10 +209,9 @@ export async function addSignalsGenerated(input: {
         (msg.includes('column') && msg.includes('does not exist'));
       if (isSchemaError && !(globalThis as any).__external_api_usage_schema_hint_shown) {
         (globalThis as any).__external_api_usage_schema_hint_shown = true;
-        const hint = msg.includes('signals_generated')
-          ? 'Run database/external_api_usage_signals_generated.sql to add signals_generated column.'
-          : 'Run database/external-api-usage.sql to create it. API usage tracking will be skipped.';
-        console.warn(`external_api_usage schema issue. ${hint}`);
+        console.warn(
+          'Schema mismatch: external_api_usage table or signals_generated column missing. Apply migration 20260504010001_fix_external_api_telemetry_tables.sql.'
+        );
       } else if (!isSchemaError) {
         const err = upsertError as { code?: string; message?: string };
         console.warn('Failed to update signals_generated', {

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/engagement/messages
@@ -8,7 +9,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { isAuthorSelf, stripSenderColonPrefix } from '../../../lib/engagement/messageRoles';
 import {
   getEffectiveMessageTimestamp,
@@ -56,7 +58,7 @@ function actionCoversMessage(input: {
     && observedMs <= actionMs + maxScrapeDelayMs;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -71,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const startDate = (req.query.start_date ?? req.query.startDate) as string | undefined;
     const endDate = (req.query.end_date ?? req.query.endDate) as string | undefined;
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? 50), 10) || 50));
-    // Sibling thread ids — the inbox API collapses legacy-split DM threads
+    // Sibling thread ids â€” the inbox API collapses legacy-split DM threads
     // by counterparty author and surfaces the other thread ids through
     // sibling_thread_ids. The conversation pane passes them back here so
     // the merged history loads as a single chain. Comma-separated string
@@ -249,7 +251,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // LinkedIn's messaging list prepends "You:" or "Sender:" to the
       // preview. lib/engagement/messageRoles owns both the routing decision
       // (who sent it) and the content cleanup, so this layer just consumes
-      // the helpers — no duplicate prefix-matching regex here.
+      // the helpers â€” no duplicate prefix-matching regex here.
       const rawContent = typeof r.content === 'string' ? r.content : '';
       const messageTimeRow = {
         id: typeof r.id === 'string' ? r.id : null,
@@ -318,11 +320,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // so the conversation pane can render them inline alongside the real
     // platform messages. The user sees:
     //   - the chain of incoming messages from the other party (real rows)
-    //   - their own queued reply with a "Queued · not yet delivered"
+    //   - their own queued reply with a "Queued Â· not yet delivered"
     //     marker and a Cancel button
     // Once the extension actually delivers the action, the row is marked
     // executed and a real outbound engagement_messages row gets ingested
-    // on the next sync — at which point this virtual entry is replaced
+    // on the next sync â€” at which point this virtual entry is replaced
     // by the real one.
     const threadIdsForPending = threadId
       ? [threadId, ...siblingThreadIds]
@@ -387,7 +389,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       // The action's target_id is now the recipient identity (display name
       // or profile URL) for new actions, but legacy rows still use the
-      // platform_thread_id. Match by either — fetch all pending DMs for
+      // platform_thread_id. Match by either â€” fetch all pending DMs for
       // the org's matching set, then filter post-hoc.
       const platformThreadIds = Array.from(platformThreadIdToThreadId.keys());
       if (platformThreadIds.length > 0 || targetToThreadIds.size > 0) {
@@ -399,7 +401,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .eq('status', 'pending');
         // Defensive: only surface actions whose target_id maps to one of
         // the requested threads. We compare against platform_thread_id
-        // (legacy shape) only — the new recipient-identity target ids
+        // (legacy shape) only â€” the new recipient-identity target ids
         // can't be matched here without an authors join. Acceptable
         // tradeoff: legacy rows get the queued UI; brand-new ones light
         // up after we add the participant lookup below.
@@ -480,3 +482,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

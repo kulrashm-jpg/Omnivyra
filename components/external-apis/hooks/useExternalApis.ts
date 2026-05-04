@@ -116,7 +116,7 @@ export function useExternalApis(
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const fetchWithAuth = useCallback(async (input: RequestInfo, init?: RequestInit) => {
+  const apiFetch = useCallback(async (input: RequestInfo, init?: RequestInit) => {
     const token = await getAuthToken();
     return fetch(input, {
       ...init,
@@ -140,7 +140,7 @@ export function useExternalApis(
       const url = companyContextId
         ? `/api/external-apis?companyId=${companyContextId}${skipCache ? '&skipCache=1' : ''}`
         : '/api/external-apis?scope=platform';
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         if (response.status === 401) { setPlatformAccessDenied(true); return; }
@@ -156,7 +156,7 @@ export function useExternalApis(
     } finally {
       setIsLoading(false);
     }
-  }, [companyContextId, isPlatformCatalogMode, fetchWithAuth]);
+  }, [companyContextId, isPlatformCatalogMode, apiFetch]);
 
   const loadPresets = useCallback(async () => {
     try {
@@ -165,7 +165,7 @@ export function useExternalApis(
       const url = companyContextId
         ? `/api/external-apis/presets?companyId=${companyContextId}`
         : '/api/external-apis/presets?scope=platform';
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         if (response.status === 401) { setPlatformAccessDenied(true); return null; }
@@ -183,7 +183,7 @@ export function useExternalApis(
     } finally {
       setIsLoadingPresets(false);
     }
-  }, [companyContextId, isPlatformCatalogMode, fetchWithAuth]);
+  }, [companyContextId, isPlatformCatalogMode, apiFetch]);
 
   const loadRequests = useCallback(async () => {
     try {
@@ -192,7 +192,7 @@ export function useExternalApis(
       const url = companyContextId
         ? `/api/external-apis/requests?companyId=${companyContextId}`
         : '/api/external-apis/requests?scope=platform';
-      const response = await fetchWithAuth(url);
+      const response = await apiFetch(url);
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         if (response.status === 401) { setPlatformAccessDenied(true); return; }
@@ -208,12 +208,12 @@ export function useExternalApis(
     } finally {
       setIsLoadingRequests(false);
     }
-  }, [companyContextId, isPlatformCatalogMode, fetchWithAuth]);
+  }, [companyContextId, isPlatformCatalogMode, apiFetch]);
 
   return {
     apis, setApis, runtime, isLoading, presets, isLoadingPresets, hiddenPresetIds,
     requests, isLoadingRequests, platformAccessDenied, setPlatformAccessDenied,
     errorMessage, setErrorMessage, successMessage, setSuccessMessage,
-    fetchWithAuth, resetMessages, loadApis, loadPresets, loadRequests,
+    apiFetch, resetMessages, loadApis, loadPresets, loadRequests,
   };
 }

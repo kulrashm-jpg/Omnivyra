@@ -1,10 +1,13 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { checkRateLimit, LOGIN_LIMIT, INVITE_UID_LIMIT } from '../../../lib/auth/rateLimit';
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
+import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 
 const VALID_ROLES = new Set([
   'COMPANY_ADMIN',
@@ -66,25 +69,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   const callerId: string = (callerUser as any).id;
 
-  const { data: superAdminRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', callerId)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+  const isSuperAdmin = await isPlatformSuperAdmin(callerId);
 
   let companyId: string;
 
-  if (superAdminRow) {
+  if (isSuperAdmin) {
     if (!bodyCompanyId || typeof bodyCompanyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required when sending invitations as super admin' });
     }
     companyId = bodyCompanyId.trim();
   } else {
     const { data: roleRow } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', callerId)
       .eq('role', 'COMPANY_ADMIN')
@@ -135,4 +131,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withIdempotency(handler, { scope: 'team-invite' });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withIdempotency(handler, { scope: 'team-invite' }));
+

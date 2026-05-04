@@ -19,7 +19,8 @@
  * which is queryable via the JSONB column on engagement_messages.
  */
 
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { ValidatedExtensionEvent, EventType } from '../types/extension.types';
 import {
   resolveSource,

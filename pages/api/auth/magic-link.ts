@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 
 /**
  * POST /api/auth/magic-link
@@ -8,7 +9,7 @@
  *
  * Magic link is login-only; signup requires a password. We keep this
  * pre-check so we can return a real "no account" error code (Supabase,
- * by design, does not distinguish) without leaking enumeration — callers
+ * by design, does not distinguish) without leaking enumeration â€” callers
  * only see it after passing our own rate limiter.
  *
  * Body: { email: string }
@@ -16,7 +17,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
@@ -66,3 +68,4 @@ export default async function handler(
 
   return res.status(200).json({ proceed: true });
 }
+

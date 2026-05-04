@@ -3,7 +3,8 @@
  * Non-super users see operational metrics only (cost masked at API layer).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export async function hasUsageAccess(
   userId: string,

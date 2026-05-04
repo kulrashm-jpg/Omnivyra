@@ -9,7 +9,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sparkles, ChevronDown, ChevronUp, Check, Zap, Target, Type, Search, MessageSquare, Loader2 } from 'lucide-react';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type Suggestion = {
   id: string;
@@ -82,7 +82,7 @@ export default function AISuggestionPanel({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchWithAuth('/api/ai/content-suggestions', {
+      const res = await apiFetch('/api/ai/content-suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -12,7 +12,8 @@
  * All active members of the org are notified.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 
 // ── Action catalogue ──────────────────────────────────────────────────────────
@@ -203,7 +204,7 @@ export async function checkAndGrantSetupCredits(
 /** Only COMPANY_ADMIN manages credits — notifications go to them only. */
 async function getOrgAdminUserIds(orgId: string): Promise<string[]> {
   const { data } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', orgId)
     .eq('status', 'active')

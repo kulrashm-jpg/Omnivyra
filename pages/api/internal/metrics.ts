@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Internal Metrics Endpoint — RISK 5: Observability
+ * Internal Metrics Endpoint â€” RISK 5: Observability
  *
  * Exposes key operational metrics for monitoring dashboards and alerts.
  *
@@ -24,7 +25,7 @@ import { getMetricsSnapshot, resetMetrics } from '../../../backend/services/metr
 
 const METRICS_SECRET = process.env.INTERNAL_METRICS_SECRET;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -78,3 +79,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: (err as Error).message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

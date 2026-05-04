@@ -11,7 +11,8 @@
  * Used by the next planning cycle to shape platform allocation and budget.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { rankPlatformsByPerformance } from './platformPerformanceRanker';
 import { getDecisionConfig } from './configService';

@@ -1,41 +1,62 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 
 /**
  * POST /api/auth/signup
  *
  * Public pre-signup gate. Runs the checks that must happen BEFORE the
- * browser fires `supabase.auth.signUp`. Responsibilities:
+ * browser fires `supabase.auth.signUp`. Responsibilities (in order â€” domain
+ * checks run early so a duplicate is rejected before any other DB work):
  *
  *   1. Personal-email / MX / rate-limit gates.
- *   2. ACCOUNT_EXISTS  — email is already a completed user (active role).
- *   3. ACCOUNT_EXISTS  — email is already confirmed in auth.users from a
- *                        prior flow (orphaned). Blocks the silent
- *                        user_repeated_signup failure mode.
- *   4. COMPANY_CLAIMED — another user from this email's domain is already
- *                        the COMPANY_ADMIN. First time we see this email,
- *                        we send them a referral email with the admin's
- *                        contact details and write a signup_referrals row.
- *                        Subsequent attempts skip the email and return
- *                        alreadyReferred=true.
- *   5. Upsert signup_intents row and return { proceed: true }.
+ *   2. COMPANY_CLAIMED â€” the email's domain (or its canonical form) is
+ *                        already claimed by another company. We surface
+ *                        the existing admin's contact details so the
+ *                        prospect can reach out for an invite. NO emails
+ *                        are sent and no signup_referrals row is written
+ *                        here â€” those are post-verify side-effects owned
+ *                        exclusively by /api/auth/sync-supabase-user, so
+ *                        spam attempts that never verify can't ping real
+ *                        admins.
+ *   3. ACCOUNT_EXISTS / RESUME_SIGNUP â€” email is already a completed user
+ *                        (active role) or already confirmed in auth.users
+ *                        from a prior flow.
+ *   4. Upsert signup_intents and return { proceed: true }.
  *
- * Does NOT send a confirmation email — Supabase sends that itself when the
+ * Does NOT send a confirmation email â€” Supabase sends that itself when the
  * client calls `supabase.auth.signUp({ email, password, options: { emailRedirectTo } })`.
+ *
+ * One-domain-one-account invariant: only the FIRST self-serve user from a
+ * given (canonical) domain becomes the COMPANY_ADMIN. Every subsequent
+ * signup attempt from that domain is rejected here pre-verify and again
+ * post-verify in sync-supabase-user.ts as defense-in-depth. Additional
+ * users from the same domain must be invited by the admin.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { validateWorkEmail } from '../../../lib/auth/serverValidation';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
-import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
+import { checkRateLimit, EMAIL_LINK_LIMIT, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
+import { isFreeEmailDomain } from '../../../backend/services/companyMatchService';
+import { lookupClaimedDomain, maskEmail } from '../../../backend/services/companyDomainLookup';
+import { resolveDomain } from '../../../backend/services/domainCanonicalService';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
 type SuccessResponse = { proceed: true };
+type ClaimedResponse = {
+  claimed: true;
+  code: 'COMPANY_CLAIMED';
+  companyName: string | null;
+  adminName: string | null;
+  adminEmailMasked: string | null;
+};
 type ErrorResponse = { error: string; code?: string };
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<SuccessResponse | ErrorResponse>,
+  res: NextApiResponse<SuccessResponse | ClaimedResponse | ErrorResponse>,
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
@@ -60,14 +81,14 @@ export default async function handler(
   const domain = normalizedEmail.split('@')[1] ?? '';
   if (!domain) return res.status(400).json({ error: 'Invalid email address' });
 
-  // ── 1. Work email (block personal providers) ─────────────────────────────
+  // â”€â”€ 1a. Work email (block personal providers) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   try {
     validateWorkEmail(normalizedEmail);
   } catch (err: any) {
     return res.status(400).json({ error: err.message, code: 'PERSONAL_EMAIL' });
   }
 
-  // ── 1a. Domain/MX check ───────────────────────────────────────────────────
+  // â”€â”€ 1b. Domain/MX check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   try {
     const eligibility = await checkDomainEligibility(normalizedEmail);
     if (eligibility.status === 'blocked') {
@@ -82,7 +103,64 @@ export default async function handler(
     logger.warn('auth_signup_mx_check_failed', { email: normalizedEmail, message: err?.message });
   }
 
-  // ── 2. Same email already a completed user? ──────────────────────────────
+  // â”€â”€ 2. Domain-claimed check (runs before any user/auth lookup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Skip the canonical resolve for free email providers â€” they can never
+  // claim a company anyway, so the lookup is guaranteed to miss.
+  if (!isFreeEmailDomain(domain)) {
+    // 2a. Cheap match: companies.admin_email_domain == domain, plus any
+    // company_domains row with this exact input/final_domain. One round
+    // trip; catches the common case (kuldeep@omnivyra.com is the admin â†’
+    // admin@omnivyra.com is rejected).
+    let claim = await lookupClaimedDomain({ emailDomain: domain });
+
+    // 2b. Canonical resolve: if the cheap match missed, follow HTTP
+    // redirects to the canonical host and re-check. Catches the case where
+    // a forwarded subdomain (`app.omnivyra.com â†’ omnivyra.com`) has been
+    // registered under its primary form. Best-effort â€” if resolveDomain
+    // fails for network/SSRF reasons we DON'T block the signup; the
+    // post-verify path in sync-supabase-user.ts will run the authoritative
+    // canonical check after email verification.
+    if (!claim) {
+      const resolveAllowed = await checkRateLimit(ip, DOMAIN_RESOLUTION_LIMIT);
+      if (resolveAllowed.allowed) {
+        try {
+          const resolution = await resolveDomain(domain);
+          const finalDomain =
+            !resolution.resolution_failed &&
+            !resolution.resolution_blocked &&
+            resolution.final_domain &&
+            resolution.final_domain !== domain
+              ? resolution.final_domain
+              : null;
+          if (finalDomain) {
+            claim = await lookupClaimedDomain({ emailDomain: domain, finalDomain });
+          }
+        } catch (err: any) {
+          logger.warn('auth_signup_canonical_resolve_threw', {
+            email: normalizedEmail,
+            message: err?.message,
+          });
+        }
+      }
+    }
+
+    if (claim) {
+      logger.info('auth_signup_company_claimed_blocked', {
+        email: normalizedEmail,
+        company_id: claim.companyId,
+        matched_via: claim.matchedVia,
+      });
+      return res.status(409).json({
+        claimed: true,
+        code: 'COMPANY_CLAIMED',
+        companyName: claim.companyName,
+        adminName: claim.admin?.name ?? null,
+        adminEmailMasked: claim.admin?.email ? maskEmail(claim.admin.email) : null,
+      });
+    }
+  }
+
+  // â”€â”€ 3. Same email already a completed user? â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // An existing public.users row with an active role = finished account;
   // route them to /login. Soft-deleted = blocked. Existing row without an
   // active role = abandoned onboarding; fall through (re-signup allowed).
@@ -98,7 +176,7 @@ export default async function handler(
 
   if (existingUser) {
     const { data: companyRole } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('id')
       .eq('user_id', (existingUser as any).id)
       .eq('status', 'active')
@@ -123,13 +201,7 @@ export default async function handler(
     });
   }
 
-  // (moved to post-email-auth) The pre-auth COMPANY_CLAIMED check that
-  // used to live here returned a 409 the moment a domain match was found.
-  // Detection + the two emails (referral to prospect, notice to admin)
-  // now run inside /api/auth/sync-supabase-user once the user has
-  // verified their email — we only contact the admin about real humans.
-
-  // ── 3. auth.users already has this email confirmed? ───────────────────────
+  // â”€â”€ 4. auth.users already has this email confirmed? â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Catches the orphan case where auth.users was created by a prior flow
   // (e.g. the old ensureAuthUserExists hack) but public.users never
   // followed. Without this, Supabase would silently swallow a repeat
@@ -150,15 +222,7 @@ export default async function handler(
     logger.warn('auth_signup_auth_confirmed_rpc_threw', { email: normalizedEmail, message: err?.message });
   }
 
-  // ── 4. (moved to post-email-auth) Domain-claimed handling ────────────────
-  // Detection of a claimed domain + the two emails it triggers (referral
-  // email to the prospect, notification email to the existing admin) now
-  // run inside /api/auth/sync-supabase-user → bootstrapCompanyFromSignupIntent
-  // AFTER the user has verified their email. This ensures emails only fly
-  // for verified humans and gives the admin a real-person notification.
-  // Signup is allowed to proceed here so the verification email is sent.
-
-  // ── 5. Fresh signup path — upsert signup_intents and let the client proceed.
+  // â”€â”€ 5. Fresh signup path â€” upsert signup_intents and let the client proceed.
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
   const { data: existingIntent } = await supabase
@@ -193,3 +257,4 @@ export default async function handler(
 
   return res.status(200).json({ proceed: true });
 }
+

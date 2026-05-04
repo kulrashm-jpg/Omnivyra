@@ -11,14 +11,16 @@
  * Auth: requireSuperAdmin (JWT-based, profiles.is_super_admin)
  *
  * Query params:
- *   ?year=2026&month=3        — specific month (default: current)
- *   ?org_id=<uuid>            — single org (default: all)
- *   ?limit=50                 — max orgs returned (default: 50)
+ *   ?year=2026&month=3        â€” specific month (default: current)
+ *   ?org_id=<uuid>            â€” single org (default: all)
+ *   ?limit=50                 â€” max orgs returned (default: 50)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { requireSuperAdmin } from '../../../backend/middleware/authMiddleware';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 export type RevenueMetricRow = {
   organization_id: string;
@@ -47,12 +49,15 @@ export type RevenueAnalyticsResponse = {
   trend: Array<{ year: number; month: number; total_consumed: number; total_revenue: number }>;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
-  // ── Auth: super-admin only ────────────────────────────────────────────────
-  const auth = await requireSuperAdmin(req, res);
-  if (!auth) return;
+  // â”€â”€ Auth: super-admin only â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const ctx = await requireAdminScope(req, res, 'analytics:revenue');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/revenue-analytics', 'analytics:revenue');
+  }
 
   const now   = new Date();
   const year  = parseInt(req.query.year  as string || String(now.getFullYear()), 10);
@@ -61,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const orgId = req.query.org_id as string | undefined;
 
   try {
-    // ── Current period rows ───────────────────────────────────────────────
+    // â”€â”€ Current period rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let query = supabase
       .from('revenue_metrics')
       .select('*')
@@ -77,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const metrics = (rows ?? []) as RevenueMetricRow[];
 
-    // ── Aggregates ────────────────────────────────────────────────────────
+    // â”€â”€ Aggregates â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const totals = metrics.reduce(
       (acc, r) => ({
         consumed:  acc.consumed  + (r.credits_consumed           ?? 0),
@@ -89,7 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { consumed: 0, purchased: 0, revenue: 0, llm_cost: 0, margin: 0 },
     );
 
-    // ── 3-month trend ─────────────────────────────────────────────────────
+    // â”€â”€ 3-month trend â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const trendMonths: Array<{ year: number; month: number }> = [];
     for (let i = 2; i >= 0; i--) {
       const d = new Date(year, month - 1 - i, 1);
@@ -134,3 +139,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

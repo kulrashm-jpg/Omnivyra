@@ -24,7 +24,7 @@ type TrendState = ReturnType<typeof useTrendCampaignsState>;
 
 export default function TrendCampaignsExecutionForm({ d }: { d: TrendState }) {
   const {
-    companyId, regions, fetchWithAuth, viewMode, initialBlogId, intelligentMixContext,
+    companyId, regions, apiFetch, viewMode, initialBlogId, intelligentMixContext,
     hasRun, isSubmitting, isExecutionFormComplete, handleRunClick,
     contextMode, setContextMode, focusedModules, setFocusedModules,
     additionalDirection, setAdditionalDirection, clusterInputs, setClusterInputs,
@@ -89,7 +89,7 @@ export default function TrendCampaignsExecutionForm({ d }: { d: TrendState }) {
         <div className="rounded-lg border border-gray-200 p-4 space-y-4">
           <EngineContextPanel
             companyId={companyId}
-            fetchWithAuth={fetchWithAuth}
+            apiFetch={apiFetch}
             contextMode={contextMode}
             focusedModules={focusedModules}
             additionalDirection={additionalDirection}

@@ -11,7 +11,8 @@ jest.mock('../../services/CampaignPrePlanningService', () => ({
   runPrePlanning: jest.fn(),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { runPrePlanning } from '../../services/CampaignPrePlanningService';
 import {
   replayGovernanceEvent,

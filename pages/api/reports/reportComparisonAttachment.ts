@@ -1,3 +1,5 @@
+﻿// AUTH EXEMPT: non-route API helper module without default handler
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { buildProgressComparison } from '../../../backend/services/reportComparisonHelpers';
 import {
   buildCompetitorMovementComparison,
@@ -107,3 +109,4 @@ export function attachProgressComparison(params: {
     }),
   };
 }
+

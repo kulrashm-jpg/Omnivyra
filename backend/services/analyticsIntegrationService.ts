@@ -1,6 +1,7 @@
 import { decodeOAuthState, encodeOAuthState } from '../auth/oauthState';
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getAnalyticsProviderConfig } from './analyticsProviderConfigService';
 
 export type AnalyticsProvider = 'GA4';

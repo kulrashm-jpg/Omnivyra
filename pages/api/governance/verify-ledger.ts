@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/governance/verify-ledger
- * Stage 31 — Verify company governance ledger. SUPER_ADMIN only.
+ * Stage 31 â€” Verify company governance ledger. SUPER_ADMIN only.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -26,4 +27,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

@@ -4,7 +4,8 @@
  */
 
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
 import { getProfile } from './companyProfileService';
 import { runCompletionWithOperation } from './aiGateway';

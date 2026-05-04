@@ -22,7 +22,7 @@ export default function DashboardPage() {
     router, selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, hasPermission, userRole, user,
     canCreateCampaign, canScheduleContent, activeTab, setActiveTab,
     campaigns, stats, isLoadingData, error, setError, campaignProgress, stageFilter, setStageFilter,
-    stageAvailability, CAMPAIGN_STAGES, filteredCampaigns, fetchWithAuth,
+    stageAvailability, CAMPAIGN_STAGES, filteredCampaigns, apiFetch,
     calendarCurrentDate, setCalendarCurrentDate, calendarSelectedDate, setCalendarSelectedDate,
     calendarView, setCalendarView, calendarActivityMode, setCalendarActivityMode,
     calendarCampaignFilter, setCalendarCampaignFilter, calendarStatusFilter, setCalendarStatusFilter,

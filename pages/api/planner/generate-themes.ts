@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/planner/generate-themes
@@ -9,7 +10,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateRichThemesForCampaignWeeks } from '../../../backend/services/strategicThemeEngine';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { buildPlannerStrategicCard, type PlannerStrategicSourceMode } from '../../../lib/plannerStrategicCard';
 import type { PlannerExecutionHandoff } from '../../../lib/plannerExecutionHandoff';
 import type { IdeaSpine, StrategyContext } from '../../../components/planner/plannerSessionStore';
@@ -31,7 +33,7 @@ function toList(value: string | string[] | null | undefined): string[] {
     .filter(Boolean);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -145,7 +147,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .filter(Boolean)
       .join(' | ');
 
-    // Return alternatives (1 or 2 sets) — each set is independently generated
+    // Return alternatives (1 or 2 sets) â€” each set is independently generated
     const numAlts = alternatives === 2 ? 2 : 1;
     if (numAlts === 2) {
       const [setA, setB] = await Promise.all([
@@ -183,3 +185,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

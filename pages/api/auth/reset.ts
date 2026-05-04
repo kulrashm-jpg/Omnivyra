@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 /**
  * POST /api/auth/reset
  *
@@ -33,3 +34,4 @@ export default async function handler(
 
   return res.status(200).json({ ok: true });
 }
+

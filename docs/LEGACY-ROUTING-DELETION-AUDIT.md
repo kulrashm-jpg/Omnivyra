@@ -1,4 +1,4 @@
-# Legacy Routing Deletion Audit
+﻿# Legacy Routing Deletion Audit
 
 Date: 2026-04-28
 
@@ -16,7 +16,6 @@ Buckets:
 The app still has real dependencies on `/dashboard`, `/welcome`, `/home`, and `/auth/callback`.
 
 The safest immediate delete candidate is:
-- `pages/api/auth/sync-firebase-user.ts`
 
 The best next cleanup targets are redirect shims and alias pages:
 - `pages/content-calendar.tsx`
@@ -27,7 +26,6 @@ Those should not be deleted first. Their callers should be migrated first, then 
 
 ## Delete Now
 
-### 1. `pages/api/auth/sync-firebase-user.ts`
 
 Status:
 - `Delete now`, pending one final sanity check for external callers.
@@ -37,13 +35,11 @@ Why:
 - It no longer participates in the Supabase auth flow.
 
 Evidence:
-- [pages/api/auth/sync-firebase-user.ts](/c:/virality/pages/api/auth/sync-firebase-user.ts:1)
 - No active internal route flow uses it.
 - Remaining references are only comments, such as:
   - [pages/api/auth/check-user.ts](/c:/virality/pages/api/auth/check-user.ts:46)
 
 Recommended action:
-1. Remove internal comment references to `sync-firebase-user`.
 2. Delete the endpoint.
 3. Monitor for any external client breakage if older clients still call it.
 
@@ -257,7 +253,6 @@ Confidence:
 1. Delete `pages/signup.tsx`
 2. Delete `pages/content-calendar.tsx`
 3. Delete `pages/calendar-view.tsx`
-4. Delete `pages/api/auth/sync-firebase-user.ts`
 
 ## Not Safe To Delete In This Audit
 
@@ -273,7 +268,6 @@ These may look old but are still active:
 
 ## Recommendation
 
-Do not delete routes yet except for the deprecated Firebase stub if we want the smallest possible first cut.
 
 The highest-value next implementation is:
 1. migrate callers off `/signup`

@@ -4,7 +4,8 @@
  * into response_strategy_intelligence. Runs every 15 minutes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { classifyStrategyType } from '../services/replyIntelligenceService';
 import { recordMetric } from '../services/systemHealthMetricsService';
 import { executeWithRetry } from '../services/workerRetryService';

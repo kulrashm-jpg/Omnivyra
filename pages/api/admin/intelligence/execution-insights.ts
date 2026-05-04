@@ -13,11 +13,10 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 interface LogRow {
   job_type:    string;
@@ -29,11 +28,14 @@ interface LogRow {
   triggered_by: string;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+
+  const ctx = await requireAdminScope(req, res, 'intelligence:execution-insights');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/intelligence/execution-insights', 'intelligence:execution-insights');
+  }
 
   const days      = Math.min(30, Math.max(1, Number(req.query.days) || 7));
   const companyId = typeof req.query.company_id === 'string' ? req.query.company_id.trim() : null;
@@ -55,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const rows = (data ?? []) as LogRow[];
 
-    // ── Summary ───────────────────────────────────────────────────────────────
+    // â”€â”€ Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const completed = rows.filter(r => r.status === 'completed');
     const failed    = rows.filter(r => r.status === 'failed');
     const skipped   = rows.filter(r => r.status === 'skipped');
@@ -65,14 +67,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? Math.round(durations.reduce((s, d) => s + d, 0) / durations.length)
       : null;
 
-    // ── Skip reason breakdown ─────────────────────────────────────────────────
+    // â”€â”€ Skip reason breakdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const skipReasons: Record<string, number> = {};
     for (const r of skipped) {
       const key = r.reason ?? 'unknown';
       skipReasons[key] = (skipReasons[key] ?? 0) + 1;
     }
 
-    // ── Per-day breakdown ─────────────────────────────────────────────────────
+    // â”€â”€ Per-day breakdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const dayMap = new Map<string, { completed: number; failed: number; skipped: number; runs: number }>();
     for (let i = 0; i < days; i++) {
       const d = new Date(Date.now() - i * 86_400_000).toISOString().slice(0, 10);
@@ -91,7 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .map(([date, counts]) => ({ date, ...counts }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
-    // ── Per-job-type breakdown ─────────────────────────────────────────────────
+    // â”€â”€ Per-job-type breakdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const jtMap = new Map<string, { completed: number; failed: number; skipped: number; durations: number[] }>();
     for (const r of rows) {
       if (!jtMap.has(r.job_type)) {
@@ -113,7 +115,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         : null,
     })).sort((a, b) => b.total - a.total);
 
-    // ── Slowest individual runs ───────────────────────────────────────────────
+    // â”€â”€ Slowest individual runs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const slowestRuns = completed
       .filter(r => r.duration_ms != null)
       .sort((a, b) => (b.duration_ms ?? 0) - (a.duration_ms ?? 0))
@@ -144,3 +146,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load insights' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

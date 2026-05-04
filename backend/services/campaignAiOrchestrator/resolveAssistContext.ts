@@ -1,4 +1,5 @@
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export async function resolveAssistContext(snapshot: Record<string, unknown> | null | undefined) {
   let assistBlogContext = (snapshot?.blog_context ?? null) as {

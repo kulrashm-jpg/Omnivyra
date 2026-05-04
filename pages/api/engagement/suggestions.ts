@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/engagement/suggestions
  * Returns AI-suggested replies for an engagement message.
  * Query: message_id, organization_id
- * Returns minimum 3 suggestions with id, text, explanation_tag.
+ * Returns exactly 3 intent suggestions with id, text, explanation_tag.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -11,15 +12,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getControls } from '../../../backend/services/engagementGovernanceService';
 import { generateReplySuggestions } from '../../../backend/services/engagementAiAssistantService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
-const FALLBACK_SUGGESTIONS = [
-  { text: 'Thanks for sharing this. Send me the key details and I will take a proper look.', tone: 'accept' },
-  { text: 'Can you share the specific context or next step you have in mind so I respond correctly?', tone: 'clarify' },
-  { text: 'I may not be able to act on this immediately, but send the relevant details and I will review them.', tone: 'defer' },
-];
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -69,14 +65,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const replies = (result.suggested_replies ?? []).filter((reply) =>
       (reply.text ?? '').toString().trim().length > 0
     );
-    const padded: Array<{ text: string; tone?: string }> = [...replies];
-    while (padded.length < 3) {
-      padded.push(FALLBACK_SUGGESTIONS[padded.length % FALLBACK_SUGGESTIONS.length]);
+
+    if (replies.length !== 3) {
+      console.error('[engagement/suggestions] Expected exactly 3 intent suggestions but received', replies.length);
+      return res.status(500).json({ error: 'AI suggestion flow returned an invalid suggestion set' });
     }
 
-    const suggestions = padded.slice(0, 3).map((r, i) => ({
+    const suggestions = replies.map((r) => ({
       id: `sug-${crypto.randomUUID()}`,
-      text: (r.text ?? '').toString().trim() || FALLBACK_SUGGESTIONS[i % FALLBACK_SUGGESTIONS.length].text,
+      text: (r.text ?? '').toString().trim(),
       explanation_tag: r.tone ? r.tone.replace(/_/g, ' ') : undefined,
     }));
 
@@ -87,3 +84,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: msg });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -5,7 +5,8 @@
  * Considers: weekly_content_plans, weekly_content_refinements, campaign_week_plan blueprint, daily_content_plans.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
 
 export type ReadinessState = 'not_ready' | 'partial' | 'ready';

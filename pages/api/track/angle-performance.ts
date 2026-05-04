@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/track/angle-performance?account_id=xxx&days=90
@@ -5,8 +6,8 @@
  * Angle Performance Memory with Decay Factor.
  *
  * Every analytics event is weighted by recency:
- *   weight = e^(−k × days_ago)   where k = ln(2)/HALF_LIFE_DAYS
- *   half-life = 30 days → events from 30d ago count 50%, 60d ago count 25%
+ *   weight = e^(âˆ’k Ã— days_ago)   where k = ln(2)/HALF_LIFE_DAYS
+ *   half-life = 30 days â†’ events from 30d ago count 50%, 60d ago count 25%
  *
  * This keeps recommendations current and prevents stale patterns from
  * dominating the signal.
@@ -18,9 +19,9 @@
  *     post_count:         number,
  *     total_views:        number,       // raw count (for display)
  *     weighted_views:     number,       // decay-weighted (used for scoring)
- *     avg_scroll:         number,       // 0–100, decay-weighted average
+ *     avg_scroll:         number,       // 0â€“100, decay-weighted average
  *     avg_time:           number,       // seconds, decay-weighted average
- *     avg_content_score:  number,       // 0–100 composite score
+ *     avg_content_score:  number,       // 0â€“100 composite score
  *     confidence_level:   'high' | 'medium' | 'low',
  *   }],
  *   best_angle: 'analytical' | 'contrarian' | 'strategic' | null,
@@ -28,7 +29,8 @@
  * }
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 export type AngleType = 'analytical' | 'contrarian' | 'strategic';
@@ -44,19 +46,19 @@ export interface AnglePerformance {
   confidence_level:   'high' | 'medium' | 'low';
 }
 
-// ── Decay constants ────────────────────────────────────────────────────────────
+// â”€â”€ Decay constants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const HALF_LIFE_DAYS = 30;
-const DECAY_K        = Math.LN2 / HALF_LIFE_DAYS; // ≈ 0.0231
+const DECAY_K        = Math.LN2 / HALF_LIFE_DAYS; // â‰ˆ 0.0231
 
 function decayWeight(createdAt: string): number {
   const daysAgo = (Date.now() - new Date(createdAt).getTime()) / 86_400_000;
   return Math.exp(-DECAY_K * Math.max(0, daysAgo));
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/** Weighted average: Σ(weight × value) / Σ(weight) */
+/** Weighted average: Î£(weight Ã— value) / Î£(weight) */
 function weightedAvg(pairs: Array<{ value: number; weight: number }>): number {
   if (pairs.length === 0) return 0;
   const sumW  = pairs.reduce((s, p) => s + p.weight, 0);
@@ -72,9 +74,9 @@ function slugMatches(urlSlug: string, blogSlug: string): boolean {
   return normalized === '/' + blogSlug || normalized.endsWith('/' + blogSlug);
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const accountId = typeof req.query.account_id === 'string' ? req.query.account_id.trim() : null;
@@ -86,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const days  = Math.min(180, Math.max(7, parseInt(String(req.query.days ?? '90'), 10) || 90));
   const since = new Date(Date.now() - days * 86_400_000).toISOString();
 
-  // ── Fetch blogs with angle_type ────────────────────────────────────────────
+  // â”€â”€ Fetch blogs with angle_type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: blogs } = await supabase
     .from('blogs')
     .select('slug, angle_type')
@@ -98,7 +100,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ angles: [], best_angle: null, has_data: false });
   }
 
-  // ── Fetch analytics with created_at for decay computation ─────────────────
+  // â”€â”€ Fetch analytics with created_at for decay computation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [pvRes, lvRes] = await Promise.all([
     supabase.from('blog_analytics')
       .select('url_slug, created_at')
@@ -139,7 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const maxWeightedViews = Math.max(1, ...[...slugWeightedViews.values()]);
 
-  // ── Group by angle_type ────────────────────────────────────────────────────
+  // â”€â”€ Group by angle_type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const angleMap = new Map<AngleType, {
     slugs:          Set<string>;
     rawViews:       number[];
@@ -174,7 +176,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     angleMap.set(angle, entry);
   }
 
-  // ── Build output ──────────────────────────────────────────────────────────
+  // â”€â”€ Build output â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const angles: AnglePerformance[] = [];
 
   for (const [angle_type, entry] of angleMap) {
@@ -225,3 +227,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ angles, best_angle, has_data: angles.length > 0 });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

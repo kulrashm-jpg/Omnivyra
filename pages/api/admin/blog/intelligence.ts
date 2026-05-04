@@ -1,27 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (isAdmin) return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const ok = await requireSuperAdmin(req, res);
-  if (!ok) return;
+  const ctx = await requireAdminScope(req, res, 'blog:intelligence');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/blog/intelligence', 'blog:intelligence');
+  }
 
   try {
-    // ── 1. All posts with block-level metadata ────────────────────────────
+    // â”€â”€ 1. All posts with block-level metadata â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: posts, error: postsErr } = await supabase
       .from('public_blogs')
       .select('id, title, slug, category, tags, status, views_count, likes_count, published_at, created_at, content_blocks')
@@ -29,19 +22,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (postsErr) return res.status(500).json({ error: postsErr.message });
 
-    // ── 2. Series ─────────────────────────────────────────────────────────
+    // â”€â”€ 2. Series â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: seriesRows } = await supabase
       .from('blog_series')
       .select(`id, title, slug, description, cover_url, created_at, blog_series_posts(blog_id, position)`)
       .order('created_at', { ascending: false });
 
-    // ── 3. Relationships ──────────────────────────────────────────────────
+    // â”€â”€ 3. Relationships â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: relRows } = await supabase
       .from('blog_relationships')
       .select('id, source_blog_id, target_blog_id, relationship_type, created_at')
       .order('created_at', { ascending: false });
 
-    // ── 4. Performance summaries ──────────────────────────────────────────
+    // â”€â”€ 4. Performance summaries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Fetched from the blog_performance_summary view (created by migration)
     const { data: perfRows } = await supabase
       .from('blog_performance_summary')
@@ -62,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ── 5. Comment counts per blog ────────────────────────────────────────
+    // â”€â”€ 5. Comment counts per blog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const postIds = (posts ?? []).map((p) => p.id);
     let commentMap = new Map<string, number>();
 
@@ -77,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── 6. Annotate posts ─────────────────────────────────────────────────
+    // â”€â”€ 6. Annotate posts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const annotated = (posts ?? []).map((p) => {
       const blocks: { type: string; body?: string; slug?: string; items?: { title: string; url: string }[] }[] =
         Array.isArray(p.content_blocks) ? p.content_blocks : [];
@@ -127,3 +120,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

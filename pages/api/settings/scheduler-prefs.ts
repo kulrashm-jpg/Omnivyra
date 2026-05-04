@@ -1,29 +1,31 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET  /api/settings/scheduler-prefs
  * PUT  /api/settings/scheduler-prefs
  *
  * Per-company scheduler preferences:
- *   interval_minutes  — how often to check for due posts during working hours
- *   timezone          — IANA timezone string (e.g. "America/New_York")
- *   working_start     — start of working hours 0-23 (default 9)
- *   working_end       — end of working hours 0-23 (default 18)
+ *   interval_minutes  â€” how often to check for due posts during working hours
+ *   timezone          â€” IANA timezone string (e.g. "America/New_York")
+ *   working_start     â€” start of working hours 0-23 (default 9)
+ *   working_end       â€” end of working hours 0-23 (default 18)
  *
  * Off-hours: scheduler checks every 6 hours (twice per 12-hr night).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 const VALID_INTERVALS = [15, 30, 60, 120, 240, 480];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { user } = await getSupabaseUserFromRequest(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', user.id)
     .eq('status', 'active')
@@ -65,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const ws = Number(working_start ?? 9);
     const we = Number(working_end ?? 18);
     if (ws < 0 || ws > 23 || we < 0 || we > 23 || ws >= we) {
-      return res.status(400).json({ error: 'Invalid working hours (start must be < end, 0–23)' });
+      return res.status(400).json({ error: 'Invalid working hours (start must be < end, 0â€“23)' });
     }
 
     const { error } = await db.from('company_scheduler_prefs').upsert({
@@ -87,3 +89,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

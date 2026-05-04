@@ -1,5 +1,6 @@
 import axios from 'axios';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { ensureCanonicalDomain, hashKey, normalizeUrl, resolveCompanyWebsite, safeNumber, slugifyKeyword, todayIsoDate } from './ingestionUtils';
 
 export interface GscKeywordRow {

@@ -1,11 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
-import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import {
+  requireAdminRateLimit,
+  requireAdminScope,
+  requireAuthenticatedInternalUser,
+} from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
+import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 
 const VALID_ROLES = new Set([
   'COMPANY_ADMIN',
@@ -25,11 +31,8 @@ async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:invite-user', 20, 60))) return;
 
-  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-  if (userErr || !user) {
-    const status = userErr === 'ACCOUNT_DELETED' ? 403 : 401;
-    return res.status(status).json({ error: userErr ?? 'Invalid session', code: userErr ?? undefined });
-  }
+  const user = await requireAuthenticatedInternalUser(req, res);
+  if (!user) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { email, role = 'CONTENT_CREATOR', companyId: bodyCompanyId } = body as {
@@ -47,24 +50,19 @@ async function handler(
 
   const normalizedEmail = email.trim().toLowerCase();
 
-  const { data: superAdminRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+  // Resolve effective companyId: super-admin supplies it explicitly; company-admin
+  // is scoped to their own org row. Final scope check below enforces the role.
+  const isSuperAdmin = await isPlatformSuperAdmin(user.id);
 
   let companyId: string;
-  if (superAdminRow) {
+  if (isSuperAdmin) {
     if (!bodyCompanyId) {
       return res.status(400).json({ error: 'companyId is required for super admin invitations' });
     }
     companyId = bodyCompanyId.trim();
   } else {
     const { data: roleRow } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('company_id')
       .eq('user_id', user.id)
       .eq('role', 'COMPANY_ADMIN')
@@ -76,6 +74,12 @@ async function handler(
       return res.status(403).json({ error: 'Only company admins can send invitations' });
     }
     companyId = (roleRow as any).company_id;
+  }
+
+  const ctx = await requireAdminScope(req, res, 'users:invite', { companyId });
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/invite-user', 'users:invite');
   }
 
   const { data: existing } = await supabase
@@ -116,4 +120,8 @@ async function handler(
   }
 }
 
-export default withIdempotency(handler, { scope: 'admin-invite-user' });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

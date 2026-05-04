@@ -5,13 +5,17 @@
 
 import React, { useState } from 'react';
 import { usePlannerSession, type StrategyContext } from './plannerSessionStore';
-import { CANONICAL_PLATFORMS, PLATFORM_OPTIONS, type CanonicalPlatform } from '../../backend/constants/platforms';
+import {
+  CANONICAL_PLATFORMS,
+  PLATFORM_OPTIONS,
+  normalizePlatform,
+  type CanonicalPlatform,
+} from '../../backend/constants/platforms';
 
 const CANONICAL_VALUES = new Set<string>(CANONICAL_PLATFORMS);
 
 function toCanonicalPlatform(p: string): CanonicalPlatform | null {
-  const v = String(p ?? '').trim().toLowerCase();
-  if (v === 'x') return 'twitter';
+  const v = normalizePlatform(p);
   return CANONICAL_VALUES.has(v) ? (v as CanonicalPlatform) : null;
 }
 const CONTENT_MIX_OPTIONS = ['post', 'video', 'carousel', 'story', 'thread', 'short'];

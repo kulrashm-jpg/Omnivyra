@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Image Search API — thin proxy to the centralized imageService.
+ * Image Search API â€” thin proxy to the centralized imageService.
  * All provider logic, caching, rate limiting, and quality filtering
  * lives in backend/services/imageService.ts.
  */
@@ -10,7 +11,7 @@ import { recordImageSearch } from '@/backend/db/imageMetadataStore';
 
 export type { NormalizedImage as ImageResult } from '@/backend/services/imageService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
@@ -27,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const result = await searchImages(query, { perPage });
 
-  // Persist metadata asynchronously — do not await so it doesn't block the response
+  // Persist metadata asynchronously â€” do not await so it doesn't block the response
   if (result.images.length > 0) {
     recordImageSearch(query, result.query, result.images).catch(() => {/* fire-and-forget */});
   }
@@ -47,3 +48,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

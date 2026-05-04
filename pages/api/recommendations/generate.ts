@@ -1,14 +1,16 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { generateRecommendations } from '../../../backend/services/recommendationEngineService';
 import { getCompanyDefaultApiIds } from '../../../backend/services/externalApiService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { getStrategyHistoryForCompany } from '../../../backend/services/strategyHistoryService';
 import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -167,7 +169,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           result.signals_source = 'PROFILE_ONLY';
           console.info('[generate] Direct AI fallback produced', aiThemes.length, 'themes for company', companyId);
         } else {
-          console.warn('[generate] Direct AI fallback returned 0 themes for company', companyId, '— check OPENAI_API_KEY and company profile');
+          console.warn('[generate] Direct AI fallback returned 0 themes for company', companyId, 'â€” check OPENAI_API_KEY and company profile');
         }
       } catch (directAiErr: any) {
         console.error('[generate] Direct AI fallback failed:', directAiErr?.message ?? directAiErr);
@@ -493,3 +495,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

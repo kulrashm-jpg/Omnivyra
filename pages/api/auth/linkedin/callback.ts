@@ -1,5 +1,7 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
@@ -8,7 +10,7 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 
-/** Derives base URL from the actual request host — never the NEXT_PUBLIC_APP_URL env var.
+/** Derives base URL from the actual request host â€” never the NEXT_PUBLIC_APP_URL env var.
  *  This ensures the redirect_uri used in token exchange exactly matches what was sent
  *  in the authorization request, even when NEXT_PUBLIC_APP_URL points to production. */
 function getRequestBaseUrl(req: NextApiRequest): string {
@@ -27,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const errDest = (earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms';
 
   if (error) {
-    const desc = error_description ? ` — ${error_description}` : '';
+    const desc = error_description ? ` â€” ${error_description}` : '';
     console.error('[LinkedIn callback] OAuth error from LinkedIn:', error, error_description);
     return res.redirect(`${errDest}?error=${encodeURIComponent(`LinkedIn error: ${error}${desc}`)}`);
   }
@@ -43,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const credentials = await getOAuthCredentialsForPlatform(platform);
     if (!credentials?.client_id || !credentials?.client_secret) {
       return res.redirect(
-        `${errDest}?error=${encodeURIComponent('LinkedIn OAuth not configured — ask your Super Admin to add credentials.')}`
+        `${errDest}?error=${encodeURIComponent('LinkedIn OAuth not configured â€” ask your Super Admin to add credentials.')}`
       );
     }
 
@@ -68,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const tokenData = await tokenResponse.json();
     console.log('[LinkedIn callback] token received:', { access_token: !!tokenData.access_token, expires_in: tokenData.expires_in });
 
-    // Fetch profile — try /v2/userinfo (OIDC) first, fall back to /v2/me
+    // Fetch profile â€” try /v2/userinfo (OIDC) first, fall back to /v2/me
     let profile: Record<string, any> = {};
     let linkedinConnectionCount = 0;
 
@@ -102,7 +104,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log('[LinkedIn callback] profile received:', { sub: profile.sub, name: profile.name });
 
     // Attempt to fetch connection/follower count via /v2/me projection.
-    // Works for standard LinkedIn developer apps — no partner approval required.
+    // Works for standard LinkedIn developer apps â€” no partner approval required.
     // LinkedIn may return numConnections (exact) or numConnectionsRange (bucketed) depending on app permissions.
     try {
       const meProjectionRes = await fetch(
@@ -137,7 +139,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required â€” please log in and try again')}`);
     }
 
     const accountName = profile.name || `${profile.given_name || 'LinkedIn'} ${profile.family_name || 'User'}`;
@@ -255,7 +257,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // approval and cannot be fetched with standard OAuth scopes. Connection count will
     // not be stored here; the UI handles missing counts gracefully.
 
-    console.log('✅ LinkedIn account saved successfully:', { accountId, accountName });
+    console.log('âœ… LinkedIn account saved successfully:', { accountId, accountName });
 
     if (companyIdUuid && userId) {
       checkAndGrantSetupCredits(companyIdUuid, userId)
@@ -286,3 +288,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
+

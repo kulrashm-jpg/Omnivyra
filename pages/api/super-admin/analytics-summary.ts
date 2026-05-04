@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const toNumber = (value: any): number => {
   const parsed = Number(value);
@@ -23,34 +24,16 @@ const computeReach = (row: any): number => {
   return toNumber(row.impressions);
 };
 
-const requireSuperAdminAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    console.debug('SUPER_ADMIN_LEGACY_SESSION', { path: req.url });
-    return true;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:all-orgs');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/analytics-summary', 'analytics:all-orgs');
+  }
 
   try {
     const { data, error } = await supabase
@@ -159,3 +142,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'FAILED_TO_LOAD_ANALYTICS' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

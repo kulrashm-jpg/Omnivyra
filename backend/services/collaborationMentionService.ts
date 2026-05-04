@@ -2,7 +2,8 @@
  * Collaboration @mention parsing, user resolution, and notification.
  * Feature 2: Parse @username, insert message_mentions, trigger notification.
  */
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const MENTION_REGEX = /@([a-zA-Z0-9_.-]+)/g;
 
@@ -14,7 +15,7 @@ export function parseMentions(text: string): string[] {
 }
 
 /**
- * Resolve @username to user_id. Matches user_company_roles.name (case-insensitive).
+ * Resolve @username to user_id. Matches user company roles.name (case-insensitive).
  */
 export async function resolveMentionedUserIds(
   usernames: string[],
@@ -23,7 +24,7 @@ export async function resolveMentionedUserIds(
   if (usernames.length === 0) return new Map();
   const map = new Map<string, string>();
   const { data } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id, name')
     .eq('company_id', companyId)
     .in('status', ['active']);

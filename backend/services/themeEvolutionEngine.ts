@@ -4,7 +4,8 @@
  * Safeguards: merge only if similarity >= 0.6; archive only if inactivity >= 30 days
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export const MERGE_SIMILARITY_THRESHOLD = 0.6;
 export const ARCHIVE_INACTIVITY_DAYS = 30;

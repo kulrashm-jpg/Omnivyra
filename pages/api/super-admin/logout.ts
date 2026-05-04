@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const clearSuperAdmin = [
     'super_admin_session=',
@@ -26,3 +27,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Set-Cookie', [clearSuperAdmin, clearContentArchitect, clearContentArchitectCompany]);
   return res.status(200).json({ success: true });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/governance/rebuild-projection
- * Stage 32 — Rebuild governance projection for a campaign. SUPER_ADMIN only.
+ * Stage 32 â€” Rebuild governance projection for a campaign. SUPER_ADMIN only.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -23,4 +24,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ ok: true, campaignId: campaignId.trim() });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

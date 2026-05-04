@@ -1,4 +1,4 @@
-# Login Email Verification Implementation
+﻿# Login Email Verification Implementation
 
 ## Problem Solved
 Users could log in with ANY email address without checking if the account existed in the database first. Now the system validates email existence before allowing the login process to continue.
@@ -19,13 +19,13 @@ Users could log in with ANY email address without checking if the account existe
 **Code Flow:**
 ```
 User enters email in login form
-        ↓
+        â†“
 POST /api/auth/check-user with { email }
-        ↓
+        â†“
 Query: SELECT id FROM users WHERE email = <lowercase_email>
-        ↓
-If found: Return { exists: true } → sends magic link
-If not found: Return { exists: false } → shows "No account found"
+        â†“
+If found: Return { exists: true } â†’ sends magic link
+If not found: Return { exists: false } â†’ shows "No account found"
 ```
 
 #### 2. **Updated `/api/onboarding/complete` Endpoint**
@@ -39,10 +39,9 @@ If not found: Return { exists: false } → shows "No account found"
 
 **Code Flow:**
 ```
-After Firebase phone verification succeeds:
-        ↓
+        â†“
 INSERT INTO users (id, email, name, created_at, updated_at)
-        ↓
+        â†“
 Then proceed with existing flow:
   - Create company
   - Create free_credit_profiles
@@ -52,70 +51,69 @@ Then proceed with existing flow:
 ## Complete User Journey
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ SIGNUP (New User)                                           │
-├─────────────────────────────────────────────────────────────┤
-│ 1. Visit /create-account                                    │
-│ 2. Enter email (domain validated)                           │
-│ 3. Email created in Supabase auth only                      │
-│ 4. Magic link sent to inbox                                 │
-│ 5. Click link → redirects to /onboarding/phone              │
-│ 6. Verify phone via Firebase SMS OTP                        │
-│ 7. Call /api/onboarding/complete                           │
-│    ✅ User NOW created in database users table (NEW)       │
-│    ✅ Company created                                       │
-│    ✅ 300 credits granted                                   │
-│ 8. Auto-redirect to dashboard                              │
-└─────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ SIGNUP (New User)                                           â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ 1. Visit /create-account                                    â”‚
+â”‚ 2. Enter email (domain validated)                           â”‚
+â”‚ 3. Email created in Supabase auth only                      â”‚
+â”‚ 4. Magic link sent to inbox                                 â”‚
+â”‚ 5. Click link â†’ redirects to /onboarding/phone              â”‚
+â”‚ 7. Call /api/onboarding/complete                           â”‚
+â”‚    âœ… User NOW created in database users table (NEW)       â”‚
+â”‚    âœ… Company created                                       â”‚
+â”‚    âœ… 300 credits granted                                   â”‚
+â”‚ 8. Auto-redirect to dashboard                              â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
-┌─────────────────────────────────────────────────────────────┐
-│ LOGIN (Existing User)                                       │
-├─────────────────────────────────────────────────────────────┤
-│ 1. Visit /login                                             │
-│ 2. Enter email (domain validated)                           │
-│ 3. Call /api/auth/check-user ✅ (CHECKS DATABASE USERS)   │
-│    ✅ Email found in users table → continue               │
-│    ✅ Email NOT found → show "No account found"            │
-│ 4. If found: Send magic link → redirect to /auth/callback │
-│ 5. Click link → Supabase session established               │
-│ 6. Auto-redirect to /onboarding/verify-phone               │
-│ 7. Verify phone again (security requirement)               │
-│ 8. Auto-redirect to dashboard                              │
-└─────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ LOGIN (Existing User)                                       â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ 1. Visit /login                                             â”‚
+â”‚ 2. Enter email (domain validated)                           â”‚
+â”‚ 3. Call /api/auth/check-user âœ… (CHECKS DATABASE USERS)   â”‚
+â”‚    âœ… Email found in users table â†’ continue               â”‚
+â”‚    âœ… Email NOT found â†’ show "No account found"            â”‚
+â”‚ 4. If found: Send magic link â†’ redirect to /auth/callback â”‚
+â”‚ 5. Click link â†’ Supabase session established               â”‚
+â”‚ 6. Auto-redirect to /onboarding/verify-phone               â”‚
+â”‚ 7. Verify phone again (security requirement)               â”‚
+â”‚ 8. Auto-redirect to dashboard                              â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
-┌─────────────────────────────────────────────────────────────┐
-│ IF NO ACCOUNT FOUND                                         │
-├─────────────────────────────────────────────────────────────┤
-│ The login page shows stage: 'not-found'                     │
-│ User sees:                                                   │
-│  - Icon: 🔍 No account found                                │
-│  - Text: "We couldn't find an account for [email]"         │
-│  - Buttons:                                                  │
-│    1. Create account — it's free                            │
-│    2. Try a different email                                 │
-│  - Text: "Start with 300 free credits — no card required"  │
-└─────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ IF NO ACCOUNT FOUND                                         â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ The login page shows stage: 'not-found'                     â”‚
+â”‚ User sees:                                                   â”‚
+â”‚  - Icon: ðŸ” No account found                                â”‚
+â”‚  - Text: "We couldn't find an account for [email]"         â”‚
+â”‚  - Buttons:                                                  â”‚
+â”‚    1. Create account â€” it's free                            â”‚
+â”‚    2. Try a different email                                 â”‚
+â”‚  - Text: "Start with 300 free credits â€” no card required"  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ## Key Features
 
-✅ **Email Validation BEFORE Magic Link**
+âœ… **Email Validation BEFORE Magic Link**
 - Prevents wasting OTP quota on non-existent emails
 - Improves security by gating access at email level
 
-✅ **Database-Driven Lookup**
+âœ… **Database-Driven Lookup**
 - Checks against actual users in the system
 - Not just Supabase auth (which could be out of sync)
 
-✅ **Case-Insensitive Email Handling**
+âœ… **Case-Insensitive Email Handling**
 - Normalizes all emails to lowercase
 - Prevents duplicate accounts with different cases
 
-✅ **Graceful Error Handling**
+âœ… **Graceful Error Handling**
 - Fails open if database is unavailable
 - Prevents login lockouts due to infrastructure issues
 
-✅ **Existing UI Already Ready**
+âœ… **Existing UI Already Ready**
 - Login page already had "not-found" stage
 - "Create account" and "Try different email" buttons already in place
 
@@ -143,9 +141,9 @@ CREATE INDEX idx_users_email ON users(email);
 2. Enter work email (e.g., `test@company.com`)
 3. Click "Send sign-in link"
 4. Check email for magic link
-5. Click link → Verify phone
+5. Click link â†’ Verify phone
 6. Check database: User should appear in `users` table
-7. Go to `/login` → Enter same email
+7. Go to `/login` â†’ Enter same email
 8. Should show magic link sent (not "No account found")
 
 ### Test 2: Non-Existent User Login
@@ -206,10 +204,10 @@ Potential improvements:
 
 ## Security Considerations
 
-✅ **No information leakage**: If email not found, we suggest creating account (doesn't confirm/deny existence)
-✅ **Rate limiting**: Should be added at reverse proxy level to prevent email enumeration
-✅ **Fail-safe design**: Errors don't lock out legitimate users
-✅ **Case normalization**: Prevents duplicate accounts
+âœ… **No information leakage**: If email not found, we suggest creating account (doesn't confirm/deny existence)
+âœ… **Rate limiting**: Should be added at reverse proxy level to prevent email enumeration
+âœ… **Fail-safe design**: Errors don't lock out legitimate users
+âœ… **Case normalization**: Prevents duplicate accounts
 
 ## Deployment Notes
 
@@ -221,5 +219,5 @@ Potential improvements:
 
 ---
 
-**Status:** ✅ Implementation Complete
+**Status:** âœ… Implementation Complete
 **Last Updated:** March 21, 2026

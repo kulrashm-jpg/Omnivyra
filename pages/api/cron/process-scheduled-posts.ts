@@ -1,128 +1,55 @@
-
-/**
- * POST /api/cron/process-scheduled-posts
- *
- * Vercel Cron Job endpoint — called every minute via vercel.json.
- * Finds all scheduled posts whose scheduled_for time has passed,
- * resolves their social account, and publishes them directly.
- *
- * Protected by CRON_SECRET env var (set in Vercel dashboard).
- * Falls back to unauthenticated if CRON_SECRET is not set (dev only).
- */
-
+﻿// AUTH EXEMPT: cron endpoint uses cron-specific authorization
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { publishNow } from '../../../backend/services/publishNowService';
-import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { findDuePostsAndEnqueue } from '../../../backend/scheduler/schedulerService';
+import { assertCronAuthorized, rejectCronUnauthorized } from '../../../backend/utils/cronAuthGuard';
+import { getJobRegistryEntry } from '../../../backend/jobs/jobRegistry';
+import { acquireJobLock, releaseJobLock } from '../../../backend/jobs/lockService';
+import { writeDeadLetter } from '../../../backend/jobs/dlqService';
 
-const BATCH_SIZE = 20; // Max posts to process per invocation
+const BATCH_SIZE = 20;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Auth: Vercel Cron sets Authorization: Bearer <CRON_SECRET>
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const auth = req.headers['authorization'];
-    if (auth !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  try {
+    assertCronAuthorized(req);
+  } catch (error) {
+    if (rejectCronUnauthorized(res, error)) return;
+    throw error;
   }
 
-  const now = new Date().toISOString();
-  const results = { processed: 0, published: 0, failed: 0, skipped: 0, errors: [] as string[] };
+  const registry = getJobRegistryEntry('publish');
+  const window = new Date().toISOString().slice(0, 16);
+  const lock = await acquireJobLock(registry.lock_key_builder({ trigger_source: 'vercel_cron', window }), 300);
+  if (!lock) {
+    console.info(JSON.stringify({ event: 'job_skipped_locked', job_id: 'publish', trigger_source: 'vercel_cron' }));
+    return res.status(200).json({ ok: true, skipped: true, reason: 'locked' });
+  }
 
   try {
-    // Fetch due posts — status=scheduled, scheduled_for <= now
-    const { data: duePosts, error: fetchErr } = await supabase
-      .from('scheduled_posts')
-      .select('id, user_id, social_account_id, platform, campaign_id, status')
-      .eq('status', 'scheduled')
-      .lte('scheduled_for', now)
-      .order('scheduled_for', { ascending: true })
-      .limit(BATCH_SIZE);
+    const { error: healthError } = await supabase.from('scheduled_posts').select('id').limit(1);
+    if (healthError) throw healthError;
 
-    if (fetchErr) throw new Error(`DB fetch error: ${fetchErr.message}`);
-    if (!duePosts?.length) {
-      return res.status(200).json({ ...results, message: 'No due posts' });
-    }
-
-    results.processed = duePosts.length;
-
-    for (const post of duePosts) {
-      try {
-        // Resolve social account — use stored one or look up by user+platform
-        let socialAccountId: string | null = post.social_account_id || null;
-        if (!socialAccountId) {
-          const platformNorm = post.platform === 'x' ? 'twitter' : post.platform;
-          const { data: acct } = await supabase
-            .from('social_accounts')
-            .select('id')
-            .eq('user_id', post.user_id)
-            .eq('is_active', true)
-            .in('platform', [post.platform, platformNorm])
-            .limit(1)
-            .maybeSingle();
-          socialAccountId = acct?.id ?? null;
-        }
-
-        if (!socialAccountId) {
-          // No connected account — mark as failed so it doesn't retry endlessly
-          await updatePostPublishStatus({
-            post_id: post.id,
-            status: 'FAILED',
-            last_error: `No connected ${post.platform} account`,
-          });
-          results.skipped++;
-          continue;
-        }
-
-        // Patch post row with resolved account if it was missing
-        if (!post.social_account_id) {
-          await supabase
-            .from('scheduled_posts')
-            .update({ social_account_id: socialAccountId })
-            .eq('id', post.id);
-        }
-
-        const result = await publishNow({
-          scheduled_post_id: post.id,
-          social_account_id: socialAccountId,
-          user_id: post.user_id,
-        });
-
-        await updatePostPublishStatus({
-          post_id: post.id,
-          status: result.status,
-          external_post_id: result.external_post_id,
-          last_error: result.status === 'PUBLISHED' ? undefined : result.message,
-        });
-
-        if (result.status === 'PUBLISHED') {
-          results.published++;
-        } else {
-          results.failed++;
-          if (result.message) results.errors.push(`[${post.id}] ${result.message}`);
-        }
-      } catch (postErr: any) {
-        results.failed++;
-        results.errors.push(`[${post.id}] ${postErr?.message}`);
-        try {
-          await updatePostPublishStatus({
-            post_id: post.id,
-            status: 'FAILED',
-            last_error: postErr?.message || 'Unexpected error',
-          });
-        } catch (_) {}
-      }
-    }
-
-    console.log('[cron/process-scheduled-posts]', results);
-    return res.status(200).json(results);
+    console.info(JSON.stringify({ event: 'job_started', job_id: 'publish', trigger_source: 'vercel_cron' }));
+    const result = await findDuePostsAndEnqueue();
+    console.info(JSON.stringify({ event: 'job_completed', job_id: 'publish', trigger_source: 'vercel_cron', result }));
+    return res.status(200).json({ ok: true, batch_size: BATCH_SIZE, ...result });
   } catch (err: any) {
-    console.error('[cron/process-scheduled-posts] fatal:', err?.message);
+    await writeDeadLetter({
+      job_id: 'publish',
+      queue_name: registry.queue_name,
+      payload: { trigger_source: 'vercel_cron', window },
+      error_message: err?.message ?? 'Failed to enqueue due posts',
+      trigger_source: 'vercel_cron',
+    }).catch(() => {});
+    console.error(JSON.stringify({ event: 'job_failed', job_id: 'publish', trigger_source: 'vercel_cron', error: err?.message }));
     return res.status(500).json({ error: err?.message });
+  } finally {
+    await releaseJobLock(lock).catch(() => {});
   }
 }
+

@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { executeAction, persistExecutionResult } from './communityAiActionExecutor';
 import { logCommunityAiActionEvent } from './communityAiActionLogService';
 import { getPlaybookById, listPlaybooks } from './playbooks/playbookService';

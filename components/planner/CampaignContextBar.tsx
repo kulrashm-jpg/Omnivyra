@@ -10,7 +10,7 @@ import { ChevronDown, ChevronUp, ChevronRight, Loader2, Target, Layers } from 'l
 import { usePlannerSession, type IdeaSpine } from './plannerSessionStore';
 import { OpportunityInsightsTab } from './OpportunityInsightsTab';
 import { MultiSelectDropdown } from '../ui/dropdown';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { buildPlannerStrategicCard } from '../../lib/plannerStrategicCard';
 
 type CampaignSuggestion = {
@@ -167,7 +167,7 @@ export function CampaignContextBar({
       return;
     }
     let cancelled = false;
-    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
+    apiFetch(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (cancelled) return;
@@ -222,7 +222,7 @@ export function CampaignContextBar({
     let cancelled = false;
     setSuggestionsLoading(true);
     setSuggestionsError(null);
-    fetchWithAuth('/api/planner/suggest-campaigns', {
+    apiFetch('/api/planner/suggest-campaigns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ companyId }),

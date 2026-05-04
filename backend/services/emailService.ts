@@ -17,7 +17,8 @@
  * remain best-effort: a delivery failure throws, and the caller decides
  * whether to retry, surface to the user, or swallow it.
  */
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 
 type InvitePayload = {

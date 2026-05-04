@@ -4,7 +4,8 @@
  * Safeguard: max_weight_change = ±0.15
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export const MAX_WEIGHT_CHANGE = 0.15;
 export const OPTIMIZATION_FREQUENCY_MS = 6 * 60 * 60 * 1000;

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
@@ -10,9 +11,10 @@ type RefineBody = {
   thread_id?: string;
   draft?: string;
   instruction?: string;
+  selected_intent?: string | null;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -25,6 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const threadId = (body.thread_id || '').toString().trim();
     const draft = (body.draft || '').toString().trim();
     const instruction = (body.instruction || '').toString().trim();
+    const selectedIntent = (body.selected_intent || '').toString().trim();
 
     if (!organizationId) {
       return res.status(400).json({ error: 'organization_id required' });
@@ -59,15 +62,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         {
           role: 'system',
           content:
-            'You refine social engagement replies. Keep the response concise, human, and directly grounded in the conversation. Output only the revised reply text.',
+            [
+              'You refine one selected engagement reply option.',
+              'Do not merely paraphrase the draft.',
+              'Use the conversation and the user instruction to produce a better outcome for that selected option.',
+              'Preserve the selected intent unless the instruction explicitly asks to change it.',
+              'If the selected intent is Yes, make the reply helpful/accepting.',
+              'If the selected intent is No, make the reply a clear but respectful boundary or decline.',
+              'If the selected intent is Maybe, ask for the missing detail or defer with a concrete next step.',
+              'Keep it concise, human, specific to the thread, and ready to send.',
+              'Output only the revised reply text.',
+            ].join(' '),
         },
         {
           role: 'user',
           content:
             `Conversation:\n${threadContext || '(no prior context)'}\n\n` +
+            `Selected option intent:\n${selectedIntent || 'Unknown'}\n\n` +
             `Current draft:\n${draft}\n\n` +
             `Refinement request:\n${instruction}\n\n` +
-            'Return one improved reply only.',
+            'Return one improved reply that meaningfully changes the selected option according to the request. Do not return a cosmetic rewrite.',
         },
       ],
     });
@@ -84,3 +98,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

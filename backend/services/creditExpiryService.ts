@@ -17,7 +17,8 @@
  * Called by: POST /api/cron/credit-expiry (daily, via Vercel/Railway cron)
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createHash } from 'crypto';
 import type { CategorySplit } from './creditPriorityService';
 

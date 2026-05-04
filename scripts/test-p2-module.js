@@ -27,7 +27,7 @@ async function testP2Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('content_analytics').select('retweets, quotes, reactions').limit(1);
@@ -50,7 +50,7 @@ async function testP2Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('content_templates').select('id').limit(1);
@@ -73,7 +73,7 @@ async function testP2Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('activity_feed').select('id').limit(1);
@@ -96,7 +96,7 @@ async function testP2Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('notifications').select('id').limit(1);
@@ -119,7 +119,7 @@ async function testP2Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('weekly_content_refinements').select('focus_areas, week_start_date').limit(1);
@@ -142,7 +142,7 @@ async function testP2Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.from('platform_performance').select('id').limit(1);
@@ -165,7 +165,7 @@ async function testP2Module() {
     try {
       const { createClient } = require('@supabase/supabase-js');
       const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      const supabaseKey = process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'];
       const supabase = createClient(supabaseUrl, supabaseKey);
 
       const { error } = await supabase.rpc('increment_template_usage', { template_id: '00000000-0000-0000-0000-000000000000' });

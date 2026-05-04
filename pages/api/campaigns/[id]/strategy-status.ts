@@ -1,11 +1,13 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { getLatestCampaignVersion } from '../../../../backend/db/campaignVersionStore';
 import { resolveEffectiveCampaignRole, type CampaignAuthContext } from '../../../../backend/services/campaignRoleService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -100,3 +102,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ...(weekly_strategy_intelligence != null && { weekly_strategy_intelligence }),
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

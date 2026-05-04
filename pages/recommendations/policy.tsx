@@ -69,7 +69,7 @@ export default function RecommendationPolicyPage() {
   const [auditSnapshot, setAuditSnapshot] = useState<AuditSnapshot | null>(null);
   const [prefilledFromAudit, setPrefilledFromAudit] = useState(false);
 
-  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+  const apiFetch = async (input: RequestInfo, init?: RequestInit) => {
     const token = await getAuthToken();
     if (!token) {
       throw new Error('Not authenticated');
@@ -87,7 +87,7 @@ export default function RecommendationPolicyPage() {
     const loadPolicy = async () => {
       try {
         setIsLoading(true);
-        const response = await fetchWithAuth('/api/recommendation-policy');
+        const response = await apiFetch('/api/recommendation-policy');
         if (!response.ok) throw new Error('Failed to load policy');
         const data = await response.json();
         if (data?.policy) {
@@ -171,7 +171,7 @@ export default function RecommendationPolicyPage() {
       setIsLoading(true);
       setErrorMessage(null);
       setSuccessMessage(null);
-      const response = await fetchWithAuth('/api/recommendation-policy', {
+      const response = await apiFetch('/api/recommendation-policy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: policy.id, weights }),

@@ -1,5 +1,7 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
@@ -34,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const oauthCredentials = await getOAuthCredentialsForPlatform('pinterest');
     if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Pinterest OAuth not configured — ask your Super Admin to add credentials.')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Pinterest OAuth not configured â€” ask your Super Admin to add credentials.')}`);
     }
 
     // Exchange code for access token
@@ -85,7 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required â€” please log in and try again')}`);
     }
 
     const accountName = userInfo.username || `Pinterest User ${userInfo.id?.substring(0, 8)}`;
@@ -161,7 +163,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await setToken(accountId, tokenObj);
 
-    console.log('✅ Pinterest account saved successfully:', { accountId, accountName });
+    console.log('âœ… Pinterest account saved successfully:', { accountId, accountName });
 
     if (companyId && userId) {
       checkAndGrantSetupCredits(companyId, userId)
@@ -177,3 +179,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
+

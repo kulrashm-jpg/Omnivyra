@@ -3,7 +3,8 @@
  * Phase 2: Persists company-specific signals derived from global intelligence_signals.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { CompanySignalOutput } from './companyIntelligenceEngine';
 import {
   computeSignalPriority,

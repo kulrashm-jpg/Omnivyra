@@ -63,6 +63,8 @@ const RESPONSE_TIMEOUT_MS = 5000;
 const AUTH_RESPONSE_TIMEOUT_MS = 15000;
 const PLATFORM_SYNC_TIMEOUT_MS = 15000;
 const PLATFORM_ACTION_TIMEOUT_MS = 45000;
+const PLATFORM_ACTION_ACK_TIMEOUT_MS = 2500;
+const BRIDGE_CAPABILITY_TIMEOUT_MS = 2500;
 
 function waitForWindowMessage<T>(responseType: string, timeoutMs = RESPONSE_TIMEOUT_MS): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -105,17 +107,6 @@ async function updatePlatformState(platform: string, enabled: boolean) {
     data: { platform, enabled }
   }, '*');
   return await responsePromise;
-}
-
-async function authenticateExtensionToken(_payload: ExtensionTokenPayload) {
-  // LEGACY PATH DISABLED. The web app must no longer forward session
-  // tokens to the extension via postMessage. Use redeemWithClaimCode()
-  // below, which sends only a one-time claim code; the extension service
-  // worker fetches the real token + HMAC secret directly from the backend.
-  return {
-    success: false,
-    message: 'Direct token forwarding is disabled. Use redeemWithClaimCode() instead.',
-  };
 }
 
 async function redeemWithClaimCode(claimCode: string) {
@@ -166,6 +157,84 @@ async function pollExtensionCommandsNowRequest() {
   );
   window.postMessage({ type: 'OMNIVYRA_POLL_COMMANDS_NOW' }, window.location.origin);
   return await responsePromise;
+}
+
+async function requestBridgeCapabilities() {
+  const responsePromise = waitForWindowMessage<{
+    success?: boolean;
+    directActionAck?: boolean;
+    message?: string;
+  }>(
+    'OMNIVYRA_BRIDGE_CAPABILITY_RESPONSE',
+    BRIDGE_CAPABILITY_TIMEOUT_MS
+  );
+  window.postMessage({ type: 'OMNIVYRA_BRIDGE_CAPABILITY_REQUEST' }, window.location.origin);
+  return await responsePromise;
+}
+
+async function executePlatformActionRequest(
+  platform: string,
+  action: string,
+  payload: Record<string, unknown>
+) {
+  try {
+    const capabilities = await requestBridgeCapabilities();
+    if (!capabilities?.success || capabilities.directActionAck !== true) {
+      throw new Error(capabilities?.message || 'Loaded Omnivyra bridge does not support direct send acknowledgements');
+    }
+  } catch (error) {
+    throw new Error(
+      error instanceof Error && error.message.includes('Timed out waiting for OMNIVYRA_BRIDGE_CAPABILITY_RESPONSE')
+        ? 'Loaded Omnivyra extension bridge is stale or missing. Reload the unpacked extension, then refresh this Omnivyra tab before sending.'
+        : error instanceof Error
+          ? error.message
+          : 'Loaded Omnivyra extension bridge is stale or missing'
+    );
+  }
+
+  const ackPromise = waitForWindowMessage<{ success?: boolean; message?: string }>(
+    'OMNIVYRA_PLATFORM_ACTION_ACK',
+    PLATFORM_ACTION_ACK_TIMEOUT_MS
+  );
+  const responsePromise = waitForWindowMessage<{
+    success?: boolean;
+    message?: string;
+    result?: unknown;
+    trace?: unknown;
+    pipelineDiagnostics?: unknown;
+    error?: string;
+  }>(
+    'OMNIVYRA_PLATFORM_ACTION_RESULT',
+    PLATFORM_ACTION_TIMEOUT_MS
+  );
+  window.postMessage({
+    type: 'OMNIVYRA_EXECUTE_PLATFORM_ACTION',
+    data: { platform, action, payload }
+  }, window.location.origin);
+  try {
+    const ack = await ackPromise;
+    if (ack?.success === false) {
+      throw new Error(ack.message || 'Omnivyra extension bridge rejected the platform action');
+    }
+  } catch (error) {
+    throw new Error(
+      error instanceof Error && error.message.includes('Timed out waiting for OMNIVYRA_PLATFORM_ACTION_ACK')
+        ? 'Omnivyra Chrome extension bridge did not acknowledge the send request. Reload the unpacked extension, then refresh this Omnivyra tab.'
+        : error instanceof Error
+          ? error.message
+          : 'Omnivyra Chrome extension bridge did not acknowledge the send request'
+    );
+  }
+  const response = await responsePromise;
+  console.log('[Omnivyra][app] platform action result received', {
+    platform,
+    action,
+    success: response?.success,
+    hasResult: Boolean(response?.result),
+    hasTrace: Boolean(response?.trace || (response?.result as { trace?: unknown } | null)?.trace),
+    hasPipelineDiagnostics: Boolean(response?.pipelineDiagnostics || (response?.result as { pipelineDiagnostics?: unknown } | null)?.pipelineDiagnostics),
+  });
+  return response;
 }
 
 export function useExtensionBridge(configuredPlatforms: string[]) {
@@ -300,10 +369,21 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
   );
 
   const executePlatformAction = useCallback(
-    async (_platform: string, _action: string, _payload: Record<string, unknown>) => {
-      throw new Error('Direct platform action execution is disabled. Actions must be issued by the server.');
+    async (platform: string, action: string, payload: Record<string, unknown>) => {
+      const result = await executePlatformActionRequest(platform, action, payload);
+      if (!result?.success) {
+        const error = new Error(result?.message || result?.error || `Unable to execute ${platform}.${action}`);
+        Object.assign(error, {
+          result: result?.result,
+          trace: result?.trace,
+          pipelineDiagnostics: result?.pipelineDiagnostics,
+        });
+        throw error;
+      }
+      await refresh();
+      return result;
     },
-    [],
+    [refresh],
   );
 
   const pollExtensionCommandsNow = useCallback(async () => {

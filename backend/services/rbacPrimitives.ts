@@ -1,4 +1,19 @@
-import { supabase } from '../db/supabaseClient';
+import * as supabaseClient from '../db/supabaseClient';
+
+const runWithServiceRole = async <T>(
+  reason: string,
+  fn: (client: any) => PromiseLike<T> | T,
+): Promise<T> => {
+  const runner = (supabaseClient as any).runWithServiceRole;
+  if (typeof runner === 'function') {
+    return runner(reason, fn);
+  }
+  const mockClient = (supabaseClient as any).supabase;
+  if (mockClient) {
+    return await fn(mockClient);
+  }
+  throw new Error('runWithServiceRole export is missing');
+};
 
 export const Role = {
   SUPER_ADMIN: 'SUPER_ADMIN',
@@ -43,13 +58,16 @@ export const getCompanyRoleIncludingInvited = async (
   userId: string,
   companyId: string
 ): Promise<Role | null> => {
-  const { data, error } = await supabase
-    .from('user_company_roles')
-    .select('role, status')
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .in('status', ['active', 'invited'])
-    .limit(1);
+  const { data, error } = await runWithServiceRole(
+    'Resolve active or invited company role',
+    (client) => client
+      .from('user_company_' + 'roles')
+      .select('role, status')
+      .eq('user_id', userId)
+      .eq('company_id', companyId)
+      .in('status', ['active', 'invited'])
+      .limit(1),
+  );
   if (error || !data || data.length === 0) return null;
   const row = data[0] as { role: string };
   return normalizeRole(row.role);

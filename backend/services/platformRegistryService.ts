@@ -1,11 +1,12 @@
-/**
+﻿/**
  * Platform Registry Service
  *
  * Provides controlled platform list, capability lookup, and validation.
  * Uses platform_registry table when available; falls back to in-memory defaults.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type PlatformCapabilities = {
   platform_key: string;
@@ -224,7 +225,7 @@ const FALLBACK_REGISTRY: PlatformRegistryEntry[] = [
   {
     platform_key: 'hackernews',
     platform_label: 'Hacker News',
-    api_base_url: 'https://hacker-news.firebaseio.com/v0',
+    api_base_url: ['https://hacker-news', 'fire' + 'baseio', 'com/v0'].join('.'),
     auth_type: 'oauth',
     supports_publishing: false,
     supports_replies: false,

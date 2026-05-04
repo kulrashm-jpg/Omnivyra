@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import {
   validateStrategicContentTransformation,
@@ -8,7 +9,7 @@ type ErrorResponse = {
   error: string;
 };
 
-export default function handler(
+function handler(
   req: NextApiRequest,
   res: NextApiResponse<StrategicContentTransformationValidationResult | ErrorResponse>,
 ) {
@@ -30,3 +31,8 @@ export default function handler(
 
   return res.status(200).json(result);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

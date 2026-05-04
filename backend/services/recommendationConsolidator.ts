@@ -7,7 +7,8 @@
  * V2: consolidateRegionalResults for Trend Strategic Theme multi-region jobs (hybrid rule + LLM).
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getProfile } from './companyProfileService';
 import type { TrendRegionRecommendation } from './opportunityGenerators';
 import { runDiagnosticPrompt } from './llm/openaiAdapter';

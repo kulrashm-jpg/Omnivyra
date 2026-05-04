@@ -1,17 +1,19 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
- * GET  /api/whatsapp/broadcasts/[id]           — broadcast detail + stats
- * POST /api/whatsapp/broadcasts/[id]/enqueue   — enqueue a draft broadcast
- * POST /api/whatsapp/broadcasts/[id]/retry     — retry failed recipients
+ * GET  /api/whatsapp/broadcasts/[id]           â€” broadcast detail + stats
+ * POST /api/whatsapp/broadcasts/[id]/enqueue   â€” enqueue a draft broadcast
+ * POST /api/whatsapp/broadcasts/[id]/retry     â€” retry failed recipients
  *
  * Action routing via ?action= query param:
- *   ?action=enqueue  → enqueueBroadcast
- *   ?action=retry    → retryFailed
+ *   ?action=enqueue  â†’ enqueueBroadcast
+ *   ?action=retry    â†’ retryFailed
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   enqueueBroadcast,
   retryFailed,
@@ -19,7 +21,7 @@ import {
   type ContactInput,
 } from '../../../../backend/services/whatsappBroadcastService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id, action } = req.query as { id: string; action?: string };
 
   if (!id) return res.status(400).json({ error: 'Broadcast id required' });
@@ -36,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await enforceCompanyAccess({ req, res, companyId: broadcast.company_id });
   if (!access) return;
 
-  // ── GET: broadcast detail ──────────────────────────────────────────────────
+  // â”€â”€ GET: broadcast detail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { data: recipientStats } = await supabase
       .from('whatsapp_broadcast_recipients')
@@ -54,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ broadcast, recipient_status_counts: byStatus });
   }
 
-  // ── POST: actions (enqueue / retry / add-recipients) ──────────────────────
+  // â”€â”€ POST: actions (enqueue / retry / add-recipients) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const roleGate = await enforceRole({ req, res, allowedRoles: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN] });
     if (!roleGate) return;
@@ -97,3 +99,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', ['GET', 'POST']);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

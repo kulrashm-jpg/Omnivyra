@@ -4,7 +4,8 @@
  * Provides message listing for conversation threads in the Unified Engagement Inbox.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type ThreadMessage = {
   message_id: string;

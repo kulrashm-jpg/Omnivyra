@@ -3,7 +3,8 @@
  * Loads recommendation_jobs_v2, runs per-region generation, then consolidation.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   generateTrendRecommendationForRegion,
   type StrategicPayload,

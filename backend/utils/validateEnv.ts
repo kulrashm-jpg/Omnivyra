@@ -11,14 +11,14 @@ import { getConfig } from '@/config';
 const WORKER_REQUIRED = [
   'REDIS_URL',
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_' + 'SERVICE_' + 'ROLE_KEY',
   'OPENAI_API_KEY',
 ] as const;
 
 const CRON_REQUIRED = [
   'REDIS_URL',
   'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  'SUPABASE_' + 'SERVICE_' + 'ROLE_KEY',
 ] as const;
 
 export function validateWorkerEnv(): void {

@@ -1,22 +1,24 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/analytics/posts
  *
  * Returns paginated post analytics rows from content_analytics.
  *
  * Query params:
- *   company_id   (required) — filter by company
- *   platform     (optional) — e.g. linkedin, twitter
- *   date_from    (optional) — YYYY-MM-DD inclusive
- *   date_to      (optional) — YYYY-MM-DD inclusive
+ *   company_id   (required) â€” filter by company
+ *   platform     (optional) â€” e.g. linkedin, twitter
+ *   date_from    (optional) â€” YYYY-MM-DD inclusive
+ *   date_to      (optional) â€” YYYY-MM-DD inclusive
  *   page         (optional, default 1)
  *   per_page     (optional, default 50, max 200)
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
@@ -70,3 +72,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     total_pages: Math.ceil((count ?? 0) / perPageNum),
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

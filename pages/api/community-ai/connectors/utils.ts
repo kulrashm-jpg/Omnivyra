@@ -1,15 +1,18 @@
+﻿// AUTH EXEMPT: non-route API helper module without default handler
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerClient } from '@supabase/ssr';
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../../backend/services/rbac/communityAiCapabilities';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /**
  * Returns the OAuth callback URL for a Community AI connector.
  * Used by auth.ts and callback.ts for all platforms (facebook, twitter, reddit, instagram, linkedin).
  *
- * Priority: request host (actual origin) → NEXT_PUBLIC_APP_URL → NEXT_PUBLIC_BASE_URL → http://localhost:3000
+ * Priority: request host (actual origin) â†’ NEXT_PUBLIC_APP_URL â†’ NEXT_PUBLIC_BASE_URL â†’ http://localhost:3000
  *
  * Deriving from the request host ensures local dev (localhost:3000) and production
  * both get the correct callback URL automatically, even when NEXT_PUBLIC_APP_URL
@@ -66,7 +69,7 @@ export const requireManageConnectors = async (
         if (row?.id) resolvedUser = { id: row.id };
       }
     } catch {
-      // SSR cookie path failed — fall through to UNAUTHORIZED
+      // SSR cookie path failed â€” fall through to UNAUTHORIZED
     }
   }
 
@@ -89,3 +92,4 @@ export const requireManageConnectors = async (
   }
   return { userId: resolvedUser.id, role };
 };
+

@@ -1,59 +1,37 @@
 
 /**
- * GET  /api/admin/platform-oauth-configs  — list all platforms with config status
- * POST /api/admin/platform-oauth-configs  — upsert OAuth credentials for a platform
+ * GET  /api/admin/platform-oauth-configs  â€” list all platforms with config status
+ * POST /api/admin/platform-oauth-configs  â€” upsert OAuth credentials for a platform
  * Super admin only.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, isSuperAdmin } from '@/backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { encryptCredential, decryptCredential } from '@/backend/auth/credentialEncryption';
-
-async function requireAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (isContentArchitectSession(req)) return true;
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  console.log('[platform-oauth-configs] auth debug:', {
-    hasUser: !!user?.id,
-    userId: user?.id,
-    authError: error,
-    cookieKeys: Object.keys(req.cookies || {}),
-    hasSuperAdminCookie: req.cookies?.super_admin_session,
-  });
-  if (!error && user?.id) {
-    // Check any admin role in user_company_roles
-    const { data: roleRows } = await supabase
-      .from('user_company_roles')
-      .select('role')
-      .eq('user_id', user.id)
-      .limit(5);
-    console.log('[platform-oauth-configs] user roles:', roleRows);
-    const adminRoles = ['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN', 'company_admin', 'super_admin', 'admin'];
-    const hasAdminRole = (roleRows || []).some((r: any) => adminRoles.includes(r.role));
-    if (hasAdminRole) return true;
-    res.status(403).json({ error: 'Admin role required', roles: roleRows });
-    return false;
-  }
-  res.status(403).json({ error: 'Not authorized — no valid session' });
-  return false;
-}
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenUrl: string; scopes: string[] }> = {
   ga4:       { label: 'Google Analytics 4', authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', scopes: ['openid','email','profile','https://www.googleapis.com/auth/analytics.readonly'] },
   linkedin:  { label: 'LinkedIn',  authUrl: 'https://www.linkedin.com/oauth/v2/authorization', tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken', scopes: ['openid','profile','email','w_member_social'] },
   x:         { label: 'X', authUrl: 'https://twitter.com/i/oauth2/authorize', tokenUrl: 'https://api.twitter.com/2/oauth2/token', scopes: ['tweet.read','tweet.write','users.read','like.write','follows.write','offline.access'] },
   youtube:   { label: 'YouTube',   authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', scopes: ['openid','email','profile','https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.force-ssl'] },
-  facebook:  { label: 'Meta (Facebook · Instagram · WhatsApp)', authUrl: 'https://www.facebook.com/v22.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token', scopes: ['pages_show_list','pages_read_engagement','pages_manage_posts','pages_manage_engagement','instagram_basic','instagram_manage_comments','instagram_manage_insights','instagram_content_publish','whatsapp_business_management','whatsapp_business_messaging','public_profile'] },
+  facebook:  { label: 'Meta (Facebook Â· Instagram Â· WhatsApp)', authUrl: 'https://www.facebook.com/v22.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token', scopes: ['pages_show_list','pages_read_engagement','pages_manage_posts','pages_manage_engagement','instagram_basic','instagram_manage_comments','instagram_manage_insights','instagram_content_publish','whatsapp_business_management','whatsapp_business_messaging','public_profile'] },
   tiktok:    { label: 'TikTok',   authUrl: 'https://www.tiktok.com/auth/authorize/', tokenUrl: 'https://open-api.tiktok.com/oauth/access_token/', scopes: ['user.info.basic','video.list'] },
   pinterest: { label: 'Pinterest', authUrl: 'https://www.pinterest.com/oauth/', tokenUrl: 'https://api.pinterest.com/v5/oauth/token', scopes: ['boards:read','pins:read','pins:write'] },
   reddit:    { label: 'Reddit',   authUrl: 'https://www.reddit.com/api/v1/authorize', tokenUrl: 'https://www.reddit.com/api/v1/access_token', scopes: ['identity','submit','read'] },
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const allowed = await requireAdminAccess(req, res);
-  if (!allowed) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Content-architect session has its own auth path (no scope check needed)
+  if (!isContentArchitectSession(req)) {
+    const ctx = await requireAdminScope(req, res, 'config:oauth');
+    if (!ctx) return;
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[ADMIN_SCOPE]', '/api/admin/platform-oauth-configs', 'config:oauth');
+    }
+  }
 
   if (req.method === 'GET') {
     const { data: configs } = await supabase
@@ -65,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let clientIdPreview = '';
       try {
         const dec = row.oauth_client_id_encrypted ? decryptCredential(row.oauth_client_id_encrypted) : '';
-        clientIdPreview = dec ? dec.slice(0, 6) + '…' : '';
+        clientIdPreview = dec ? dec.slice(0, 6) + 'â€¦' : '';
       } catch { /* bad key */ }
       configMap[row.platform] = {
         ...row,
@@ -97,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Invalid platform' });
     }
 
-    // If no client_id supplied, check if credentials already exist — allow enabled-only toggle
+    // If no client_id supplied, check if credentials already exist â€” allow enabled-only toggle
     if (!client_id) {
       const { data: existing } = await supabase
         .from('platform_oauth_configs')
@@ -109,7 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'client_id required' });
       }
 
-      // Credentials exist — just update the enabled flag
+      // Credentials exist â€” just update the enabled flag
       const { error: updateErr } = await supabase
         .from('platform_oauth_configs')
         .update({ enabled: Boolean(enabled), updated_at: new Date().toISOString() })
@@ -153,3 +131,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -1,13 +1,15 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/social-accounts/disconnect
  * Deactivates a social_accounts row for the current user.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error } = await getSupabaseUserFromRequest(req);
@@ -26,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Do NOT null access_token/refresh_token: the column has a NOT NULL
   // constraint in production, so the entire UPDATE rejects and the
   // disconnect appears to silently fail. The encrypted tokens on an
-  // is_active=false row are harmless — reconnect overwrites them.
+  // is_active=false row are harmless â€” reconnect overwrites them.
   const updatePayload = {
     is_active: false,
     status: 'disconnected',
@@ -34,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   };
 
   // Chain .select() so the update returns the affected rows. Without this,
-  // Supabase happily returns no error when zero rows match — the API would
+  // Supabase happily returns no error when zero rows match â€” the API would
   // 200 OK and the UI would falsely claim "disconnected" while nothing changed.
   // This is the failure mode when the row's user_id doesn't match the caller
   // (duplicate users rows, or a row created under a different supabase_uid).
@@ -76,10 +78,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({
       error:
         `No active ${normalizedPlatform} account found for your user. ` +
-        `The connection may belong to a different login — check the users table for duplicates.`,
+        `The connection may belong to a different login â€” check the users table for duplicates.`,
       disconnected: 0,
     });
   }
 
   return res.status(200).json({ success: true, disconnected: disconnectedCount });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

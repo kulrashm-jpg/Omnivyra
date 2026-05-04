@@ -6,7 +6,8 @@
  * dedup helper so the weekly job doesn't spam duplicate rows.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from './logger';
 
 export type AlertType =

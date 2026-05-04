@@ -12,7 +12,7 @@ import {
 import { usePlannerSession, type CalendarPlanActivity } from './plannerSessionStore';
 import PlatformIcon from '../ui/PlatformIcon';
 import ActivityWorkspaceDrawer, { type ContentGroup } from './ActivityWorkspaceDrawer';
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { PlannerStrategicCard } from '../../lib/plannerStrategicCard';
 
 const WEEK_COLORS = [
@@ -154,7 +154,7 @@ function CardsView({
         idea_spine: state.idea_spine,
         trend_context: state.trend_context,
       };
-      const res = await fetchWithAuth('/api/planner/generate-themes', {
+      const res = await apiFetch('/api/planner/generate-themes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

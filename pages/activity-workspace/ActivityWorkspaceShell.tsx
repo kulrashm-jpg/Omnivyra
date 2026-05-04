@@ -25,7 +25,7 @@ type ActivityWorkspaceShellProps = {
   onSaveChanges: () => void;
   currentUserId: string;
   discussionActivityId: string;
-  fetchWithAuth: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  apiFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   communitySignalsLoading: boolean;
   communitySignals: CommunitySignal[];
 };
@@ -60,7 +60,7 @@ export default function ActivityWorkspaceShell({
   onSaveChanges,
   currentUserId,
   discussionActivityId,
-  fetchWithAuth,
+  apiFetch,
   communitySignalsLoading,
   communitySignals,
 }: ActivityWorkspaceShellProps) {
@@ -179,7 +179,7 @@ export default function ActivityWorkspaceShell({
               campaignId={payload.campaignId}
               activityId={discussionActivityId}
               currentUserId={currentUserId}
-              fetchWithAuth={fetchWithAuth}
+              apiFetch={apiFetch}
             />
           ) : (
             <div className="p-6 text-sm text-gray-500">Open an activity to view discussion.</div>

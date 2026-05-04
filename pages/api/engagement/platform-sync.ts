@@ -1,7 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
 
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 
 const SYNC_COMMAND_PLATFORMS = new Set(['linkedin']);
@@ -182,7 +184,7 @@ async function loadFreshness(organizationId: string, platforms: string[], since:
   return result;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const organizationId = String(
     req.method === 'GET'
       ? req.query.organization_id ?? req.query.organizationId ?? ''
@@ -232,3 +234,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ success: false, error: (error as Error)?.message || 'platform sync failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

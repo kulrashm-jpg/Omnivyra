@@ -3,17 +3,17 @@
  * /api/super-admin/activity-control
  *
  * GET  ?type=global_activities
- *        → all intelligence_global_config rows
+ *        â†’ all intelligence_global_config rows
  *
  * GET  ?type=company_activities&company_id=<uuid>
- *        → global configs merged with company overrides (resolved)
+ *        â†’ global configs merged with company overrides (resolved)
  *
  * GET  ?type=infra_limits
- *        → InfraLimitsConfig from Redis + current effective limits
+ *        â†’ InfraLimitsConfig from Redis + current effective limits
  *
  * PATCH body { action: 'update_global_activity',   job_type, ...fields }
  *       body { action: 'update_company_activity',  job_type, company_id, ...fields }
- *       body { action: 'update_infra_limits',       limits: InfraLimitsConfig['redis'|…] }
+ *       body { action: 'update_infra_limits',       limits: InfraLimitsConfig['redis'|â€¦] }
  *
  * Auth: super_admin_session cookie (HttpOnly) required.
  */
@@ -30,6 +30,7 @@ import {
   resolveConfig,
   type GlobalConfig,
 } from '../../../backend/services/intelligenceConfigService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import {
   getInfraLimitsConfig,
   saveInfraLimitsConfig,
@@ -47,17 +48,11 @@ async function getApplyOverride() {
   return _applyOverride;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Auth guard
-// ─────────────────────────────────────────────────────────────────────────────
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Activity group labels (user-facing → job_type mapping)
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Activity group labels (user-facing â†’ job_type mapping)
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const ACTIVITY_GROUPS: Record<string, string[]> = {
   'Website Analysis':  ['signal_clustering', 'signal_intelligence', 'intelligence_polling', 'trend_relevance'],
@@ -74,9 +69,9 @@ function groupForJobType(jobType: string): string {
   return 'Other';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Handlers
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   const { type, company_id } = req.query;
@@ -178,7 +173,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
     };
     await saveInfraLimitsConfig(updated);
 
-    // Apply immediately to in-process protection engine (best-effort — may not be running in this process)
+    // Apply immediately to in-process protection engine (best-effort â€” may not be running in this process)
     try {
       const apply = await getApplyOverride();
       apply({
@@ -229,15 +224,23 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
   return res.status(400).json({ error: 'Unknown action' });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Handler
-// ─────────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Forbidden' });
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'autonomous:control');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/activity-control', 'autonomous:control');
   }
   if (req.method === 'GET')   return handleGet(req, res);
   if (req.method === 'PATCH') return handlePatch(req, res);
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

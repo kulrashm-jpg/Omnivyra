@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET  /api/track/angle-industry-matrix?industry=saas
@@ -10,7 +11,7 @@
  * { industry, angle_type, content_score }
  *
  * Called internally after a blog is generated to update the running
- * aggregate (score_sum, post_count) for that industry × angle combination.
+ * aggregate (score_sum, post_count) for that industry Ã— angle combination.
  *
  * Response (GET):
  * {
@@ -22,13 +23,14 @@
  *     post_count:   number,
  *     avg_score:    number,
  *     recommendation: 'best' | 'good' | 'avoid',
- *     confidence:   'data' | 'prior',  // 'data' once ≥ 3 posts
+ *     confidence:   'data' | 'prior',  // 'data' once â‰¥ 3 posts
  *   }]
  * }
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 type AngleType = 'analytical' | 'contrarian' | 'strategic';
@@ -47,8 +49,8 @@ function normaliseIndustry(raw: string): string {
   return raw.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // ── GET: fetch matrix for an industry ────────────────────────────────────
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // â”€â”€ GET: fetch matrix for an industry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const rawIndustry = typeof req.query.industry === 'string' ? req.query.industry.trim() : '';
     if (!rawIndustry) return res.status(400).json({ error: 'industry required' });
@@ -67,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const rows = data as MatrixRow[];
 
-    // Compute effective ranking: use data-score if ≥ 3 posts, else use prior_rank
+    // Compute effective ranking: use data-score if â‰¥ 3 posts, else use prior_rank
     const ranked = rows.map(row => {
       const hasData     = row.post_count >= 3;
       const effectiveRank = hasData
@@ -88,7 +90,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ industry, angles: ranked });
   }
 
-  // ── POST: update running aggregate ────────────────────────────────────────
+  // â”€â”€ POST: update running aggregate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const { company_id, industry: rawIndustry, angle_type, content_score } = req.body ?? {};
 
@@ -106,7 +108,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'angle_type must be analytical | contrarian | strategic' });
     }
     if (typeof content_score !== 'number' || content_score < 0 || content_score > 100) {
-      return res.status(400).json({ error: 'content_score must be 0–100' });
+      return res.status(400).json({ error: 'content_score must be 0â€“100' });
     }
 
     const industry = normaliseIndustry(rawIndustry);
@@ -139,3 +141,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

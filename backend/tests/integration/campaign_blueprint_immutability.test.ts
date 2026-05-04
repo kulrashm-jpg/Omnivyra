@@ -34,7 +34,8 @@ import regenerateBlueprintHandler from '../../../pages/api/campaigns/regenerate-
 import negotiateDurationHandler from '../../../pages/api/campaigns/negotiate-duration';
 import runPreplanningHandler from '../../../pages/api/campaigns/run-preplanning';
 import { recordGovernanceEvent } from '../../services/GovernanceEventService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { runPrePlanning } from '../../services/CampaignPrePlanningService';
 import { runDurationNegotiation } from '../../services/CampaignNegotiationService';
 

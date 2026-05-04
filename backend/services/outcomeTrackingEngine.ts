@@ -4,7 +4,8 @@
  * Types: content_published, campaign_created, feature_built, competitive_response, market_entry
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type OutcomeType =
   | 'content_published'

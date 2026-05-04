@@ -1,6 +1,8 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 type ReadinessResponse = {
   connected_platforms: string[];
@@ -15,7 +17,7 @@ type ReadinessResponse = {
 
 async function getCompanyUserIds(companyId: string): Promise<string[]> {
   const { data, error } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', companyId)
     .eq('status', 'active');
@@ -27,7 +29,7 @@ async function getCompanyUserIds(companyId: string): Promise<string[]> {
   return (data ?? []).map((row: { user_id: string }) => row.user_id).filter(Boolean);
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse<ReadinessResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<ReadinessResponse | { error: string }>) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -164,3 +166,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

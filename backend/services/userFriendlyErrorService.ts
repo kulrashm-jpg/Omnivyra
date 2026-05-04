@@ -5,7 +5,8 @@
  * Cached in memory; falls back to built-in defaults if DB fails.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type ErrorContext =
   | 'login'

@@ -8,7 +8,8 @@
  * every platform.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { normalizePlatform } from '../constants/platforms';
 
 /** Built-in fallback times (HH:MM UTC) — used when platform_rules row is missing. */

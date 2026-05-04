@@ -20,7 +20,7 @@ import { buildSourceStrategicTheme } from '../../../lib/recommendationStrategicC
 export interface TrendCampaignsRecommendationCardsProps {
   // Core
   companyId: string | undefined;
-  fetchWithAuth: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+  apiFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
   router: ReturnType<typeof useRouter>;
   viewMode?: string;
   initialBlogId?: string | null;
@@ -135,7 +135,7 @@ export interface TrendCampaignsRecommendationCardsProps {
 
 export default function TrendCampaignsRecommendationCards(props: TrendCampaignsRecommendationCardsProps) {
   const {
-    companyId, fetchWithAuth, router, viewMode, initialBlogId, intelligentMixContext,
+    companyId, apiFetch, router, viewMode, initialBlogId, intelligentMixContext,
     hasRun, isSubmitting, isExecutionFormComplete, handleRunClick,
     visibleEngineCards, rankedEngineCardsWithStatus, archivedEngineCards, longTermEngineCards,
     consolidatedResult, workspaceSummaryData,
@@ -478,7 +478,7 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                             (typeof recommendation.topic === 'string' ? recommendation.topic : null),
                         });
                         try {
-                          const putRes = await fetchWithAuth(
+                          const putRes = await apiFetch(
                             `/api/campaigns/${encodeURIComponent(generatedCampaignId)}/source-recommendation`,
                             {
                               method: 'PUT',
@@ -530,7 +530,7 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                               : null) ??
                             undefined;
 
-                          const createRes = await fetchWithAuth('/api/campaigns', {
+                          const createRes = await apiFetch('/api/campaigns', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -555,7 +555,7 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                                   ? recTitle
                                   : null,
                           });
-                          await fetchWithAuth(
+                          await apiFetch(
                             `/api/campaigns/${encodeURIComponent(stubCampaignId)}/source-recommendation`,
                             {
                               method: 'PUT',
@@ -669,7 +669,7 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                         const timeoutId = setTimeout(() => controller.abort(), BOLT_EXECUTE_TIMEOUT_MS);
                         let execRes;
                         try {
-                          execRes = await fetchWithAuth('/api/bolt/execute', {
+                          execRes = await apiFetch('/api/bolt/execute', {
                             method: 'POST',
                             signal: controller.signal,
                             headers: { 'Content-Type': 'application/json' },
@@ -714,7 +714,7 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                           const progTimeoutId = setTimeout(() => progController.abort(), POLL_PROGRESS_TIMEOUT_MS);
                           let progRes: Response;
                           try {
-                            progRes = await fetchWithAuth(`/api/bolt/progress?run_id=${encodeURIComponent(runId)}`, {
+                            progRes = await apiFetch(`/api/bolt/progress?run_id=${encodeURIComponent(runId)}`, {
                               signal: progController.signal,
                             });
                           } finally {
@@ -795,13 +795,13 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                       (typeof card.recommendation?.id === 'string' &&
                         card.recommendation.id.trim() &&
                         !card.recommendation.id.startsWith('engine-') &&
-                        fetchWithAuth)
+                        apiFetch)
                         ? async () => {
                             const recId = (card.recommendation?.id as string).trim();
                             setRecommendationUserStateMap((prev) => ({ ...prev, [recId]: 'LONG_TERM' }));
                             setRecommendationSignals((prev: any) => prev ? ({ ...prev, longTerm: prev.longTerm + 1 }) : prev);
                             try {
-                              const res = await fetchWithAuth!(`/api/recommendations/${encodeURIComponent(recId)}/long-term`, { method: 'POST' });
+                              const res = await apiFetch!(`/api/recommendations/${encodeURIComponent(recId)}/long-term`, { method: 'POST' });
                               if (!res.ok) throw new Error('Failed to mark long-term');
                             } catch {
                               setRecommendationUserStateMap((prev) => {
@@ -818,13 +818,13 @@ export default function TrendCampaignsRecommendationCards(props: TrendCampaignsR
                       (typeof card.recommendation?.id === 'string' &&
                         card.recommendation.id.trim() &&
                         !card.recommendation.id.startsWith('engine-') &&
-                        fetchWithAuth)
+                        apiFetch)
                         ? async () => {
                             const recId = (card.recommendation?.id as string).trim();
                             setRecommendationUserStateMap((prev) => ({ ...prev, [recId]: 'ARCHIVED' }));
                             setRecommendationSignals((prev: any) => prev ? ({ ...prev, archived: prev.archived + 1 }) : prev);
                             try {
-                              const res = await fetchWithAuth!(`/api/recommendations/${encodeURIComponent(recId)}/archive`, { method: 'POST' });
+                              const res = await apiFetch!(`/api/recommendations/${encodeURIComponent(recId)}/archive`, { method: 'POST' });
                               if (!res.ok) throw new Error('Failed to archive');
                             } catch {
                               setRecommendationUserStateMap((prev) => {

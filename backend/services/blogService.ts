@@ -3,7 +3,8 @@
  * Publish to WordPress, custom blog API, or host internally as fallback.
  * Supports full content_blocks + SEO + category/tag metadata.
  */
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getIntegration, getActiveIntegration, Integration } from './integrationService';
 import { extractBlogContext } from '../../lib/blog/blockExtractor';
 

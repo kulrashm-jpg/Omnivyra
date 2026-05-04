@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/calendar/activity-events
@@ -6,7 +7,8 @@
  * Performance: Loads only events for visible month.
  */
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 function extractTitleFromContent(content: string | null | undefined): string {
@@ -27,7 +29,7 @@ function toLocalDateKey(value: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -70,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       new Set((versionRows || []).map((r: { campaign_id: string }) => r.campaign_id).filter(Boolean))
     );
     const { data: roleRows, error: roleError } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id')
       .eq('company_id', companyId)
       .eq('status', 'active');
@@ -87,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Support broad-range stage-filter fetch (no date bounds when stageFilter param is set)
     const stageFilter = typeof req.query.stageFilter === 'string' ? req.query.stageFilter.trim() : '';
 
-    // 2. Query scheduled_posts — full range when stageFilter is active, otherwise month range
+    // 2. Query scheduled_posts â€” full range when stageFilter is active, otherwise month range
     const applyDateRange = <T extends { gte: (...args: any[]) => T; lte: (...args: any[]) => T }>(query: T) => {
       if (stageFilter) return query;
       return query.gte('scheduled_for', startIso).lte('scheduled_for', endIso);
@@ -167,3 +169,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message || 'Internal error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

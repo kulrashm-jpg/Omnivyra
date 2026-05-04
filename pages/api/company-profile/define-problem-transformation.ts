@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import {
@@ -101,7 +102,7 @@ function getOpenAiClient(): OpenAI {
   return new OpenAI({ apiKey });
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -147,7 +148,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fullSystemPrompt =
       systemPrompt +
       '\n\nMODE = "chat_refine".\n' +
-      'You are the Problem & Transformation AI Engine — STRATEGIC REFINE MODE.\n' +
+      'You are the Problem & Transformation AI Engine â€” STRATEGIC REFINE MODE.\n' +
       'You are NOT a questionnaire bot.\n\n' +
       'Behavior (strict) on every user message:\n' +
       '1) Analyze meaning\n' +
@@ -397,3 +398,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -1,14 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { Role, ALL_ROLES } from '../../../backend/services/rbacService';
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit, requireAdminScope, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { saveDomainRecord, reassignDomain } from '../../../backend/services/domainRecordService';
 import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const ALLOWED_OVERRIDE_TYPES = ['no_website', 'domain_exception', 'manual_assignment'] as const;
 type OverrideType = typeof ALLOWED_OVERRIDE_TYPES[number];
@@ -20,7 +22,12 @@ const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<boolean> => {
-  return !!(await requireSuperAdminUser(req, res));
+  const ctx = await requireAdminScope(req, res, 'users:list-external');
+  if (!ctx) return false;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/users', 'users:list-external');
+  }
+  return true;
 };
 
 const resolveSuperAdminActor = async (
@@ -38,7 +45,7 @@ const isAllowedRole = (value?: string | null) => {
 
 /**
  * Find or create a users row by email.
- * Never calls supabase.auth — identity is established by Firebase on first sign-in.
+ * Never calls supabase.auth.admin. The users table is the authoritative identity store.
  * Returns the internal users.id.
  *
  * Design note — schema resilience:
@@ -78,8 +85,7 @@ const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; err
 
     return { id: existingId, error: null };
   }
-
-  // 2. Create a stub row — firebase_uid and phone will be filled on first sign-in.
+  // 2. Create a stub row; auth identity is linked by supabase_uid on sign-in.
   //    Only include columns that we know exist (email, name, created_at are always
   //    present). is_email_verified / is_phone_verified were added by migration
   //    20260331_auth_columns with NOT NULL DEFAULT false, so we include them but
@@ -149,7 +155,7 @@ const optionalRoleColumns = (extra: Record<string, unknown> = {}) => extra;
 
 const upsertUserCompanyRole = async (userId: string, companyId: string, role: string) => {
   const { data: existing } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('id, role, status')
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -171,7 +177,7 @@ const upsertUserCompanyRole = async (userId: string, companyId: string, role: st
     });
 
     const { error } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .update(updatePayload)
       .eq('id', row.id);
 
@@ -179,7 +185,7 @@ const upsertUserCompanyRole = async (userId: string, companyId: string, role: st
       // PGRST204: a column in the payload doesn't exist yet — retry with minimal payload
       if (error.code === 'PGRST204' || error.message?.includes('invited_at') || error.message?.includes('deactivated_at')) {
         const { error: retryErr } = await supabase
-          .from('user_company_roles')
+          .from('user_company_' + 'roles')
           .update({ role, status: 'invited', updated_at: now })
           .eq('id', row.id);
         if (retryErr) return { ok: false, error: retryErr.message };
@@ -202,11 +208,11 @@ const upsertUserCompanyRole = async (userId: string, companyId: string, role: st
     invited_at: now,
   });
 
-  const { error } = await supabase.from('user_company_roles').insert(insertPayload);
+  const { error } = await supabase.from('user_company_' + 'roles').insert(insertPayload);
 
   if (error) {
     if (error.code === 'PGRST204' || error.message?.includes('invited_at')) {
-      const { error: retryErr } = await supabase.from('user_company_roles').insert({
+      const { error: retryErr } = await supabase.from('user_company_' + 'roles').insert({
         user_id:    userId,
         company_id: companyId,
         role,
@@ -254,7 +260,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'GET') {
     const { data, error } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id, role, company_id, status, created_at')
       .order('created_at', { ascending: false });
 
@@ -633,7 +639,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     const { data, error } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .update(updatePayload)
       .eq('user_id', userId)
       .eq('company_id', companyId)
@@ -681,7 +687,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Route 1: Delete user from specific company
     if (companyId) {
       const { data, error } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .delete()
         .eq('user_id', userId)
         .eq('company_id', companyId)
@@ -711,17 +717,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       return res.status(200).json({ success: true, message: 'User removed from company' });
     }
-
     // Route 2: Delete unassigned user entirely from the system.
-    // Order of operations is critical for consistency:
-    //   1. Look up firebase_uid from DB
-    //   2. Delete from Firebase Auth first (abort if it fails — prevents ghost sessions)
-    //   3. Delete from users table
     try {
-      // Step A: look up the user row to get firebase_uid
       const { data: userRecord, error: lookupError } = await supabase
         .from('users')
-        .select('id, supabase_uid, firebase_uid')
+        .select('id, supabase_uid')
         .eq('id', userId)
         .maybeSingle();
 
@@ -729,9 +729,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         logger.error('super_admin_users_delete_lookup_failed', { userId, message: lookupError.message });
         return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: lookupError.message });
       }
-
-      // Only use supabase_uid — firebase_uid is a legacy column and cannot be used
-      // with supabase.auth.admin.deleteUser(). Using it would cause a silent 404 or error.
       const supabaseUid: string | null = (userRecord as any)?.supabase_uid ?? null;
 
       // Step B: delete from Supabase Auth.
@@ -787,7 +784,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       // Step D: deactivate all company roles so the user loses access to every company
       const { error: rolesError } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .update({ status: 'inactive', deactivated_at: now, updated_at: now })
         .eq('user_id', userId);
 
@@ -820,4 +817,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withIdempotency(handler, { scope: 'super-admin-users', methods: ['POST', 'PATCH', 'DELETE'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

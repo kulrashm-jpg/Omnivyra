@@ -1,5 +1,7 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
@@ -38,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const credentials = await getOAuthCredentialsForPlatform(platform);
     if (!credentials?.client_id || !credentials?.client_secret) {
       return res.redirect(
-        `${errDest}?error=${encodeURIComponent('YouTube OAuth not configured — ask your Super Admin to add credentials.')}`
+        `${errDest}?error=${encodeURIComponent('YouTube OAuth not configured â€” ask your Super Admin to add credentials.')}`
       );
     }
 
@@ -85,7 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
-      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
+      return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required â€” please log in and try again')}`);
     }
 
     const accountName = channel.snippet?.title || 'YouTube Channel';
@@ -195,7 +197,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Save encrypted tokens
     await setToken(accountId, tokenObj);
 
-    console.log('✅ YouTube account saved successfully:', { accountId, accountName });
+    console.log('âœ… YouTube account saved successfully:', { accountId, accountName });
 
     if (companyId && userId) {
       checkAndGrantSetupCredits(companyId, userId)
@@ -223,3 +225,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }
+

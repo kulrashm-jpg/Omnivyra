@@ -1,24 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const ok = await requireSuperAdmin(req, res);
-  if (!ok) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'blog:series-manage');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/blog/series/[id]', 'blog:series-manage');
+  }
 
   const id = req.query.id as string;
   if (!id?.trim()) return res.status(400).json({ error: 'id required' });
 
-  // ── GET — series with full post list ──────────────────────────────────────
+  // â”€â”€ GET â€” series with full post list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     const { data, error } = await supabase
       .from('blog_series')
@@ -56,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ...data, blog_series_posts: posts });
   }
 
-  // ── PATCH — update series metadata + replace post list ─────────────────────
+  // â”€â”€ PATCH â€” update series metadata + replace post list â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'PATCH') {
     const body = req.body ?? {};
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -93,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true });
   }
 
-  // ── DELETE ─────────────────────────────────────────────────────────────────
+  // â”€â”€ DELETE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'DELETE') {
     const { error } = await supabase.from('blog_series').delete().eq('id', id);
     if (error) return res.status(500).json({ error: error.message });
@@ -102,3 +98,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -483,7 +483,7 @@ export default function CMOIntelligenceDashboard() {
             companyId={companyId}
             activeView={activeView}
             onViewChange={setActiveView}
-            fetchWithAuth={(input, init) =>
+            apiFetch={(input, init) =>
               fetch(input, {
                 ...init,
                 credentials: 'include',

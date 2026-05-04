@@ -1,7 +1,9 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
 import { Role } from '../../../../backend/services/rbacService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   takeAction,
   setOpportunityReviewed,
@@ -112,4 +114,7 @@ async function actionHandler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(actionHandler, [Role.COMPANY_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(actionHandler, [Role.COMPANY_ADMIN]));
+

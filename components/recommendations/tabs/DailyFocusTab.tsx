@@ -81,11 +81,11 @@ function DailyItem({
 const VALID_TABS = ['TREND', 'LEAD', 'PULSE', 'SEASONAL', 'INFLUENCER', 'DAILY_FOCUS'];
 
 export default function DailyFocusTab(props: OpportunityTabProps) {
-  const { companyId, onPromote, onAction, fetchWithAuth, onSwitchTab, onOpenGenerator, overrideText = '', onOverrideChange } = props;
+  const { companyId, onPromote, onAction, apiFetch, onSwitchTab, onOpenGenerator, overrideText = '', onOverrideChange } = props;
   const { opportunities, loading, error, runEngine, hasRun, refetch, refetchGetOnly } = useOpportunities(
     companyId,
     TYPE,
-    fetchWithAuth
+    apiFetch
   );
 
   const wrappedOnPromote = async (id: string) => {
@@ -123,7 +123,7 @@ export default function DailyFocusTab(props: OpportunityTabProps) {
   return (
     <div className="space-y-4">
       <EngineOverridePanel value={overrideText} onChange={onOverrideChange ?? (() => {})} />
-      <EngineContextPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      <EngineContextPanel companyId={companyId} apiFetch={apiFetch} />
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-gray-800">{ENGINE_LABEL}</h3>
         <div className="flex gap-2">

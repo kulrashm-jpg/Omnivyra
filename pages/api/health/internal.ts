@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * Internal System Health Endpoint
@@ -10,7 +11,7 @@
  * - Monitoring freshness (is polling data current?)
  * - Monitoring failure signals (what's wrong?)
  * 
- * 🔴 NODE RUNTIME ONLY
+ * ðŸ”´ NODE RUNTIME ONLY
  * Used by SRE dashboards and alerting systems
  */
 
@@ -63,7 +64,7 @@ interface InternalHealthResponse {
   };
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<InternalHealthResponse>
 ) {
@@ -138,7 +139,7 @@ export default async function handler(
     const statusCode = 
       overallStatus === 'healthy' ? 200 :
       overallStatus === 'degraded' ? 200 :
-      503;  // unhealthy → service unavailable
+      503;  // unhealthy â†’ service unavailable
     
     // Add structured logging
     console.log(JSON.stringify({
@@ -203,3 +204,8 @@ export default async function handler(
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

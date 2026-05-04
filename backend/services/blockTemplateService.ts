@@ -6,7 +6,8 @@
  * Follows the strategyTemplateService pattern.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 
 // ── Types ────────────────────────────────────────────────────────────────────

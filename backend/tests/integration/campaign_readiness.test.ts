@@ -18,8 +18,12 @@ jest.mock('../../db/queries', () => ({
 jest.mock('../../adapters/platformAdapter', () => ({
   publishToPlatform: jest.fn(),
 }));
+jest.mock('../../jobs/idempotencyService', () => ({
+  claimIdempotencyKey: jest.fn().mockResolvedValue(true),
+}));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getQueue } from '../../queue/bullmqClient';
 import {
   createQueueJob,

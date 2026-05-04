@@ -1,4 +1,4 @@
-import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import type { ChatMessage, StructuredPlan } from './types';
 
 type Params = {
@@ -66,7 +66,7 @@ export function useCampaignPlanCreation({
         body.structuredPlan = { weeks: structuredPlan.weeks };
       }
 
-      const response = await fetchWithAuth('/api/campaigns/create-12week-plan', {
+      const response = await apiFetch('/api/campaigns/create-12week-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

@@ -1,11 +1,11 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+﻿import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from './CompanyContext';
 import OrgServiceDrilldown, { type ServiceKey } from './super-admin/OrgServiceDrilldown';
 import RailwayEfficiencyPanel from './super-admin/RailwayEfficiencyPanel';
 import RailwayCompanyCostsPanel from './super-admin/RailwayCompanyCostsPanel';
 
-// ── Activity Breakdown type ────────────────────────────────────────────────────
+// â”€â”€ Activity Breakdown type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 interface ActivityBreakdown {
   period: { year: number; month: number };
   system_costs: {
@@ -19,7 +19,7 @@ interface ActivityBreakdown {
   by_platform_content: { platform: string; content_type: string; post_count: number; published_count: number }[];
 }
 
-// ── Intelligence types ────────────────────────────────────────────────────────
+// â”€â”€ Intelligence types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface ServiceCost { service: string; estimatedMonthly: number; breakdown: Record<string,number>; notes: string[]; hasData: boolean }
 interface CostEstimate {
@@ -33,7 +33,6 @@ interface IntelligenceData {
   metrics: {
     redis?:    { totalOps: number; opsPerMin: number; peakOpsPerMin: number; storageBytesUsed: number; topFeatures: {feature:string;total:number;pct:number}[]; topCommands:{command:string;total:number;pct:number}[] } | null;
     supabase?: { reads: number; writes: number; errors: number; queriesPerMin: number; avgReadLatency: number|null; avgWriteLatency: number|null; available: boolean } | null;
-    firebase?: { tokenVerifications: number; revokedChecks: number; authErrors: number; signIns: number; verificationsPerMin: number; avgVerifyLatencyMs: number|null } | null;
     api?:      { totalCalls: number; callsPerMin: number; errors4xx: number; errors5xx: number; errorRate: number; avgLatencyMs: number|null; p95LatencyMs: number|null; topEndpoints:{endpoint:string;calls:number;avgLatencyMs:number|null}[] } | null;
     external?: { totalExternalCalls: number; topServices:{service:string;calls:number;errors:number;avgLatencyMs:number|null}[] } | null;
   };
@@ -42,7 +41,7 @@ interface IntelligenceData {
   errors?: Record<string, string>;
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type Severity = 'CRITICAL' | 'WARNING' | 'INFO';
 
@@ -82,7 +81,7 @@ interface SystemHealthData {
   baselines: Record<string, number>;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const SEVERITY_CONFIG: Record<Severity, { bg: string; text: string; dot: string; label: string }> = {
   CRITICAL: { bg: 'bg-red-50',    text: 'text-red-600',    dot: 'bg-red-600',    label: 'CRITICAL' },
@@ -111,7 +110,7 @@ function StatusDot({ status }: { status: 'ok' | 'degraded' }) {
 
 function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }) {
   const [open, setOpen] = useState(false);
-  if (!metadata || Object.keys(metadata).length === 0) return <span className="text-slate-500 text-xs">—</span>;
+  if (!metadata || Object.keys(metadata).length === 0) return <span className="text-slate-500 text-xs">â€”</span>;
   return (
     <div>
       <button
@@ -132,9 +131,9 @@ function MetaExpander({ metadata }: { metadata: Record<string, unknown> | null }
 const STATE_CONFIG: Record<SystemStatus, {
   border: string; bg: string; icon: string; label: string; textColor: string;
 }> = {
-  healthy:  { border: 'border-green-300',  bg: 'bg-green-50',  icon: '✓', label: 'System Healthy',   textColor: 'text-green-600'  },
-  degraded: { border: 'border-yellow-300', bg: 'bg-yellow-50', icon: '⚠', label: 'System Degraded',  textColor: 'text-yellow-600' },
-  critical: { border: 'border-red-300',    bg: 'bg-red-50',    icon: '✕', label: 'System Critical',  textColor: 'text-red-600'    },
+  healthy:  { border: 'border-green-300',  bg: 'bg-green-50',  icon: 'âœ“', label: 'System Healthy',   textColor: 'text-green-600'  },
+  degraded: { border: 'border-yellow-300', bg: 'bg-yellow-50', icon: 'âš ', label: 'System Degraded',  textColor: 'text-yellow-600' },
+  critical: { border: 'border-red-300',    bg: 'bg-red-50',    icon: 'âœ•', label: 'System Critical',  textColor: 'text-red-600'    },
 };
 
 function SystemStateBanner({ state }: { state: SystemHealthData['systemState'] }) {
@@ -151,7 +150,7 @@ function SystemStateBanner({ state }: { state: SystemHealthData['systemState'] }
             ))}
           </ul>
         ) : (
-          <p className="text-xs text-slate-500 mt-0.5">No active alerts · All systems operational</p>
+          <p className="text-xs text-slate-500 mt-0.5">No active alerts Â· All systems operational</p>
         )}
       </div>
       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cfg.bg} ${cfg.textColor} border ${cfg.border} whitespace-nowrap`}>
@@ -167,7 +166,7 @@ function fmt(iso: string) {
   });
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Tabs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type Tab = 'all' | 'user' | 'company' | 'system' | 'railway' | 'cache';
 const TABS: { key: Tab; label: string }[] = [
@@ -175,11 +174,11 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'user',    label: 'User'    },
   { key: 'company', label: 'Company' },
   { key: 'system',  label: 'System'  },
-  { key: 'railway', label: '🚂 Railway Efficiency' },
-  { key: 'cache',   label: '🗄 Cache' },
+  { key: 'railway', label: 'ðŸš‚ Railway Efficiency' },
+  { key: 'cache',   label: 'ðŸ—„ Cache' },
 ];
 
-// ── Cache types ───────────────────────────────────────────────────────────────
+// â”€â”€ Cache types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface CacheData {
   redis: {
@@ -205,7 +204,7 @@ interface CacheData {
   collected_at: string;
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// â”€â”€ Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 import type { useSysHealth } from '../hooks/useSysHealth';
 type S = ReturnType<typeof useSysHealth>;
@@ -267,14 +266,14 @@ export default function SysHealthView({ d }: { d: S }) {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-semibold text-slate-900">System Health</h1>
-          <p className="text-sm text-slate-600 mt-0.5">Anomaly detection · Last 24 hours</p>
+          <p className="text-sm text-slate-600 mt-0.5">Anomaly detection Â· Last 24 hours</p>
         </div>
         <button
           onClick={() => void fetchData()}
           disabled={loading}
           className="px-3 py-1.5 text-sm rounded-md bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 transition-colors shadow-sm"
         >
-          {loading ? 'Refreshing…' : 'Refresh'}
+          {loading ? 'Refreshingâ€¦' : 'Refresh'}
         </button>
       </div>
 
@@ -378,7 +377,7 @@ export default function SysHealthView({ d }: { d: S }) {
           )}
 
           {cacheLoading && !cacheData ? (
-            <div className="flex items-center justify-center h-32 text-slate-600 text-sm">Loading cache stats…</div>
+            <div className="flex items-center justify-center h-32 text-slate-600 text-sm">Loading cache statsâ€¦</div>
           ) : cacheData ? (
             <>
               {/* Redis overview */}
@@ -431,7 +430,7 @@ export default function SysHealthView({ d }: { d: S }) {
                     <div key={layer.prefix} className="flex items-center justify-between py-2 border-b border-slate-100 last:border-0">
                       <div>
                         <p className="text-sm font-medium text-slate-800">{layer.name}</p>
-                        <p className="text-xs text-slate-500 mt-0.5">TTL: {layer.ttl} · {layer.auto_evict ? 'Auto-evict enabled' : 'Manual eviction'}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">TTL: {layer.ttl} Â· {layer.auto_evict ? 'Auto-evict enabled' : 'Manual eviction'}</p>
                       </div>
                       {layer.prefix === 'ai_cache' && (
                         <button
@@ -477,7 +476,7 @@ export default function SysHealthView({ d }: { d: S }) {
                   <div className="bg-blue-50 rounded-md p-3">
                     <p className="text-xs text-slate-500 mb-0.5">Hit Rate</p>
                     <p className="text-xl font-bold text-blue-700">
-                      {cacheData.ext_api_cache.hit_rate !== null ? `${cacheData.ext_api_cache.hit_rate}%` : '—'}
+                      {cacheData.ext_api_cache.hit_rate !== null ? `${cacheData.ext_api_cache.hit_rate}%` : 'â€”'}
                     </p>
                   </div>
                 </div>
@@ -504,7 +503,7 @@ export default function SysHealthView({ d }: { d: S }) {
                 )}
               </div>
 
-              <p className="text-xs text-slate-400 text-right">Collected {new Date(cacheData.collected_at).toLocaleTimeString()} · Auto-refreshes every 60s</p>
+              <p className="text-xs text-slate-400 text-right">Collected {new Date(cacheData.collected_at).toLocaleTimeString()} Â· Auto-refreshes every 60s</p>
             </>
           ) : (
             <div className="flex items-center justify-center h-32 text-slate-500 text-sm">Cache data unavailable</div>
@@ -522,7 +521,7 @@ export default function SysHealthView({ d }: { d: S }) {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              💰 Company & Activity Breakdown
+              ðŸ’° Company & Activity Breakdown
             </button>
             <button
               onClick={() => setRailwayView('efficiency')}
@@ -532,7 +531,7 @@ export default function SysHealthView({ d }: { d: S }) {
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              ⚡ Feature Efficiency
+              âš¡ Feature Efficiency
             </button>
           </div>
 
@@ -544,10 +543,10 @@ export default function SysHealthView({ d }: { d: S }) {
           )}
         </div>
       ) : loading && !data ? (
-        <div className="flex items-center justify-center h-32 text-slate-600 text-sm">Loading…</div>
+        <div className="flex items-center justify-center h-32 text-slate-600 text-sm">Loadingâ€¦</div>
       ) : filtered.length === 0 ? (
         <div className="flex items-center justify-center h-32 text-slate-600 text-sm">
-          No anomalies in the last 24 hours 🎉
+          No anomalies in the last 24 hours ðŸŽ‰
         </div>
       ) : (
         <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
@@ -578,7 +577,7 @@ export default function SysHealthView({ d }: { d: S }) {
                     <span className="text-xs text-slate-600">
                       {anomaly.entity_type}
                       {anomaly.entity_id && (
-                        <span className="text-slate-500"> / {anomaly.entity_id.slice(0, 12)}…</span>
+                        <span className="text-slate-500"> / {anomaly.entity_id.slice(0, 12)}â€¦</span>
                       )}
                     </span>
                   </td>
@@ -594,7 +593,7 @@ export default function SysHealthView({ d }: { d: S }) {
                         )}
                       </span>
                     ) : (
-                      <span className="text-slate-500 text-xs">—</span>
+                      <span className="text-slate-500 text-xs">â€”</span>
                     )}
                   </td>
                   <td className="px-4 py-3 hidden xl:table-cell">
@@ -629,17 +628,17 @@ export default function SysHealthView({ d }: { d: S }) {
         </details>
       )}
 
-      {/* ── System Intelligence ───────────────────────────────────────────── */}
+      {/* â”€â”€ System Intelligence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="mt-10 border-t border-slate-200 pt-8">
         <div className="flex items-center justify-between mb-5">
           <div>
             <h2 className="text-base font-semibold text-slate-900">System Intelligence</h2>
-            <p className="text-xs text-slate-600 mt-0.5">Multi-service metrics · Cost estimates</p>
+            <p className="text-xs text-slate-600 mt-0.5">Multi-service metrics Â· Cost estimates</p>
           </div>
-          {intelLoading && <span className="text-xs text-slate-600 animate-pulse">Refreshing…</span>}
+          {intelLoading && <span className="text-xs text-slate-600 animate-pulse">Refreshingâ€¦</span>}
           {intel?.errors && Object.keys(intel.errors).length > 0 && (
             <span className="text-xs text-yellow-700 bg-yellow-50 px-2 py-0.5 rounded border border-yellow-200">
-              Partial data — {Object.keys(intel.errors).join(', ')} unavailable
+              Partial data â€” {Object.keys(intel.errors).join(', ')} unavailable
             </span>
           )}
         </div>
@@ -647,7 +646,7 @@ export default function SysHealthView({ d }: { d: S }) {
         {/* Intelligence grid: 3 columns on wide screens */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 
-          {/* §2 — Database (Supabase) */}
+          {/* Â§2 â€” Database (Supabase) */}
           <IntelCard
             title="Database"
             subtitle="Supabase"
@@ -672,34 +671,7 @@ export default function SysHealthView({ d }: { d: S }) {
               </>
             ) : <UnavailableNote label="Supabase" />}
           </IntelCard>
-
-          {/* §3 — Auth (Firebase) */}
-          <IntelCard
-            title="Auth"
-            subtitle="Firebase"
-            active={activeSection === 'firebase'}
-            onToggle={() => setActiveSection(s => s === 'firebase' ? null : 'firebase')}
-          >
-            {intel?.metrics?.firebase ? (
-              <>
-                <MetricRow label="Verifications/min" value={intel.metrics.firebase.verificationsPerMin.toString()} />
-                <MetricRow label="Total verified"    value={intel.metrics.firebase.tokenVerifications.toLocaleString()} />
-                <MetricRow label="Revoked checks"    value={intel.metrics.firebase.revokedChecks.toLocaleString()} />
-                <MetricRow label="Auth errors"       value={intel.metrics.firebase.authErrors.toLocaleString()} highlight={intel.metrics.firebase.authErrors > 0} />
-                {intel.metrics.firebase.avgVerifyLatencyMs != null && (
-                  <MetricRow label="Avg verify"      value={`${intel.metrics.firebase.avgVerifyLatencyMs} ms`} />
-                )}
-                {activeSection === 'firebase' && (
-                  <div className="mt-3 pt-3 border-t border-slate-200">
-                    <p className="text-xs text-slate-600 mb-1">Cost contribution</p>
-                    <CostLine cost={intel.cost?.breakdown?.['Firebase Auth']} />
-                  </div>
-                )}
-              </>
-            ) : <UnavailableNote label="Firebase" />}
-          </IntelCard>
-
-          {/* §4 — API Usage */}
+{/* Â§4 â€” API Usage */}
           <IntelCard
             title="API Usage"
             subtitle="Vercel / Next.js"
@@ -736,10 +708,10 @@ export default function SysHealthView({ d }: { d: S }) {
             ) : <UnavailableNote label="API" />}
           </IntelCard>
 
-          {/* §5 — External APIs */}
+          {/* Â§5 â€” External APIs */}
           <IntelCard
             title="External APIs"
-            subtitle="OpenAI · Firebase · LinkedIn"
+            subtitle="OpenAI · LinkedIn"
             active={activeSection === 'external'}
             onToggle={() => setActiveSection(s => s === 'external' ? null : 'external')}
           >
@@ -765,7 +737,7 @@ export default function SysHealthView({ d }: { d: S }) {
             )}
           </IntelCard>
 
-          {/* §5 — Redis (instrumented) */}
+          {/* Â§5 â€” Redis (instrumented) */}
           <IntelCard
             title="Redis"
             subtitle="Upstash"
@@ -798,10 +770,10 @@ export default function SysHealthView({ d }: { d: S }) {
             ) : <UnavailableNote label="Redis" />}
           </IntelCard>
 
-          {/* §6 — Cost Overview */}
+          {/* Â§6 â€” Cost Overview */}
           <IntelCard
-            title="💰 Cost Overview"
-            subtitle={intel?.cost ? `Confidence: ${intel.cost.confidence}` : 'Estimating…'}
+            title="ðŸ’° Cost Overview"
+            subtitle={intel?.cost ? `Confidence: ${intel.cost.confidence}` : 'Estimatingâ€¦'}
             active={activeSection === 'cost'}
             onToggle={() => setActiveSection(s => s === 'cost' ? null : 'cost')}
             highlight
@@ -832,7 +804,7 @@ export default function SysHealthView({ d }: { d: S }) {
                     </p>
                     {intel.cost.confidence === 'low' && (
                       <p className="text-xs text-slate-600 mt-1">
-                        Counters are at zero — instrument more endpoints to improve accuracy.
+                        Counters are at zero â€” instrument more endpoints to improve accuracy.
                       </p>
                     )}
                   </div>
@@ -847,12 +819,12 @@ export default function SysHealthView({ d }: { d: S }) {
       <div className="mt-10 border-t border-slate-200 pt-8">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Activity × Cost Breakdown</h2>
+            <h2 className="text-base font-semibold text-slate-900">Activity Ã— Cost Breakdown</h2>
             <p className="text-xs text-slate-600 mt-0.5">
-              How platform activity drives LLM + infra spend · current month
+              How platform activity drives LLM + infra spend Â· current month
             </p>
           </div>
-          {activityLoading && <span className="text-xs text-slate-600 animate-pulse">Loading…</span>}
+          {activityLoading && <span className="text-xs text-slate-600 animate-pulse">Loadingâ€¦</span>}
         </div>
 
         {activityData ? (
@@ -865,9 +837,9 @@ export default function SysHealthView({ d }: { d: S }) {
             >
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-medium text-slate-900">Cost by Feature Area</p>
-                <span className="text-xs text-slate-600">↗ orgs</span>
+                <span className="text-xs text-slate-600">â†— orgs</span>
               </div>
-              <p className="text-xs text-slate-600 mb-3">What the platform spends LLM budget on · click for per-org view</p>
+              <p className="text-xs text-slate-600 mb-3">What the platform spends LLM budget on Â· click for per-org view</p>
               {activityData.by_feature_area.length === 0 ? (
                 <p className="text-xs text-slate-600">No LLM usage recorded this month.</p>
               ) : (() => {
@@ -877,7 +849,7 @@ export default function SysHealthView({ d }: { d: S }) {
                     <div className="flex items-center justify-between text-xs mb-0.5">
                       <span className="text-slate-700 truncate max-w-[170px]">{f.feature_area}</span>
                       <span className="text-slate-600 ml-2 shrink-0">
-                        ${f.total_cost_usd.toFixed(4)} · {f.call_count.toLocaleString()} calls
+                        ${f.total_cost_usd.toFixed(4)} Â· {f.call_count.toLocaleString()} calls
                       </span>
                     </div>
                     <div className="w-full bg-slate-200 rounded-full h-1.5 shadow-sm">
@@ -898,10 +870,10 @@ export default function SysHealthView({ d }: { d: S }) {
             >
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-medium text-slate-900">Posts by Platform</p>
-                <span className="text-xs text-gray-600">↗ orgs</span>
+                <span className="text-xs text-gray-600">â†— orgs</span>
               </div>
               <p className="text-xs text-gray-600 mb-3">
-                Where content is scheduled · click for per-org API cost view
+                Where content is scheduled Â· click for per-org API cost view
               </p>
               {activityData.by_platform.length === 0 ? (
                 <p className="text-xs text-gray-600">No scheduled posts this month.</p>
@@ -958,7 +930,7 @@ export default function SysHealthView({ d }: { d: S }) {
                           <td className="py-1 capitalize text-gray-300">{pc.platform}</td>
                           <td className="py-1 text-gray-400">{pc.content_type}</td>
                           <td className="py-1 text-right text-gray-300">{pc.post_count.toLocaleString()}</td>
-                          <td className="py-1 text-right text-green-500">{pc.published_count || '—'}</td>
+                          <td className="py-1 text-right text-green-500">{pc.published_count || 'â€”'}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -996,7 +968,7 @@ export default function SysHealthView({ d }: { d: S }) {
                 </div>
                 {activityData.system_costs.total_cost_usd === 0 && (
                   <p className="text-xs text-gray-600 mt-1">
-                    No system-level usage detected — all spend is attributed to organizations.
+                    No system-level usage detected â€” all spend is attributed to organizations.
                   </p>
                 )}
               </div>
@@ -1014,7 +986,7 @@ export default function SysHealthView({ d }: { d: S }) {
                       <div className="flex items-center justify-between text-xs mb-0.5">
                         <span className="font-mono text-gray-300 truncate max-w-[160px]">{p.process_type}</span>
                         <span className="text-gray-500 ml-2 shrink-0">
-                          ${p.total_cost_usd.toFixed(4)} · {p.call_count}×
+                          ${p.total_cost_usd.toFixed(4)} Â· {p.call_count}Ã—
                         </span>
                       </div>
                       <div className="w-full bg-gray-800 rounded-full h-1.5">
@@ -1034,7 +1006,7 @@ export default function SysHealthView({ d }: { d: S }) {
           <p className="text-sm text-gray-600">Activity data unavailable.</p>
         ) : null}
 
-        {/* ── Infra service cost-by-process cards ────────────────────────── */}
+        {/* â”€â”€ Infra service cost-by-process cards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {intel?.cost && (
           <div className="mt-6">
             <p className="text-sm font-medium text-white mb-1">Infrastructure Cost by Process</p>
@@ -1043,10 +1015,10 @@ export default function SysHealthView({ d }: { d: S }) {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 
-              {/* ── Redis / Workers ── */}
+              {/* â”€â”€ Redis / Workers â”€â”€ */}
               <ServiceCostCard
                 title="Workers (Redis)"
-                subtitle="Upstash — BullMQ job queues · ops + storage"
+                subtitle="Upstash â€” BullMQ job queues Â· ops + storage"
                 svc={intel.cost.breakdown['Upstash Redis']}
                 color="text-emerald-400"
                 borderColor="border-emerald-500/20"
@@ -1058,7 +1030,7 @@ export default function SysHealthView({ d }: { d: S }) {
                   const redis      = intel.metrics.redis;
                   const rows: ProcessRow[] = [];
 
-                  // ── Storage row — always shown when we have data ──
+                  // â”€â”€ Storage row â€” always shown when we have data â”€â”€
                   const storageMB = redis?.storageBytesUsed
                     ? (redis.storageBytesUsed / (1024 * 1024))
                     : null;
@@ -1066,28 +1038,28 @@ export default function SysHealthView({ d }: { d: S }) {
                     label: 'Storage',
                     value: storageCost > 0 ? storageCost : null,
                     sub: storageMB != null
-                      ? `${storageMB.toFixed(1)} MB used · 256 MB free · $0.25/GB above`
-                      : '256 MB free · $0.25/GB above · fetching…',
+                      ? `${storageMB.toFixed(1)} MB used Â· 256 MB free Â· $0.25/GB above`
+                      : '256 MB free Â· $0.25/GB above Â· fetchingâ€¦',
                   });
 
-                  // ── Ops cost row ──
+                  // â”€â”€ Ops cost row â”€â”€
                   const monthlyOps = redis ? Math.round(redis.opsPerMin * 60 * 24 * 30) : 0;
                   rows.push({
                     label: 'Commands (ops)',
                     value: opsCost > 0 ? opsCost : null,
                     sub: redis
-                      ? `${redis.opsPerMin.toFixed(1)}/min · ~${Math.round(monthlyOps / 1000)}K/mo · 300K/mo free`
-                      : '300K ops/month free · $0.20/100K above',
+                      ? `${redis.opsPerMin.toFixed(1)}/min Â· ~${Math.round(monthlyOps / 1000)}K/mo Â· 300K/mo free`
+                      : '300K ops/month free Â· $0.20/100K above',
                   });
 
-                  // ── Top-feature rows (by op share) ──
+                  // â”€â”€ Top-feature rows (by op share) â”€â”€
                   if (redis?.topFeatures?.length) {
                     const topCost = opsCost; // distribute ops cost across features
                     for (const f of redis.topFeatures.slice(0, 4)) {
                       rows.push({
                         label: f.feature,
                         value: topCost > 0 ? topCost * (f.pct / 100) : null,
-                        sub: `${f.pct}% of ops · ${f.total.toLocaleString()} cmds`,
+                        sub: `${f.pct}% of ops Â· ${f.total.toLocaleString()} cmds`,
                       });
                     }
                   }
@@ -1100,15 +1072,15 @@ export default function SysHealthView({ d }: { d: S }) {
                   return redis.topCommands.slice(0, 4).map(c => ({
                     label: `CMD: ${c.command}`,
                     value: null,
-                    sub: `${c.pct}% of all ops · ${c.total.toLocaleString()} calls`,
+                    sub: `${c.pct}% of all ops Â· ${c.total.toLocaleString()} calls`,
                   }));
                 })()}
               />
 
-              {/* ── Supabase / Database ── */}
+              {/* â”€â”€ Supabase / Database â”€â”€ */}
               <ServiceCostCard
                 title="Database (Supabase)"
-                subtitle="Pro plan — compute + storage + bandwidth"
+                subtitle="Pro plan â€” compute + storage + bandwidth"
                 svc={intel.cost.breakdown['Supabase']}
                 color="text-green-400"
                 borderColor="border-green-500/20"
@@ -1119,35 +1091,35 @@ export default function SysHealthView({ d }: { d: S }) {
                   { label: 'Bandwidth',        value: intel.cost.breakdown['Supabase']?.breakdown?.bandwidth ?? 0, sub: 'Above 50 GB/mo free tier' },
                 ]}
                 subRows={intel.metrics.supabase ? [
-                  { label: 'Reads this window',  value: null, sub: `${intel.metrics.supabase.reads.toLocaleString()} reads · ${intel.metrics.supabase.queriesPerMin.toFixed(1)} q/min` },
-                  { label: 'Writes this window', value: null, sub: `${intel.metrics.supabase.writes.toLocaleString()} writes · ${intel.metrics.supabase.errors} errors` },
+                  { label: 'Reads this window',  value: null, sub: `${intel.metrics.supabase.reads.toLocaleString()} reads Â· ${intel.metrics.supabase.queriesPerMin.toFixed(1)} q/min` },
+                  { label: 'Writes this window', value: null, sub: `${intel.metrics.supabase.writes.toLocaleString()} writes Â· ${intel.metrics.supabase.errors} errors` },
                   ...(intel.metrics.supabase.avgReadLatency != null ? [{ label: 'Avg read latency', value: null, sub: `${intel.metrics.supabase.avgReadLatency.toFixed(0)} ms` }] : []),
                 ] : []}
               />
 
-              {/* ── Railway ── */}
+              {/* â”€â”€ Railway â”€â”€ */}
               <ServiceCostCard
                 title="Railway (Backend)"
-                subtitle="Hobby plan — 1 vCPU / 0.5 GB worker"
+                subtitle="Hobby plan â€” 1 vCPU / 0.5 GB worker"
                 svc={intel.cost.breakdown['Railway']}
                 color="text-purple-400"
                 borderColor="border-purple-500/20"
                 onClick={() => setDrilldown({ serviceKey: 'railway', serviceLabel: 'Railway (Backend)', serviceCostUsd: intel.cost!.breakdown['Railway']?.estimatedMonthly ?? 0 })}
                 processRows={[
-                  { label: 'CPU (1 vCPU)',     value: intel.cost.breakdown['Railway']?.breakdown?.cpu          ?? 0, sub: '$0.000463/vCPU-hr × 730 h' },
-                  { label: 'Memory (0.5 GB)',  value: intel.cost.breakdown['Railway']?.breakdown?.memory       ?? 0, sub: '$0.000231/GB-hr × 730 h' },
+                  { label: 'CPU (1 vCPU)',     value: intel.cost.breakdown['Railway']?.breakdown?.cpu          ?? 0, sub: '$0.000463/vCPU-hr Ã— 730 h' },
+                  { label: 'Memory (0.5 GB)',  value: intel.cost.breakdown['Railway']?.breakdown?.memory       ?? 0, sub: '$0.000231/GB-hr Ã— 730 h' },
                   { label: 'Hobby credit',     value: intel.cost.breakdown['Railway']?.breakdown?.hobby_credit ?? 0, sub: '$5/month included' },
                 ]}
                 subRows={[
-                  { label: 'Services',    value: null, sub: 'Workers · Cron scheduler · Background jobs' },
-                  { label: 'Uptime',      value: null, sub: 'Continuous — 730 h/month assumed' },
+                  { label: 'Services',    value: null, sub: 'Workers Â· Cron scheduler Â· Background jobs' },
+                  { label: 'Uptime',      value: null, sub: 'Continuous â€” 730 h/month assumed' },
                 ]}
               />
 
-              {/* ── Vercel ── */}
+              {/* â”€â”€ Vercel â”€â”€ */}
               <ServiceCostCard
                 title="Vercel (Frontend)"
-                subtitle="Pro plan — Next.js + serverless functions"
+                subtitle="Pro plan â€” Next.js + serverless functions"
                 svc={intel.cost.breakdown['Vercel']}
                 color="text-blue-400"
                 borderColor="border-blue-500/20"
@@ -1157,22 +1129,22 @@ export default function SysHealthView({ d }: { d: S }) {
                   { label: 'Invocations',  value: intel.cost.breakdown['Vercel']?.breakdown?.invocations ?? 0, sub: 'Above 1M/mo free tier' },
                 ]}
                 subRows={intel.metrics.api ? [
-                  { label: 'Calls/min',    value: null, sub: `${intel.metrics.api.callsPerMin.toFixed(1)}/min · ${intel.metrics.api.totalCalls.toLocaleString()} total` },
-                  { label: 'Error rate',   value: null, sub: `4xx: ${intel.metrics.api.errors4xx} · 5xx: ${intel.metrics.api.errors5xx}` },
+                  { label: 'Calls/min',    value: null, sub: `${intel.metrics.api.callsPerMin.toFixed(1)}/min Â· ${intel.metrics.api.totalCalls.toLocaleString()} total` },
+                  { label: 'Error rate',   value: null, sub: `4xx: ${intel.metrics.api.errors4xx} Â· 5xx: ${intel.metrics.api.errors5xx}` },
                   ...(intel.metrics.api.topEndpoints.slice(0, 3).map(ep => ({
                     label: ep.endpoint,
                     value: (intel.cost!.breakdown['Vercel']?.breakdown?.invocations ?? 0) > 0
                       ? ((intel.cost!.breakdown['Vercel']!.breakdown!.invocations!) * (ep.calls / (intel.metrics.api!.totalCalls || 1)))
                       : null,
-                    sub: `${ep.calls.toLocaleString()} calls${ep.avgLatencyMs != null ? ` · ${ep.avgLatencyMs}ms` : ''}`,
+                    sub: `${ep.calls.toLocaleString()} calls${ep.avgLatencyMs != null ? ` Â· ${ep.avgLatencyMs}ms` : ''}`,
                   }))),
                 ] : []}
               />
 
-              {/* ── CDN / Vercel Edge ── */}
+              {/* â”€â”€ CDN / Vercel Edge â”€â”€ */}
               <ServiceCostCard
                 title="CDN / Edge (Vercel)"
-                subtitle="Included in Vercel Pro — edge network + static delivery"
+                subtitle="Included in Vercel Pro â€” edge network + static delivery"
                 svc={intel.cost.breakdown['Vercel']}   /* shares Vercel cost */
                 color="text-cyan-400"
                 borderColor="border-cyan-500/20"
@@ -1181,7 +1153,7 @@ export default function SysHealthView({ d }: { d: S }) {
                 processRows={[
                   { label: 'Edge bandwidth',   value: null, sub: 'Included up to 1 TB/mo on Pro' },
                   { label: 'Edge functions',   value: null, sub: 'Bundled with invocation quota' },
-                  { label: 'Static assets',    value: null, sub: 'Global CDN — no per-request cost' },
+                  { label: 'Static assets',    value: null, sub: 'Global CDN â€” no per-request cost' },
                   { label: 'Image optimisation', value: null, sub: 'Included on Pro (up to 5K src imgs/mo)' },
                 ]}
                 subRows={intel.metrics.api ? [
@@ -1189,24 +1161,6 @@ export default function SysHealthView({ d }: { d: S }) {
                   { label: 'Avg latency',  value: null, sub: intel.metrics.api.avgLatencyMs != null ? `${intel.metrics.api.avgLatencyMs} ms` : 'n/a' },
                 ] : []}
                 extraNote="CDN cost is bundled into Vercel Pro. Extra bandwidth above 1 TB billed at $0.15/GB."
-              />
-
-              {/* ── Firebase Auth ── */}
-              <ServiceCostCard
-                title="Firebase Auth"
-                subtitle="Blaze plan — token verification"
-                svc={intel.cost.breakdown['Firebase Auth']}
-                color="text-yellow-400"
-                borderColor="border-yellow-500/20"
-                onClick={() => setDrilldown({ serviceKey: 'firebase', serviceLabel: 'Firebase Auth', serviceCostUsd: intel.cost!.breakdown['Firebase Auth']?.estimatedMonthly ?? 0 })}
-                processRows={[
-                  { label: 'MAU (est.)',       value: intel.cost.breakdown['Firebase Auth']?.breakdown?.auth_mau ?? 0, sub: 'Above 50K MAU free tier' },
-                ]}
-                subRows={intel.metrics.firebase ? [
-                  { label: 'Verifications/min', value: null, sub: `${intel.metrics.firebase.verificationsPerMin.toFixed(2)}/min` },
-                  { label: 'Total verified',    value: null, sub: intel.metrics.firebase.tokenVerifications.toLocaleString() },
-                  { label: 'Auth errors',       value: null, sub: `${intel.metrics.firebase.authErrors} in window` },
-                ] : []}
               />
 
             </div>
@@ -1217,7 +1171,7 @@ export default function SysHealthView({ d }: { d: S }) {
 
     </div>
 
-    {/* ── Org-level service drilldown ────────────────────────────────────── */}
+    {/* â”€â”€ Org-level service drilldown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
     {drilldown && (
       <OrgServiceDrilldown
         serviceKey={drilldown.serviceKey}
@@ -1233,7 +1187,7 @@ export default function SysHealthView({ d }: { d: S }) {
   );
 }
 
-// ── ServiceCostCard ────────────────────────────────────────────────────────────
+// â”€â”€ ServiceCostCard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Reusable card showing cost broken down by process/activity for one infra service.
 
 interface ProcessRow {
@@ -1277,7 +1231,7 @@ function ServiceCostCard({
               ${total.toFixed(2)}<span className="text-xs font-normal text-gray-600">/mo</span>
             </span>
           )}
-          {onClick && <span className="text-xs text-gray-600 hover:text-gray-400">↗ orgs</span>}
+          {onClick && <span className="text-xs text-gray-600 hover:text-gray-400">â†— orgs</span>}
         </div>
       </div>
 
@@ -1294,7 +1248,7 @@ function ServiceCostCard({
               <div className="flex items-start justify-between text-xs mb-0.5 gap-2">
                 <span className="text-gray-300 truncate">{row.label}</span>
                 <span className={`shrink-0 ${row.value != null ? color : 'text-gray-600'}`}>
-                  {row.value != null ? `$${Math.abs(row.value).toFixed(4)}${row.value < 0 ? ' cr' : ''}` : '—'}
+                  {row.value != null ? `$${Math.abs(row.value).toFixed(4)}${row.value < 0 ? ' cr' : ''}` : 'â€”'}
                 </span>
               </div>
               {row.sub && <p className="text-xs text-gray-600 mb-0.5">{row.sub}</p>}
@@ -1311,13 +1265,13 @@ function ServiceCostCard({
         </div>
       )}
 
-      {/* Activity metrics (no cost estimate — contextual) */}
+      {/* Activity metrics (no cost estimate â€” contextual) */}
       {subRows.length > 0 && (
         <div className="border-t border-gray-800 pt-2 mt-2 space-y-1">
           {subRows.map((row, i) => (
             <div key={i} className="flex items-start justify-between text-xs gap-2">
               <span className="text-gray-500 truncate">{row.label}</span>
-              <span className="text-gray-400 shrink-0 text-right max-w-[60%]">{row.sub ?? '—'}</span>
+              <span className="text-gray-400 shrink-0 text-right max-w-[60%]">{row.sub ?? 'â€”'}</span>
             </div>
           ))}
         </div>
@@ -1337,7 +1291,7 @@ function ServiceCostCard({
   );
 }
 
-// ── Intelligence sub-components ───────────────────────────────────────────────
+// â”€â”€ Intelligence sub-components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function IntelCard({
   title, subtitle, children, active, onToggle, highlight,
@@ -1365,7 +1319,7 @@ function IntelCard({
           <p className="text-sm font-medium text-white">{title}</p>
           {subtitle && <p className="text-xs text-gray-600 mt-0.5">{subtitle}</p>}
         </div>
-        <span className="text-xs text-gray-600">{active ? '▲' : '▼'}</span>
+        <span className="text-xs text-gray-600">{active ? 'â–²' : 'â–¼'}</span>
       </div>
       {children}
     </div>
@@ -1416,4 +1370,6 @@ function UnavailableNote({ label }: { label: string }) {
     <p className="text-xs text-gray-700 mt-1 italic">{label} metrics unavailable in this window</p>
   );
 }
+
+
 

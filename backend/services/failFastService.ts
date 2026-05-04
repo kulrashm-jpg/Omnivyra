@@ -15,7 +15,8 @@
  * estimated post credits to the winning type.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getPlatformBenchmark } from './globalPatternService';
 
 const REDUCE_THRESHOLD_PCT = 0.50; // 50% of platform avg → reduce

@@ -1,12 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * Community Health API — read-only conversation health metrics.
+ * Community Health API â€” read-only conversation health metrics.
  * Data from: post_comments, comment_replies, comment_flags, community_ai_actions, scheduled_posts.
  * No campaign performance, no strategist memory, no distribution metrics.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireTenantScope } from '../community-ai/utils';
 import { requireCampaignAccess } from '../../../backend/services/campaignAccessService';
 
@@ -35,7 +37,7 @@ function parseRange(range: string | string[] | undefined): number {
   return RANGE_OPTIONS.includes(n) ? n : 7;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -215,3 +217,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

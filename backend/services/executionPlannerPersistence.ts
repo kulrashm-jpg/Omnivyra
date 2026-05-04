@@ -8,7 +8,8 @@
  * Do NOT write directly to the table from APIs or UI layers.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type ExecutionPlanRow = Record<string, unknown> & {
   campaign_id: string;

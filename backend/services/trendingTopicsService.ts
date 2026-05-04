@@ -3,7 +3,8 @@
  * Extracts topic clusters from engagement messages and computes metrics.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const STOP_WORDS = new Set([
   'the', 'a', 'an', 'is', 'are', 'to', 'for', 'with', 'on', 'in',

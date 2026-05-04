@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getEngagementSignalsDashboardData } from '../../../backend/services/engagementSignalIntelligenceService';
@@ -15,7 +16,7 @@ type EngagementSignalsApiResponse =
     }
   | { error: string };
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<EngagementSignalsApiResponse>,
 ) {
@@ -49,3 +50,9 @@ export default async function handler(
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

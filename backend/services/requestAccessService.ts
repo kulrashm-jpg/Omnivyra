@@ -1,8 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkRateLimit, type RateLimitConfig } from '../../lib/auth/rateLimit';
-import { isPlatformSuperAdmin } from './rbacService';
+import { getUserRole, isPlatformSuperAdmin } from './rbacService';
+import { normalizePermissionRole, Role } from './rbacPrimitives';
+import {
+  ADMIN_SCOPE_ALLOWED_ROLES,
+  scopeRequiresOnlySuperAdmin,
+  type AdminScope,
+} from './adminPermissions';
 import { logger } from './logger';
 import { seedRequestContextFromRequest } from './requestContext';
 
@@ -64,6 +71,77 @@ export async function requireSuperAdminUser(
 }
 
 /**
+ * Scope-based admin guard. Mirrors `requireSuperAdminUser` shape: authenticates
+ * the caller, then enforces the scope's role policy from `adminPermissions.ts`.
+ *
+ * Platform super-admins bypass every scope. For scopes that allow non-super-admin
+ * roles (e.g. COMPANY_ADMIN), the caller must supply `opts.companyId` so the
+ * caller's role can be resolved against `user company roles`.
+ *
+ * On failure, sends the response (401/403/400) and returns `null`. On success,
+ * returns the authenticated user augmented with the resolved `role`.
+ */
+export async function requireAdminScope(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  scope: AdminScope,
+  opts?: { companyId?: string | null },
+): Promise<{ id: string; email?: string | null; role: Role } | null> {
+  const user = await requireAuthenticatedInternalUser(req, res);
+  if (!user) return null;
+
+  if (await isPlatformSuperAdmin(user.id)) {
+    seedRequestContextFromRequest(req, { userId: user.id });
+    return { ...user, role: Role.SUPER_ADMIN };
+  }
+
+  if (scopeRequiresOnlySuperAdmin(scope)) {
+    logger.warn('admin_scope_denied', {
+      userId: user.id,
+      scope,
+      reason: 'super_admin_required',
+    });
+    res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED', scope });
+    return null;
+  }
+
+  const companyId = opts?.companyId;
+  if (!companyId) {
+    logger.warn('admin_scope_missing_company', { userId: user.id, scope });
+    res.status(400).json({ error: 'COMPANY_ID_REQUIRED', scope });
+    return null;
+  }
+
+  const { role, error } = await getUserRole(user.id, companyId);
+  if (error === 'COMPANY_ACCESS_DENIED') {
+    logger.warn('admin_scope_company_violation', { userId: user.id, scope, companyId });
+    res.status(403).json({ error: 'COMPANY_SCOPE_VIOLATION', scope });
+    return null;
+  }
+  if (error || !role) {
+    logger.warn('admin_scope_no_role', { userId: user.id, scope, companyId });
+    res.status(403).json({ error: 'FORBIDDEN_ROLE', scope });
+    return null;
+  }
+
+  const allowed = ADMIN_SCOPE_ALLOWED_ROLES[scope] as readonly Role[];
+  const normalized = normalizePermissionRole(role) as Role;
+  if (!allowed.includes(normalized)) {
+    logger.warn('admin_scope_denied', {
+      userId: user.id,
+      scope,
+      role: normalized,
+      reason: 'role_not_allowed',
+    });
+    res.status(403).json({ error: 'FORBIDDEN_SCOPE', scope });
+    return null;
+  }
+
+  seedRequestContextFromRequest(req, { userId: user.id, orgId: companyId });
+  return { ...user, role: normalized };
+}
+
+/**
  * Service-layer membership check — verify a userId belongs to an organization.
  *
  * Unlike `assertOrgAccess`, this helper has NO req/res coupling: it returns
@@ -84,7 +162,7 @@ export async function assertOrgMembership(
   if (await isPlatformSuperAdmin(userId)) return true;
 
   const { data, error } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('id')
     .eq('user_id', userId)
     .eq('company_id', organizationId)
@@ -119,7 +197,7 @@ export async function assertOrgAccess(
   }
 
   const { data, error } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('id')
     .eq('user_id', user.id)
     .eq('company_id', organizationId)

@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../backend/services/userContextService';
 import { listUsers } from '../../../backend/services/userManagementService';
@@ -25,4 +26,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ users: ok.users });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]));
+

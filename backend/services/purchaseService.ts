@@ -12,7 +12,8 @@
  * so retries from the gateway do not double-credit the organization.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 
 function serviceSupabase() {

@@ -3,7 +3,8 @@
  * Orchestration + automation only. No evaluation, replay, or campaign mutation.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const COMPANY_AUDIT_CAMPAIGN_SENTINEL = '00000000-0000-0000-0000-000000000000';
 const SYSTEM_AUDIT_USER_ID = '00000000-0000-0000-0000-000000000000';
@@ -91,7 +92,7 @@ export async function runGovernanceAudit(companyId: string): Promise<GovernanceA
       if (isTableMissing && !(globalThis as any).__governance_audit_runs_migration_hint_shown) {
         (globalThis as any).__governance_audit_runs_migration_hint_shown = true;
         console.warn(
-          'GovernanceAuditService: governance_audit_runs table not found. Run database/governance_audit_runs.sql to create it.'
+          'Schema mismatch: governance_audit_runs table missing. Apply migration 20260504010003_fix_governance_audit_runs.sql. Audit run will not be persisted.'
         );
       } else if (!isTableMissing) {
         console.error('GovernanceAuditService: failed to persist audit run', insertError);

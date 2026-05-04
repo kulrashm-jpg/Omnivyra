@@ -3,7 +3,8 @@
  * Manages reusable response structure templates.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type PatternStructure = {
   blocks?: Array<{ type: string; label: string; required?: boolean }>;

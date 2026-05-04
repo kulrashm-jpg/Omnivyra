@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/governance/run-audit
- * Stage 28 — Trigger governance audit for a company. SUPER_ADMIN only.
+ * Stage 28 â€” Trigger governance audit for a company. SUPER_ADMIN only.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -23,4 +24,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ result });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

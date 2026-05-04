@@ -3,7 +3,8 @@
  * Phase 4: Stores long-term intelligence signals in strategic_memory.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type MemoryType =
   | 'opportunity'

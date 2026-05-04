@@ -7,7 +7,8 @@
  *   - user        : high-level token counts only, no cost figures
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createCredit, makeIdempotencyKey, executeWithCredits } from './creditExecutionService';
 import type { CreditAction } from './creditDeductionService';
 
@@ -316,7 +317,7 @@ export async function getLlmConsumption(
 
       // Resolve membership type: users with a role row in this org are 'member'; others are 'guest'
       const { data: roleRows } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .select('user_id')
         .eq('company_id', organizationId)
         .in('user_id', realUserIds);

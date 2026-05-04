@@ -1,15 +1,17 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
- * GET  /api/notifications       — fetch recent notifications for the current user
- * PATCH /api/notifications      — mark all notifications as read
- * PATCH /api/notifications?id=  — mark a single notification as read
+ * GET  /api/notifications       â€” fetch recent notifications for the current user
+ * PATCH /api/notifications      â€” mark all notifications as read
+ * PATCH /api/notifications?id=  â€” mark a single notification as read
  *
  * Auth: Bearer token or Supabase session cookie.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServerClient } from '@supabase/ssr';
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
 
 async function resolveUserId(req: NextApiRequest): Promise<string | null> {
@@ -42,7 +44,7 @@ async function resolveUserId(req: NextApiRequest): Promise<string | null> {
   }
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   const userId = await resolveUserId(req);
   if (!userId) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -74,3 +76,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

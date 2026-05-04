@@ -1,3 +1,4 @@
+﻿// AUTH EXEMPT: OAuth callback handles external provider redirect
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
@@ -127,3 +128,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
   }
 }
+

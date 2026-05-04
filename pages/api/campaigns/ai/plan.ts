@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import {
   generatePlanPreview,
@@ -16,7 +17,8 @@ import { getCampaignPlanningInputs, saveCampaignPlanningInputs } from '../../../
 type CampaignAiMode = 'generate_plan' | 'refine_day' | 'platform_customize';
 import { fromStructuredPlan } from '../../../../backend/services/campaignBlueprintAdapter';
 import { detectCampaignConflicts, suggestAvailableDateRange } from '../../../../backend/services/schedulingService';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getUserCompanyRole, getCompanyRoleIncludingInvited } from '../../../../backend/services/rbacService';
 import { resolveEffectiveCampaignRole, isCompanyOverrideRole } from '../../../../backend/services/campaignRoleService';
 import {
@@ -30,7 +32,7 @@ import type { PlannerExecutionHandoff } from '../../../../lib/plannerExecutionHa
 // Persists across requests within the same Node.js process (Next.js API routes
 // keep module state in memory between calls in both dev and production).
 //
-// TTL: 60 s — stale enough to avoid redundant DB hits during a single planning
+// TTL: 60 s â€” stale enough to avoid redundant DB hits during a single planning
 // session, short enough to pick up a newly finalized campaign within a minute.
 // ---------------------------------------------------------------------------
 const companyCtxCache = new Map<string, { data: PreviousCampaignContext | null; expiresAt: number }>();
@@ -38,7 +40,7 @@ const COMPANY_CTX_TTL_MS = 60_000;
 
 const MODES: CampaignAiMode[] = ['generate_plan', 'refine_day', 'platform_customize'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -624,7 +626,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('[PLAN INPUT SOURCE]', JSON.stringify(finalCollectedPlanningContext, null, 2));
 
-    // Restore point: when user retries (e.g. after timeout) with "continue" or "try again", return existing draft if it matches requested duration — avoid reprocessing with no changes.
+    // Restore point: when user retries (e.g. after timeout) with "continue" or "try again", return existing draft if it matches requested duration â€” avoid reprocessing with no changes.
     const requestedWeeks = typeof durationWeeks === 'number' ? durationWeeks : null;
     const isRetryMessage = /^\s*continue\s*$/i.test(String(message).trim()) || /try again|retry/i.test(String(message));
     if (mode === 'generate_plan' && isRetryMessage && requestedWeeks != null) {
@@ -658,7 +660,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ? (effectiveStrategyContext as { duration_weeks: number }).duration_weeks
           : 4;
 
-    // ── Previous campaign context (generate_plan only, non-fatal) ────────────
+    // â”€â”€ Previous campaign context (generate_plan only, non-fatal) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Auto-fetch the most recent completed campaign context for this company so
     // the AI can learn from what worked and failed in past campaigns.
     // Result is TTL-cached in the module Map to avoid a DB roundtrip on every
@@ -769,9 +771,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           );
           if (conflicts.length > 0) {
             const lines = conflicts.map(
-              (c) => `• "${c.campaign_name}" (${c.start_date.toLocaleDateString()} – ${c.end_date.toLocaleDateString()}, ${c.overlap_days} day overlap)`
+              (c) => `â€¢ "${c.campaign_name}" (${c.start_date.toLocaleDateString()} â€“ ${c.end_date.toLocaleDateString()}, ${c.overlap_days} day overlap)`
             );
-            startDateConflictWarning = `⚠️ **Date conflict:** This start date overlaps with ${conflicts.length} existing campaign(s):\n\n${lines.join('\n')}\n\nConsider choosing a different start date or finishing the overlapping campaign(s) first.`;
+            startDateConflictWarning = `âš ï¸ **Date conflict:** This start date overlaps with ${conflicts.length} existing campaign(s):\n\n${lines.join('\n')}\n\nConsider choosing a different start date or finishing the overlapping campaign(s) first.`;
             const suggestion = await suggestAvailableDateRange(userId!, 12 * 7, startDate);
             if (suggestion) {
               startDateConflictWarning += `\n\nSuggested alternative: start **${suggestion.start_date.toLocaleDateString()}** (after current campaigns).`;
@@ -827,3 +829,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -1,4 +1,5 @@
-import { supabase } from './supabaseClient';
+import { createServiceRoleMigrationProxy } from './supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { DecisionResult } from '../services/omnivyreClient';
 import type { WeeklyBlueprintWeek } from '../services/campaignPlanParser';
 import { fromStructuredPlan } from '../services/campaignBlueprintAdapter';

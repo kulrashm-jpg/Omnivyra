@@ -1,6 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/governance/replay-event
- * Stage 24 — Deterministic governance replay. Read-only.
+ * Stage 24 â€” Deterministic governance replay. Read-only.
  * RBAC: COMPANY_ADMIN minimum.
  */
 
@@ -12,7 +13,8 @@ import {
   ReplayNotSupportedError,
 } from '../../../backend/services/GovernanceReplayService';
 import { tryConsumeReplayToken } from '../../../backend/services/GovernanceRateLimiter';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -90,4 +92,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.COMPANY_ADMIN, Role.SUPER_ADMIN]));
+

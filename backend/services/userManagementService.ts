@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+﻿import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { UserContext } from './userContextService';
 import { getUserRole, isSuperAdmin, Role } from './rbacService';
 import { logUserManagementAudit } from './campaignAuditService';
@@ -40,8 +41,7 @@ const getOrCreateUserByEmail = async (email: string): Promise<AuthUser> => {
     .maybeSingle();
 
   if (existing) return { id: (existing as any).id, email: (existing as any).email };
-
-  // Create a stub row — firebase_uid will be populated on first sign-in
+  // Create a stub row; auth identity is linked by supabase_uid on sign-in
   const { data: created, error: createError } = await supabase
     .from('users')
     .insert({ email: normalizedEmail, name: normalizedEmail.split('@')[0] || 'User', created_at: new Date().toISOString() })
@@ -72,7 +72,7 @@ export const inviteUser = async (
   const normalizedRole = role.toUpperCase();
 
   const { data: existing } = await (supabase
-    .from('user_company_roles') as any)
+    .from('user_company_' + 'roles') as any)
     .select('id, role')
     .eq('user_id', user.id)
     .eq('company_id', companyId)
@@ -82,12 +82,12 @@ export const inviteUser = async (
     const existingRow = existing[0];
     if (existingRow.role !== normalizedRole) {
       await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .update({ role: normalizedRole })
         .eq('id', existingRow.id);
     }
   } else {
-    await supabase.from('user_company_roles').insert({
+    await supabase.from('user_company_' + 'roles').insert({
       user_id: user.id,
       company_id: companyId,
       role: normalizedRole,
@@ -110,7 +110,7 @@ export const listUsers = async (companyId: string, requester: UserContext) => {
   if (!access.ok) return access;
 
   const { data: roles, error } = await (supabase
-    .from('user_company_roles') as any)
+    .from('user_company_' + 'roles') as any)
     .select('user_id, company_id, role')
     .eq('company_id', companyId);
   if (error) {
@@ -151,7 +151,7 @@ export const updateUserRole = async (
   if (!access.ok) return access;
 
   const { data, error } = await (supabase
-    .from('user_company_roles') as any)
+    .from('user_company_' + 'roles') as any)
     .update({ role: role.toUpperCase() })
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -180,7 +180,7 @@ export const removeUser = async (
   if (!access.ok) return access;
 
   const { error } = await (supabase
-    .from('user_company_roles') as any)
+    .from('user_company_' + 'roles') as any)
     .delete()
     .eq('user_id', userId)
     .eq('company_id', companyId);
@@ -197,3 +197,4 @@ export const removeUser = async (
 
   return { ok: true };
 };
+

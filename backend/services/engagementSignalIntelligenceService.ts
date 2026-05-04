@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type EngagementMetricType = 'likes' | 'comments' | 'shares' | 'impressions' | 'clicks';
 export type EngagementSignalConfidence = 'high' | 'low_confidence';

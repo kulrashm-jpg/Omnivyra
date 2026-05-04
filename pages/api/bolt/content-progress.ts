@@ -1,9 +1,10 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/bolt/content-progress?run_id=<id>
  *
  * Returns per-topic job progress for a BOLT run that uses the
  * queue-based content generation path. Used by the UI to render
- * a live progress bar like "42 of 60 topics scheduled · ~4 min remaining".
+ * a live progress bar like "42 of 60 topics scheduled Â· ~4 min remaining".
  *
  * Response shape:
  * {
@@ -22,10 +23,11 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -48,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(404).json({ error: 'Run not found' });
     }
 
-    // Separately query new progress columns (added by migration — may not exist yet)
+    // Separately query new progress columns (added by migration â€” may not exist yet)
     let postsScheduled = 0;
     let postsSkipped = 0;
     try {
@@ -59,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .maybeSingle();
       postsScheduled = (runExtra as any)?.posts_scheduled ?? 0;
       postsSkipped   = (runExtra as any)?.posts_skipped   ?? 0;
-    } catch { /* columns not yet migrated — use 0 */ }
+    } catch { /* columns not yet migrated â€” use 0 */ }
 
     const companyId = (run as any).company_id as string;
     const access = await enforceCompanyAccess({ req, res, companyId });
@@ -74,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order('created_at', { ascending: true });
 
     if (jobsError) {
-      // Table may not exist yet (migration not applied) — return empty state
+      // Table may not exist yet (migration not applied) â€” return empty state
       // so the frontend treats it as "no queued jobs" and navigates immediately.
       if (jobsError.code === '42P01' || jobsError.message?.includes('does not exist')) {
         return res.status(200).json({
@@ -123,7 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // A job is complete when all have reached a terminal state (done/failed).
     // Also detect stale runs: if jobs have been stuck in queued/pending for 3+ minutes
-    // with no active or done jobs, workers likely aren't processing — treat as complete
+    // with no active or done jobs, workers likely aren't processing â€” treat as complete
     // so the UI doesn't hang indefinitely.
     let isComplete = total === 0 || done + failed >= total;
     if (!isComplete && total > 0 && active === 0 && done === 0 && queued > 0) {
@@ -133,7 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }, Infinity);
       const staleMs = Date.now() - oldestCreated;
       if (staleMs > 3 * 60 * 1000) {
-        console.warn('[bolt/content-progress] Stale jobs detected — no worker progress after 3 min', {
+        console.warn('[bolt/content-progress] Stale jobs detected â€” no worker progress after 3 min', {
           run_id: runId, total, queued, staleMs,
         });
         isComplete = true;
@@ -164,3 +166,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

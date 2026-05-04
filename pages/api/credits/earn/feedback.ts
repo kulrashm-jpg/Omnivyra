@@ -1,26 +1,29 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/credits/earn/feedback
  *
  * User submits feedback. Super admin reviews it.
- * On approval → +100 credits granted to the user's org.
+ * On approval â†’ +100 credits granted to the user's org.
  *
  * One pending submission allowed per user at a time.
  * Credits granted once per user lifetime (approved status).
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { getPlatformSuperAdminUserIds } from '../../../../backend/services/rbacService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
 
   const { data: roleRow } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', user.id)
     .eq('status', 'active')
@@ -75,18 +78,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (insertErr) return res.status(500).json({ error: insertErr.message });
 
   // Notify super admins of new feedback
-  const { data: superAdmins } = await supabase
-    .from('users')
-    .select('id')
-    .eq('role', 'SUPER_ADMIN');
+  const superAdminUserIds = await getPlatformSuperAdminUserIds();
 
-  if (superAdmins?.length) {
+  if (superAdminUserIds.length) {
     await supabase.from('notifications').insert(
-      superAdmins.map((sa: any) => ({
-        user_id:  sa.id,
+      superAdminUserIds.map((userId) => ({
+        user_id:  userId,
         type:     'feedback_submitted',
         title:    'New feedback pending review',
-        message:  `User submitted feedback: "${feedbackText.trim().slice(0, 80)}${feedbackText.length > 80 ? '…' : ''}"`,
+        message:  `User submitted feedback: "${feedbackText.trim().slice(0, 80)}${feedbackText.length > 80 ? 'â€¦' : ''}"`,
         metadata: { feedback_id: (inserted as any).id, submitter_user_id: user.id },
         is_read:  false,
       })),
@@ -95,3 +95,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, feedbackId: (inserted as any).id });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

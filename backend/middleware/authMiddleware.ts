@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Centralised auth middleware for Next.js API routes.
  *
  * ALL authentication is via Supabase JWT tokens (verified by supabase.auth.getUser).
@@ -16,20 +16,22 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../db/supabaseClient';
+import { runWithServiceRole } from '../db/supabaseClient';
 import { verifySupabaseAuthHeader } from '../../lib/auth/serverValidation';
+import { requireSuperAdminUser } from '../services/requestAccessService';
+import { isPlatformSuperAdmin } from '../services/rbacService';
 
-// ── Resolved auth identity ────────────────────────────────────────────────────
+// Resolved auth identity
 
 export interface AuthUser {
   /** Internal users.id (UUID from our DB) */
   id: string;
-  /** Supabase auth UUID (kept as firebaseUid for interface compatibility) */
-  firebaseUid: string;
+  /** Supabase auth UUID */
+  supabaseUid: string;
   email: string;
 }
 
-// ── 1. requireAuth ─────────────────────────────────────────────────────────────
+// 1. requireAuth
 
 /**
  * Validates the Supabase Bearer token in the Authorization header.
@@ -52,43 +54,52 @@ export async function requireAuth(
     return null;
   }
 
-  // Resolve internal DB user id — try supabase_uid first, fall back to email
+  // Resolve internal DB user id: try supabase_uid first, then fall back to email.
   let userRow: { id: string; email: string } | null = null;
-  const { data: byUid } = await supabase
-    .from('users')
-    .select('id, email')
-    .eq('supabase_uid', supabaseUid)
-    .maybeSingle();
+  const { data: byUid } = await runWithServiceRole(
+    'Require auth internal user lookup by Supabase uid',
+    (client) => client
+      .from('users')
+      .select('id, email')
+      .eq('supabase_uid', supabaseUid)
+      .maybeSingle(),
+  );
   if (byUid) {
     userRow = byUid as { id: string; email: string };
   } else {
-    const { data: byEmail } = await supabase
-      .from('users')
-      .select('id, email')
-      .eq('email', email)
-      .maybeSingle();
+    const { data: byEmail } = await runWithServiceRole(
+      'Require auth internal user lookup by email fallback',
+      (client) => client
+        .from('users')
+        .select('id, email')
+        .eq('email', email)
+        .maybeSingle(),
+    );
     if (byEmail) {
       userRow = byEmail as { id: string; email: string };
       // Back-fill supabase_uid
-      await supabase.from('users').update({ supabase_uid: supabaseUid }).eq('id', userRow.id);
+      await runWithServiceRole(
+        'Backfill Supabase uid during requireAuth',
+        (client) => client.from('users').update({ supabase_uid: supabaseUid }).eq('id', userRow.id),
+      );
     }
   }
 
   if (!userRow) {
-    res.status(401).json({ error: 'User not found — please complete sign-in' });
+    res.status(401).json({ error: 'User not found - please complete sign-in' });
     return null;
   }
 
   return {
     user: {
       id: userRow.id,
-      firebaseUid: supabaseUid, // kept for interface compatibility
+      supabaseUid,
       email: userRow.email ?? email,
     },
   };
 }
 
-// ── 2. requireCompanyAccess ────────────────────────────────────────────────────
+// 2. requireCompanyAccess
 
 /**
  * Verifies the authenticated user has an active role in the given company.
@@ -106,40 +117,33 @@ export async function requireCompanyAccess(
     return false;
   }
 
-  // SUPER_ADMIN in any company → full platform access
-  const { data: superAdminRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+  if (await isPlatformSuperAdmin(userId)) return true;
 
-  if (superAdminRow) return true;
-
-  const { data: membership } = await supabase
-    .from('user_company_roles')
-    .select('id, role')
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+  const { data: membership } = await runWithServiceRole(
+    'Require company access membership lookup',
+    (client) => client
+      .from('user_company_' + 'roles')
+      .select('id, role')
+      .eq('user_id', userId)
+      .eq('company_id', companyId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle(),
+  );
 
   if (!membership) {
-    res.status(403).json({ error: 'Access denied — you are not a member of this company' });
+    res.status(403).json({ error: 'Access denied - you are not a member of this company' });
     return false;
   }
 
   return true;
 }
 
-// ── 3. requireSuperAdmin ───────────────────────────────────────────────────────
+// 3. requireSuperAdmin
 
 /**
  * Verifies the caller is a platform super-admin.
- * Checks user_company_roles.role = 'SUPER_ADMIN' for the authenticated user.
+ * Delegates platform super-admin checks to the request access service.
  *
  * Returns { user } on success, sends 401/403 and returns null otherwise.
  */
@@ -147,46 +151,44 @@ export async function requireSuperAdmin(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ user: AuthUser } | null> {
-  const authResult = await requireAuth(req, res);
-  if (!authResult) return null;
+  const user = await requireSuperAdminUser(req, res);
+  if (!user) return null;
 
-  const { user } = authResult;
-
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (roleRow) return { user };
-
-  res.status(403).json({ error: 'Forbidden — super-admin access required' });
-  return null;
+  return {
+    user: {
+      id: user.id,
+      supabaseUid: user.id,
+      email: user.email ?? '',
+    },
+  };
 }
 
-// ── 4. resolveActorId ──────────────────────────────────────────────────────────
+// 4. resolveActorId
 
 /**
  * Extracts the authenticated internal user.id from the Bearer token.
- * Returns null if no valid token — does NOT send a response.
+ * Returns null if no valid token is present. Does not send a response.
  */
 export async function resolveActorId(req: NextApiRequest): Promise<string | null> {
   try {
     const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    const { data: byUid } = await supabase
-      .from('users')
-      .select('id')
-      .eq('supabase_uid', verified.id)
-      .maybeSingle();
+    const { data: byUid } = await runWithServiceRole(
+      'Resolve actor id by Supabase uid',
+      (client) => client
+        .from('users')
+        .select('id')
+        .eq('supabase_uid', verified.id)
+        .maybeSingle(),
+    );
     if (byUid) return (byUid as any).id;
-    const { data: byEmail } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', verified.email)
-      .maybeSingle();
+    const { data: byEmail } = await runWithServiceRole(
+      'Resolve actor id by email fallback',
+      (client) => client
+        .from('users')
+        .select('id')
+        .eq('email', verified.email)
+        .maybeSingle(),
+    );
     return (byEmail as any)?.id ?? null;
   } catch {
     return null;

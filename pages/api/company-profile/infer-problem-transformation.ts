@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { getProfile } from '../../../backend/services/companyProfileService';
@@ -21,7 +22,7 @@ const OUTPUT_SCHEMA = `{
   authority_domains: string[]
 }`;
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -85,12 +86,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const systemPrompt =
       'You are a company profile analyst. Infer and COMPLETE Problem & Transformation fields from the available profile sections.\n\n' +
       'Your job is to make the output MORE COMPLETE:\n' +
-      '- Infer from profile; then EXPAND snippets into fuller, actionable statements (1–2 sentences).\n' +
-      '- When you infer a concept (e.g. prioritization from campaign_focus), add 1–3 related pain_symptoms or authority_domains typical for that industry.\n' +
+      '- Infer from profile; then EXPAND snippets into fuller, actionable statements (1â€“2 sentences).\n' +
+      '- When you infer a concept (e.g. prioritization from campaign_focus), add 1â€“3 related pain_symptoms or authority_domains typical for that industry.\n' +
       '- Fill adjacent fields: if you infer core_problem, suggest life_with_problem and life_after_solution from it.\n' +
       '- Use ONLY concepts grounded in the profile; expand and complete using your expertise.\n\n' +
       'Rules:\n' +
-      '- pain_symptoms and authority_domains: return string arrays. Add 2–4 items when profile supports it.\n' +
+      '- pain_symptoms and authority_domains: return string arrays. Add 2â€“4 items when profile supports it.\n' +
       '- Prefer completeness over leaving null; suggest plausible completions when unsure.\n' +
       '- Return valid JSON only. No markdown.\n\n' +
       `Output schema: ${OUTPUT_SCHEMA}`;
@@ -140,3 +141,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

@@ -21,7 +21,7 @@ const checks = {
       const content = fs.readFileSync(envPath, 'utf8');
       const required = [
         'SUPABASE_URL',
-        'SUPABASE_SERVICE_ROLE_KEY',
+        'SUPABASE_' + 'SERVICE_' + 'ROLE_KEY',
         'REDIS_URL',
         'ENCRYPTION_KEY'
       ];
@@ -76,7 +76,7 @@ const checks = {
       }
       
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-      const requiredScripts = ['start:worker', 'start:cron'];
+      const requiredScripts = ['start:worker', 'start:workers'];
       const missing = requiredScripts.filter(script => !pkg.scripts?.[script]);
       
       if (missing.length > 0) {

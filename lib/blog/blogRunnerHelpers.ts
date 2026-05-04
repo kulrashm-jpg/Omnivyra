@@ -15,7 +15,8 @@ import type { ContentBlock, InternalLinkBlock } from './blockTypes';
 import type { BlogGenerationOutput } from './blogGenerationEngine';
 import type { BlogFormatType } from './blogStructureTemplates';
 import type { BlogGenerationRequest } from './blogRunnerTypes';
-import { supabase } from '../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Text utilities ────────────────────────────────────────────────────────────
 

@@ -18,7 +18,8 @@
  * Schema: see supabase/migrations/20260605_token_refresh_locks.sql.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const DEFAULT_TTL_SECONDS = 30;
 

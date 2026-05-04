@@ -5,7 +5,8 @@
  * Read-only. No behavioral changes.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCompanyCampaignIds } from '../db/campaignVersionStore';
 import { replayGovernanceEvent } from './GovernanceReplayService';
 import { getCurrentPolicyVersion } from '../governance/GovernancePolicyRegistry';

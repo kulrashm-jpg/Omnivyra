@@ -1,13 +1,14 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/content/generate-from-card
  *
  * Generates blog content directly from a Strategic Card or Theme Card.
- * Eliminates the manual re-entry of strategic intelligence — implements GAP-001.
+ * Eliminates the manual re-entry of strategic intelligence â€” implements GAP-001.
  *
  * This route is responsible for:
  *   1. Auth: enforceCompanyAccess + COMPANY_ADMIN role only
  *   2. Parsing and validating the strategic card payload
- *   3. Calling cardToContentBridge() to map card → BlogGenerationRequest
+ *   3. Calling cardToContentBridge() to map card â†’ BlogGenerationRequest
  *   4. Injecting company profile context (same as /api/blogs/generate)
  *   5. Calling the owned content-type runner and returning the result
  *
@@ -18,13 +19,13 @@
  * Body:
  * {
  *   company_id:       string,          required
- *   strategic_card:   object,          required — RecommendationStrategicCard | PlannerStrategicCard
- *   theme_card?:      object | null,   optional — ThemeCardInput for hook/tone injection
- *   content_type?:    string,          optional — 'blog'|'article'|'whitepaper'|'post'|'narrative' (default 'blog')
- *   target_audience?: string,          optional — override audience extracted from card
- *   goal?:            string,          optional — 'awareness'|'authority'|'conversion'|'retention'
- *   mode?:            string,          optional — 'angles'|'full' (default 'full')
- *   override_angle_type?: string,      optional — force 'strategic'|'contrarian'|'analytical'
+ *   strategic_card:   object,          required â€” RecommendationStrategicCard | PlannerStrategicCard
+ *   theme_card?:      object | null,   optional â€” ThemeCardInput for hook/tone injection
+ *   content_type?:    string,          optional â€” 'blog'|'article'|'whitepaper'|'post'|'narrative' (default 'blog')
+ *   target_audience?: string,          optional â€” override audience extracted from card
+ *   goal?:            string,          optional â€” 'awareness'|'authority'|'conversion'|'retention'
+ *   mode?:            string,          optional â€” 'angles'|'full' (default 'full')
+ *   override_angle_type?: string,      optional â€” force 'strategic'|'contrarian'|'analytical'
  * }
  *
  * Response: same shape as POST /api/blogs/generate
@@ -53,7 +54,7 @@ const VALID_CONTENT_TYPES: ContentType[] = ['blog', 'article', 'whitepaper', 'po
 const VALID_GOALS: ContentGoal[] = ['awareness', 'authority', 'conversion', 'retention'];
 const VALID_ANGLE_TYPES: AngleType[] = ['strategic', 'contrarian', 'analytical'];
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -67,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     override_angle_type,
   } = req.body ?? {};
 
-  // ── Input validation ────────────────────────────────────────────────────────
+  // â”€â”€ Input validation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (!company_id || typeof company_id !== 'string')
     return res.status(400).json({ error: 'company_id required' });
 
@@ -87,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const resolvedAngleType: AngleType | undefined =
     VALID_ANGLE_TYPES.includes(override_angle_type) ? override_angle_type : undefined;
 
-  // ── 1. Auth ─────────────────────────────────────────────────────────────────
+  // â”€â”€ 1. Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
@@ -97,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   });
   if (!roleGate) return;
 
-  // ── 2. Bridge: card → BlogGenerationRequest ──────────────────────────────────
+  // â”€â”€ 2. Bridge: card â†’ BlogGenerationRequest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   let bridgeInput: CardBridgeInput;
   try {
     bridgeInput = {
@@ -125,7 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     mode === 'angles' ? 'angles' : 'full',
   );
 
-  // ── 3. Company profile context injection (best-effort) ───────────────────────
+  // â”€â”€ 3. Company profile context injection (best-effort) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   try {
     const profile = await getProfile(company_id, { autoRefine: false, languageRefine: true });
     const profileAny = (profile || {}) as Record<string, unknown>;
@@ -146,11 +147,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Profile enrichment is best-effort and must not block generation.
   }
 
-  // ── 4. Generate ──────────────────────────────────────────────────────────────
+  // â”€â”€ 4. Generate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const result = await runOwnedGeneration(generationRequest);
 
-  // ── 5. Depth + insight correction (post-generation) ─────────────────────────
-  // Runs only on full-mode successful generation — skips clarification + angles modes.
+  // â”€â”€ 5. Depth + insight correction (post-generation) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Runs only on full-mode successful generation â€” skips clarification + angles modes.
   if (result.needs_clarification === false && result.mode === 'full') {
     try {
       const engineOutput = runContentDepthAndInsightEngine({
@@ -166,7 +167,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         validation:      engineOutput.validation,
       };
 
-      // ── 5b. Quality enhancement v2.1 (depth ceiling + internal links + GEO) ──
+      // â”€â”€ 5b. Quality enhancement v2.1 (depth ceiling + internal links + GEO) â”€â”€
       let v21Out = null;
       let finalContent = engineOutput.final_content;
       try {
@@ -199,14 +200,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         quality_report:      v21Out,
       });
     } catch {
-      // Depth engine failures must not block content delivery — fall through.
+      // Depth engine failures must not block content delivery â€” fall through.
     }
   }
 
-  // ── 6. Return result with bridge validation metadata ─────────────────────────
+  // â”€â”€ 6. Return result with bridge validation metadata â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   return res.status(200).json({
     ...result,
     bridge_validation:   bridgeOutput.validation,
     depth_insight_report: null,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

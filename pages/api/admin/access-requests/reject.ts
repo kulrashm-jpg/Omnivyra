@@ -8,22 +8,19 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!profile?.is_super_admin) return res.status(403).json({ error: 'Forbidden' });
+  const ctx = await requireAdminScope(req, res, 'access-requests:reject');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/access-requests/reject', 'access-requests:reject');
+  }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { requestId, reason } = body as { requestId: string; reason: string };
@@ -43,7 +40,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .from('access_requests')
     .update({
       status: 'rejected',
-      reviewed_by: user.id,
+      reviewed_by: ctx.id,
       reviewed_at: new Date().toISOString(),
       rejection_reason: reason,
     })
@@ -51,3 +48,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json({ success: true, requestId });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

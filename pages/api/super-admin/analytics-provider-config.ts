@@ -1,40 +1,19 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
 import {
   getAnalyticsProviderConfigSummary,
   getDefaultAnalyticsProviderScopes,
   getDefaultAnalyticsRedirectUri,
   upsertAnalyticsProviderConfig,
 } from '../../../backend/services/analyticsProviderConfigService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 
-async function requireAnalyticsProviderAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return false;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'config:analytics');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/analytics-provider-config', 'config:analytics');
   }
-
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (roleRow) return true;
-
-  res.status(403).json({ error: 'Super admin access required' });
-  return false;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const allowed = await requireAnalyticsProviderAdmin(req, res);
-  if (!allowed) return;
 
   if (req.method === 'GET') {
     try {
@@ -79,3 +58,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

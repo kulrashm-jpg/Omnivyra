@@ -5,7 +5,8 @@
  * Signals: buying_intent, recommendation_request, product_comparison, problem_discussion
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const BUYING_WEIGHT = 0.35;
 const RECOMMENDATION_WEIGHT = 0.25;

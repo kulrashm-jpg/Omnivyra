@@ -1,4 +1,5 @@
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   getPlatformsWithActiveSocialAccountsForOrg,
   getPlatformsWithTokensForOrg,
@@ -14,9 +15,8 @@ import { resolveEngagementCapability } from '../engagementCapabilityMap';
  * actually usable right now?"
  *
  * Detection is read-only and cheap:
- *   - API connected     → community_ai_platform_tokens has an access_token
- *                         (+ social_accounts fallback, via
- *                          getPlatformsWithTokensForOrg).
+ *   - API connected     → social_accounts has a token, resolved through
+ *                         getPlatformsWithTokensForOrg.
  *   - RPA session       → rpa_sessions row exists for (org, platform) AND
  *                         expires_at is null or in the future.
  *   - Extension         → at least one `execution_success` metric event

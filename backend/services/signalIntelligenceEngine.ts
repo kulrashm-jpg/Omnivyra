@@ -4,7 +4,8 @@
  * Does not modify signal ingestion, polling, or clustering.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
 const WINDOW_6H_MS = 6 * 60 * 60 * 1000;

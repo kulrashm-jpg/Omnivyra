@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
@@ -5,13 +6,13 @@ import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oaut
 /**
  * GET /api/community-ai/connectors/meta/auth
  *
- * Unified Meta OAuth — connects Facebook, Instagram, and WhatsApp Business in one flow.
+ * Unified Meta OAuth â€” connects Facebook, Instagram, and WhatsApp Business in one flow.
  * All three platforms share the same Meta (Facebook) App credentials and access token.
  *
  * Required scopes:
- *   Facebook  — pages_show_list, pages_read_engagement, pages_manage_posts, pages_manage_engagement
- *   Instagram — instagram_basic, instagram_manage_comments, instagram_manage_insights, instagram_content_publish
- *   WhatsApp  — whatsapp_business_management, whatsapp_business_messaging
+ *   Facebook  â€” pages_show_list, pages_read_engagement, pages_manage_posts, pages_manage_engagement
+ *   Instagram â€” instagram_basic, instagram_manage_comments, instagram_manage_insights, instagram_content_publish
+ *   WhatsApp  â€” whatsapp_business_management, whatsapp_business_messaging
  *
  * Register callback URL in Meta Developer Console:
  *   {baseUrl}/api/community-ai/connectors/meta/callback
@@ -27,23 +28,17 @@ const buildState = (value: Record<string, string>) => {
 };
 
 const META_SCOPES = [
-  // Facebook Pages
   'pages_show_list',
   'pages_read_engagement',
   'pages_manage_posts',
-  'pages_manage_engagement',
-  // Instagram
+  'pages_read_user_content',
+  'pages_messaging',
   'instagram_basic',
-  'instagram_manage_comments',
-  'instagram_manage_insights',
   'instagram_content_publish',
-  // Required for Pages owned by a Business Portfolio
   'business_management',
-  // Base
-  'public_profile',
 ].join(',');
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -80,3 +75,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.redirect(`https://www.facebook.com/v22.0/dialog/oauth?${params.toString()}`);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -19,7 +19,8 @@ jest.mock('../../services/userContextService', () => ({
   enforceCompanyAccess: jest.fn().mockResolvedValue({ userId: 'user-1' }),
 }));
 
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { recordGovernanceEvent } from '../../services/GovernanceEventService';
 import { executeCampaignPreemption } from '../../services/CampaignPreemptionService';
 import { createApiRequestMock } from '../utils/createApiRequestMock';

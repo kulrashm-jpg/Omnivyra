@@ -3,7 +3,8 @@
  * Generates strategic actions from topic and thread analysis.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const CACHE_TTL_MS = 60 * 1000;
 const cache = new Map<string, { data: TopicPlaybook; expires: number }>();

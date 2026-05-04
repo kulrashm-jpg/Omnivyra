@@ -16,7 +16,8 @@
  *   warnings                  — low-confidence or threshold flags
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { extractFeatures, type FeatureInput, type FeatureVector } from './predictionFeatureExtractor';
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { generatePerformanceInsights } from './performanceInsightGenerator';

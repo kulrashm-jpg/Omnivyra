@@ -16,7 +16,8 @@
  * In-process cache: thresholds are cached for 1 hour to avoid DB hit on every job.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // ── Default threshold per plan tier ──────────────────────────────────────────
 

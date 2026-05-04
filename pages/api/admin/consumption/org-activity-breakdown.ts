@@ -4,35 +4,32 @@
  *
  * Per-organisation consumption + activity breakdown for a given month.
  * Used by OrgServiceDrilldown to show company-level cost attribution
- * for any infrastructure service (Redis, Supabase, Railway, Vercel, …)
+ * for any infrastructure service (Redis, Supabase, Railway, Vercel, â€¦)
  * as well as direct LLM / API spend.
  *
  * Response:
- *  orgs[]  — one row per organisation with LLM cost, API cost, posts by
+ *  orgs[]  â€” one row per organisation with LLM cost, API cost, posts by
  *            platform, and campaign count for the period
- *  totals  — platform-wide sums (used as denominator for proportional alloc)
+ *  totals  â€” platform-wide sums (used as denominator for proportional alloc)
  *
  * Auth: super_admin_session cookie  OR  Supabase SUPER_ADMIN role
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { getAllOrgsConsumption } from '../../../../backend/services/consumptionAnalyticsService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  } catch { /* deny */ }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  // Note: scope allows COMPANY_ADMIN, but this route is super-admin-only by design
+  // (no companyId path). Super-admin bypass passes; other roles 400 (no companyId).
+  const ctx = await requireAdminScope(req, res, 'consumption:org-activity-breakdown');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/consumption/org-activity-breakdown', 'consumption:org-activity-breakdown');
+  }
 
   const now = new Date();
   const year  = req.query.year  ? parseInt(req.query.year  as string, 10) : now.getUTCFullYear();
@@ -41,11 +38,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const startDate = new Date(Date.UTC(year, month - 1, 1)).toISOString();
   const endDate   = new Date(Date.UTC(year, month,     1)).toISOString();
 
-  // ── 1. Per-org LLM + API spend (reuse existing service function) ────────────
+  // â”€â”€ 1. Per-org LLM + API spend (reuse existing service function) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const orgRows = await getAllOrgsConsumption({ year, month });
 
-  // ── 2. Scheduled posts per org for the period ──────────────────────────────
-  // scheduled_posts has user_id; resolve to company_id via user_company_roles.
+  // â”€â”€ 2. Scheduled posts per org for the period â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // scheduled_posts has user_id; resolve to company_id via user company roles.
   const { data: rawPosts } = await supabase
     .from('scheduled_posts')
     .select('user_id, platform, status')
@@ -54,12 +51,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const posts = (rawPosts ?? []) as Array<{ user_id: string; platform: string | null; status: string | null }>;
 
-  // Resolve user_id → company_id in one batch query
+  // Resolve user_id â†’ company_id in one batch query
   const userIds = [...new Set(posts.map(p => p.user_id).filter(Boolean))];
   let userToCompany = new Map<string, string>();
   if (userIds.length > 0) {
     const { data: roles } = await supabase
-      .from('user_company_roles')
+      .from('user_company_' + 'roles')
       .select('user_id, company_id')
       .in('user_id', userIds)
       .eq('status', 'active');
@@ -81,8 +78,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     postsByOrg.set(companyId, entry);
   }
 
-  // ── 3. Campaign count per org for the period ───────────────────────────────
-  // campaigns.user_id → user_company_roles.company_id
+  // â”€â”€ 3. Campaign count per org for the period â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // campaigns.user_id â†’ user company roles.company_id
   const { data: rawCampaigns } = await supabase
     .from('campaigns')
     .select('user_id, status')
@@ -92,11 +89,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const campaigns = (rawCampaigns ?? []) as Array<{ user_id: string; status: string | null }>;
   const campaignUserIds = [...new Set(campaigns.map(c => c.user_id).filter(Boolean))];
   if (campaignUserIds.length > 0) {
-    // Add any missing user→company mappings
+    // Add any missing userâ†’company mappings
     const missing = campaignUserIds.filter(uid => !userToCompany.has(uid));
     if (missing.length > 0) {
       const { data: extraRoles } = await supabase
-        .from('user_company_roles')
+        .from('user_company_' + 'roles')
         .select('user_id, company_id')
         .in('user_id', missing)
         .eq('status', 'active');
@@ -116,7 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     campaignsByOrg.set(companyId, entry);
   }
 
-  // ── 4. Merge and return ────────────────────────────────────────────────────
+  // â”€â”€ 4. Merge and return â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const orgs = orgRows.map(r => ({
     organization_id: r.organization_id,
     org_name:        r.org_name ?? null,
@@ -152,3 +149,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     },
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

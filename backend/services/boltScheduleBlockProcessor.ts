@@ -25,7 +25,8 @@
  * so downstream repurposing can reference the canonical article.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 import {
   generateMasterContentFromIntent,

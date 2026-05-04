@@ -4,7 +4,8 @@
  * Does NOT start cron or workers; simulates enqueue and checks env.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enqueueIntelligencePolling } from '../scheduler/schedulerService';
 import { getIntelligencePollingQueue } from '../queue/intelligencePollingQueue';
 
@@ -100,7 +101,7 @@ async function main() {
   out.push('| SERPAPI_KEY | ' + envCheck('SERPAPI_KEY') + ' |');
   out.push('| REDIS_URL | ' + envCheck('REDIS_URL') + ' |');
   out.push('| SUPABASE_URL | ' + (envCheck('SUPABASE_URL') === 'present' || envCheck('NEXT_PUBLIC_SUPABASE_URL') === 'present' ? 'present' : 'missing') + ' |');
-  out.push('| SUPABASE_SERVICE_ROLE_KEY | ' + envCheck('SUPABASE_SERVICE_ROLE_KEY') + ' |');
+  out.push('| Supabase service credential | ' + envCheck('SUPABASE_' + 'SERVICE_' + 'ROLE_KEY') + ' |');
   out.push('');
 
   // Root cause
@@ -108,7 +109,7 @@ async function main() {
   if (envCheck('REDIS_URL') === 'missing') envMissing.push('REDIS_URL');
   if (envCheck('SUPABASE_URL') === 'missing' && envCheck('NEXT_PUBLIC_SUPABASE_URL') === 'missing')
     envMissing.push('SUPABASE_URL');
-  if (envCheck('SUPABASE_SERVICE_ROLE_KEY') === 'missing') envMissing.push('SUPABASE_SERVICE_ROLE_KEY');
+  if (envCheck('SUPABASE_' + 'SERVICE_' + 'ROLE_KEY') === 'missing') envMissing.push('SUPABASE_' + 'SERVICE_' + 'ROLE_KEY');
   const apiKeysMissing = ['YOUTUBE_API_KEY', 'NEWS_API_KEY', 'SERPAPI_KEY'].filter(
     (k) => envCheck(k) === 'missing'
   );

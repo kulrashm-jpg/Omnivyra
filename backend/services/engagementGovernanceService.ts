@@ -3,7 +3,8 @@
  * Get and update engagement system controls per organization.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type EngagementControls = {
   auto_reply_enabled: boolean;

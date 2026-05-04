@@ -1,4 +1,4 @@
-import { supabase } from '../../db/supabaseClient';
+import { runWithServiceRole } from '../../db/supabaseClient';
 import { composeSnapshotReport } from '../../services/snapshotReportService';
 
 type GeneratedRow = {
@@ -99,12 +99,12 @@ describe('manual snapshot activation validation', () => {
   it(
     'generates fresh snapshots and validates activation signals',
     async () => {
-      const baseRowsRes = await supabase
+      const baseRowsRes = await runWithServiceRole((client) => client
         .from('reports')
         .select('id, report_type, metadata, data, created_at')
         .eq('report_type', 'content_readiness')
         .order('created_at', { ascending: false })
-        .limit(80);
+        .limit(80));
 
       const baseRows = (baseRowsRes.data ?? []) as Array<{
         id: string;
@@ -126,12 +126,12 @@ describe('manual snapshot activation validation', () => {
         ? Number((beforeNullSignals / beforeSnapshots.length).toFixed(2))
         : null;
 
-      const membershipRes = await supabase
-        .from('user_company_roles')
+      const membershipRes = await runWithServiceRole((client) => client
+        .from('user_company_' + 'roles')
         .select('company_id, user_id')
         .eq('status', 'active')
         .limit(1)
-        .maybeSingle();
+        .maybeSingle());
 
       const membership = membershipRes.data;
       if (!membership?.company_id || !membership?.user_id) {
@@ -162,7 +162,7 @@ describe('manual snapshot activation validation', () => {
         });
 
         const createdAt = new Date(now + index * 2000).toISOString();
-        const insertRes = await supabase
+        const insertRes = await runWithServiceRole((client) => client
           .from('reports')
           .insert({
             company_id: companyId,
@@ -189,7 +189,7 @@ describe('manual snapshot activation validation', () => {
             },
           })
           .select('id, domain, created_at, data, metadata')
-          .single();
+          .single());
 
         expect(insertRes.data?.id).toBeTruthy();
         generated.push(insertRes.data as GeneratedRow);
@@ -208,7 +208,7 @@ describe('manual snapshot activation validation', () => {
         });
 
         const createdAt = new Date(now + (targets.length + rerun) * 2000).toISOString();
-        const insertRes = await supabase
+        const insertRes = await runWithServiceRole((client) => client
           .from('reports')
           .insert({
             company_id: companyId,
@@ -235,7 +235,7 @@ describe('manual snapshot activation validation', () => {
             },
           })
           .select('id, domain, created_at, data, metadata')
-          .single();
+          .single());
 
         expect(insertRes.data?.id).toBeTruthy();
         generated.push(insertRes.data as GeneratedRow);
@@ -261,7 +261,7 @@ describe('manual snapshot activation validation', () => {
         ? Number((afterNullSignals / generatedReports.length).toFixed(2))
         : null;
 
-      const calendlyRowsRes = await supabase
+      const calendlyRowsRes = await runWithServiceRole((client) => client
         .from('reports')
         .select('id, created_at, report_type, metadata')
         .eq('company_id', companyId)
@@ -269,7 +269,7 @@ describe('manual snapshot activation validation', () => {
         .in('report_type', ['snapshot', 'content_readiness'])
         .eq('status', 'completed')
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(20));
       const calendlyRows = (calendlyRowsRes.data ?? []) as Array<{
         id: string;
         created_at: string;

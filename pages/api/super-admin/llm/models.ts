@@ -1,26 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import {
   getAllModels,
   upsertModel,
 } from '../../../../backend/services/llmProviderService';
-import { supabase } from '../../../../backend/db/supabaseClient';
-
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 /**
- * GET  /api/super-admin/llm/models  → list all models (with provider info)
- * POST /api/super-admin/llm/models  → create or update a model
+ * GET  /api/super-admin/llm/models  â†’ list all models (with provider info)
+ * POST /api/super-admin/llm/models  â†’ create or update a model
  *
  * POST body:
  *   provider_id OR provider_name (one is required)
@@ -29,10 +19,14 @@ const requireSuperAdmin = async (
  *   is_active       (optional, default true)
  *   metadata        (optional jsonb)
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireSuperAdmin(req, res))) return;
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const ctx = await requireAdminScope(req, res, 'config:llm');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/llm/models', 'config:llm');
+  }
 
-  // ── GET ──────────────────────────────────────────────────────────────────
+  // â”€â”€ GET â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'GET') {
     try {
       const models = await getAllModels();
@@ -42,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // ── POST ─────────────────────────────────────────────────────────────────
+  // â”€â”€ POST â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (req.method === 'POST') {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const { provider_id, provider_name, model_key, display_name, is_active, metadata } = body;
@@ -86,3 +80,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

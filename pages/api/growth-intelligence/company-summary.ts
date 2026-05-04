@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/growth-intelligence/company-summary
  * Company-level Growth Intelligence - aggregates metrics across all campaigns.
@@ -8,7 +9,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { Role } from '../../../backend/services/rbacService';
 import { getDecisionReportView } from '../../../backend/services/decisionReportService';
@@ -46,11 +48,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, [
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(withRBAC(handler, [
   Role.COMPANY_ADMIN,
   Role.VIEW_ONLY,
   Role.CONTENT_CREATOR,
   Role.CONTENT_REVIEWER,
   Role.CONTENT_PUBLISHER,
   Role.SUPER_ADMIN,
-]);
+]));
+

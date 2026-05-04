@@ -1,21 +1,18 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { user, error: authError } = await getSupabaseUserFromRequest(req);
-  if (authError || !user) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const superAdmin = await isSuperAdmin(user.id);
-  if (!superAdmin) {
-    return res.status(403).json({ error: 'Forbidden' });
+  const ctx = await requireAdminScope(req, res, 'content:delete');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/delete-content', 'content:delete');
   }
 
   try {
@@ -31,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { data: userRole } = await supabase
       .from('user_roles')
       .select('role')
-      .eq('user_id', user.id)
+      .eq('user_id', ctx.id)
       .eq('is_active', true)
       .single();
 
@@ -53,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { error: logError } = await supabase
       .from('deletion_audit_log')
       .insert({
-        user_id: user.id,
+        user_id: ctx.id,
         user_role: userRole?.role || 'super_admin',
         action: 'delete_content',
         table_name: 'content_items',
@@ -97,3 +94,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

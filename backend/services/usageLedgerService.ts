@@ -7,7 +7,8 @@
  * hardcoded maps were removed in the Phase 4 pricing-engine refactor.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import {
   resolveLlmCost as _resolveLlmCostFromConfig,
   resolveEmbeddingCost as _resolveEmbeddingCostFromConfig,

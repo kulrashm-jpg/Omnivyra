@@ -10,31 +10,20 @@
  * This allows super-admins to see compute cost attribution at the business level.
  *
  * Query params:
- *   hours=24       — Time window (default 24)
- *   companyId=...  — Optional filter to single company
+ *   hours=24       â€” Time window (default 24)
+ *   companyId=...  â€” Optional filter to single company
  *
  * Response:
- *   period         — Time window info
- *   total_cost_usd — Total compute cost across selected companies
- *   companies      — Array of company cost breakdowns
- *   activities     — Array of activity-level breakdown
+ *   period         â€” Time window info
+ *   total_cost_usd â€” Total compute cost across selected companies
+ *   companies      â€” Array of company cost breakdowns
+ *   activities     â€” Array of activity-level breakdown
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getComputeMetricsReport } from '../../../lib/instrumentation/railwayComputeInstrumentation';
-
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 interface CompanyCostRow {
   company_id: string;
@@ -62,9 +51,13 @@ interface ActivitySummaryRow {
   top_features: Array<{ feature: string; cost_usd: number; calls: number }>;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:railway-costs');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/railway-company-costs', 'analytics:railway-costs');
+  }
 
   try {
     const hours = parseInt(req.query.hours as string) || 24;
@@ -180,7 +173,7 @@ function generateInsights(companies: CompanyCostRow[], activities: ActivitySumma
   if (companies.length > 0) {
     const top3Cost = companies.slice(0, 3).reduce((sum, c) => sum + c.cost_pct, 0);
     if (top3Cost > 70) {
-      insights.push(`⚠️ High cost concentration: Top 3 companies use ${top3Cost.toFixed(1)}% of compute`);
+      insights.push(`âš ï¸ High cost concentration: Top 3 companies use ${top3Cost.toFixed(1)}% of compute`);
     }
   }
 
@@ -203,3 +196,9 @@ function generateInsights(companies: CompanyCostRow[], activities: ActivitySumma
 
   return insights;
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

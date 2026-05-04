@@ -7,6 +7,7 @@ import {
   type IngestionSource,
 } from './ingestionRunService';
 import { logger } from './logger';
+import { reconcileAfterIngestionCompletion, type ReconciliationResult } from './reconciliationService';
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
 import type { SourceAdapter } from './sourceAdapter';
 
@@ -44,6 +45,7 @@ export interface UnifiedIngestionResult {
   errors: string[];
   unifiedSource: UnifiedSource;
   loadResult?: unknown;
+  reconciliation?: ReconciliationResult;
 }
 
 export interface UnifiedIngestionOptions {
@@ -271,7 +273,7 @@ export async function ingestUnifiedData(
       unifiedSource,
     });
 
-    logger.info('unified_ingestion_completed', {
+    const completionLogContext = {
       companyId: payload.companyId,
       source: payload.source,
       sourceType: payload.sourceType,
@@ -283,7 +285,25 @@ export async function ingestUnifiedData(
       recordsProcessed: processed,
       recordsInserted: inserted,
       recordsUpdated: updated,
-    });
+    };
+
+    logger.info('unified_ingestion_completed', completionLogContext);
+
+    let reconciliation: ReconciliationResult | undefined;
+    try {
+      reconciliation = await reconcileAfterIngestionCompletion({
+        companyId: payload.companyId,
+        ingestionRunId: run.id,
+        context: completionLogContext,
+      });
+    } catch (reconciliationError) {
+      logger.error('unified_ingestion_reconciliation_failed', {
+        ...completionLogContext,
+        message: reconciliationError instanceof Error
+          ? reconciliationError.message
+          : String(reconciliationError),
+      });
+    }
 
     return {
       source: payload.source,
@@ -296,6 +316,7 @@ export async function ingestUnifiedData(
       errors: [],
       unifiedSource,
       loadResult: context.loadResult,
+      reconciliation,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

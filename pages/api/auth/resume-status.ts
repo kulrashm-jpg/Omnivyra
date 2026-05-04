@@ -1,5 +1,7 @@
+﻿// AUTH EXEMPT: auth route handles token exchange/pre-auth flows separately
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { checkRateLimit, LOGIN_LIMIT } from '../../../lib/auth/rateLimit';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 
@@ -56,3 +58,4 @@ export default async function handler(
     nextStep: hasPassword ? 'continue_signup' : 'set_password',
   });
 }
+

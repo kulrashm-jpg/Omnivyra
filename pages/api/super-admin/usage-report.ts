@@ -1,17 +1,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { Role } from '../../../backend/services/rbacPrimitives';
 import { hasUsageAccess } from '../../../backend/services/usageAccessService';
-import { requireAdminRateLimit, requireAuthenticatedInternalUser } from '../../../backend/services/requestAccessService';
-
-const requireAuth = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<{ userId: string | null; isSuperAdmin: boolean } | null> => {
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return null;
-  return { userId: user.id, isSuperAdmin: await isPlatformSuperAdmin(user.id) };
-};
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function maskCostInTotals(totals: Record<string, unknown>): Record<string, unknown> {
   const out = { ...totals };
@@ -45,19 +38,23 @@ function maskCostInEvent(row: Record<string, unknown>): Record<string, unknown> 
   return out;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:usage-report', 30, 60))) return;
 
-  const auth = await requireAuth(req, res);
-  if (!auth) return;
-
   const organizationId = req.query.organization_id as string | undefined;
   if (!organizationId) {
     return res.status(400).json({ error: 'organization_id is required' });
   }
+
+  const ctx = await requireAdminScope(req, res, 'analytics:usage-report', { companyId: organizationId });
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/usage-report', 'analytics:usage-report');
+  }
+  const auth = { userId: ctx.id, isSuperAdmin: ctx.role === Role.SUPER_ADMIN };
 
   if (!auth.isSuperAdmin && auth.userId) {
     const allowed = await hasUsageAccess(auth.userId, organizationId, false);
@@ -134,3 +131,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -144,7 +144,7 @@ function getStrategicFlowState(cards: CardSignals[]): StrategicFlowState {
 export type UseTrendCampaignsOptions = {
   companyId: string | null;
   engineRecommendations?: Array<Record<string, unknown>>;
-  fetchWithAuth: (url: string, options?: RequestInit) => Promise<Response>;
+  apiFetch: (url: string, options?: RequestInit) => Promise<Response>;
   intelligentMixContext?: import('@/pages/command-center/intelligent-mix-strategy').IntelligentMixState | null;
   campaignId?: string | null;
   strategicIntents?: string[];
@@ -155,7 +155,7 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
   const {
     companyId,
     engineRecommendations,
-    fetchWithAuth,
+    apiFetch,
     intelligentMixContext: intelligentMixProp,
     campaignId,
     onStrategicIntentsChange,
@@ -491,7 +491,7 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
     } | null;
     error?: string | null;
     created_at?: string;
-  }>(jobId, jobId ? `/api/recommendations/job/${jobId}` : null, fetchWithAuth, { enabled: !!jobId });
+  }>(jobId, jobId ? `/api/recommendations/job/${jobId}` : null, apiFetch, { enabled: !!jobId });
 
   useEffect(() => {
     if (!polledJob) return;
@@ -547,50 +547,50 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
   useEffect(() => {
     if (!historyDrawerOpen || !companyId) return;
     setHistoryLoading(true);
-    fetchWithAuth(`/api/recommendations/job/history?companyId=${encodeURIComponent(companyId)}&limit=5`)
+    apiFetch(`/api/recommendations/job/history?companyId=${encodeURIComponent(companyId)}&limit=5`)
       .then((res) => (res.ok ? res.json() : { jobs: [] }))
       .then((data) => setJobHistory(Array.isArray(data?.jobs) ? data.jobs : []))
       .catch(() => setJobHistory([]))
       .finally(() => setHistoryLoading(false));
-  }, [historyDrawerOpen, companyId, fetchWithAuth]);
+  }, [historyDrawerOpen, companyId, apiFetch]);
 
   useEffect(() => {
-    if (!companyId || !fetchWithAuth) { setRecommendationUserStateMap({}); return; }
-    fetchWithAuth(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : {})).then((data) => (typeof data === 'object' && data !== null ? data : {})).then(setRecommendationUserStateMap).catch(() => setRecommendationUserStateMap({}));
-  }, [companyId, fetchWithAuth]);
+    if (!companyId || !apiFetch) { setRecommendationUserStateMap({}); return; }
+    apiFetch(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : {})).then((data) => (typeof data === 'object' && data !== null ? data : {})).then(setRecommendationUserStateMap).catch(() => setRecommendationUserStateMap({}));
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
     if (!companyId) { setUsedRecommendationIds(new Set()); return; }
-    fetchWithAuth(`/api/recommendations/used-by-company?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : { usedRecommendationIds: [] })).then((data) => setUsedRecommendationIds(new Set(Array.isArray(data?.usedRecommendationIds) ? data.usedRecommendationIds : []))).catch(() => setUsedRecommendationIds(new Set()));
-  }, [companyId, fetchWithAuth]);
+    apiFetch(`/api/recommendations/used-by-company?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : { usedRecommendationIds: [] })).then((data) => setUsedRecommendationIds(new Set(Array.isArray(data?.usedRecommendationIds) ? data.usedRecommendationIds : []))).catch(() => setUsedRecommendationIds(new Set()));
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
     if (!companyId) { setStrategyHistory(null); return; }
-    fetchWithAuth(`/api/recommendations/strategy-history?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : null)).then((data) => {
+    apiFetch(`/api/recommendations/strategy-history?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : null)).then((data) => {
       if (data && typeof data.campaigns_count === 'number' && data.campaigns_count > 0) {
         const sm = data.strategy_momentum && typeof data.strategy_momentum === 'object';
         setStrategyHistory({ campaigns_count: data.campaigns_count, aspect_counts: data.aspect_counts && typeof data.aspect_counts === 'object' ? data.aspect_counts : {}, dominant_aspects: Array.isArray(data.dominant_aspects) ? data.dominant_aspects : [], underused_aspects: Array.isArray(data.underused_aspects) ? data.underused_aspects : [], strategy_momentum: sm ? { dominant_streak_aspect: data.strategy_momentum.dominant_streak_aspect ?? null, dominant_streak_count: typeof data.strategy_momentum.dominant_streak_count === 'number' ? data.strategy_momentum.dominant_streak_count : 0, diversification_score: typeof data.strategy_momentum.diversification_score === 'number' ? data.strategy_momentum.diversification_score : 0 } : null });
       } else { setStrategyHistory(null); }
     }).catch(() => setStrategyHistory(null));
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
-    if (!campaignId?.trim() || !fetchWithAuth) { setStrategyStatusPayload(null); return; }
-    fetchWithAuth(`/api/campaigns/${encodeURIComponent(campaignId)}/strategy-status`).then((res) => (res.ok ? res.json() : null)).then((data) => setStrategyStatusPayload(data ?? null)).catch(() => setStrategyStatusPayload(null));
-  }, [campaignId, fetchWithAuth]);
+    if (!campaignId?.trim() || !apiFetch) { setStrategyStatusPayload(null); return; }
+    apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/strategy-status`).then((res) => (res.ok ? res.json() : null)).then((data) => setStrategyStatusPayload(data ?? null)).catch(() => setStrategyStatusPayload(null));
+  }, [campaignId, apiFetch]);
 
   useEffect(() => {
-    if (!companyId || !fetchWithAuth) { setRecommendationUserStateMap({}); setRecommendationSignals(null); return; }
+    if (!companyId || !apiFetch) { setRecommendationUserStateMap({}); setRecommendationSignals(null); return; }
     let cancelled = false;
-    fetchWithAuth(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : {})).then((data) => { if (cancelled) return; setRecommendationUserStateMap(data && typeof data === 'object' ? data as Record<string, string> : {}); }).catch(() => { if (!cancelled) setRecommendationUserStateMap({}); });
-    fetchWithAuth(`/api/recommendations/strategy-signals?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : null)).then((data) => { if (cancelled) return; setRecommendationSignals(data && typeof data === 'object' ? { archived: Number((data as any).archived) || 0, longTerm: Number((data as any).longTerm) || 0, adopted: Number((data as any).adopted) || 0, totalRecommendations: Number((data as any).totalRecommendations) || 0, adoptionRate: Number((data as any).adoptionRate) || 0 } : null); }).catch(() => { if (!cancelled) setRecommendationSignals(null); });
+    apiFetch(`/api/recommendations/user-state-map?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : {})).then((data) => { if (cancelled) return; setRecommendationUserStateMap(data && typeof data === 'object' ? data as Record<string, string> : {}); }).catch(() => { if (!cancelled) setRecommendationUserStateMap({}); });
+    apiFetch(`/api/recommendations/strategy-signals?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : null)).then((data) => { if (cancelled) return; setRecommendationSignals(data && typeof data === 'object' ? { archived: Number((data as any).archived) || 0, longTerm: Number((data as any).longTerm) || 0, adopted: Number((data as any).adopted) || 0, totalRecommendations: Number((data as any).totalRecommendations) || 0, adoptionRate: Number((data as any).adoptionRate) || 0 } : null); }).catch(() => { if (!cancelled) setRecommendationSignals(null); });
     return () => { cancelled = true; };
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   useEffect(() => {
     if (!companyId) { setStrategicConfig(null); return; }
     let cancelled = false;
-    fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : null)).then((data) => {
+    apiFetch(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`).then((res) => (res.ok ? res.json() : null)).then((data) => {
       if (cancelled) return;
       const config = data?.recommendation_strategic_config;
       const map = config?.offerings_by_aspect ?? config?.aspect_offerings_map;
@@ -603,7 +603,7 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
       } else { setStrategicConfig(null); }
     }).catch(() => { if (!cancelled) setStrategicConfig(null); });
     return () => { cancelled = true; };
-  }, [companyId, fetchWithAuth]);
+  }, [companyId, apiFetch]);
 
   const aspects = strategicConfig?.strategic_aspects ?? [];
   const aspectOfferingsMap = strategicConfig?.aspect_offerings_map ?? strategicConfig?.offerings_by_aspect ?? {};
@@ -629,7 +629,7 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
 
   const fetchProfile = async (): Promise<Record<string, unknown> | null> => {
     if (!companyId) return null;
-    const res = await fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`);
+    const res = await apiFetch(`/api/company-profile?companyId=${encodeURIComponent(companyId)}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data?.profile ?? null;
@@ -713,7 +713,7 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
 
   const handleViewIntelligence = async (id: string) => {
     try {
-      const res = await fetchWithAuth(`/api/recommendations/job/${id}`);
+      const res = await apiFetch(`/api/recommendations/job/${id}`);
       if (!res.ok) return;
       const data = await res.json();
       setConsolidatedResult(data.consolidated_result ?? null);
@@ -742,7 +742,7 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
       const regionList = regionInputToIsoCodes(regionInput);
       const objective = (payload.mapped_core_types?.length ? payload.mapped_core_types[0] : primaryCampaignType === 'third_party' ? 'third_party' : primaryCampaignType) ?? 'brand_awareness';
       const durationFromExec = payload.execution_config && typeof payload.execution_config === 'object' && typeof (payload.execution_config as { campaign_duration?: number }).campaign_duration === 'number' && (payload.execution_config as { campaign_duration: number }).campaign_duration >= 4 && (payload.execution_config as { campaign_duration: number }).campaign_duration <= 12 ? (payload.execution_config as { campaign_duration: number }).campaign_duration : 12;
-      const recRes = await fetchWithAuth('/api/recommendations/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId, objective, durationWeeks: durationFromExec, ...(regionList.length > 0 ? { regions: regionList } : {}), strategicPayload: payload, insight_source: insightSource }) });
+      const recRes = await apiFetch('/api/recommendations/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ companyId, objective, durationWeeks: durationFromExec, ...(regionList.length > 0 ? { regions: regionList } : {}), strategicPayload: payload, insight_source: insightSource }) });
       if (!recRes.ok) {
         const recErr = await recRes.json().catch(() => ({}));
         const code = recErr?.error;
@@ -761,7 +761,7 @@ export function useTrendCampaigns(opts: UseTrendCampaignsOptions) {
         setExecutionCollapsed(true);
         try {
           const newCampaignId = crypto.randomUUID();
-          const createRes = await fetchWithAuth('/api/campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: newCampaignId, companyId, name: 'Campaign from themes', description: 'Select a card and click Build Campaign Blueprint to set the strategic theme.', status: 'planning', current_stage: 'planning', build_mode: 'no_context' }) });
+          const createRes = await apiFetch('/api/campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: newCampaignId, companyId, name: 'Campaign from themes', description: 'Select a card and click Build Campaign Blueprint to set the strategic theme.', status: 'planning', current_stage: 'planning', build_mode: 'no_context' }) });
           if (createRes.ok) { const createData = await createRes.json().catch(() => ({})); setGeneratedCampaignId(createData?.campaign?.id ?? newCampaignId); }
         } catch (_) { setGeneratedCampaignId(null); }
       }

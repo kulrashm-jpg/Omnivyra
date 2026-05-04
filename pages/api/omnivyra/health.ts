@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getOmnivyraHealthReport } from '../../../backend/services/omnivyraClientV1';
 import { Role } from '../../../backend/services/rbacService';
@@ -12,4 +13,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json(report);
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN]);
+export default applyAuthGuard({
+  requiresAuth: true,
+})(withRBAC(handler, [Role.SUPER_ADMIN]));
+

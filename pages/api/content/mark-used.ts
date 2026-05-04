@@ -1,5 +1,7 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '@/backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 
 /**
@@ -8,12 +10,12 @@ import { enforceCompanyAccess } from '@/backend/services/userContextService';
  * Marks a content item (article, blog, etc.) as "used" for distribution tracking.
  *
  * Body:
- *   content_id:    string  (required — the blog/article row id)
- *   content_type:  string  (required — 'article' | 'blog')
+ *   content_id:    string  (required â€” the blog/article row id)
+ *   content_type:  string  (required â€” 'article' | 'blog')
  *   company_id:    string  (required)
- *   platform?:     string  (optional — e.g. 'linkedin', 'twitter', 'newsletter', 'email')
+ *   platform?:     string  (optional â€” e.g. 'linkedin', 'twitter', 'newsletter', 'email')
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -39,7 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq('company_id', company_id);
 
     if (updateError) {
-      // If columns don't exist yet, still return success — the mark-used is best-effort
+      // If columns don't exist yet, still return success â€” the mark-used is best-effort
       // until the DB migration adds used_at and used_platform columns
       console.warn('[mark-used] DB update warning:', updateError.message);
     }
@@ -57,3 +59,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

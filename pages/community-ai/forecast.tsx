@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type ForecastItem = {
   date: string;
@@ -131,7 +131,7 @@ export default function CommunityAiForecast() {
         { shallow: true }
       );
       try {
-        const response = await fetchWithAuth(`/api/community-ai/forecast?${query.toString()}`);
+        const response = await apiFetch(`/api/community-ai/forecast?${query.toString()}`);
         if (!response.ok) {
           const data = await response.json().catch(() => null);
           throw new Error(data?.error || 'Failed to load forecast');
@@ -193,7 +193,7 @@ export default function CommunityAiForecast() {
     if (platform) query.set('platform', platform);
     if (contentType) query.set('content_type', contentType);
     try {
-      const response = await fetchWithAuth(`/api/community-ai/forecast?${query.toString()}`);
+      const response = await apiFetch(`/api/community-ai/forecast?${query.toString()}`);
       if (!response.ok) {
         const data = await response.json().catch(() => null);
         setToastMessage(data?.error || 'Export failed. Please try again.');
@@ -274,7 +274,7 @@ export default function CommunityAiForecast() {
       });
       if (platform) query.set('platform', platform);
       if (contentType) query.set('content_type', contentType);
-      const response = await fetchWithAuth(`/api/community-ai/forecast-insights?${query.toString()}`);
+      const response = await apiFetch(`/api/community-ai/forecast-insights?${query.toString()}`);
       if (!response.ok) {
         const data = await response.json().catch(() => null);
         throw new Error(data?.error || 'Failed to load forecast insights');
@@ -325,7 +325,7 @@ export default function CommunityAiForecast() {
     setSimulationError(null);
     setSimulationStatus((prev) => ({ ...prev, [key]: 'loading' }));
     try {
-      const response = await fetchWithAuth('/api/community-ai/forecast-simulate', {
+      const response = await apiFetch('/api/community-ai/forecast-simulate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

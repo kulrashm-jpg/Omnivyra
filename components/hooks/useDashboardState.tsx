@@ -136,7 +136,7 @@ export function useDashboardState() {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetchWithAuth(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}&includeCompleteness=0`);
+        const response = await apiFetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}&includeCompleteness=0`);
         if (!response.ok) return;
         const data = await response.json();
         if (cancelled) return;
@@ -168,7 +168,7 @@ export function useDashboardState() {
         return stage === stageFilter;
       });
 
-  const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
+  const apiFetch = async (input: RequestInfo, init?: RequestInit) => {
     const token = await getAuthToken();
     return fetch(input, {
       ...init,
@@ -252,7 +252,7 @@ export function useDashboardState() {
     setCalendarStageFilter(stage);
     setCalendarStageEventsLoading(true);
     const campaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : undefined;
-    fetchWithAuth(
+    apiFetch(
       `/api/calendar/activity-events?start=2020-01-01&end=2099-12-31&companyId=${encodeURIComponent(selectedCompanyId)}&stageFilter=1${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}`
     )
       .then((r) => (r.ok ? r.json() : []))
@@ -478,7 +478,7 @@ export function useDashboardState() {
     async (newDate: string) => {
       if (!draggedActivity?.scheduled_post_id || !selectedCompanyId) return;
       try {
-        const res = await fetchWithAuth('/api/schedule/reschedule', {
+        const res = await apiFetch('/api/schedule/reschedule', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -538,7 +538,7 @@ export function useDashboardState() {
 
   const handleRescheduleFromModal = async (postId: string, newDate: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const res = await fetchWithAuth('/api/schedule/reschedule', {
+      const res = await apiFetch('/api/schedule/reschedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scheduled_post_id: postId, new_date: newDate, companyId: selectedCompanyId }),
@@ -573,7 +573,7 @@ export function useDashboardState() {
 
   const handlePublishNow = async (postId: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const res = await fetchWithAuth('/api/social/publish', {
+      const res = await apiFetch('/api/social/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ post_id: postId }),
@@ -599,7 +599,7 @@ export function useDashboardState() {
       setStageAvailability({});
       return;
     }
-    fetchWithAuth(
+    apiFetch(
       `/api/campaigns/stage-availability-batch?campaignIds=${encodeURIComponent(campaignIds)}`
     )
       .then((r) => r.ok ? r.json() : { availability: {} })
@@ -616,7 +616,7 @@ export function useDashboardState() {
     const end = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     setCalendarActivityEventsLoading(true);
     const campaignId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : undefined;
-    fetchWithAuth(
+    apiFetch(
       `/api/calendar/activity-events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&companyId=${encodeURIComponent(selectedCompanyId)}${campaignId ? `&campaignId=${encodeURIComponent(campaignId)}` : ''}`
     )
       .then((r) => (r.ok ? r.json() : []))
@@ -680,7 +680,7 @@ export function useDashboardState() {
     const authId = calendarCampaignFilter !== 'all' ? calendarCampaignFilter : ids[0];
     if (!authId) return;
     const url = `/api/calendar/message-counts?campaignIds=${encodeURIComponent(campaignIds)}&dates=${encodeURIComponent(dates.join(','))}`;
-    fetchWithAuth(url)
+    apiFetch(url)
       .then((r) => (r.ok ? r.json() : {}))
       .then((data) => setCalendarMessageCounts(typeof data === 'object' && data !== null ? data as Record<string, any> : {}))
       .catch(() => setCalendarMessageCounts({}));
@@ -705,7 +705,7 @@ export function useDashboardState() {
     const merged: Record<string, { total: number; unread: number }> = {};
     Promise.all(
       Object.entries(byCampaign).map(([cid, aids]) =>
-        fetchWithAuth(`/api/activity/message-counts?campaignId=${encodeURIComponent(cid)}&activityIds=${encodeURIComponent(aids.join(','))}`)
+        apiFetch(`/api/activity/message-counts?campaignId=${encodeURIComponent(cid)}&activityIds=${encodeURIComponent(aids.join(','))}`)
           .then((r) => (r.ok ? r.json() : {}))
           .then((data) => {
             if (typeof data === 'object') Object.assign(merged, data);
@@ -720,7 +720,7 @@ export function useDashboardState() {
     if (chatPanel.mode === 'day' && chatPanel.date) {
       setDayChatLoading(true);
       setDayChatMessages([]);
-      fetchWithAuth(`/api/calendar/messages?campaignId=${encodeURIComponent(chatPanel.campaignId)}&date=${encodeURIComponent(chatPanel.date)}`)
+      apiFetch(`/api/calendar/messages?campaignId=${encodeURIComponent(chatPanel.campaignId)}&date=${encodeURIComponent(chatPanel.date)}`)
         .then((r) => (r.ok ? r.json() : []))
         .then((data) => setDayChatMessages(Array.isArray(data) ? data : []))
         .catch(() => setDayChatMessages([]))
@@ -728,7 +728,7 @@ export function useDashboardState() {
     } else if (chatPanel.mode === 'activity' && chatPanel.activityId) {
       setActivityChatLoading(true);
       setActivityChatMessages([]);
-      fetchWithAuth(`/api/activity/messages?activityId=${encodeURIComponent(chatPanel.activityId)}&campaignId=${encodeURIComponent(chatPanel.campaignId)}`)
+      apiFetch(`/api/activity/messages?activityId=${encodeURIComponent(chatPanel.activityId)}&campaignId=${encodeURIComponent(chatPanel.campaignId)}`)
         .then((r) => (r.ok ? r.json() : []))
         .then((data) => setActivityChatMessages(Array.isArray(data) ? data : []))
         .catch(() => setActivityChatMessages([]))
@@ -740,7 +740,7 @@ export function useDashboardState() {
   const handleChatSend = async (text: string) => {
     if (!chatPanel?.campaignId) return;
     if (chatPanel.mode === 'day' && chatPanel.date) {
-      const res = await fetchWithAuth('/api/calendar/messages', {
+      const res = await apiFetch('/api/calendar/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaignId: chatPanel.campaignId, date: chatPanel.date, message_text: text }),
@@ -751,7 +751,7 @@ export function useDashboardState() {
         setChatRefresh((c) => c + 1);
       }
     } else if (chatPanel.mode === 'activity' && chatPanel.activityId) {
-      const res = await fetchWithAuth('/api/activity/messages', {
+      const res = await apiFetch('/api/activity/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ activityId: chatPanel.activityId, campaignId: chatPanel.campaignId, message_text: text }),
@@ -768,12 +768,12 @@ export function useDashboardState() {
     e.stopPropagation();
     setExpandingCampaignId(campaignId);
     try {
-      const res = await fetchWithAuth(`/api/campaigns/${campaignId}/expand-to-week-plans`, {
+      const res = await apiFetch(`/api/campaigns/${campaignId}/expand-to-week-plans`, {
         method: 'POST',
       });
       if (res.ok) {
         const ids = campaignIds.split(',').filter(Boolean);
-        const r = await fetchWithAuth(`/api/campaigns/stage-availability-batch?campaignIds=${ids.join(',')}`);
+        const r = await apiFetch(`/api/campaigns/stage-availability-batch?campaignIds=${ids.join(',')}`);
         if (r.ok) {
           const data = await r.json();
           setStageAvailability(data.availability || {});
@@ -805,8 +805,8 @@ export function useDashboardState() {
       const contentStatsUrl = `/api/campaigns/content-stats?companyId=${selectedCompanyId}`;
       console.log('DASHBOARD_API_CALL', campaignsUrl);
       const [campaignsResponse, contentStatsResponse] = await Promise.all([
-        fetchWithAuth(campaignsUrl),
-        fetchWithAuth(contentStatsUrl).catch(() => null),
+        apiFetch(campaignsUrl),
+        apiFetch(contentStatsUrl).catch(() => null),
       ]);
       console.log('Received response:', campaignsResponse.status, campaignsResponse.statusText);
       
@@ -937,7 +937,7 @@ export function useDashboardState() {
     setIsDeletingCampaign(true);
     try {
       const deleteUrl = `/api/admin/delete-campaign?companyId=${encodeURIComponent(selectedCompanyId)}`;
-      const deleteResponse = await fetchWithAuth(deleteUrl, {
+      const deleteResponse = await apiFetch(deleteUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1010,7 +1010,7 @@ export function useDashboardState() {
     router, selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, hasPermission, userRole, user,
     canCreateCampaign, canScheduleContent, activeTab, setActiveTab, intelligenceView, setIntelligenceView,
     campaigns, stats, isLoadingData, error, setError, campaignProgress, stageFilter, setStageFilter,
-    stageAvailability, CAMPAIGN_STAGES, filteredCampaigns, fetchWithAuth,
+    stageAvailability, CAMPAIGN_STAGES, filteredCampaigns, apiFetch,
     calendarCurrentDate, setCalendarCurrentDate, calendarSelectedDate, setCalendarSelectedDate,
     calendarView, setCalendarView, calendarActivityMode, setCalendarActivityMode,
     calendarCampaignFilter, setCalendarCampaignFilter, calendarStatusFilter, setCalendarStatusFilter,

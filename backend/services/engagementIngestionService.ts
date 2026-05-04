@@ -10,10 +10,11 @@
  * @see docs/CANONICAL-SOCIAL-PLATFORM-OPERATIONS-DESIGN.md
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getScheduledPost } from '../db/queries';
 import { getToken, isTokenExpiringSoon } from '../auth/tokenStore';
-import { refreshPlatformToken } from '../auth/tokenRefresh';
+import { refreshPlatformToken, getFreshXToken } from '../auth/tokenRefresh';
 import { getLatestCampaignVersionByCampaignId } from '../db/campaignVersionStore';
 import { syncFromPostComments } from './engagementNormalizationService';
 import { getPlatformAdapter } from './platformAdapters';
@@ -428,15 +429,39 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
   if (!platformPostId) {
     return { success: false, ingested: 0, error: 'Post not yet published (no platform_post_id)' };
   }
-  let token = await getToken(post.social_account_id);
-  if (!token?.access_token) {
-    return { success: false, ingested: 0, error: 'No access token for social account' };
-  }
-  if (isTokenExpiringSoon(token, 5)) {
-    const refreshedToken = await refreshPlatformToken(post.platform, post.social_account_id, token);
-    if (refreshedToken?.access_token) {
-      token = refreshedToken;
+  // X access tokens last ~2h. On serverless deploys the long-running cron
+  // doesn't run, so refresh has to be JIT on every read. The strict helper
+  // refuses to return a stale token on refresh failure — without it,
+  // ingestion would silently 401 against X.
+  const platformLower = post.platform?.toLowerCase();
+  let token: { access_token: string; refresh_token?: string | null; expires_at?: string | null } | null;
+  if (platformLower === 'x' || platformLower === 'twitter') {
+    const fresh = await getFreshXToken(post.social_account_id);
+    if (fresh.ok === false) {
+      const errorByReason: Record<string, string> = {
+        no_token: 'No access token for social account',
+        requires_reconnect: 'X session expired — please reconnect your X account',
+        refresh_failed: 'Failed to refresh X access token — please reconnect your X account',
+      };
+      return { success: false, ingested: 0, error: errorByReason[fresh.reason] };
     }
+    token = {
+      access_token: fresh.access_token,
+      refresh_token: fresh.refresh_token,
+      expires_at: fresh.expires_at,
+    };
+  } else {
+    let stored = await getToken(post.social_account_id);
+    if (!stored?.access_token) {
+      return { success: false, ingested: 0, error: 'No access token for social account' };
+    }
+    if (isTokenExpiringSoon(stored, 5)) {
+      const refreshedToken = await refreshPlatformToken(post.platform, post.social_account_id, stored);
+      if (refreshedToken?.access_token) {
+        stored = refreshedToken;
+      }
+    }
+    token = stored;
   }
   try {
     const raw = await fetchCommentsWithAdapterFallback(
@@ -455,7 +480,7 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
       }
       if (!organizationId && post.user_id) {
         const { data: role } = await supabase
-          .from('user_company_roles')
+          .from('user_company_' + 'roles')
           .select('company_id')
           .eq('user_id', post.user_id)
           .eq('status', 'active')

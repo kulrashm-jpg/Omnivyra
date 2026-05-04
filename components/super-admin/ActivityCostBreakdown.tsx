@@ -11,6 +11,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
+import { apiFetch } from '../../lib/apiFetch';
 
 interface ResourceCost {
   [key: string]: number;
@@ -307,7 +308,7 @@ export default function ActivityCostBreakdown({
     const fetchData = async () => {
       try {
         setLoading(true);
-        const res = await fetch(
+        const res = await apiFetch(
           `/api/super-admin/activity-cost-breakdown?period=${period}&org_id=${orgId}`
         );
         if (!res.ok) throw new Error('Failed to fetch data');

@@ -1,14 +1,17 @@
+﻿// AUTH EXEMPT: OAuth callback handles external provider redirect
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveToken } from '../../../../../backend/services/platformTokenService';
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
-import { syncInstagramAndThreadsFromMeta } from '../../../../../backend/services/metaDerivedAccountsService';
+// IG/Threads social_accounts rows are now provisioned exclusively by the
+// /api/auth/facebook OAuth flow via the meta_oauth_apply RPC. The community-ai
+// connector flow only populates community_ai_platform_tokens (engagement layer).
 
 /**
  * GET /api/community-ai/connectors/meta/callback
  *
- * Meta OAuth callback — saves the same access token for facebook, instagram, and whatsapp.
+ * Meta OAuth callback â€” saves the same access token for facebook, instagram, and whatsapp.
  * One connection covers all three Meta platforms.
  */
 
@@ -123,13 +126,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ]);
 
     // Dual-write Facebook to publishing layer (social_accounts).
-    // Instagram is intentionally NOT dual-written here — its row needs the IG
-    // Business account ID as platform_user_id (not the FB user ID), and the IG
-    // username as account_name. We call syncInstagramAndThreadsFromMeta below
-    // which queries /me/accounts?fields=instagram_business_account, finds the
-    // real IG account linked to a Page, and inserts/updates with correct values.
-    // Earlier code ran dualWriteSocialAccount for IG with FB data, leaving every
-    // future IG publish call broken (FB user ID isn't a valid IG account ID).
+    // Instagram is intentionally NOT dual-written here â€” its row needs the IG
+    // Business account ID as platform_user_id (not the FB user ID). The full
+    // multi-row IG/Threads provisioning runs via meta_oauth_apply during the
+    // /api/auth/facebook OAuth flow.
     const dualToken = {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token || undefined,
@@ -150,26 +150,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       permissions: grantedScopesList,
     });
 
-    // Resolve the real Instagram Business account(s) from Pages and create
-    // proper instagram + threads rows. Non-fatal: if the user has no IG-linked
-    // Page, the FB connection still succeeds and we just skip IG/Threads.
-    let derivedThreadsCount = 0;
-    let derivedInstagramCount = 0;
-    try {
-      const syncResult = await syncInstagramAndThreadsFromMeta({
-        userId: access.userId,
-        companyId: organizationId,
-        accessToken: tokenData.access_token,
-        expiresAt: expiresAt ?? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
-        permissions: grantedScopesList,
-      });
-      derivedInstagramCount = syncResult.instagramAccounts.length;
-      derivedThreadsCount = syncResult.threadsAccounts.length;
-    } catch (syncErr: any) {
-      console.warn('[meta/callback] IG/Threads derivation skipped:', syncErr?.message);
-    }
+    // IG/Threads social_accounts derivation is no longer performed here.
+    // Users connect publishing accounts via the dedicated /api/auth/facebook
+    // flow which calls meta_oauth_apply transactionally. This community-ai
+    // connector handles only the engagement-layer token store.
 
-    // Audit log
     console.info('[connector_audit]', JSON.stringify({
       user_id: access.userId,
       company_id: organizationId,
@@ -177,8 +162,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       action: 'connect',
       meta_user_id: metaUserId,
       meta_name: metaName,
-      derived_instagram_count: derivedInstagramCount,
-      derived_threads_count: derivedThreadsCount,
     }));
 
     return res.redirect(`${redirectTo}?connected=meta&status=success`);
@@ -187,3 +170,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Meta connection failed. Please try again.')}`);
   }
 }
+

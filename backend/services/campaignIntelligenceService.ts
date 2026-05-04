@@ -1,6 +1,7 @@
 import { normalizePlatform } from '../constants/platforms';
 import { randomUUID } from 'crypto';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type StatusNormalized = 'planned' | 'active' | 'completed' | 'abandoned' | 'unknown';
 

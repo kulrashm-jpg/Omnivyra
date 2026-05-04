@@ -1,4 +1,5 @@
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getLatestCampaignVersionByCampaignId } from '../../db/campaignVersionStore';
 import { getPrimaryCampaignType, BACKWARD_COMPAT_DEFAULTS } from '../campaignContextConfig';
 import { recommendationDurationSeed, toValidWeeks } from '../campaign-ai/campaignAiPlanningContext';

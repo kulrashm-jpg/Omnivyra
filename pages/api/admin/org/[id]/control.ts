@@ -15,11 +15,11 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../../backend/services/rbacService';
 import {
   requireAdminRateLimit,
-  requireAuthenticatedInternalUser,
+  requireAdminScope,
 } from '../../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../../backend/services/adminAuditService';
 import { applyOrgControl } from '../../../../../backend/services/orgControlService';
 import { withIdempotency } from '../../../../../backend/middleware/withIdempotency';
@@ -30,11 +30,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:org_ctrl', 30, 60))) return;
 
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return;
-  if (!(await isPlatformSuperAdmin(user.id)) && !(await isSuperAdmin(user.id))) {
-    return res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
+  const ctx = await requireAdminScope(req, res, 'org:control');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/admin/org/[id]/control', 'org:control');
   }
+  const user = ctx;
 
   const orgId = String(req.query.id ?? '').trim();
   if (!orgId) return res.status(400).json({ error: 'org id required' });
@@ -96,4 +97,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(200).json({ ok: true, organization_id: orgId });
 }
 
-export default withIdempotency(handler, { scope: 'admin-org-control', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

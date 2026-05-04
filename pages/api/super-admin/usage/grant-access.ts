@@ -1,38 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-const PLACEHOLDER_GRANTED_BY = '00000000-0000-0000-0000-000000000000';
-
-const requireSuperAdminAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<string | null> => {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    return PLACEHOLDER_GRANTED_BY;
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return null;
-    }
-    return user.id;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return null;
-};
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const grantedBy = await requireSuperAdminAccess(req, res);
-  if (grantedBy === null) return;
+  const ctx = await requireAdminScope(req, res, 'config:rbac');
+  if (!ctx) return;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn('[ADMIN_SCOPE]', '/api/super-admin/usage/grant-access', 'config:rbac');
+  }
+  const grantedBy = ctx.id;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const organizationId = body.organization_id ?? body.organizationId;
@@ -61,3 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

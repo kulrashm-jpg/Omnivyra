@@ -6,7 +6,8 @@
  * Run daily via cron.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const JOB_NAME = 'intelligence_event_cleanup';
 const RETENTION_DAYS = 180;

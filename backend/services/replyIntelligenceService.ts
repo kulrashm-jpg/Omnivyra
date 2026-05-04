@@ -3,7 +3,8 @@
  * AI Reply Effectiveness Intelligence Layer.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export type ReplyIntelligenceRow = {
   id: string;

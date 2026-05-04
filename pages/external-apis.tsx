@@ -48,7 +48,7 @@ export default function ExternalApisPage() {
     editingPresetId,
     errorMessage,
     expandedCardIds,
-    fetchWithAuth,
+    apiFetch,
     findPresetByName,
     form,
     formatPercent,

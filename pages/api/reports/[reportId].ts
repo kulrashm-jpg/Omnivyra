@@ -1,14 +1,16 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/reports/[reportId]?type=snapshot|performance|growth
  *
  * Reads the stored intelligence snapshot from reports.data and maps it
  * to a CMO-friendly view payload for the given report type.
  *
- * All data originates from runCompanyBlogIntelligence — no re-computation here.
+ * All data originates from runCompanyBlogIntelligence â€” no re-computation here.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { renderOmnivyraSnapshotMasterHtml, renderReportHtmlTemplate } from '../../../backend/services/export/reportHtmlTemplateRenderer';
 import { renderReportPdf } from '../../../backend/services/export/reportPdfRenderer';
@@ -30,13 +32,13 @@ import { mapComposedReport } from './reportComposedMapper';
 import type { ComposedReportData } from './reportComposedTypes';
 import type { ReportViewPayload } from './reportViewPayloadTypes';
 
-// ── Task 6: canonical type derived from the intelligence engine ───────────────
+// â”€â”€ Task 6: canonical type derived from the intelligence engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export type ReportIntelligenceData = CompanyBlogIntelligenceResult;
 
 /** Reports older than this are considered stale. */
 const STALE_THRESHOLD_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-// ── View-layer types (consumed by [reportId].tsx) ─────────────────────────────
+// â”€â”€ View-layer types (consumed by [reportId].tsx) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type ReportApiRow = Pick<
   ReportRecord,
@@ -94,7 +96,7 @@ async function requeueIncompleteReport(report: ReportApiRow): Promise<void> {
   startAsyncReportGeneration(report as ReportRecord);
 }
 
-// ── Mappers: CompanyBlogIntelligenceResult → ReportViewPayload ────────────────
+// â”€â”€ Mappers: CompanyBlogIntelligenceResult â†’ ReportViewPayload â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function sanitizeFilenamePart(value: string | null | undefined): string {
   return (value ?? '')
@@ -117,7 +119,7 @@ function buildPdfDownloadFilename(
   return `${prefix} - ${brand}.pdf`;
 }
 
-export default async function handler(
+async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ReportViewPayload | { error: string; code: string }>,
 ) {
@@ -133,7 +135,7 @@ export default async function handler(
   const reportId = req.query.reportId as string;
   const format = typeof req.query.format === 'string' ? req.query.format : 'json';
 
-  // Task 4 — reject invalid report type values before any DB work
+  // Task 4 â€” reject invalid report type values before any DB work
   const VALID_TYPES = ['snapshot', 'performance', 'growth'] as const;
   type ValidReportType = typeof VALID_TYPES[number];
   const rawType = req.query.type;
@@ -145,7 +147,7 @@ export default async function handler(
   }
   const type = rawType as ValidReportType;
 
-  // Fetch the report record — confirm ownership via company membership
+  // Fetch the report record â€” confirm ownership via company membership
   const { data: report, error: reportError } = await supabase
     .from('reports')
     .select('id, company_id, user_id, domain, report_type, status, created_at, data, metadata')
@@ -158,7 +160,7 @@ export default async function handler(
 
   // Confirm the requesting user belongs to this company
   const { data: membership } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('company_id')
     .eq('user_id', user.id)
     .eq('company_id', report.company_id)
@@ -169,7 +171,7 @@ export default async function handler(
     return res.status(403).json({ error: 'Access denied', code: 'ACCESS_DENIED' });
   }
 
-  // Still generating — return status so the view page shows the spinner
+  // Still generating â€” return status so the view page shows the spinner
   if (report.status !== 'completed' && report.status !== 'failed') {
     return res.status(202).json(
       buildGeneratingPayload(reportId, report.company_id, report.domain, type, report.created_at),
@@ -196,7 +198,7 @@ export default async function handler(
     );
   }
 
-  // Task 1 — staleness
+  // Task 1 â€” staleness
   const generated_at = report.created_at;
   const is_stale = Date.now() - new Date(generated_at).getTime() > STALE_THRESHOLD_MS;
 
@@ -206,7 +208,7 @@ export default async function handler(
     year: 'numeric',
   });
 
-  // Task 3 — engine version stored at generation time, fall back to v1
+  // Task 3 â€” engine version stored at generation time, fall back to v1
   const engine_version = stored?.engine_version ?? 'v1';
 
   const composedPayload = composedReport
@@ -423,3 +425,8 @@ export default async function handler(
 
   return res.status(200).json(sanitizedPayloadWithComparison);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

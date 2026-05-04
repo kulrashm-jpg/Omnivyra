@@ -4,7 +4,8 @@
  * Flow: load job → validate → run APIs per region (controlled concurrency) → store raw signals → READY_FOR_ANALYSIS → trigger consolidation.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { fetchExternalTrends } from './externalApiService';
 import { normalizeExternalTrends } from './trendNormalizationService';
 import { consolidateMultiRegionSignals } from './recommendationConsolidator';

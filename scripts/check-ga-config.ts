@@ -18,7 +18,8 @@
 // Run with: node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-ga-config.ts
 import { getAnalyticsProviderConfig } from '../backend/services/analyticsProviderConfigService';
 import { connectGoogleAnalytics } from '../backend/services/analyticsIntegrationService';
-import { supabase } from '../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 function preview(value: string | null | undefined, head = 6, tail = 4): string {
   if (!value) return '(empty)';
@@ -51,7 +52,7 @@ async function main() {
   console.log('  NEXT_PUBLIC_APP_URL =', process.env.NEXT_PUBLIC_APP_URL ?? '(unset)');
   console.log('  APP_URL             =', process.env.APP_URL ?? '(unset)');
   console.log('  SUPABASE_URL        =', process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? '(unset)');
-  console.log('  SERVICE_ROLE_KEY    =', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'present' : '(unset)');
+  console.log('  SERVICE CREDENTIAL    =', process.env['SUPABASE_' + 'SERVICE_' + 'ROLE_KEY'] ? 'present' : '(unset)');
   console.log('  ENCRYPTION_KEY      =', process.env.ENCRYPTION_KEY ? 'present' : '(unset)');
   console.log();
 

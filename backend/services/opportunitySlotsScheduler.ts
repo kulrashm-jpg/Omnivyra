@@ -1,4 +1,5 @@
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { fillOpportunitySlots, reopenScheduledOpportunitiesDue } from './opportunityService';
 
 const OPPORTUNITY_TYPES = [

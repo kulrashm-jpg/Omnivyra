@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * GET /api/analytics/summary
  *
@@ -5,8 +6,8 @@
  *
  * Query params:
  *   company_id   (required)
- *   date_from    (optional) — YYYY-MM-DD, defaults to 30 days ago
- *   date_to      (optional) — YYYY-MM-DD, defaults to today
+ *   date_from    (optional) â€” YYYY-MM-DD, defaults to 30 days ago
+ *   date_to      (optional) â€” YYYY-MM-DD, defaults to today
  *
  * Response:
  * {
@@ -15,12 +16,13 @@
  * }
  *
  * Sources:
- *   - content_analytics  → post-level impressions, reach, engagement metrics
- *   - platform_metrics_snapshots → latest follower count per platform
+ *   - content_analytics  â†’ post-level impressions, reach, engagement metrics
+ *   - platform_metrics_snapshots â†’ latest follower count per platform
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 interface PlatformSummary {
@@ -43,7 +45,7 @@ const EMPTY_PLATFORM = (): PlatformSummary => ({
   post_count: 0, avg_engagement_rate: 0, followers: 0,
 });
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
@@ -56,7 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const dfrom    = date_from ?? new Date(Date.now() - 30 * 86400_000).toISOString().split('T')[0];
   const dto      = date_to   ?? today;
 
-  // ── 1. Post-level metrics from content_analytics ─────────────────────────
+  // â”€â”€ 1. Post-level metrics from content_analytics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: postRows, error: postErr } = await supabase
     .from('content_analytics')
     .select(
@@ -73,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: 'Failed to fetch analytics summary' });
   }
 
-  // ── 2. Latest follower counts from platform_metrics_snapshots ────────────
+  // â”€â”€ 2. Latest follower counts from platform_metrics_snapshots â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const { data: snapRows } = await supabase
     .from('platform_metrics_snapshots')
     .select('platform, followers, captured_date')
@@ -87,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!(p in latestFollowers)) latestFollowers[p] = s.followers ?? 0;
   }
 
-  // ── 3. Aggregate by platform ──────────────────────────────────────────────
+  // â”€â”€ 3. Aggregate by platform â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const breakdown: Record<string, PlatformSummary> = {};
 
   for (const row of postRows ?? []) {
@@ -115,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     b.followers = latestFollowers[p] ?? 0;
   }
 
-  // ── 4. Totals ─────────────────────────────────────────────────────────────
+  // â”€â”€ 4. Totals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const totals = Object.values(breakdown).reduce(
     (acc, b) => {
       acc.total_impressions += b.impressions;
@@ -143,3 +145,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     platform_breakdown: breakdown,
   });
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

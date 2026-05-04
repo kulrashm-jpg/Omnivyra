@@ -4,7 +4,7 @@ import Head from 'next/head';
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { useCompanyContext } from '../../../components/CompanyContext';
-import { fetchWithAuth } from '../../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import CampaignAIChat from '../../../components/CampaignAIChat.dynamic';
 
 interface RecWeek {
@@ -54,8 +54,8 @@ export default function VetChatPage() {
   useEffect(() => {
     if (!campaignId) return;
     Promise.all([
-      fetchWithAuth(`/api/campaigns/${campaignId}`).then((r) => (r.ok ? r.json() : null)),
-      fetchWithAuth(`/api/campaigns/${campaignId}/recommendations?status=pending${sessionId ? `&sessionId=${sessionId}` : ''}`).then((r) => (r.ok ? r.json() : null)),
+      apiFetch(`/api/campaigns/${campaignId}`).then((r) => (r.ok ? r.json() : null)),
+      apiFetch(`/api/campaigns/${campaignId}/recommendations?status=pending${sessionId ? `&sessionId=${sessionId}` : ''}`).then((r) => (r.ok ? r.json() : null)),
     ])
       .then(([campRes, recRes]) => {
         setCampaign(campRes?.campaign || { id: campaignId, name: 'Campaign' });

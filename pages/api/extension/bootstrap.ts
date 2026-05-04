@@ -1,10 +1,11 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/extension/bootstrap
  *
  * Called by the web app (with the user's authenticated cookie-based
  * Supabase session). Creates a short-lived single-use claim code bound to
  * the current user + organization. The web app forwards ONLY this code to
- * the extension via postMessage — never the session token itself.
+ * the extension via postMessage â€” never the session token itself.
  *
  * The extension service worker then calls POST /api/extension/redeem with
  * the claim code to fetch the real session token + HMAC secret.
@@ -14,7 +15,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { createClaimCode } from '@/backend/services/extensionClaimCodeService';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
@@ -44,3 +45,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ success: false, error: (error as Error)?.message || 'bootstrap failed' });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+})(handler);
+

@@ -1,7 +1,8 @@
 import { generateRecommendations } from '../../services/recommendationEngine';
 import { getPlatformStrategies } from '../../services/externalApiService';
 import { logRecommendationAudit } from '../../services/recommendationAuditService';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import handler from '../../../pages/api/recommendations/audit/[id]';
 import campaignHandler from '../../../pages/api/recommendations/audit/campaign/[id]';
 import { createApiRequestMock, createMockRes, createSupabaseMock } from '../utils';

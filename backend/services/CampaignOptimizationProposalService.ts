@@ -3,7 +3,8 @@
  * Advisory only. No automatic mutation. Read-only.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCampaignRoiIntelligence } from './CampaignRoiIntelligenceService';
 import { getCampaignGovernanceAnalytics } from './GovernanceAnalyticsService';
 import { generateCampaignOptimizationInsights } from './CampaignOptimizationIntelligenceService';

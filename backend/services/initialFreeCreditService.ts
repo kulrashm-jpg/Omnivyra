@@ -21,7 +21,8 @@
  *     through earnCreditsService.ts and are additive on top of the initial grant.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
 import { logger } from './logger';
 

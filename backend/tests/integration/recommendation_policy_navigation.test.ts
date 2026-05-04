@@ -1,5 +1,6 @@
 import simulateHandler from '../../../pages/api/recommendations/simulate';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { simulateRecommendations } from '../../services/recommendationSimulationService';
 import { createApiRequestMock, createMockRes } from '../utils';
 

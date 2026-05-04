@@ -1,3 +1,4 @@
+﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
 import { updateToEditedCommitted } from '../../../backend/db/campaignPlanStore';
@@ -7,7 +8,7 @@ import { updateToEditedCommitted } from '../../../backend/db/campaignPlanStore';
  * Updates committed plan to edited_committed (same row, status change).
  * Used when user edits a committed plan and saves changes.
  */
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -40,3 +41,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiresOrg: true,
+})(handler);
+

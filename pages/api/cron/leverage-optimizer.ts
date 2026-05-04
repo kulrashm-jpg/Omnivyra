@@ -1,12 +1,13 @@
+﻿// AUTH EXEMPT: cron endpoint uses cron-specific authorization
 
 /**
  * GET /api/cron/leverage-optimizer
  *
- * Daily cron — runs the outcome measurement + efficiency optimization loop
+ * Daily cron â€” runs the outcome measurement + efficiency optimization loop
  * for all companies with campaign data.
  *
- * Schedule: 0 2 * * *  (2am daily — after health monitor has run)
- * Header:   x-cron-secret: $CRON_SECRET
+ * Schedule: 0 2 * * *  (2am daily â€” after health monitor has run)
+ * Header:   Authorization: Bearer $CRON_SECRET
  *
  * Per company:
  *   1. measureOutcomeScore for recently completed campaigns
@@ -16,11 +17,13 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../backend/db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { measureOutcomeScore } from '../../../backend/services/outcomeTrackingService';
 import { checkAndFailFast } from '../../../backend/services/failFastService';
 import { optimizeCreditEfficiency } from '../../../backend/services/creditEfficiencyEngine';
 import { checkCreditAlerts } from '../../../backend/services/creditAlertService';
+import { assertCronAuthorized, rejectCronUnauthorized } from '../../../backend/utils/cronAuthGuard';
 
 type LeverageRunResult = {
   companies_processed: number;
@@ -36,9 +39,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers['x-cron-secret'] !== secret) {
-    return res.status(401).json({ error: 'Unauthorised' });
+  try {
+    assertCronAuthorized(req);
+  } catch (error) {
+    if (rejectCronUnauthorized(res, error)) return;
+    throw error;
   }
 
   const result: LeverageRunResult = {
@@ -51,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   };
 
   try {
-    // ── 1. Get all active companies ────────────────────────────────────────
+    // â”€â”€ 1. Get all active companies â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: companies } = await supabase
       .from('companies')
       .select('id')
@@ -62,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ success: true, result });
     }
 
-    // ── 2. Get recently completed campaigns (last 48h) ─────────────────────
+    // â”€â”€ 2. Get recently completed campaigns (last 48h) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const since48h = new Date(Date.now() - 48 * 3600_000).toISOString();
     const { data: completedCampaigns } = await supabase
       .from('campaigns')
@@ -70,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .in('status', ['completed', 'ended'])
       .gte('updated_at', since48h);
 
-    // ── 3. Get active campaigns for fail-fast check ────────────────────────
+    // â”€â”€ 3. Get active campaigns for fail-fast check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const { data: activeCampaigns } = await supabase
       .from('campaigns')
       .select('id, company_id')
@@ -78,7 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const processedCompanyIds = new Set<string>();
 
-    // ── Measure outcomes for completed campaigns ───────────────────────────
+    // â”€â”€ Measure outcomes for completed campaigns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for (const campaign of (completedCampaigns ?? []) as Array<{ id: string; company_id: string }>) {
       try {
         await measureOutcomeScore(campaign.id, campaign.company_id);
@@ -89,7 +94,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── Fail-fast check for active campaigns ──────────────────────────────
+    // â”€â”€ Fail-fast check for active campaigns â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     for (const campaign of (activeCampaigns ?? []) as Array<{ id: string; company_id: string }>) {
       try {
         const ff = await checkAndFailFast(campaign.id, campaign.company_id);
@@ -102,7 +107,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // ── Efficiency optimization + credit alerts per company ────────────────
+    // â”€â”€ Efficiency optimization + credit alerts per company â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const companyIds = [...new Set([
       ...processedCompanyIds,
       ...(companies as Array<{ id: string }>).map(c => c.id).slice(0, 50),
@@ -133,3 +138,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: err?.message });
   }
 }
+

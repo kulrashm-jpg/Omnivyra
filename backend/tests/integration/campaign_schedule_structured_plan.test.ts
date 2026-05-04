@@ -1,7 +1,8 @@
 import handler from '../../../pages/api/campaigns/[id]/schedule-structured-plan';
 import { scheduleStructuredPlan } from '../../services/structuredPlanScheduler';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 jest.mock('../../db/supabaseClient', () => ({
   supabase: { from: jest.fn() },

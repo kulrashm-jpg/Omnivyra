@@ -4,7 +4,8 @@
  * Single-source fetch helpers used by the intelligence polling pipeline, plus
  * runtime snapshot / reset utilities.
  */
-import { supabase } from '../../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { updateApiHealth, getHealthSnapshot } from '../externalApiHealthService';
 import {
   getCacheStats,

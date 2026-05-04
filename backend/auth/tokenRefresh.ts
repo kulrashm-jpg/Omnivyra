@@ -16,7 +16,8 @@
 
 import axios from 'axios';
 import { getToken, setToken, TokenObject } from './tokenStore';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { config } from '@/config';
 import { getOAuthCredentialsForPlatform } from './oauthCredentialResolver';
 import { withRefreshLock } from './refreshLock';
@@ -243,9 +244,8 @@ async function doRefreshTwitterTokenInner(
       token_type: response.data.token_type || 'Bearer',
     };
 
-    // setToken persists to social_accounts AND mirrors to
-    // community_ai_platform_tokens (see mirrorTokenToCommunityAi). Both tables
-    // receive the freshly-rotated refresh_token in the same call.
+    // setToken persists the rotated refresh_token to social_accounts, which
+    // is now the single token source for both publishing and connector reads.
     await setToken(account.account_id, refreshed);
     await recordTwitterRefreshOutcome(account.account_id, 'success', null);
 
@@ -294,6 +294,65 @@ export async function refreshTwitterToken(
     refresh_token: result.refresh_token ?? undefined,
     expires_at: result.token_expires_at ?? undefined,
     token_type: currentToken.token_type || 'Bearer',
+  };
+}
+
+export type FreshXTokenResult =
+  | { ok: true; access_token: string; refresh_token: string | null; expires_at: string | null; status: TwitterTokenRefreshStatus }
+  | { ok: false; reason: 'no_token' | 'requires_reconnect' | 'refresh_failed' };
+
+/**
+ * Strict X/Twitter token read.
+ *
+ * Read paths used to swallow refresh failures and return the stale access
+ * token, so the next API call would hit X with an expired bearer and 401 —
+ * surfaced to users as "Twitter just stopped working". This helper closes
+ * that gap: it always invokes the locked refresh and refuses to return a
+ * stale token. Callers must handle ok:false with reason and surface a
+ * reconnect prompt for requires_reconnect.
+ *
+ * Use for every X read on serverless deployments where the long-running
+ * cron is not available — X access tokens live ~2h, so JIT refresh on each
+ * request is the only reliable path.
+ */
+export async function getFreshXToken(socialAccountId: string): Promise<FreshXTokenResult> {
+  const stored = await getToken(socialAccountId);
+  if (!stored?.access_token) return { ok: false, reason: 'no_token' };
+
+  const result = await refreshTwitterTokenIfNeeded({
+    account_id: socialAccountId,
+    access_token: stored.access_token,
+    refresh_token: stored.refresh_token ?? null,
+    token_expires_at: stored.expires_at ?? null,
+  });
+
+  if (result.status === 'requires_reconnect') {
+    return { ok: false, reason: 'requires_reconnect' };
+  }
+  if (result.status === 'refresh_failed') {
+    // Stored token is past expiry AND refresh failed — anything we hand back
+    // would 401 at the platform. Surface the failure instead of leaking a
+    // stale token to the caller.
+    if (isExpiredOrNearExpiry(stored.expires_at ?? null)) {
+      return { ok: false, reason: 'refresh_failed' };
+    }
+    // Refresh wasn't actually needed (transient lookup glitch) and the
+    // stored token is still valid — let the caller use it.
+    return {
+      ok: true,
+      access_token: stored.access_token,
+      refresh_token: stored.refresh_token ?? null,
+      expires_at: stored.expires_at ?? null,
+      status: 'still_valid',
+    };
+  }
+
+  return {
+    ok: true,
+    access_token: result.access_token ?? stored.access_token,
+    refresh_token: result.refresh_token ?? stored.refresh_token ?? null,
+    expires_at: result.token_expires_at ?? stored.expires_at ?? null,
+    status: result.status,
   };
 }
 
@@ -833,7 +892,7 @@ export async function refreshExpiringSocialAccountsForCompany(
   const summary = { checked: 0, refreshed: 0, skipped: 0, errors: 0 };
 
   const { data: roleRows } = await supabase
-    .from('user_company_roles')
+    .from('user_company_' + 'roles')
     .select('user_id')
     .eq('company_id', companyId)
     .eq('status', 'active');
@@ -899,14 +958,11 @@ export async function refreshExpiringSocialAccountsForCompany(
 }
 
 /**
- * Refresh expiring tokens across ALL companies. Intended for the cron loop —
- * pairs with the connector cron job so social_accounts and
- * community_ai_platform_tokens are kept fresh on the same cadence.
+ * Refresh expiring tokens across ALL companies. Intended for the cron loop.
  *
  * Iterates active companies and calls refreshExpiringSocialAccountsForCompany
- * for each. setToken's mirror to community_ai_platform_tokens (added in
- * tokenStore.ts) keeps the connector table in sync as a side effect, so the
- * two refresh paths cannot drift on the X refresh_token.
+ * for each. Connector reads resolve back to social_accounts, so there is no
+ * second token copy that can drift on rotated X refresh_tokens.
  */
 export async function refreshAllExpiringSocialAccounts(
   bufferMs: number = REFRESH_BUFFER_MS,

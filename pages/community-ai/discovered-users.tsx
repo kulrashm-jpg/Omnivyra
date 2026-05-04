@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import CommunityAiLayout from '../../components/community-ai/CommunityAiLayout';
 import SectionCard from '../../components/community-ai/SectionCard';
-import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 
 type DiscoveredUser = {
   id: string;
@@ -76,7 +76,7 @@ export default function DiscoveredUsersPage() {
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth(`/api/community-ai/discovered-users?${buildQuery()}`);
+      const response = await apiFetch(`/api/community-ai/discovered-users?${buildQuery()}`);
       if (!response.ok) {
         const data = await response.json().catch(() => null);
         throw new Error(data?.error || 'Failed to load discovered users');
@@ -102,7 +102,7 @@ export default function DiscoveredUsersPage() {
     if (!tenantId) return;
     setErrorMessage(null);
     try {
-      const response = await fetchWithAuth('/api/community-ai/discovered-users', {
+      const response = await apiFetch('/api/community-ai/discovered-users', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

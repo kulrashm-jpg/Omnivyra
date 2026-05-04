@@ -13,13 +13,19 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isPlatformSuperAdmin, isSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
+import { Role } from '../../../../backend/services/rbacPrimitives';
 import {
   getOrgCreditSummary,
   grantCredits,
   adjustCredits,
   updateOrgCreditRate,
 } from '../../../../backend/services/consumptionAnalyticsService';
-import { requireAdminRateLimit, requireAuthenticatedInternalUser } from '../../../../backend/services/requestAccessService';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import {
+  requireAdminRateLimit,
+  requireAdminScope,
+  requireAuthenticatedInternalUser,
+} from '../../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { logger } from '../../../../backend/services/logger';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
@@ -54,14 +60,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const companyId = req.query.companyId as string | undefined;
       if (!companyId) return res.status(400).json({ error: 'companyId required' });
 
-      const ctx = await assertCompanyAccess(req, res, companyId);
+      const ctx = await requireAdminScope(req, res, 'credits:view', { companyId });
       if (!ctx) return;
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[ADMIN_SCOPE]', '/api/admin/credits (GET)', 'credits:view');
+      }
+      const isSA = ctx.role === Role.SUPER_ADMIN;
 
       const summary = await getOrgCreditSummary(companyId);
       if (!summary) return res.status(200).json({ companyId, credits: null, message: 'No credit account yet' });
 
       // Non-super-admins see balance and transactions but not the credit_rate (internal pricing)
-      if (!ctx.isSA) {
+      if (!isSA) {
         const { credit_rate_usd: _hidden, ...safe } = summary;
         return res.status(200).json({ companyId, credits: safe });
       }
@@ -70,8 +80,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     if (req.method === 'POST') {
-      const userId = await assertSuperAdmin(req, res);
-      if (!userId) return;
+      const ctx = await requireAdminScope(req, res, 'credits:grant');
+      if (!ctx) return;
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[ADMIN_SCOPE]', '/api/admin/credits (POST)', 'credits:grant');
+      }
+      const userId = ctx.id;
 
       const { action, companyId, credits, usdEquivalent, note, creditRateUsd } = req.body ?? {};
       if (!companyId) return res.status(400).json({ error: 'companyId required' });
@@ -136,4 +150,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withIdempotency(handler, { scope: 'admin-credits', methods: ['POST'] });
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

@@ -33,7 +33,7 @@ import {
 import CampaignAIChat from '../components/CampaignAIChat';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { apiFetch } from '@/lib/apiFetch';
 import { GovernanceStatusCard } from '../components/governance/GovernanceStatusCard';
 import { GovernanceAnalyticsCard } from '../components/governance/GovernanceAnalyticsCard';
 import { GovernanceExplanationPanel, deriveFromEvent } from '../components/governance/GovernanceExplanationPanel';
@@ -299,7 +299,7 @@ export function useCampaignDetailsCore() {
   const [blueprintFrozen, setBlueprintFrozen] = useState(false);
   useEffect(() => {
     if (!id || !effectiveCompanyId) return;
-    fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`)
+    apiFetch(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.governance) {
@@ -326,10 +326,10 @@ export function useCampaignDetailsCore() {
     setGovernanceLoading(true);
     try {
       const [statusRes, eventsRes, analyticsRes, driftRes] = await Promise.all([
-        fetchWithAuth(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
-        fetchWithAuth(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(id as string)}`),
-        fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`),
-        fetchWithAuth(`/api/governance/company-drift?companyId=${encodeURIComponent(effectiveCompanyId)}`),
+        apiFetch(`/api/governance/campaign-status?campaignId=${encodeURIComponent(id as string)}&companyId=${encodeURIComponent(effectiveCompanyId)}`),
+        apiFetch(`/api/governance/events?companyId=${encodeURIComponent(effectiveCompanyId)}&campaignId=${encodeURIComponent(id as string)}`),
+        apiFetch(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`),
+        apiFetch(`/api/governance/company-drift?companyId=${encodeURIComponent(effectiveCompanyId)}`),
       ]);
       if (statusRes.ok) {
         const statusData = await statusRes.json();
@@ -388,7 +388,7 @@ export function useCampaignDetailsCore() {
   // Stage 35: Preload campaign-analytics for AI chat optimization context (roi + insights)
   useEffect(() => {
     if (!id || !effectiveCompanyId) return;
-    fetchWithAuth(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`)
+    apiFetch(`/api/governance/campaign-analytics?campaignId=${encodeURIComponent(id as string)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data) setGovernanceAnalytics(data);
@@ -398,7 +398,7 @@ export function useCampaignDetailsCore() {
 
   useEffect(() => {
     if (!id || !effectiveCompanyId) return;
-    fetchWithAuth(`/api/governance/company-drift?companyId=${encodeURIComponent(effectiveCompanyId)}`)
+    apiFetch(`/api/governance/company-drift?companyId=${encodeURIComponent(effectiveCompanyId)}`)
       .then((r) => r.ok ? r.json() : null)
       .then((d) => {
         if (d) {
@@ -421,7 +421,7 @@ export function useCampaignDetailsCore() {
     const loadAdminStatus = async () => {
       try {
         if (!effectiveCompanyId) return;
-        const response = await fetchWithAuth(
+        const response = await apiFetch(
           `/api/admin/check-super-admin?companyId=${encodeURIComponent(effectiveCompanyId)}`
         );
         if (!response.ok) return;
@@ -464,7 +464,7 @@ export function useCampaignDetailsCore() {
     setAiSuggestionLoading(true);
     setAiSuggestion(null);
     try {
-      const res = await fetchWithAuth('/api/campaigns/suggest-duration', {
+      const res = await apiFetch('/api/campaigns/suggest-duration', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -482,7 +482,7 @@ export function useCampaignDetailsCore() {
     } finally {
       setAiSuggestionLoading(false);
     }
-  }, [campaign, effectiveCompanyId, fetchWithAuth]);
+  }, [campaign, effectiveCompanyId, apiFetch]);
 
   useEffect(() => {
     if (shouldForceWeeklyBlueprintView) return;

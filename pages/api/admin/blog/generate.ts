@@ -38,8 +38,9 @@ import { runUnifiedLongFormGeneration } from '../../../../lib/content/unifiedLon
 import type { BlogAngle } from '../../../../lib/blog/blogGenerationEngine';
 import { buildContentContext } from '../../../../lib/content/buildContentContext';
 import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -63,14 +64,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!topic || typeof topic !== 'string' || !topic.trim())
     return res.status(400).json({ error: 'topic required' });
 
-  // ── 1. Auth ─────────────────────────────────────────────────────────────────
+  // â”€â”€ 1. Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
   const roleGate = await enforceRole({
     req, res, companyId: company_id,
     allowedRoles: [Role.SUPER_ADMIN],
-    // Company Admin uses /api/blogs/generate — not this route.
+    // Company Admin uses /api/blogs/generate â€” not this route.
   });
   if (!roleGate) return;
 
@@ -101,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Profile context enrichment is best-effort and must not block generation.
   }
 
-  // ── 2. Generate ──────────────────────────────────────────────────────────────
+  // â”€â”€ 2. Generate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const result = await runUnifiedLongFormGeneration({
     ...generationRequest,
     contentType: 'blog',
@@ -114,3 +115,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json(result);
 }
+
+export default applyAuthGuard({
+  requiresAuth: true,
+  requiredRole: 'SUPER_ADMIN',
+  allowSuperAdminOverride: true,
+})(handler);

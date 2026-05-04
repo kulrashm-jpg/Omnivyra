@@ -203,7 +203,7 @@ const resolveSelect = (table: string, state: any) => {
     }
     return { data: rows, error: null };
   }
-  if (table === 'user_company_roles') {
+  if (table === 'user company roles') {
     let rows = [...roleStore];
     if (state.filters.user_id) rows = rows.filter((row) => row.user_id === state.filters.user_id);
     if (state.filters.company_id) rows = rows.filter((row) => row.company_id === state.filters.company_id);

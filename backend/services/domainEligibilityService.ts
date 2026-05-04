@@ -7,7 +7,8 @@
  */
 
 import dns from 'dns/promises';
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 // Known forwarding MX hostname fragments
 const FORWARDING_MX_PATTERNS = [

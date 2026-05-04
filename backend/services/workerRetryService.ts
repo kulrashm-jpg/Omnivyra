@@ -3,7 +3,8 @@
  * Retry policy and dead letter queue for background workers.
  */
 
-import { supabase } from '../db/supabaseClient';
+import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
+const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 const MAX_ATTEMPTS = 3;
 

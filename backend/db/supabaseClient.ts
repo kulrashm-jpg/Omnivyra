@@ -1,19 +1,9 @@
+import type { NextApiRequest } from 'next';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { assertNoCampaignStateBypass } from '../services/campaignStateWriteGuard';
 
-/**
- * Supabase Admin Client — lazy singleton.
- * Uses service role key (bypasses RLS). Backend / Railway only.
- *
- * Validation is deferred to first use so that Next.js can bundle API routes
- * on Vercel without requiring SUPABASE_SERVICE_ROLE_KEY at build time.
- * The error will still surface clearly at request time if the key is absent.
- */
-let _client: SupabaseClient | null = null;
 let _serverEnvLoaded = false;
-let _trackDbOp:
-  | ((count: number, type: 'read' | 'write') => void)
-  | null
-  | undefined;
+let _serviceRoleClient: SupabaseClient | null = null;
 
 function ensureServerEnvLoaded(): void {
   if (_serverEnvLoaded) return;
@@ -26,81 +16,132 @@ function ensureServerEnvLoaded(): void {
   dotenv.config();
 }
 
-function getSupabaseConfig(): { url: string; key: string } {
+function requireConfig(name: string, value: string | undefined): string {
   ensureServerEnvLoaded();
-
-  const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url) {
-    throw new Error('SUPABASE_URL is missing in environment variables. Set SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL in .env.local');
-  }
-  if (!key) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing. Add it to your deployment environment variables (Vercel/Railway Settings → Environment Variables).');
-  }
-
-  return { url, key };
+  if (!value) throw new Error(`${name} is missing in environment variables.`);
+  return value;
 }
 
-function trackDbOperation(count: number, type: 'read' | 'write'): void {
-  if (_trackDbOp === null) return;
-
-  if (_trackDbOp === undefined) {
-    try {
-      // Keep the large Redis protection module off the hot import path.
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const usageProtection = require('../../lib/redis/usageProtection') as typeof import('../../lib/redis/usageProtection');
-      _trackDbOp = usageProtection.trackDbOp;
-    } catch {
-      _trackDbOp = null;
-      return;
-    }
-  }
-
-  _trackDbOp?.(count, type);
+function getSupabaseUrl(): string {
+  return requireConfig(
+    'SUPABASE_URL',
+    process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
+  );
 }
 
-function getAdminClient(): SupabaseClient {
-  if (_client) return _client;
+function getSupabaseAnonKey(): string {
+  return requireConfig(
+    'SUPABASE_ANON_KEY',
+    process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  );
+}
 
-  const { url, key } = getSupabaseConfig();
+export function getServiceRoleClient(): SupabaseClient {
+  if (_serviceRoleClient) return _serviceRoleClient;
 
-  _client = createClient(url, key, {
+  /**
+   * WARNING:
+   * Service-role bypasses RLS.
+   * Use ONLY via runWithServiceRole with justification.
+   */
+  _serviceRoleClient = createClient(
+    getSupabaseUrl(),
+    requireConfig('SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY),
+    { auth: { persistSession: false, autoRefreshToken: false } },
+  );
+
+  return _serviceRoleClient;
+}
+
+export function getUserClient(req: NextApiRequest): SupabaseClient {
+  return createClient(getSupabaseUrl(), getSupabaseAnonKey(), {
+    global: {
+      headers: {
+        Authorization: req.headers.authorization || '',
+      },
+    },
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  return _client;
 }
 
-// Proxy so all existing `supabase.from(...)` call sites work unchanged.
-// The underlying client is created on first property access (i.e. first actual use).
-// BUG#7 fix: intercept .select() / write methods so advisory DB counters are tracked.
-export const supabase = new Proxy({} as SupabaseClient, {
-  get(_target, prop, receiver) {
-    const client = getAdminClient();
-    const val = Reflect.get(client, prop, receiver);
-    if (prop === 'from' && typeof val === 'function') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return function (...fromArgs: any[]) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const builder: any = (val as Function).apply(client, fromArgs);
-        return new Proxy(builder, {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          get(bTarget: any, bProp: any) {
-            const method = bTarget[bProp];
-            if (typeof method !== 'function') return method;
-            if (bProp === 'select') {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              return function (...a: any[]) { trackDbOperation(1, 'read'); return method.apply(bTarget, a); };
-            }
-            if (bProp === 'insert' || bProp === 'upsert' || bProp === 'update' || bProp === 'delete') {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              return function (...a: any[]) { trackDbOperation(1, 'write'); return method.apply(bTarget, a); };
-            }
-            return method.bind(bTarget);
-          },
-        });
-      };
+export async function runWithServiceRole<T>(
+  reasonOrFn: string | ((client: SupabaseClient) => PromiseLike<T> | T),
+  maybeFn?: (client: SupabaseClient) => PromiseLike<T> | T,
+): Promise<Awaited<T>> {
+  const reason = typeof reasonOrFn === 'string' ? reasonOrFn : 'Service role operation';
+  const fn = typeof reasonOrFn === 'function' ? reasonOrFn : maybeFn;
+
+  if (!reason.trim()) {
+    throw new Error('Service role usage requires explicit reason');
+  }
+  if (!fn) {
+    throw new Error('Service role callback is required');
+  }
+
+  return await fn(getServiceRoleClient());
+}
+
+type SupabaseOperation = {
+  prop: PropertyKey;
+  args: unknown[];
+};
+
+function createServiceRoleChain(reason: string, operations: SupabaseOperation[] = []): any {
+  const run = () => runWithServiceRole(reason, async (client) => {
+    let target: any = client;
+    for (const operation of operations) {
+      const value = target[operation.prop];
+      target = typeof value === 'function'
+        ? value.apply(target, operation.args)
+        : value;
     }
-    return val;
+    return await target;
+  });
+
+  return new Proxy(() => undefined, {
+    apply(_target, _thisArg, args) {
+      const previous = operations[operations.length - 1];
+      if (!previous) {
+        throw new Error('Service role migration proxy called without a property.');
+      }
+      return createServiceRoleChain(reason, [
+        ...operations.slice(0, -1),
+        { prop: previous.prop, args },
+      ]);
+    },
+    get(_target, prop) {
+      if (prop === 'then') return run().then.bind(run());
+      if (prop === 'catch') return run().catch.bind(run());
+      if (prop === 'finally') return run().finally.bind(run());
+      return createServiceRoleChain(reason, [...operations, { prop, args: [] }]);
+    },
+  });
+}
+
+export function createServiceRoleMigrationProxy(reason: string): SupabaseClient {
+  if (!reason.trim()) {
+    throw new Error('Service role usage requires explicit reason');
+  }
+  return createServiceRoleChain(reason) as SupabaseClient;
+}
+
+function guardCampaignBuilder(table: unknown, builder: any): any {
+  if (table !== 'campaigns' || !builder || typeof builder.update !== 'function') {
+    return builder;
+  }
+  return new Proxy(builder, {
+    get(target, prop, receiver) {
+      if (prop !== 'update') return Reflect.get(target, prop, receiver);
+      return (payload: unknown, ...args: unknown[]) => {
+        assertNoCampaignStateBypass(payload);
+        return target.update(payload, ...args);
+      };
+    },
+  });
+}
+
+export const supabase = new Proxy({} as SupabaseClient, {
+  get() {
+    throw new Error('Direct supabase usage is prohibited. Use getUserClient or runWithServiceRole.');
   },
 });
