@@ -778,3 +778,5 @@ CREATE INDEX IF NOT EXISTS idx_users_onboarding_state  ON public.users (onboardi
 CREATE UNIQUE INDEX IF NOT EXISTS users_supabase_uid_key ON public.users (supabase_uid) WHERE supabase_uid IS NOT NULL;
 
 -- End of baseline.
+
+-- trigger CI
