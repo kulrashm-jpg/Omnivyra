@@ -4,8 +4,16 @@
 -- Idempotency: NOT GUARDED — ADD CONSTRAINT will fail on second apply. Flagged in B0 report.
 -- Pre-condition: scripts/backfillCanonicalDomains.ts collisions_found=0.
 
-ALTER TABLE company_domains
-  ADD CONSTRAINT unique_final_domain UNIQUE (final_domain);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'unique_final_domain'
+  ) THEN
+    ALTER TABLE public.company_domains
+      ADD CONSTRAINT unique_final_domain UNIQUE (final_domain);
+  END IF;
+END $$;
 
 ALTER TABLE company_domains
   ALTER COLUMN final_domain SET NOT NULL;
