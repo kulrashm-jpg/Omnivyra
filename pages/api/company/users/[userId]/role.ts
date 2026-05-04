@@ -4,7 +4,7 @@ import { createServiceRoleMigrationProxy } from '../../../../../backend/db/supab
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireCompanyContext } from '../../../../../backend/services/companyContextGuardService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
-import { getUserRole, isSuperAdmin, Role } from '../../../../../backend/services/rbacService';
+import { getUserRole, isPlatformSuperAdmin, Role } from '../../../../../backend/services/rbacService';
 
 const mapAppRoleToRbac = (role: string): Role | null => {
   const normalized = role.toUpperCase();
@@ -24,7 +24,7 @@ const ensureCompanyAdminAccess = async (
     return null;
   }
 
-  const superAdmin = await isSuperAdmin(user.id);
+  const superAdmin = await isPlatformSuperAdmin(user.id);
   if (superAdmin) {
     return { userId: user.id };
   }

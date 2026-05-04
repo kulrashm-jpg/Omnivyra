@@ -35,11 +35,10 @@ import { requireAdminScope } from '../../../backend/services/requestAccessServic
 import { getQueueReportFromRedis, type QueueStats } from '../../../backend/queue/queueInstrumentation';
 import { getReportFromRedis }         from '../../../backend/utils/cronInstrumentation';
 import { getSharedRedisClient }       from '../../../backend/queue/bullmqClient';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'health:queue-metrics');
   if (!ctx) return;
@@ -101,9 +100,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     reportedAt: new Date().toISOString(),
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

@@ -6,7 +6,6 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import {
   getUserRole,
   isPlatformSuperAdmin,
-  isSuperAdmin,
   Role,
 } from '../../../../backend/services/rbacService';
 
@@ -37,7 +36,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   let role: Role | 'SUPER_ADMIN' | null = null;
   if (await isPlatformSuperAdmin(user.id)) {
     role = 'SUPER_ADMIN';
-  } else if (await isSuperAdmin(user.id)) {
+  } else if (await isPlatformSuperAdmin(user.id)) {
     console.debug('SUPER_ADMIN_FALLBACK', {
       path: req.url,
       userId: user.id,

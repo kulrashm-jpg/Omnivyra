@@ -4,13 +4,12 @@ import {
   getAllProviders,
   upsertProvider,
 } from '../../../../backend/services/llmProviderService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET  /api/super-admin/llm/providers  â†’ list all providers
  * POST /api/super-admin/llm/providers  â†’ create or update a provider
  */
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'config:llm');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -53,9 +52,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

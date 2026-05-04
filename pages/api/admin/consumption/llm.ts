@@ -23,7 +23,6 @@ import {
   getAllOrgsConsumption,
   ConsumptionTier,
 } from '../../../../backend/services/consumptionAnalyticsService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
@@ -73,9 +72,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: msg });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);
+export default handler;

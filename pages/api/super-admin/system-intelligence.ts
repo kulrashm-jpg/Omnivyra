@@ -28,7 +28,6 @@ import { projectCost }                  from '../../../lib/instrumentation/costP
 import { querySnapshots }               from '../../../lib/instrumentation/metricsPersistence';
 import { getSharedRedisClient }         from '../../../backend/queue/bullmqClient';
 import { parseRedisInfoMemory }         from '../../../lib/redis/instrumentation';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // â”€â”€ Trend summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -64,7 +63,7 @@ function buildTrends(metrics: Awaited<ReturnType<typeof getSystemMetrics>>) {
 
 // â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'system-intelligence:view');
   if (!ctx) return;
@@ -156,9 +155,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     errors:         Object.keys(errors).length > 0 ? errors : undefined,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

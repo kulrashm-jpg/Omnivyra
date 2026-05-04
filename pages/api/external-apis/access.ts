@@ -14,13 +14,11 @@ import {
   getCompanyConfigRows,
 } from '../../../backend/services/companyApiConfigCache';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
 
@@ -61,19 +59,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const legacySession = getLegacySuperAdminSession(req);
-  const { user, error } = legacySession ? { user: { id: legacySession.userId }, error: null } : await getSupabaseUserFromRequest(req);
+  const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
-  let canManageExternalApis = false;
-  if (legacySession) {
-    canManageExternalApis = true;
-  } else {
+  let canManageExternalApis = false; {
     const platformAdmin = await isPlatformSuperAdmin(user.id);
     if (platformAdmin) {
       canManageExternalApis = true;
-    } else if (await isSuperAdmin(user.id)) {
+    } else if (await isPlatformSuperAdmin(user.id)) {
       console.debug('SUPER_ADMIN_FALLBACK', {
         path: req.url,
         userId: user.id,
@@ -567,4 +561,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 export default applyAuthGuard({
   requiresAuth: true,
 })(handler);
-

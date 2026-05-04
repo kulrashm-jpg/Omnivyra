@@ -3,7 +3,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../backend/services/supabaseAuthService';
-import { isSuperAdmin } from '../../backend/services/rbacService';
+import { isPlatformSuperAdmin } from '../../backend/services/rbacService';
 import {
   getActivePolicy,
   updatePolicy,
@@ -55,7 +55,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   if (req.method === 'POST') {
-    const allowed = await isSuperAdmin(user.id);
+    const allowed = await isPlatformSuperAdmin(user.id);
     if (!allowed) {
       return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     }

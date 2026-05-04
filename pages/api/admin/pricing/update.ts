@@ -34,7 +34,6 @@ import {
   requireAdminRateLimit,
   requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
@@ -232,7 +231,7 @@ async function handleActionUpdate(body: ActionUpdateBody, actorId: string, res: 
   return res.status(200).json({ ok: true, id: (data as any).id, target: 'action' });
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:pricing', 20, 60))) return;
@@ -254,9 +253,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
   return res.status(400).json({ error: "target must be 'model' or 'action'" });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

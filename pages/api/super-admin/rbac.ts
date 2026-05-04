@@ -4,9 +4,8 @@ import { requireAdminRateLimit, requireAdminScope } from '../../../backend/servi
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { logger } from '../../../backend/services/logger';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:rbac', 20, 60))) return;
   const admin = await requireAdminScope(req, res, 'config:rbac');
   if (!admin) return;
@@ -53,9 +52,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

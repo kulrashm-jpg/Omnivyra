@@ -19,13 +19,12 @@ import {
   requireAdminRateLimit,
   requireAdminScope,
 } from '../../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../../backend/services/adminAuditService';
 import { applyOrgControl } from '../../../../../backend/services/orgControlService';
 import { withIdempotency } from '../../../../../backend/middleware/withIdempotency';
 import { logger } from '../../../../../backend/services/logger';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:org_ctrl', 30, 60))) return;
@@ -96,9 +95,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(200).json({ ok: true, organization_id: orgId });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

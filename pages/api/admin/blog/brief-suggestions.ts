@@ -1,10 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { enforceRole, Role } from '../../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { getProfile } from '../../../../backend/services/companyProfileService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
 import { buildFormattedStyleInstructions } from '../../../../lib/content/writingStyleEngine';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 type SuggestionResponse = {
   uniqueness_directive_options: string[];
@@ -51,7 +50,7 @@ function resolveSuggestionRange(
   return { min: 3, max: 3 };
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -73,13 +72,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
-  const roleGate = await enforceRole({
-    req,
-    res,
-    companyId: company_id,
-    allowedRoles: [Role.SUPER_ADMIN],
-  });
-  if (!roleGate) return;
+  const ctx = await requireAdminScope(req, res, 'blog:brief-suggestions');
+  if (!ctx) return;
 
   try {
     const profile = await getProfile(company_id, { autoRefine: false, languageRefine: false });
@@ -152,9 +146,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(200).json(EMPTY);
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

@@ -2,13 +2,12 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * GET /api/super-admin/plans/list
  * Returns all active pricing plans with their limits (llm_tokens, external_api_calls, automation_executions, max_campaign_duration_weeks).
  */
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -66,9 +65,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: message });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

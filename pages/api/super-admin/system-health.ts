@@ -16,14 +16,13 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getHourlyBaseline } from '../../../lib/anomaly/baselineService';
 import { ANOMALY_CONFIGS } from '../../../lib/anomaly/types';
 import { getUsageStatus } from '../../../lib/redis/usageProtection';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'health:system');
   if (!ctx) return;
@@ -169,9 +168,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     redisUsage,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

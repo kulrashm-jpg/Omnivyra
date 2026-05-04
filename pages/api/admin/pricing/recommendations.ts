@@ -17,7 +17,6 @@ import {
   requireAdminRateLimit,
   requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { logger } from '../../../../backend/services/logger';
@@ -59,7 +58,7 @@ async function resolveLatestWeek(): Promise<string | null> {
   return (data[0] as any).week_start as string;
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:pricing_recommendations', 60, 60))) return;
@@ -149,9 +148,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

@@ -4,7 +4,6 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { Role } from '../../../backend/services/rbacPrimitives';
 import { hasUsageAccess } from '../../../backend/services/usageAccessService';
 import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function maskCostInTotals(totals: Record<string, unknown>): Record<string, unknown> {
   const out = { ...totals };
@@ -38,7 +37,7 @@ function maskCostInEvent(row: Record<string, unknown>): Record<string, unknown> 
   return out;
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -131,9 +130,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: err?.message ?? 'Internal server error' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

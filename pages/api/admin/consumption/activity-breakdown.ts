@@ -15,11 +15,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const r6 = (n: number) => Math.round(n * 1_000_000) / 1_000_000;
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'consumption:activity-breakdown');
   if (!ctx) return;
@@ -139,9 +138,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     by_platform_content,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

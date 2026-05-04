@@ -23,7 +23,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getComputeMetricsReport } from '../../../lib/instrumentation/railwayComputeInstrumentation';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 interface CompanyCostRow {
   company_id: string;
@@ -51,7 +50,7 @@ interface ActivitySummaryRow {
   top_features: Array<{ feature: string; cost_usd: number; calls: number }>;
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'analytics:railway-costs');
   if (!ctx) return;
@@ -196,9 +195,3 @@ function generateInsights(companies: CompanyCostRow[], activities: ActivitySumma
 
   return insights;
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

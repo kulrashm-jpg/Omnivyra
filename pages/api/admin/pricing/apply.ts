@@ -20,7 +20,6 @@ import {
   requireAdminRateLimit,
   requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
@@ -148,9 +147,4 @@ async function pricingApplyHandler(req: NextApiRequest, res: NextApiResponse) {
     new_multiplier:     queueRow.proposed_multiplier,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(withIdempotency(pricingApplyHandler, { scope: 'admin-pricing-apply', methods: ['POST'] }));
+export default withIdempotency(pricingApplyHandler, { scope: 'admin-pricing-apply', methods: ['POST'] });

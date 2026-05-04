@@ -14,13 +14,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSocialPostingConfigs } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
 
@@ -34,15 +32,13 @@ const requireExternalApiAccess = async (
     res.status(400).json({ error: 'companyId required' });
     return null;
   }
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) return { userId: legacySession.userId, role: 'SUPER_ADMIN' };
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
   if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
-  if (await isSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
+  if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
   let { role, error: roleError } = await getUserRole(user.id, companyId);
   if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
     const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
@@ -63,15 +59,13 @@ const requireExternalApiAccess = async (
 };
 
 const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) return { userId: legacySession.userId, role: 'SUPER_ADMIN' };
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
   if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
-  if (await isSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
+  if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
   res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   return null;
 };

@@ -3,14 +3,13 @@ import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseCli
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { Role, ALL_ROLES } from '../../../backend/services/rbacService';
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
-import { requireAdminRateLimit, requireAdminScope, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { saveDomainRecord, reassignDomain } from '../../../backend/services/domainRecordService';
 import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const ALLOWED_OVERRIDE_TYPES = ['no_website', 'domain_exception', 'manual_assignment'] as const;
 type OverrideType = typeof ALLOWED_OVERRIDE_TYPES[number];
@@ -34,7 +33,9 @@ const resolveSuperAdminActor = async (
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ id: string; email?: string | null } | null> => {
-  return requireSuperAdminUser(req, res);
+  const ctx = await requireAdminScope(req, res, 'users:list-external');
+  if (!ctx) return null;
+  return { id: ctx.id, email: ctx.email ?? null };
 };
 
 const allowedRoles = ALL_ROLES.filter((role) => role !== Role.SUPER_ADMIN);
@@ -254,7 +255,7 @@ const insertAuditLog = async (input: {
   }
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:users', 30, 60))) return;
   if (!(await requireSuperAdminAccess(req, res))) return;
 
@@ -816,9 +817,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

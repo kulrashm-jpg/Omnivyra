@@ -21,10 +21,9 @@ import {
   getHighRiskCompanies,
   getEventTrend,
 } from '../../../backend/services/domainAnalyticsService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { logger } from '../../../backend/services/logger';
 
-async function handler(
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse,
 ) {
@@ -70,9 +69,3 @@ function clampInt(raw: string | undefined, dflt: number, min: number, max: numbe
   if (Number.isNaN(n)) return dflt;
   return Math.min(max, Math.max(min, n));
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

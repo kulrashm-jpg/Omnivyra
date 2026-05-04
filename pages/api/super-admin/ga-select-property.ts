@@ -2,9 +2,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveSelectedProperty } from '../../../backend/services/analyticsIntegrationService';
 import { resolveOmnivyraWebsiteCompany } from '../../../backend/services/omnivyraWebsiteCompanyService';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -37,9 +36,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ status: 'error', message: 'Failed to select Google Analytics property' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

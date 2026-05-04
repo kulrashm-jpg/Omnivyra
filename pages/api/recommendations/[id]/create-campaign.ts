@@ -6,7 +6,6 @@ import {
   getUserRole,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
   Role,
 } from '../../../../backend/services/rbacService';
 import { getCampaignPlanningInputs } from '../../../../backend/services/campaignPlanningInputsService';
@@ -89,7 +88,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const companyId = String(recommendation.company_id);
     const privileged =
       (await isPlatformSuperAdmin(userId)) ||
-      (await isSuperAdmin(userId));
+      (await isPlatformSuperAdmin(userId));
     if (!privileged) {
       const { role } = await getUserRole(userId, companyId);
       if (!(await hasPermission(role, 'CREATE_CAMPAIGN'))) {

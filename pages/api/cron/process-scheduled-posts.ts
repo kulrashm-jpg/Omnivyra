@@ -10,7 +10,17 @@ import { writeDeadLetter } from '../../../backend/jobs/dlqService';
 
 const BATCH_SIZE = 20;
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms).unref?.();
+    }),
+  ]);
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  console.log('CRON_ENTER');
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -21,6 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (rejectCronUnauthorized(res, error)) return;
     throw error;
   }
+  console.log('CRON_AFTER_AUTH');
 
   const registry = getJobRegistryEntry('publish');
   const window = new Date().toISOString().slice(0, 16);
@@ -35,7 +46,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (healthError) throw healthError;
 
     console.info(JSON.stringify({ event: 'job_started', job_id: 'publish', trigger_source: 'vercel_cron' }));
-    const result = await findDuePostsAndEnqueue();
+    console.log('CRON_BEFORE_JOB');
+    const result = await withTimeout(findDuePostsAndEnqueue(), 5_000, 'PUBLISH_JOB');
+    console.log('CRON_AFTER_JOB');
     console.info(JSON.stringify({ event: 'job_completed', job_id: 'publish', trigger_source: 'vercel_cron', result }));
     return res.status(200).json({ ok: true, batch_size: BATCH_SIZE, ...result });
   } catch (err: any) {

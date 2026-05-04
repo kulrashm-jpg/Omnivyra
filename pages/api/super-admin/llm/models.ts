@@ -4,7 +4,6 @@ import {
   getAllModels,
   upsertModel,
 } from '../../../../backend/services/llmProviderService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
@@ -19,7 +18,7 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
  *   is_active       (optional, default true)
  *   metadata        (optional jsonb)
  */
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'config:llm');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -80,9 +79,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

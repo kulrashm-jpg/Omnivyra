@@ -6,7 +6,17 @@ import { getJobRegistryEntry } from '../../../backend/jobs/jobRegistry';
 import { acquireJobLock, releaseJobLock } from '../../../backend/jobs/lockService';
 import { writeDeadLetter } from '../../../backend/jobs/dlqService';
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms).unref?.();
+    }),
+  ]);
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  console.log('CRON_ENTER');
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -17,6 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (rejectCronUnauthorized(res, error)) return;
     throw error;
   }
+  console.log('CRON_AFTER_AUTH');
 
   const registry = getJobRegistryEntry('token_refresh');
   const window = new Date().toISOString().slice(0, 15);
@@ -26,7 +37,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const startedAt = Date.now();
   try {
     console.info(JSON.stringify({ event: 'job_started', job_id: 'token_refresh', trigger_source: 'vercel_cron' }));
-    const totals = await refreshAllExpiringSocialAccounts();
+    console.log('CRON_BEFORE_JOB');
+    const totals = await withTimeout(refreshAllExpiringSocialAccounts(), 5_000, 'TOKEN_REFRESH_JOB');
+    console.log('CRON_AFTER_JOB');
     const durationMs = Date.now() - startedAt;
     console.info(JSON.stringify({ event: 'job_completed', job_id: 'token_refresh', durationMs }));
     return res.status(200).json({ ok: true, ...totals, durationMs });

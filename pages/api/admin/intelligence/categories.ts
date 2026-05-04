@@ -13,9 +13,8 @@ import {
   updateCategory,
   setCategoryEnabled,
 } from '../../../../backend/services/intelligenceGovernanceService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'intelligence:categories');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -63,9 +62,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: message });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

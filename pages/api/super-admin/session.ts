@@ -10,16 +10,10 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  return res.status(200).json({ isSuperAdmin: !!(await requireSuperAdminUser(req, res)) });
+  const ctx = await requireAdminScope(req, res, 'users:list-external');
+  return ctx ? res.status(200).json({ isSuperAdmin: true }) : undefined;
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

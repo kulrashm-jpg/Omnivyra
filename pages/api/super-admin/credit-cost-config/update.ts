@@ -18,7 +18,6 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminRateLimit, requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 type UpdateEntry = {
   action_type: string;
@@ -27,7 +26,7 @@ type UpdateEntry = {
   smart_dedup_seconds?: number;
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:credit-cost-config', 20, 60))) return;
   const admin = await requireAdminScope(req, res, 'config:credit-cost');
   if (!admin) return;
@@ -91,9 +90,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

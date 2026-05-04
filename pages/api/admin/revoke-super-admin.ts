@@ -12,9 +12,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { downgradePlatformSuperAdminRoles } from '@/backend/services/rbacService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const ctx = await requireAdminScope(req, res, 'users:super-admin-revoke');
@@ -41,9 +40,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

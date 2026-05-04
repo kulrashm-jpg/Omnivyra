@@ -232,7 +232,6 @@ export default function SysHealthView({ d }: { d: S }) {
     flushCache,
     intel,
     intelLoading,
-    isSuperAdmin,
     loading,
     now2,
     railwayView,

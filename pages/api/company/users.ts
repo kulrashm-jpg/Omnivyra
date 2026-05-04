@@ -8,7 +8,7 @@ import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
-  isSuperAdmin,
+  isPlatformSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
@@ -33,7 +33,7 @@ const ensureCompanyAccess = async (
     return null;
   }
 
-  const superAdmin = await isSuperAdmin(user.id);
+  const superAdmin = await isPlatformSuperAdmin(user.id);
   if (superAdmin) {
     return { userId: user.id, role: Role.SUPER_ADMIN };
   }

@@ -14,9 +14,8 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { getSystemMetrics } from '../../../../lib/instrumentation/systemMetrics';
 import { estimateCost } from '../../../../lib/instrumentation/costEngine';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'consumption:infra-estimate');
   if (!ctx) return;
@@ -53,9 +52,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     perHeadUsd: activeOrgs > 0 ? Math.round((estimate.totalMonthlyEstimate / activeOrgs) * 10000) / 10000 : 0,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

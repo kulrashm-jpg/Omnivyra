@@ -12,7 +12,7 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin, isSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
+import { isPlatformSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
 import { Role } from '../../../../backend/services/rbacPrimitives';
 import {
   getOrgCreditSummary,
@@ -20,7 +20,6 @@ import {
   adjustCredits,
   updateOrgCreditRate,
 } from '../../../../backend/services/consumptionAnalyticsService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import {
   requireAdminRateLimit,
   requireAdminScope,
@@ -34,7 +33,7 @@ async function assertSuperAdmin(req: NextApiRequest, res: NextApiResponse): Prom
   const user = await requireAuthenticatedInternalUser(req, res);
   if (!user) return null;
   const userId = user.id;
-  if ((await isPlatformSuperAdmin(userId)) || (await isSuperAdmin(userId))) return userId;
+  if ((await isPlatformSuperAdmin(userId)) || (await isPlatformSuperAdmin(userId))) return userId;
   res.status(403).json({ error: 'SUPER_ADMIN_REQUIRED' });
   return null;
 }
@@ -47,7 +46,7 @@ async function assertCompanyAccess(
   const user = await requireAuthenticatedInternalUser(req, res);
   if (!user) return null;
   const userId = user.id;
-  if ((await isPlatformSuperAdmin(userId)) || (await isSuperAdmin(userId))) return { userId, isSA: true };
+  if ((await isPlatformSuperAdmin(userId)) || (await isPlatformSuperAdmin(userId))) return { userId, isSA: true };
   const { role } = await getUserRole(userId, companyId);
   if (!role) { res.status(403).json({ error: 'FORBIDDEN' }); return null; }
   return { userId, isSA: false };
@@ -149,9 +148,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);
+export default handler;

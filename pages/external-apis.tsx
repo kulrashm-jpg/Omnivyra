@@ -77,7 +77,6 @@ export default function ExternalApisPage() {
     isSavingPreset,
     isSavingPresetSelection,
     isSubmittingRequest,
-    isSuperAdmin,
     lastHealthCheckAt,
     loadAccounts,
     loadApis,

@@ -18,7 +18,6 @@ import {
   updateGlobalConfig,
   getRecentExecutionLogs,
 } from '../../../../backend/services/intelligenceConfigService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 
@@ -28,7 +27,7 @@ async function resolveUser(req: NextApiRequest): Promise<string> {
   return user?.email ?? user?.id ?? 'super_admin';
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'intelligence:scheduler-config');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -93,9 +92,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

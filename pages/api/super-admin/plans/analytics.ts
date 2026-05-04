@@ -17,7 +17,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 interface PlanAnalytics {
   plan_id: string;
@@ -45,7 +44,7 @@ interface PlanAnalyticsResponse {
   };
 }
 
-async function handler(
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<PlanAnalyticsResponse | { error: string }>
 ) {
@@ -283,9 +282,3 @@ async function handler(
     return res.status(500).json({ error: error.message || 'Failed to fetch plan analytics' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

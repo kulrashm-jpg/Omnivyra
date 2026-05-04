@@ -1054,7 +1054,6 @@ export function useIntelControl() {
 
   return {
     _ef1,
-    isSuperAdmin,
     setTab,
     tab,
     userRole,

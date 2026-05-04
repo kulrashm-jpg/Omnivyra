@@ -13,9 +13,8 @@ import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseCli
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'feedback:review');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -103,9 +102,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Allow', 'GET, PATCH');
   return res.status(405).end();
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

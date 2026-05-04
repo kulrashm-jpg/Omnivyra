@@ -3,7 +3,6 @@ import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseCli
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { saveProfile } from '../../../backend/services/companyProfileService';
 import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const normalizeWebsite = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -11,7 +10,7 @@ const normalizeWebsite = (value: string): string => {
   return withoutScheme.replace(/\/+$/, '');
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:companies', 20, 60))) return;
   const ctx = await requireAdminScope(req, res, 'analytics:all-orgs');
   if (!ctx) return;
@@ -168,9 +167,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

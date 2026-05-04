@@ -1047,7 +1047,6 @@ type S = ReturnType<typeof useIntelControl>;
 export default function IntelControlView({ d }: { d: S }) {
   const {
     _ef1,
-    isSuperAdmin,
     setTab,
     tab,
     userRole,

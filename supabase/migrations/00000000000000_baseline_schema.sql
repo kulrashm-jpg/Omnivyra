@@ -48,7 +48,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ── 1. CREATE TABLE statements ─────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS public.access_requests (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid,
   email text NOT NULL,
   domain text NOT NULL,
@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS public.access_requests (
 );
 
 CREATE TABLE IF NOT EXISTS public.action_pricing_config (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   action_key text NOT NULL,
   credit_cost integer,
   cost_multiplier numeric(10,4) NOT NULL DEFAULT 1.0,
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS public.action_pricing_config (
 );
 
 CREATE TABLE IF NOT EXISTS public.community_ai_actions (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   platform text NOT NULL,
@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS public.community_ai_actions (
 );
 
 CREATE TABLE IF NOT EXISTS public.community_ai_platform_tokens (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id uuid NOT NULL,
   organization_id uuid NOT NULL,
   platform text NOT NULL,
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS public.community_ai_platform_tokens (
 );
 
 CREATE TABLE IF NOT EXISTS public.companies (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
   created_at timestamp with time zone DEFAULT now(),
   website text,
@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS public.companies (
 );
 
 CREATE TABLE IF NOT EXISTS public.company_domains (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL,
   is_primary boolean NOT NULL DEFAULT false,
   verified boolean NOT NULL DEFAULT true,
@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS public.company_domains (
 );
 
 CREATE TABLE IF NOT EXISTS public.credit_transactions (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
   transaction_type text NOT NULL,
   credits_delta integer NOT NULL DEFAULT 0,
@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS public.credit_transactions (
 );
 
 CREATE TABLE IF NOT EXISTS public.daily_content_plans (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   campaign_id uuid NOT NULL,
   week_number integer NOT NULL,
   day_of_week character varying(20) NOT NULL,
@@ -282,7 +282,7 @@ CREATE TABLE IF NOT EXISTS public.domain_whitelist (
 );
 
 CREATE TABLE IF NOT EXISTS public.email_jobs (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   job_type text NOT NULL,
   recipient_email text NOT NULL,
   subject text NOT NULL,
@@ -304,7 +304,7 @@ CREATE TABLE IF NOT EXISTS public.email_jobs (
 );
 
 CREATE TABLE IF NOT EXISTS public.free_credit_claims (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
   organization_id uuid,
   category text NOT NULL,
@@ -314,7 +314,7 @@ CREATE TABLE IF NOT EXISTS public.free_credit_claims (
 );
 
 CREATE TABLE IF NOT EXISTS public.free_credit_profiles (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid,
   organization_id uuid,
   phone_number text NOT NULL,
@@ -331,7 +331,7 @@ CREATE TABLE IF NOT EXISTS public.free_credit_profiles (
 );
 
 CREATE TABLE IF NOT EXISTS public.invitations (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email text NOT NULL,
   company_id uuid NOT NULL,
   role text NOT NULL DEFAULT 'CONTENT_CREATOR'::text,
@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS public.invitations (
 );
 
 CREATE TABLE IF NOT EXISTS public.llm_model_pricing (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   provider text NOT NULL,
   model_name text NOT NULL,
   kind text NOT NULL DEFAULT 'completion'::text,
@@ -363,7 +363,7 @@ CREATE TABLE IF NOT EXISTS public.llm_model_pricing (
 );
 
 CREATE TABLE IF NOT EXISTS public.organization_credits (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
   free_balance integer NOT NULL DEFAULT 0,
   paid_balance integer NOT NULL DEFAULT 0,
@@ -391,7 +391,7 @@ CREATE TABLE IF NOT EXISTS public.platform_oauth_configs (
 );
 
 CREATE TABLE IF NOT EXISTS public.scheduled_posts (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
   social_account_id uuid,
   campaign_id uuid,
@@ -446,7 +446,7 @@ CREATE TABLE IF NOT EXISTS public.scheduled_posts (
 );
 
 CREATE TABLE IF NOT EXISTS public.social_accounts (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
   platform character varying(50) NOT NULL,
   platform_user_id character varying(255) NOT NULL,
@@ -479,7 +479,7 @@ CREATE TABLE IF NOT EXISTS public.social_accounts (
 );
 
 CREATE TABLE IF NOT EXISTS public.super_admin_audit_logs (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   actor_user_id uuid NOT NULL,
   action text NOT NULL,
   target_type text NOT NULL,
@@ -490,7 +490,7 @@ CREATE TABLE IF NOT EXISTS public.super_admin_audit_logs (
 );
 
 CREATE TABLE IF NOT EXISTS public.unified_transactions (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
   user_id uuid,
   action_key text,
@@ -519,7 +519,7 @@ CREATE TABLE IF NOT EXISTS public.unified_transactions (
 );
 
 CREATE TABLE IF NOT EXISTS public.usage_events (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id uuid NOT NULL,
   campaign_id uuid,
   user_id uuid,
@@ -548,7 +548,7 @@ CREATE TABLE IF NOT EXISTS public.usage_events (
 );
 
 CREATE TABLE IF NOT EXISTS public.user_company_roles (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
   company_id uuid NOT NULL,
   role text NOT NULL,
@@ -572,7 +572,7 @@ CREATE TABLE IF NOT EXISTS public.user_override (
 );
 
 CREATE TABLE IF NOT EXISTS public.user_preferences (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
   default_landing character varying(50) DEFAULT 'command_center'::character varying,
   command_center_pinned boolean DEFAULT true,
@@ -581,7 +581,7 @@ CREATE TABLE IF NOT EXISTS public.user_preferences (
 );
 
 CREATE TABLE IF NOT EXISTS public.users (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email text NOT NULL,
   created_at timestamp with time zone DEFAULT now(),
   company_id uuid,
@@ -696,7 +696,6 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='user_preferences_pkey')                             THEN ALTER TABLE public.user_preferences ADD CONSTRAINT user_preferences_pkey PRIMARY KEY (id); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='unique_user_id')                                    THEN ALTER TABLE public.user_preferences ADD CONSTRAINT unique_user_id UNIQUE (user_id); END IF;
   -- users
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='users_pkey')                                        THEN ALTER TABLE public.users ADD CONSTRAINT users_pkey PRIMARY KEY (id); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='users_email_key')                                   THEN ALTER TABLE public.users ADD CONSTRAINT users_email_key UNIQUE (email); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='users_auth_level_check')                            THEN ALTER TABLE public.users ADD CONSTRAINT users_auth_level_check CHECK (auth_level IN ('none','email_verified','email_phone_verified')); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='users_user_type_check')                             THEN ALTER TABLE public.users ADD CONSTRAINT users_user_type_check CHECK (user_type IN ('trial','paid','enterprise','internal')); END IF;

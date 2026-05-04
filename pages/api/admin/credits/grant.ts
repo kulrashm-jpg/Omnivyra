@@ -27,7 +27,6 @@ import {
   requireAdminRateLimit,
   requireAdminScope,
 } from '../../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import {
   grantAdminCreditExtension,
@@ -141,9 +140,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     idempotencyKey: result.idempotencyKey,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(withIdempotency(handler, { scope: 'admin-credits-grant', methods: ['POST'] }));
+export default withIdempotency(handler, { scope: 'admin-credits-grant', methods: ['POST'] });

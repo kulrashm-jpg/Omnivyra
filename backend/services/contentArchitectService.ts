@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
-import { getUserRole, getCompanyRoleIncludingInvited, isSuperAdmin, Role } from './rbacService';
+import { getUserRole, getCompanyRoleIncludingInvited, isPlatformSuperAdmin, Role } from './rbacService';
 
 /**
  * Content Architect: platform-level role (next to Super Admin) with access to all companies'
@@ -66,7 +66,7 @@ export async function resolveCompanyAccess(
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
-  if (await isSuperAdmin(user.id)) {
+  if (await isPlatformSuperAdmin(user.id)) {
     return { userId: user.id, role: 'SUPER_ADMIN' };
   }
   // Company Admin and other roles: access only for the specific company they have a role for

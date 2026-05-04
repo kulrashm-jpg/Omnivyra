@@ -5,21 +5,15 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { externalApiPresets } from '../../../backend/services/externalApiPresets';
 import { ExternalApiSource } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
 
 const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) {
-    return { userId: legacySession.userId, role: 'SUPER_ADMIN' };
-  }
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -28,7 +22,7 @@ const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) =
   if (await isPlatformSuperAdmin(user.id)) {
     return { userId: user.id, role: 'SUPER_ADMIN' };
   }
-  if (await isSuperAdmin(user.id)) {
+  if (await isPlatformSuperAdmin(user.id)) {
     console.debug('SUPER_ADMIN_FALLBACK', {
       path: req.url,
       userId: user.id,
@@ -50,10 +44,6 @@ const requireExternalApiAccess = async (
     res.status(400).json({ error: 'companyId required' });
     return null;
   }
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) {
-    return { userId: legacySession.userId, role: 'SUPER_ADMIN' };
-  }
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
@@ -62,7 +52,7 @@ const requireExternalApiAccess = async (
   if (await isPlatformSuperAdmin(user.id)) {
     return { userId: user.id, role: 'SUPER_ADMIN' };
   }
-  if (await isSuperAdmin(user.id)) {
+  if (await isPlatformSuperAdmin(user.id)) {
     console.debug('SUPER_ADMIN_FALLBACK', {
       path: req.url,
       userId: user.id,

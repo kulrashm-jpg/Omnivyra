@@ -82,9 +82,11 @@ export function getConnectionConfig() {
     password: redisConfig.password,
     ...(redisConfig.tls ? { tls: redisConfig.tls } : {}),
     enableReadyCheck: false,
-    maxRetriesPerRequest: IS_OPTIONAL_LOCAL_REDIS ? 1 : null,
+    maxRetriesPerRequest: 1,
+    connectTimeout: 5_000,
+    commandTimeout: 5_000,
     lazyConnect: true,
-    ...(IS_OPTIONAL_LOCAL_REDIS ? { retryStrategy: () => null } : {}),
+    retryStrategy: () => null,
   };
 }
 

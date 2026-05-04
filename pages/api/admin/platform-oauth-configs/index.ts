@@ -10,7 +10,6 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { encryptCredential, decryptCredential } from '@/backend/auth/credentialEncryption';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenUrl: string; scopes: string[] }> = {
   ga4:       { label: 'Google Analytics 4', authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', scopes: ['openid','email','profile','https://www.googleapis.com/auth/analytics.readonly'] },
@@ -23,7 +22,7 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
   reddit:    { label: 'Reddit',   authUrl: 'https://www.reddit.com/api/v1/authorize', tokenUrl: 'https://www.reddit.com/api/v1/access_token', scopes: ['identity','submit','read'] },
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Content-architect session has its own auth path (no scope check needed)
   if (!isContentArchitectSession(req)) {
     const ctx = await requireAdminScope(req, res, 'config:oauth');
@@ -131,9 +130,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

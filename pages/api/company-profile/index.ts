@@ -221,8 +221,19 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default applyAuthGuard({
+const guardedCompanyProfileHandler = applyAuthGuard({
   requiresAuth: true,
   requiresOrg: true,
 })(handler);
+
+export default function companyProfileRoute(req: NextApiRequest, res: NextApiResponse) {
+  const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+  const mode = (req.query.mode as string | undefined) || (body.mode as string | undefined);
+
+  if (req.method === 'GET' && mode === 'list') {
+    return handler(req, res);
+  }
+
+  return guardedCompanyProfileHandler(req, res);
+}
 

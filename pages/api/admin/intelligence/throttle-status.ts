@@ -19,7 +19,6 @@ import {
   getSystemThrottleLevel,
   invalidateThrottleCache,
 } from '../../../../backend/services/intelligenceHealthService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const ALLOWED_FIELDS = new Set([
   'cpu_medium_threshold',
@@ -29,7 +28,7 @@ const ALLOWED_FIELDS = new Set([
   'enabled',
 ]);
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'intelligence:throttle-status');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -79,9 +78,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

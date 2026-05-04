@@ -20,7 +20,6 @@ import {
   invalidateConfigCache,
   type ConfigUpdateInput,
 } from '@/backend/services/configService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const VALID_TYPES = new Set([
   'decision_engine_config',
@@ -90,9 +89,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ success: false, error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);
+export default handler;

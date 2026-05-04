@@ -1,0 +1,32 @@
+﻿2026-05-04T13:02:26.9280354Z Current runner version: '2.334.0'
+2026-05-04T13:02:26.9321100Z ##[group]Runner Image Provisioner
+2026-05-04T13:02:26.9322420Z Hosted Compute Agent
+2026-05-04T13:02:26.9323387Z Version: 20260213.493
+2026-05-04T13:02:26.9324413Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+2026-05-04T13:02:26.9325697Z Build Date: 2026-02-13T00:28:41Z
+2026-05-04T13:02:26.9326839Z Worker ID: {df93cccd-5527-43f8-8213-e8ee8b05da96}
+2026-05-04T13:02:26.9328068Z Azure Region: centralus
+2026-05-04T13:02:26.9329064Z ##[endgroup]
+2026-05-04T13:02:26.9331631Z ##[group]Operating System
+2026-05-04T13:02:26.9332685Z Ubuntu
+2026-05-04T13:02:26.9333427Z 24.04.4
+2026-05-04T13:02:26.9334214Z LTS
+2026-05-04T13:02:26.9334969Z ##[endgroup]
+2026-05-04T13:02:26.9336247Z ##[group]Runner Image
+2026-05-04T13:02:26.9337324Z Image: ubuntu-24.04
+2026-05-04T13:02:26.9338259Z Version: 20260413.86.1
+2026-05-04T13:02:26.9340175Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260413.86/images/ubuntu/Ubuntu2404-Readme.md
+2026-05-04T13:02:26.9343350Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260413.86
+2026-05-04T13:02:26.9344888Z ##[endgroup]
+2026-05-04T13:02:26.9346703Z ##[group]GITHUB_TOKEN Permissions
+2026-05-04T13:02:26.9349512Z Contents: read
+2026-05-04T13:02:26.9350432Z Metadata: read
+2026-05-04T13:02:26.9351626Z Packages: read
+2026-05-04T13:02:26.9352643Z ##[endgroup]
+2026-05-04T13:02:26.9355740Z Secret source: Actions
+2026-05-04T13:02:26.9356906Z Prepare workflow directory
+2026-05-04T13:02:26.9726628Z Prepare all required actions
+2026-05-04T13:02:26.9765883Z Getting action download info
+2026-05-04T13:02:27.3927624Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+2026-05-04T13:02:27.4904418Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-05-04T13:02:27.7219992Z Complete job name: Reject reintroduction of database/*.sql

@@ -13,8 +13,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
+import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
 
 // â”€â”€ Auth guard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -22,15 +21,13 @@ async function requireSuperAdmin(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ userId: string } | null> {
-  const legacy = getLegacySuperAdminSession(req);
-  if (legacy) return { userId: legacy.userId };
 
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
-  if ((await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id))) {
+  if ((await isPlatformSuperAdmin(user.id)) || (await isPlatformSuperAdmin(user.id))) {
     return { userId: user.id };
   }
   res.status(403).json({ error: 'SUPER_ADMIN_ONLY' });

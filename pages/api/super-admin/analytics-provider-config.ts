@@ -5,10 +5,9 @@ import {
   getDefaultAnalyticsRedirectUri,
   upsertAnalyticsProviderConfig,
 } from '../../../backend/services/analyticsProviderConfigService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'config:analytics');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -58,9 +57,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Allow', 'GET, POST');
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

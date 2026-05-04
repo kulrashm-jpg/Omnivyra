@@ -6,7 +6,6 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import {
   getUserRole,
   isPlatformSuperAdmin,
-  isSuperAdmin,
   Role,
 } from '../../../../backend/services/rbacService';
 
@@ -27,7 +26,7 @@ const requirePlaybookAccess = async (
   if (await isPlatformSuperAdmin(user.id)) {
     return { userId: user.id, role: 'SUPER_ADMIN' };
   }
-  if (await isSuperAdmin(user.id)) {
+  if (await isPlatformSuperAdmin(user.id)) {
     console.debug('SUPER_ADMIN_FALLBACK', {
       path: req.url,
       userId: user.id,

@@ -19,16 +19,15 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { enforceRole, Role } from '../../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function extractFirstParagraph(html: string): string {
   const m = html.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
   return m ? m[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() : '';
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { company_id, content_html, topic, angle_type } = req.body ?? {};
@@ -46,11 +45,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
-  const roleGate = await enforceRole({
-    req, res, companyId: company_id,
-    allowedRoles: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
-  });
-  if (!roleGate) return;
+  const ctx = await requireAdminScope(req, res, 'blog:rewrite-hook', { companyId: company_id });
+  if (!ctx) return;
 
   const currentHook = extractFirstParagraph(content_html);
   if (!currentHook) {
@@ -98,9 +94,3 @@ The value must be a complete <p> tag with the rewritten text inside. No markdown
     return res.status(500).json({ error: 'Hook rewrite failed' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

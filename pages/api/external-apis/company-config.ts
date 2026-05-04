@@ -16,7 +16,6 @@ import {
   getCompanyRoleIncludingInvited,
   Role,
 } from '../../../backend/services/rbacService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getAllowedPollingForCompany,
   isPollingAllowedForCompany,
@@ -45,10 +44,7 @@ async function requireCompanyAccess(
     res.status(400).json({ error: 'companyId required' });
     return null;
   }
-  const legacy = getLegacySuperAdminSession(req);
-  const { user, error } = legacy
-    ? { user: { id: legacy.userId }, error: null }
-    : await getSupabaseUserFromRequest(req);
+  const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;

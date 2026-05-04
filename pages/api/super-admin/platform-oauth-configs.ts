@@ -12,7 +12,6 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { encryptCredential, decryptCredential } from '../../../backend/auth/credentialEncryption';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /** Resolve user from Supabase SSR cookies (no Bearer token needed). */
 async function getUserFromCookies(req: NextApiRequest) {
@@ -71,7 +70,7 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
   quora:         { label: 'Quora',          authUrl: '', tokenUrl: '', scopes: [] },
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const allowed = await requireAdminAccess(req, res);
   if (!allowed) return;
 
@@ -180,9 +179,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

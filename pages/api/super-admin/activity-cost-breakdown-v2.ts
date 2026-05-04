@@ -21,7 +21,6 @@ import { createServiceRoleMigrationProxy } from '@/backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { NextApiRequest, NextApiResponse } from 'next';
 import { requireAdminScope } from '@/backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // Production cost rates (USD)
 const COST_RATES = {
@@ -102,7 +101,7 @@ interface CostBreakdownResponse {
   cost_rates: typeof COST_RATES;
 }
 
-async function handler(
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<CostBreakdownResponse | { error: string }>
 ) {
@@ -385,9 +384,3 @@ function calculateResourceCosts(
 
   return { ...costs, total };
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

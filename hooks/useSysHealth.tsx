@@ -385,7 +385,6 @@ export function useSysHealth() {
     flushCache,
     intel,
     intelLoading,
-    isSuperAdmin,
     loading,
     now2,
     railwayView,

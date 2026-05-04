@@ -15,12 +15,11 @@ import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseCli
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 type SuccessResponse = { companyId: string };
 type ErrorResponse   = { error: string; code?: string; details?: string; conflicts?: string[] };
 
-async function handler(
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -131,9 +130,3 @@ async function handler(
 
   return res.status(201).json({ companyId });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

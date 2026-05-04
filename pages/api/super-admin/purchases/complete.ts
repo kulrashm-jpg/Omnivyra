@@ -19,9 +19,8 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
 import { completePurchase, failPurchase } from '../../../../backend/services/purchaseService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!isContentArchitectSession(req)) {
     const ctx = await requireAdminScope(req, res, 'credits:grant');
@@ -99,9 +98,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     credits_granted: result.creditsGranted,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

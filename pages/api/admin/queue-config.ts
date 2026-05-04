@@ -31,14 +31,13 @@ import {
   validateQueueConfig,
   type QueueAdminConfig,
 } from '../../../backend/services/adminRuntimeConfig';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:queue-config', 20, 60))) return;
-  const admin = await requireSuperAdminUser(req, res);
+  const admin = await requireAdminScope(req, res, 'config:queue');
   if (!admin) return;
 
   if (req.method === 'GET') {
@@ -71,9 +70,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

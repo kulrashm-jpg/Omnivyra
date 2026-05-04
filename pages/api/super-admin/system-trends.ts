@@ -33,7 +33,6 @@ import { computeBaselines }             from '../../../lib/instrumentation/basel
 import { projectCost }                  from '../../../lib/instrumentation/costProjection';
 import { getSharedRedisClient }         from '../../../backend/queue/bullmqClient';
 import { RUNTIME_ENV }                  from '../../../lib/instrumentation/systemMetrics';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -102,7 +101,7 @@ function buildCostTrend(snapshots: SlimSnapshot[]): CostTrendPoint[] {
 
 // â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'system-trends:view');
   if (!ctx) return;
@@ -152,9 +151,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ...(queryError ? { error: queryError } : {}),
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

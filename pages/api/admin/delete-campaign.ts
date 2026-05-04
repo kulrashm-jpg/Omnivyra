@@ -4,9 +4,8 @@ const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { getCompanyCampaignIds } from '../../../backend/db/campaignVersionStore';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { Role } from '../../../backend/services/rbacPrimitives';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -105,9 +104,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

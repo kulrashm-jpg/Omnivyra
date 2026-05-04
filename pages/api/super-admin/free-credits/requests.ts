@@ -16,7 +16,6 @@ import { requireAdminScope } from '@/backend/services/requestAccessService';
 import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 const CONTENT_ARCHITECT_SENTINEL = 'content_architect';
 
@@ -26,7 +25,7 @@ async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Pro
   return ctx?.id ?? null;
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const adminId = await requireSuperAdmin(req, res);
   if (!adminId) return;
 
@@ -154,9 +153,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

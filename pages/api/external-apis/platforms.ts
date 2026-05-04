@@ -2,11 +2,10 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getPlatformStrategies } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
-  isSuperAdmin,
+  isPlatformSuperAdmin,
 } from '../../../backend/services/rbacService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -21,15 +20,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'companyId required' });
   }
 
-  const legacySession = getLegacySuperAdminSession(req);
-  const { user, error: userError } = legacySession
-    ? { user: { id: legacySession.userId }, error: null }
-    : await getSupabaseUserFromRequest(req);
+  const { user, error: userError } = await getSupabaseUserFromRequest(req);
   if (userError || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
-  const isPlatformOrSuperAdmin = legacySession || (await isSuperAdmin(user.id));
+  const isPlatformOrSuperAdmin = await isPlatformSuperAdmin(user.id);
   if (!isPlatformOrSuperAdmin) {
     let { role, error: roleError } = await getUserRole(user.id, companyId);
     if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
@@ -64,4 +60,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 export default applyAuthGuard({
   requiresAuth: true,
 })(handler);
-

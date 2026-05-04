@@ -12,10 +12,9 @@ import {
   getEngagementSignalSchedulerLastRun,
   getEngagementSignalSchedulerErrors,
 } from '../../../backend/jobs/engagementSignalScheduler';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { getEngagementSignalQueueSize } from '../../../backend/queue/engagementSignalQueue';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -70,10 +69,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiresOrg: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

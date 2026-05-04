@@ -1,25 +1,19 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { requireAdminScope } from '../../../backend/services/requestAccessService';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const { user, error: authError } = await getSupabaseUserFromRequest(req);
-    if (authError || !user) {
-      return res.status(401).json({ error: 'UNAUTHORIZED' });
-    }
-    const userId = user.id;
-    const isSuperAdmin = await isPlatformSuperAdmin(userId);
+    const ctx = await requireAdminScope(req, res, 'users:list-external');
+    if (!ctx) return;
 
     return res.status(200).json({
       success: true,
-      isSuperAdmin,
-      userId: userId,
+      isSuperAdmin: true,
+      userId: ctx.id,
     });
 
   } catch (error) {
@@ -30,9 +24,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

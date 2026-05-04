@@ -7,13 +7,11 @@ import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { invalidateCompanyConfigCacheForApiSource } from '../../../backend/services/companyApiConfigCache';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveUserContext } from '../../../backend/services/userContextService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
 } from '../../../backend/services/rbacService';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -30,24 +28,17 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!companyId && !platformScopeRequested) {
     return res.status(400).json({ error: 'companyId required' });
   }
-  const legacySession = getLegacySuperAdminSession(req);
-  const { user, error: userError } = legacySession
-    ? { user: { id: legacySession.userId }, error: null }
-    : await getSupabaseUserFromRequest(req);
+  const { user, error: userError } = await getSupabaseUserFromRequest(req);
   if (userError || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
   let canManageExternalApis = false;
-  let hasPlatformScope = false;
-  if (legacySession) {
-    canManageExternalApis = true;
-    hasPlatformScope = true;
-  } else {
+  let hasPlatformScope = false; {
     const platformAdmin = await isPlatformSuperAdmin(user.id);
     if (platformAdmin) {
       canManageExternalApis = true;
       hasPlatformScope = true;
-    } else if (await isSuperAdmin(user.id)) {
+    } else if (await isPlatformSuperAdmin(user.id)) {
       console.debug('SUPER_ADMIN_FALLBACK', {
         path: req.url,
         userId: user.id,
@@ -272,4 +263,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 export default applyAuthGuard({
   requiresAuth: true,
 })(handler);
-

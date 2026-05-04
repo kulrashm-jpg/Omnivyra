@@ -13,7 +13,6 @@ import IORedis from 'ioredis';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getCacheStats as getExtApiStats } from '../../../backend/services/redisExternalApiCache';
 import { invalidateCacheByPrefix } from '../../../backend/services/aiResponseCache';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 function getRedisClient(): IORedis | null {
   const url = process.env.REDIS_URL || process.env.REDIS_PRIVATE_URL;
@@ -74,7 +73,7 @@ async function getRedisKeyStats(client: IORedis): Promise<{ prefix: string; coun
   return results;
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'admin:cache-management');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -193,9 +192,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     collected_at: new Date().toISOString(),
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

@@ -1,7 +1,7 @@
 ﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isSuperAdmin } from '../../../backend/services/rbacService';
+import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 import { getScheduledPost } from '../../../backend/db/queries';
 import { updatePostPublishStatus } from '../../../backend/db/scheduledPostsStore';
 import { publishNow } from '../../../backend/services/publishNowService';
@@ -56,7 +56,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     // Allow: post owner OR super-admin
-    const superAdmin = await isSuperAdmin(user.id);
+    const superAdmin = await isPlatformSuperAdmin(user.id);
     if (!superAdmin && post.user_id !== user.id) {
       return res.status(403).json({ error: 'Forbidden: you do not own this post' });
     }

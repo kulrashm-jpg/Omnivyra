@@ -9,7 +9,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 interface ActivityCost {
   activity_type: string;
@@ -97,7 +96,7 @@ function mapProcessTypeToActivity(processType: string): string {
   return map[processType] || 'other';
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<CostAccountingResponse | { error: string }>) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse<CostAccountingResponse | { error: string }>) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'admin:cost-accounting');
   if (!ctx) return;
@@ -275,9 +274,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse<CostAccountingR
     res.status(500).json({ error: 'Failed to calculate cost accounting' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

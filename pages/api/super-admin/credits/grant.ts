@@ -31,7 +31,6 @@ import { requireAdminRateLimit, requireAdminScope } from '@/backend/services/req
 import { recordAdminAudit } from '@/backend/services/adminAuditService';
 import { logger } from '@/backend/services/logger';
 import { withIdempotency } from '@/backend/middleware/withIdempotency';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 // ── Valid categories for admin-driven grants ───────────────────────────────────
 
@@ -214,9 +213,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     credits_added: credits,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(withIdempotency(handler, { scope: 'super-admin-credits-grant' }));
+export default withIdempotency(handler, { scope: 'super-admin-credits-grant' });

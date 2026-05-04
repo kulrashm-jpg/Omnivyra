@@ -27,12 +27,11 @@ import {
   getReportFromRedis,
   getRecentCyclesFromRedis,
 } from '../../../backend/utils/cronInstrumentation';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { getSharedRedisClient } from '../../../backend/queue/bullmqClient';
 
 // â”€â”€ Handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
   const ctx = await requireAdminScope(req, res, 'health:cron-metrics');
   if (!ctx) return;
@@ -85,9 +84,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     hasDuplicates:     report.duplicateInstances.length > 0,
   });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

@@ -1,4 +1,4 @@
-﻿{
+{
   "permissions": {
     "allow": [
       "Bash(xxd \"C:/virality/tsconfig.json\")",
@@ -216,7 +216,12 @@
       "Bash(PORT=3000 npm run *)",
       "PowerShell(Start-Process powershell -Verb RunAs -ArgumentList \"-NoProfile\",\"-Command\",\"taskkill /F /T /PID 1212; Start-Sleep -Seconds 1\")",
       "PowerShell(Start-Process powershell -Verb RunAs -ArgumentList \"-NoProfile\",\"-Command\",\"taskkill /F /T /PID 21168; taskkill /F /T /PID 14440; taskkill /F /T /PID 18420; taskkill /F /T /PID 1820; taskkill /F /T /PID 10780; Start-Sleep -Seconds 1\")",
-      "PowerShell(Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/\" -UseBasicParsing -TimeoutSec 30 -MaximumRedirection 0 -ErrorAction Stop; \"HTTP $\\($r.StatusCode\\) on 3000\" } catch [System.Net.WebException] { if \\($_.Exception.Response\\) { \"HTTP $\\([int]$_.Exception.Response.StatusCode\\) on 3000\" } else { \"Connection error: $\\($_.Exception.Message\\)\" } })"
+      "PowerShell(Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/\" -UseBasicParsing -TimeoutSec 30 -MaximumRedirection 0 -ErrorAction Stop; \"HTTP $\\($r.StatusCode\\) on 3000\" } catch [System.Net.WebException] { if \\($_.Exception.Response\\) { \"HTTP $\\([int]$_.Exception.Response.StatusCode\\) on 3000\" } else { \"Connection error: $\\($_.Exception.Message\\)\" } })",
+      "Bash(wc -l c:\\\\\\\\tmp\\\\\\\\tsc20.log)",
+      "Bash(head -50 c:\\\\\\\\tmp\\\\\\\\tsc20.log)",
+      "Bash(wc -l c:\\\\\\\\tmp\\\\\\\\tsc21.log)",
+      "Bash(head -30 c:\\\\\\\\tmp\\\\\\\\tsc21.log)",
+      "PowerShell(npx vercel whoami)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

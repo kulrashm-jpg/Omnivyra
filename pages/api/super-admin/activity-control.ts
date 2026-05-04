@@ -30,7 +30,6 @@ import {
   resolveConfig,
   type GlobalConfig,
 } from '../../../backend/services/intelligenceConfigService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import {
   getInfraLimitsConfig,
   saveInfraLimitsConfig,
@@ -228,7 +227,7 @@ async function handlePatch(req: NextApiRequest, res: NextApiResponse) {
 // Handler
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await requireAdminScope(req, res, 'autonomous:control');
   if (!ctx) return;
   if (process.env.NODE_ENV !== 'production') {
@@ -238,9 +237,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'PATCH') return handlePatch(req, res);
   return res.status(405).json({ error: 'Method not allowed' });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

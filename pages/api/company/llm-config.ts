@@ -19,7 +19,6 @@ import {
   getCompanyRoleIncludingInvited,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
   Role,
 } from '../../../backend/services/rbacService';
 import {
@@ -46,7 +45,7 @@ async function requireCompanyLlmAccess(
   }
 
   if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
-  if (await isSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
+  if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' };
 
   let { role, error: roleError } = await getUserRole(user.id, companyId);
   if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {

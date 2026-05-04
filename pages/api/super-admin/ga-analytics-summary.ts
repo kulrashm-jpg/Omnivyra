@@ -8,7 +8,6 @@ import {
   resolveOmnivyraWebsiteCompany,
   resolveOmnivyraWebsiteUrl,
 } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 
 async function fetchAllRows<T>(
@@ -34,7 +33,7 @@ function aggregatedCount(metadata: Record<string, unknown> | null | undefined): 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -248,9 +247,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: error?.message || 'FAILED_TO_LOAD_GA_ANALYTICS' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

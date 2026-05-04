@@ -1,0 +1,8 @@
+﻿2026-05-04T13:05:14.0436707Z ##[group]Run supabase stop || true
+2026-05-04T13:05:14.0437010Z [36;1msupabase stop || true[0m
+2026-05-04T13:05:14.0458226Z shell: /usr/bin/bash -e {0}
+2026-05-04T13:05:14.0458439Z env:
+2026-05-04T13:05:14.0458629Z   SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
+2026-05-04T13:05:14.0458888Z ##[endgroup]
+2026-05-04T13:05:14.0855211Z Stopping containers...
+2026-05-04T13:05:14.0866108Z Stopped supabase local development setup.

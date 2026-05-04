@@ -24,7 +24,6 @@ import {
   getUserRole,
   hasPermission,
   isPlatformSuperAdmin,
-  isSuperAdmin,
 } from '../../../backend/services/rbacService';
 
 const requireCompanyRole = async (
@@ -45,7 +44,7 @@ const requireCompanyRole = async (
   if (platformAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
     return { userId, role: Role.SUPER_ADMIN };
   }
-  const legacyAdmin = await isSuperAdmin(userId);
+  const legacyAdmin = await isPlatformSuperAdmin(userId);
   if (legacyAdmin && allowedRoles.includes(Role.SUPER_ADMIN)) {
     console.debug('SUPER_ADMIN_FALLBACK', {
       path: req.url,
@@ -140,7 +139,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const userId = auth.user.id;
       if (await isPlatformSuperAdmin(userId)) {
         requester = { id: userId, role: Role.SUPER_ADMIN };
-      } else if (await isSuperAdmin(userId)) {
+      } else if (await isPlatformSuperAdmin(userId)) {
         requester = { id: userId, role: Role.SUPER_ADMIN };
       } else {
         let { role } = await getUserRole(userId, companyId);

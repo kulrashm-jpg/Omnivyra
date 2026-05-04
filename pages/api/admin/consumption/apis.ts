@@ -16,7 +16,6 @@ import {
   getAllOrgsConsumption,
   ConsumptionTier,
 } from '../../../../backend/services/consumptionAnalyticsService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 async function resolveTier(
   req: NextApiRequest,
@@ -72,9 +71,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);
+export default handler;

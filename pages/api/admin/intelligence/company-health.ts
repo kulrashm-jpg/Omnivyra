@@ -18,9 +18,8 @@ import {
   computeCompanyHealthScore,
   computeAllCompanyHealthScores,
 } from '../../../../backend/services/intelligenceHealthService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   const ctx = await requireAdminScope(req, res, 'intelligence:company-health');
@@ -72,10 +71,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to compute health scores' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiresOrg: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

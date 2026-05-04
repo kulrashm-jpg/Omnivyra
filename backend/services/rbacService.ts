@@ -268,21 +268,12 @@ export const getUserCompanyRole = async (
   if (user.userId === 'content_architect') {
     return { role: Role.COMPANY_ADMIN, userId: user.userId };
   }
-  const superAdmin = await isSuperAdmin(user.userId);
+  const superAdmin = await isPlatformSuperAdmin(user.userId);
   if (superAdmin) {
     return { role: Role.SUPER_ADMIN, userId: user.userId };
   }
   const { role } = await getUserRole(user.userId, companyId);
   return { role, userId: user.userId };
-};
-
-/**
- * @deprecated Use `isPlatformSuperAdmin` directly. This alias is retained for
- * legacy callers and resolves to the same canonical query against
- * `user_company_roles.role = 'SUPER_ADMIN'`.
- */
-export const isSuperAdmin = async (userId: string): Promise<boolean> => {
-  return isPlatformSuperAdmin(userId);
 };
 
 export const isPlatformSuperAdmin = async (userId: string): Promise<boolean> => {
@@ -371,7 +362,7 @@ export const enforceRole = async (input: {
 
   // Run role checks in parallel to reduce latency
   const [superAdminResult, platformSuperAdminResult, userRoleResult] = await Promise.all([
-    isSuperAdmin(user.userId),
+    isPlatformSuperAdmin(user.userId),
     isPlatformSuperAdmin(user.userId),
     getUserRole(user.userId, companyId),
   ]);

@@ -1,7 +1,7 @@
 ﻿import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type { UserContext } from './userContextService';
-import { getUserRole, isSuperAdmin, Role } from './rbacService';
+import { getUserRole, isPlatformSuperAdmin, Role } from './rbacService';
 import { logUserManagementAudit } from './campaignAuditService';
 
 type AccessResult =
@@ -12,7 +12,7 @@ const requireUserAdminAccess = async (
   requester: UserContext,
   companyId: string
 ): Promise<AccessResult> => {
-  const superAdmin = await isSuperAdmin(requester.userId);
+  const superAdmin = await isPlatformSuperAdmin(requester.userId);
   if (superAdmin) {
     return { ok: true, scope: 'super_admin' };
   }

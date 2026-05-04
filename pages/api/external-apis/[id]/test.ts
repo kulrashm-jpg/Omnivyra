@@ -9,22 +9,19 @@ import { normalizeExternalTrends } from '../../../../backend/services/trendNorma
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { Role } from '../../../../backend/services/rbacService';
 import { withRBAC } from '../../../../backend/middleware/withRBAC';
-import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../../backend/services/rbacService';
+import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
 const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) return { userId: legacySession.userId, role: 'SUPER_ADMIN' as const };
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     res.status(401).json({ error: 'UNAUTHORIZED' });
     return null;
   }
   if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' as const };
-  if (await isSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' as const };
+  if (await isPlatformSuperAdmin(user.id)) return { userId: user.id, role: 'SUPER_ADMIN' as const };
   res.status(403).json({ error: 'FORBIDDEN_ROLE' });
   return null;
 };

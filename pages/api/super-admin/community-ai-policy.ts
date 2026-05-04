@@ -2,7 +2,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 type PolicyInput = {
   execution_enabled?: boolean;
@@ -39,7 +38,7 @@ const resolveUpdatedByEmail = async (userId?: string | null) => {
   return data?.email || null;
 };
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const admin = await requireSuperAdmin(req, res);
   if (!admin) return;
 
@@ -147,9 +146,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const updatedByEmail = await resolveUpdatedByEmail(savedPolicy?.updated_by);
   return res.status(200).json({ policy: savedPolicy, updated_by_email: updatedByEmail });
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

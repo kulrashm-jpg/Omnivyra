@@ -32,15 +32,14 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { enforceRole, Role } from '../../../../backend/services/rbacService';
+import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import type { BlogGenerationRequest } from '../../../../lib/blog/runBlogGeneration';
 import { runUnifiedLongFormGeneration } from '../../../../lib/content/unifiedLongFormEngine';
 import type { BlogAngle } from '../../../../lib/blog/blogGenerationEngine';
 import { buildContentContext } from '../../../../lib/content/buildContentContext';
 import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const {
@@ -68,12 +67,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
-  const roleGate = await enforceRole({
-    req, res, companyId: company_id,
-    allowedRoles: [Role.SUPER_ADMIN],
-    // Company Admin uses /api/blogs/generate â€” not this route.
-  });
-  if (!roleGate) return;
+  // Super-admin only — Company Admin uses /api/blogs/generate.
+  const ctx = await requireAdminScope(req, res, 'blog:generate');
+  if (!ctx) return;
 
   const generationRequest: BlogGenerationRequest = {
     company_id,
@@ -115,9 +111,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   return res.status(200).json(result);
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

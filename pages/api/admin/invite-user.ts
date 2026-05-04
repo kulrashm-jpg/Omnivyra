@@ -7,7 +7,6 @@ import {
   requireAdminScope,
   requireAuthenticatedInternalUser,
 } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
@@ -24,7 +23,7 @@ const VALID_ROLES = new Set([
 type SuccessResponse = { invitationId: string };
 type ErrorResponse = { error: string; code?: string };
 
-async function handler(
+export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<SuccessResponse | ErrorResponse>,
 ) {
@@ -119,9 +118,3 @@ async function handler(
     return res.status(500).json({ error: 'Failed to create and send invitation' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

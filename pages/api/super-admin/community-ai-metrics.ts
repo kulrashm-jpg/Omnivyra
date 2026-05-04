@@ -1,16 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
-import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { requireAdminRateLimit, requireAdminScope } from '../../../backend/services/requestAccessService';
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:community-ai-metrics', 20, 60))) return;
 
-  if (!(await requireSuperAdminUser(req, res))) return;
+  const ctx = await requireAdminScope(req, res, 'analytics:community-ai');
+  if (!ctx) return;
 
   try {
     const [actionsCount, executedCount, playbooksCount, autoRulesCount, tenantRows] =
@@ -62,9 +62,3 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'FAILED_TO_LOAD_COMMUNITY_AI_METRICS' });
   }
 }
-
-export default applyAuthGuard({
-  requiresAuth: true,
-  requiredRole: 'SUPER_ADMIN',
-  allowSuperAdminOverride: true,
-})(handler);

@@ -9,10 +9,8 @@ import {
   getUserRole,
   getCompanyRoleIncludingInvited,
   hasPermission,
-  isSuperAdmin,
   isPlatformSuperAdmin,
 } from '../../../../backend/services/rbacService';
-import { getLegacySuperAdminSession } from '../../../../backend/services/superAdminSession';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
@@ -24,10 +22,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const legacySession = getLegacySuperAdminSession(req);
-  const { user, error: userError } = legacySession
-    ? { user: { id: legacySession.userId }, error: null }
-    : await getSupabaseUserFromRequest(req);
+  const { user, error: userError } = await getSupabaseUserFromRequest(req);
   if (userError || !user) {
     return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
@@ -41,34 +36,24 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'companyId required' });
   }
   let canManageExternalApis = false;
-  if (legacySession) {
+  if (await isPlatformSuperAdmin(user.id)) {
     canManageExternalApis = true;
   } else {
-    // isPlatformSuperAdmin and isSuperAdmin are equivalent (both check SUPER_ADMIN)
-    if (await isSuperAdmin(user.id)) {
-      console.debug('SUPER_ADMIN_FALLBACK', {
-        path: req.url,
-        userId: user.id,
-        source: 'rbacService.isSuperAdmin',
-      });
-      canManageExternalApis = true;
-    } else {
-      if (!companyId) {
-        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      }
-      let { role, error: roleError } = await getUserRole(user.id, companyId);
-      if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
-        const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
-        if (fallbackRole && (await hasPermission(fallbackRole, 'MANAGE_EXTERNAL_APIS'))) {
-          role = fallbackRole;
-          roleError = null;
-        }
-      }
-      if (roleError || !role || !(await hasPermission(role, 'MANAGE_EXTERNAL_APIS'))) {
-        return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      }
-      canManageExternalApis = true;
+    if (!companyId) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
     }
+    let { role, error: roleError } = await getUserRole(user.id, companyId);
+    if (!role && (roleError === 'COMPANY_ACCESS_DENIED' || roleError === null)) {
+      const fallbackRole = await getCompanyRoleIncludingInvited(user.id, companyId);
+      if (fallbackRole && (await hasPermission(fallbackRole, 'MANAGE_EXTERNAL_APIS'))) {
+        role = fallbackRole;
+        roleError = null;
+      }
+    }
+    if (roleError || !role || !(await hasPermission(role, 'MANAGE_EXTERNAL_APIS'))) {
+      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    }
+    canManageExternalApis = true;
   }
   if (!canManageExternalApis) {
     return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
@@ -102,8 +87,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(404).json({ error: 'Request not found' });
   }
 
-  const isSuperAdminUser =
-    legacySession || (await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id));
+  const isSuperAdminUser = await isPlatformSuperAdmin(user.id);
 
   const now = new Date().toISOString();
 
