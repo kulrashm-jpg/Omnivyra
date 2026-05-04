@@ -1,5 +1,4 @@
--- Reconstructed by Phase B0 on 2026-05-03
--- FIXED: idempotent + replay-safe
+-- FINAL FIX: fully idempotent + replay safe
 
 DO $$
 BEGIN
