@@ -503,7 +503,7 @@ CREATE TABLE IF NOT EXISTS public.unified_transactions (
   api_cost_usd numeric(20,10),
   credits_charged integer,
   credits_value_usd numeric(20,10),
-  margin_usd numeric(20,10) DEFAULT (COALESCE(credits_value_usd, (0)::numeric) - COALESCE(api_cost_usd, (0)::numeric)),
+  margin_usd numeric(20,10) GENERATED ALWAYS AS (COALESCE(credits_value_usd, (0)::numeric) - COALESCE(api_cost_usd, (0)::numeric)) STORED,
   retry_attempt integer NOT NULL DEFAULT 1,
   final_attempt boolean NOT NULL DEFAULT true,
   error_flag boolean NOT NULL DEFAULT false,
