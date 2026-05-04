@@ -119,7 +119,7 @@ export default function ScheduleReview() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <button 
-                onClick={() => window.location.href = `/content-creation?campaignId=${campaignId}`}
+                onClick={() => window.location.href = `/content-studio?campaignId=${campaignId}`}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
                 <ArrowLeft className="h-5 w-5 text-gray-600" />

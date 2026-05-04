@@ -30,12 +30,12 @@ const NAV_ITEMS = [
     icon: FileText,
     children: [
       { label: 'Post',        href: '/content-studio' },
-      { label: 'Blog',        href: '/blogs' },
+      { label: 'Blog',        href: '/content/blog' },
       { label: 'Story',       href: '/stories/create' },
       { label: 'Article',     href: '/articles' },
       { label: 'Whitepaper',  href: '/whitepapers/create' },
       { label: 'Case Study',  href: '/case-studies/create' },
-      { label: 'Thread',      href: '/content-creation' },
+      { label: 'Thread',      href: '/content-studio' },
       { label: 'Guide',       href: '/guides/create' },
       { label: 'Newsletter',  href: '/newsletters/create' },
     ],
@@ -581,3 +581,5 @@ const Header: React.FC = () => {
 };
 
 export default Header;
+
+

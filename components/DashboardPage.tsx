@@ -251,7 +251,7 @@ export default function DashboardPage() {
                   value: stats.totalContent,
                   icon: Edit3,
                   color: 'bg-violet-500',
-                  onClick: () => window.location.href = '/content-creation'
+                  onClick: () => window.location.href = '/content-studio'
                 },
                 {
                   label: 'Published',

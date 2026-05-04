@@ -178,7 +178,7 @@ export default function MarketAnalysis() {
 
       if (response.ok) {
         // Navigate to content creation with campaign ID
-        window.location.href = `/content-creation?campaignId=${campaignId}`;
+        window.location.href = `/content-studio?campaignId=${campaignId}`;
       }
     } catch (error) {
       console.error('Error transitioning stage:', error);

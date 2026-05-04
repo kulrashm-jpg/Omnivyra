@@ -14,8 +14,9 @@ logs
 tsconfig.tsbuildinfo
 tsconfig.*.tsbuildinfo
 tmp/
+tmp*/
 artifacts/
-tmp_*.json
+tmp_*
 build-*.txt
 validation-output.txt
 tsc_out.txt

@@ -80,12 +80,11 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       '/command-center/writer-content',
       '/command-center/creator-content',
       '/content-studio',
-      '/blogs',
+      '/content/blog',
       '/stories',
       '/articles',
       '/whitepapers',
       '/case-studies',
-      '/content-creation',
       '/guides',
       '/newsletters',
       '/posts',
@@ -665,3 +664,5 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
 };
 
 export default GlobalHeader;
+
+

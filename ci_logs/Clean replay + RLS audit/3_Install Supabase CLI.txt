@@ -1,5 +1,0 @@
-﻿2026-05-04T13:02:43.6506233Z ##[group]Run supabase/setup-cli@v1
-2026-05-04T13:02:43.6506609Z with:
-2026-05-04T13:02:43.6506831Z   version: latest
-2026-05-04T13:02:43.6507049Z ##[endgroup]
-2026-05-04T13:02:44.4632113Z [command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/abf63121-4e86-46ca-8188-839faba9efd5 -f /home/runner/work/_temp/99149750-e6b0-41b1-aeb6-a5ce0f7d8500

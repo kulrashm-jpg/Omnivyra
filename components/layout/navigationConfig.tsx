@@ -50,7 +50,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
     href: '/command-center/content',
     icon: FileText,
     description: 'Choose between writer and creator content workflows.',
-    matchers: ['/command-center/content', '/command-center/writer-content', '/command-center/creator-content', '/blogs', '/stories', '/articles', '/whitepapers', '/case-studies', '/guides', '/newsletters', '/posts', '/threads', '/content-studio', '/content-creation'],
+    matchers: ['/command-center/content', '/command-center/writer-content', '/command-center/creator-content', '/content/blog', '/stories', '/articles', '/whitepapers', '/case-studies', '/guides', '/newsletters', '/posts', '/threads', '/content-studio'],
     children: [
       {
         label: 'Writer Content',
@@ -148,7 +148,7 @@ export const CREATE_ACTIONS: CreateAction[] = [
     id: 'write-blog',
     label: 'Write Blog',
     description: 'Create SEO-optimized long-form content.',
-    href: '/blogs/create',
+    href: '/admin/content',
     icon: PenTool,
     keywords: ['blog', 'article', 'seo', 'long form', 'write'],
   },
@@ -212,7 +212,7 @@ export function getNextActionForPath(pathname: string): NextAction | null {
     };
   }
 
-  if (path.startsWith('/blogs') || path.startsWith('/content')) {
+  if (path.startsWith('/content/blog') || path.startsWith('/content')) {
     return {
       label: 'Generate AI Content',
       description: 'Open the studio and create your next draft in minutes.',
@@ -288,3 +288,5 @@ export const COMMAND_ITEMS: CommandItem[] = [
     keywords: item.keywords,
   })),
 ];
+
+

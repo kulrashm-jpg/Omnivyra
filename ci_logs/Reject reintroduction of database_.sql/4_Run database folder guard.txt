@@ -1,5 +1,0 @@
-﻿2026-05-04T13:02:32.9406489Z ##[group]Run node scripts/check-no-database-folder.js
-2026-05-04T13:02:32.9406942Z [36;1mnode scripts/check-no-database-folder.js[0m
-2026-05-04T13:02:32.9439101Z shell: /usr/bin/bash -e {0}
-2026-05-04T13:02:32.9439387Z ##[endgroup]
-2026-05-04T13:02:32.9759735Z [check-no-database-folder] OK — no forbidden schema files under database/.
