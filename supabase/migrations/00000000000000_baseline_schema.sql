@@ -628,7 +628,6 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='companies_status_check')                            THEN ALTER TABLE public.companies ADD CONSTRAINT companies_status_check CHECK (status IN ('active','inactive','suspended')); END IF;
   -- company_domains
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='company_domains_pkey')                              THEN ALTER TABLE public.company_domains ADD CONSTRAINT company_domains_pkey PRIMARY KEY (id); END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='unique_final_domain')                               THEN ALTER TABLE public.company_domains ADD CONSTRAINT unique_final_domain UNIQUE (final_domain); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='final_domain_not_empty')                            THEN ALTER TABLE public.company_domains ADD CONSTRAINT final_domain_not_empty CHECK (final_domain <> ''); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='company_domains_created_via_check')                 THEN ALTER TABLE public.company_domains ADD CONSTRAINT company_domains_created_via_check CHECK (created_via IN ('user','admin','system')); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='company_domains_verification_status_check')         THEN ALTER TABLE public.company_domains ADD CONSTRAINT company_domains_verification_status_check CHECK (verification_status IN ('unverified','pending','verified','admin_override')); END IF;
