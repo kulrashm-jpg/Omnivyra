@@ -77,3 +77,16 @@ export const KNOWLEDGE_GRAPH_LABELS: Record<Snapshot['knowledge_graph_summary'][
   imbalanced: 'Imbalanced',
   maturing: 'Maturing',
 };
+
+export const REPORT_READINESS_LABELS: Record<string, string> = {
+  not_ready: 'Not ready',
+  partially_ready: 'Partially ready',
+  collecting_baseline: 'Collecting baseline data',
+  ready_soon: 'Ready soon',
+  ready_now: 'Ready now',
+};
+
+export const PATTERN_TYPE_LABELS: Record<string, string> = {
+  topic_strength: 'Topic Strength', goal_affinity: 'Goal Affinity',
+  volatility: 'Volatility', momentum: 'Momentum', source_pattern: 'Content Source',
+};
