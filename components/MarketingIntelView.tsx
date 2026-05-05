@@ -57,6 +57,11 @@ import LearnedSignalsSection from '@/features/marketing-intel/components/Learned
 import BottomLineSection from '@/features/marketing-intel/components/BottomLineSection';
 import CommercialReadinessSection from '@/features/marketing-intel/components/CommercialReadinessSection';
 import StrategicIntelligenceSection from '@/features/marketing-intel/components/StrategicIntelligenceSection';
+import SystemDiagnosisSection from '@/features/marketing-intel/components/SystemDiagnosisSection';
+import SystemMemorySection from '@/features/marketing-intel/components/SystemMemorySection';
+import SessionAwarenessSection from '@/features/marketing-intel/components/SessionAwarenessSection';
+import SupportingSignalsSection from '@/features/marketing-intel/components/SupportingSignalsSection';
+import EcosystemProgressSection from '@/features/marketing-intel/components/EcosystemProgressSection';
 import type {
   PatternSignal,
   CampaignRow,
@@ -216,205 +221,12 @@ function ObjectiveSetupNotice({ snapshot }: { snapshot: Snapshot }) {
 
 
 
-function SystemDiagnosisSection({ snapshot }: { snapshot: Snapshot }) {
-  const diagnosis = deriveDiagnosis(snapshot);
-
-  return (
-    <SectionCard title="Why This Is Happening" badge="Diagnosis">
-      <div className="mb-4 rounded-xl border border-gray-100 bg-gray-50 p-4">
-        <p className="text-sm leading-relaxed text-gray-700">
-          The system is active, but not consistent enough to generate reliable learning. Content, distribution, and evidence are fragmented, so patterns appear, but cannot be trusted.
-        </p>
-      </div>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {diagnosis.map((item) => {
-          const tone = toneClasses(item.tone);
-          const accent =
-            item.label === 'Evidence strength'
-              ? 'border-l-blue-400'
-              : 'border-l-amber-400';
-          return (
-            <div key={item.label} className={`rounded-xl border border-gray-100 border-l-4 bg-gray-50 p-4 ${accent}`}>
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{item.label}</p>
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone.badge}`}>
-                  {item.tone === 'strong' ? 'Healthy' : item.tone === 'moderate' ? 'Mixed' : 'Weak'}
-                </span>
-              </div>
-              <p className="mt-3 text-sm leading-relaxed text-gray-700">{item.explanation}</p>
-            </div>
-          );
-        })}
-      </div>
-    </SectionCard>
-  );
-}
-
-function SystemMemorySection({ snapshot }: { snapshot: Snapshot }) {
-  const items = deriveSystemMemory(snapshot);
-  if (items.length === 0) return null;
-
-  const indicatorTone = {
-    up: 'text-emerald-600',
-    flat: 'text-slate-500',
-    down: 'text-amber-600',
-  } as const;
-
-  const indicatorGlyph = {
-    up: '\u2191',
-    flat: '\u2192',
-    down: '\u2193',
-  } as const;
-
-  return (
-    <div className="px-1">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Since last check</p>
-      <ul className="mt-2 space-y-1 text-sm text-gray-600">
-        {items.map((item) => (
-          <li key={`${item.direction}-${item.text}`} className="flex items-start gap-2">
-            <span className={indicatorTone[item.direction]}>{indicatorGlyph[item.direction]}</span>
-            <span>{item.text}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function SessionAwarenessSection({ snapshot }: { snapshot: Snapshot }) {
-  const [message, setMessage] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const doNowItems = deriveCurrentDoNowItems(snapshot);
-
-    try {
-      const saved = window.localStorage.getItem(MARKETING_INTEL_PROGRESS_STORAGE_KEY);
-      if (!saved) {
-        setMessage(doNowItems.length > 0 ? 'System just initialized. Start with Do Now.' : null);
-        return;
-      }
-
-      const progress = normalizeActionProgress(JSON.parse(saved));
-      const pendingCount = doNowItems.filter((item) => progress[item.id]?.status !== 'completed').length;
-
-      if (pendingCount > 0) {
-        setMessage(`You have ${pendingCount} pending action${pendingCount === 1 ? '' : 's'} from last session.`);
-      } else {
-        setMessage('Last session’s urgent actions are complete. Move to the next system step.');
-      }
-    } catch {
-      setMessage(doNowItems.length > 0 ? 'System just initialized. Start with Do Now.' : null);
-    }
-  }, [snapshot]);
-
-  if (!message) return null;
-
-  return (
-    <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-      <p className="text-sm font-medium text-gray-700">{message}</p>
-    </div>
-  );
-}
-
-function SupportingSignalsSection({ snapshot }: { snapshot: Snapshot }) {
-  const cards = deriveSupportingSignals(snapshot);
-
-  return (
-    <SectionCard title="Supporting Signals" badge="Optional drill-down">
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-4">
-        {cards.map((card) => (
-          <div key={card.title} className="rounded-xl border border-gray-200 bg-gray-50 p-4 shadow-sm transition-all duration-150 ease-out hover:-translate-y-0.5 hover:shadow-md">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{card.title}</p>
-            <p className="mt-3 text-sm leading-relaxed text-gray-700">{card.summary}</p>
-            <div className="mt-3">
-              <SectionCta href={card.href} label={card.label} />
-            </div>
-          </div>
-        ))}
-      </div>
-    </SectionCard>
-  );
-}
 
 
 
-function EcosystemProgressSection({ snapshot }: { snapshot: Snapshot }) {
-  const graph = snapshot.knowledge_graph_summary;
-  const timing = snapshot.timing_summary;
-  const distribution = snapshot.distribution_summary;
-  const topPlatform = distribution.platform_mix[0];
-  const cta = deriveEcosystemProgressCta(snapshot);
 
-  const graphTone =
-    graph.status === 'maturing' ? toneClasses('strong') :
-    graph.status === 'imbalanced' ? toneClasses('watch') :
-    toneClasses('moderate');
-  const rhythmTone =
-    timing.rhythm_state === 'strong' ? toneClasses('strong') :
-    timing.rhythm_state === 'thin' ? toneClasses('watch') :
-    toneClasses('moderate');
-  const distributionTone =
-    distribution.active_platforms >= 2 && distribution.publish_success_rate >= 85
-      ? toneClasses('strong')
-      : distribution.active_platforms === 0 || distribution.publish_success_rate < 80
-        ? toneClasses('watch')
-        : toneClasses('moderate');
 
-  return (
-    <SectionCard
-      title="Ecosystem Progress"
-      badge="Compounding health"
-      footer={<SectionCta href={cta.href} label={cta.label} />}
-    >
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Knowledge graph</p>
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${graphTone.badge}`}>{KNOWLEDGE_GRAPH_LABELS[graph.status]}</span>
-          </div>
-          <p className={`mt-3 text-sm font-semibold ${graphTone.text}`}>
-            {graph.dominant_cluster ?? 'No dominant cluster yet'}
-          </p>
-          <p className="mt-2 text-xs leading-relaxed text-gray-600">
-            {graph.topic_cluster_count} topic cluster{graph.topic_cluster_count === 1 ? '' : 's'}, {graph.format_diversity} active format{graph.format_diversity === 1 ? '' : 's'}, and stage coverage of {graph.stage_coverage.awareness} awareness, {graph.stage_coverage.consideration} consideration, and {graph.stage_coverage.decision} decision assets.
-          </p>
-        </div>
 
-        <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Operating rhythm</p>
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${rhythmTone.badge}`}>{timing.rhythm_state === 'strong' ? 'Strong' : timing.rhythm_state === 'steady' ? 'Steady' : 'Thin'}</span>
-          </div>
-          <p className={`mt-3 text-sm font-semibold ${rhythmTone.text}`}>
-            {timing.active_days} active day{timing.active_days === 1 ? '' : 's'} in the current window
-          </p>
-          <p className="mt-2 text-xs leading-relaxed text-gray-600">
-            {timing.latest_activity_at
-              ? `The latest visible activity landed on ${new Date(timing.latest_activity_at).toLocaleDateString()}, and the average gap between visible events is ${timing.avg_gap_days ?? '—'} days.`
-              : 'No recent content or distribution rhythm is visible yet, so momentum is still being inferred from isolated activity.'}
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Distribution shape</p>
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${distributionTone.badge}`}>{distribution.active_platforms === 0 ? 'Inactive' : distribution.active_platforms === 1 ? 'Narrow' : 'Broadening'}</span>
-          </div>
-          <p className={`mt-3 text-sm font-semibold ${distributionTone.text}`}>
-            {distribution.active_platforms} active platform{distribution.active_platforms === 1 ? '' : 's'} with {distribution.publish_success_rate}% reliability
-          </p>
-          <p className="mt-2 text-xs leading-relaxed text-gray-600">
-            {topPlatform
-              ? `${formatPlatformLabel(topPlatform.platform)} is carrying ${topPlatform.share_pct}% of visible distribution right now${distribution.platform_mix[1] ? `, followed by ${formatPlatformLabel(distribution.platform_mix[1].platform)}.` : '.'}`
-              : 'Connected publishing channels exist, but there is still too little live distribution data to describe channel concentration.'}
-          </p>
-        </div>
-      </div>
-    </SectionCard>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. System Snapshot
@@ -606,17 +418,17 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
 
             <ExecutiveSummary d={d} />
 
-            <SessionAwarenessSection snapshot={snapshot} />
+            <SessionAwarenessSection d={d} />
 
-            <SystemDiagnosisSection snapshot={snapshot} />
+            <SystemDiagnosisSection d={d} />
 
-            <SystemMemorySection snapshot={snapshot} />
+            <SystemMemorySection d={d} />
 
             <PrimaryBottleneckSection d={d} />
 
             <ActionBucketsSection d={d} />
 
-            <SupportingSignalsSection snapshot={snapshot} />
+            <SupportingSignalsSection d={d} />
 
             <BottomLineSection d={d} />
 
@@ -641,7 +453,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
 
                 <CommercialReadinessSection d={d} />
 
-                <EcosystemProgressSection snapshot={snapshot} />
+                <EcosystemProgressSection d={d} />
 
                 {/* System Snapshot */}
                 {isVisible('system_snapshot') && (
