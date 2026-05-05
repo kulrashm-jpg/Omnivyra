@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { fetchMarketingIntel } from '@/features/marketing-intel/data/fetchMarketingIntel';
@@ -65,9 +65,12 @@ export function useMarketingIntel(): MarketingIntelData {
     }
   }, [userRole, isContextLoading, router]);
 
-  // Fetch
+  // Fetch — guarded against re-entry while a request is in flight
+  const fetchingRef = useRef(false);
   const fetchSnapshot = useCallback(async (days: TimeRange = timeRange) => {
     if (!selectedCompanyId) return;
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -76,6 +79,7 @@ export function useMarketingIntel(): MarketingIntelData {
       setError('Could not load intelligence data. Please try again.');
     } finally {
       setLoading(false);
+      fetchingRef.current = false;
     }
   }, [selectedCompanyId, timeRange]);
 
