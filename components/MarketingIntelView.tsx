@@ -31,6 +31,7 @@ import {
   formatPlatformLabel,
   getContentRoute,
 } from '@/features/marketing-intel/hooks/viewModel.helpers';
+import { useMarketingIntelViewModel } from '@/features/marketing-intel/hooks/useMarketingIntelViewModel';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -3660,6 +3661,8 @@ type MarketingIntelState = Omit<MarketingIntelHookState, 'snapshot' | 'setSnapsh
 };
 
 export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
+  const vm = useMarketingIntelViewModel(d);
+  void vm;
   const {
     _ef1,
     _ef2,
