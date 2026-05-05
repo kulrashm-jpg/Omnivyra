@@ -157,6 +157,7 @@ function RenderImage({ block }: { block: ImageBlock }) {
         src={block.url}
         alt={block.alt}
         loading="lazy"
+        decoding="async"
         className="w-full rounded-2xl shadow-lg"
       />
       {block.caption && (
@@ -338,6 +339,10 @@ function renderBlock(block: ContentBlock): React.ReactNode {
   }
 }
 
+const MemoizedBlock = React.memo(function MemoizedBlock({ block }: { block: ContentBlock }) {
+  return <>{renderBlock(block)}</>;
+});
+
 // ── Exported component ────────────────────────────────────────────────────────
 
 type Props = {
@@ -345,16 +350,46 @@ type Props = {
   /** If provided, the SoftProductInsert is injected after this block index */
   productInsertAfterIndex?: number;
   ProductInsert?: React.ReactNode;
+  aboveFoldCount?: number;
 };
 
 export type ContentRendererProps = Props;
 
-export function BlockRenderer({ blocks, productInsertAfterIndex, ProductInsert }: Props) {
+export function BlockRenderer({ blocks, productInsertAfterIndex, ProductInsert, aboveFoldCount = 12 }: Props) {
+  const initialCount = Math.min(blocks.length, aboveFoldCount);
+  const [visibleCount, setVisibleCount] = React.useState(initialCount);
+
+  React.useEffect(() => {
+    setVisibleCount(Math.min(blocks.length, aboveFoldCount));
+    if (blocks.length <= aboveFoldCount) return;
+
+    if (typeof window === 'undefined') return;
+
+    const loadRest = () => setVisibleCount(blocks.length);
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    const idle = typeof w.requestIdleCallback === 'function'
+      ? w.requestIdleCallback(loadRest)
+      : w.setTimeout(loadRest, 80);
+
+    return () => {
+      if (typeof w.cancelIdleCallback === 'function' && typeof idle === 'number') {
+        w.cancelIdleCallback(idle);
+      } else {
+        w.clearTimeout(idle);
+      }
+    };
+  }, [aboveFoldCount, blocks]);
+
+  const visibleBlocks = blocks.slice(0, visibleCount);
+
   return (
     <div>
-      {blocks.map((block, i) => (
+      {visibleBlocks.map((block, i) => (
         <React.Fragment key={block.id}>
-          {renderBlock(block)}
+          <MemoizedBlock block={block} />
           {productInsertAfterIndex !== undefined &&
            ProductInsert &&
            i === productInsertAfterIndex && ProductInsert}
@@ -365,5 +400,4 @@ export function BlockRenderer({ blocks, productInsertAfterIndex, ProductInsert }
 }
 
 export const ContentRenderer = BlockRenderer;
-
 
