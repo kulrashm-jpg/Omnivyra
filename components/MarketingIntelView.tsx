@@ -47,6 +47,10 @@ import ExecutiveSummary from '@/features/marketing-intel/components/ExecutiveSum
 import TargetPotentialSection from '@/features/marketing-intel/components/TargetPotentialSection';
 import OperatingOverviewSection from '@/features/marketing-intel/components/OperatingOverviewSection';
 import StrategicMemorySection from '@/features/marketing-intel/components/StrategicMemorySection';
+import SystemSnapshotSection from '@/features/marketing-intel/components/SystemSnapshotSection';
+import CampaignDnaSection from '@/features/marketing-intel/components/CampaignDnaSection';
+import AudienceResponseSection from '@/features/marketing-intel/components/AudienceResponseSection';
+import NextActionsSection from '@/features/marketing-intel/components/NextActionsSection';
 import type {
   PatternSignal,
   CampaignRow,
@@ -1776,72 +1780,6 @@ function EcosystemProgressSection({ snapshot }: { snapshot: Snapshot }) {
 // 1. System Snapshot
 // ─────────────────────────────────────────────────────────────────────────────
 
-function SystemSnapshotSection({ data }: { data: Snapshot['system_snapshot'] }) {
-  const health = HEALTH_CFG[data.health];
-  const TrendIcon =
-    data.trend_signal === 'improving' ? TrendingUp :
-    data.trend_signal === 'declining' ? TrendingDown : Minus;
-  const trendColour =
-    data.trend_signal === 'improving' ? 'text-emerald-600' :
-    data.trend_signal === 'declining' ? 'text-amber-600' : 'text-gray-400';
-
-  return (
-    <SectionCard sectionKey="system_snapshot" title="System Snapshot">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className={`rounded-xl p-4 ${health.bg}`}>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Health</p>
-          <p className={`text-xl font-bold ${health.colour}`}>{health.label}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5">{data.avg_score}/100 avg</p>
-        </div>
-        <div className="rounded-xl p-4 bg-gray-50">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Trend</p>
-          <div className={`flex items-center gap-1.5 ${trendColour}`}>
-            <TrendIcon className="h-5 w-5" />
-            <span className="text-xl font-bold capitalize">{data.trend_signal ?? '—'}</span>
-          </div>
-          <p className="text-[11px] text-gray-500 mt-0.5">{data.evaluated_campaigns} evaluated</p>
-        </div>
-        <div className="rounded-xl p-4 bg-gray-50">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Campaigns</p>
-          <p className="text-xl font-bold text-gray-800">{data.total_campaigns}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5">{data.campaigns_ready_to_scale} scaling-ready</p>
-        </div>
-        <div className="rounded-xl p-4 bg-gray-50">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Actions</p>
-          <div className="space-y-1">
-            {Object.entries(data.action_distribution).map(([action, count]) => count > 0 ? (
-              <span key={action} className={`block text-[10px] font-semibold ${ACTION_CFG[action as keyof typeof ACTION_CFG]?.colour ?? 'text-gray-600'}`}>
-                {count} {action}
-              </span>
-            ) : null)}
-          </div>
-        </div>
-      </div>
-
-      {data.evaluated_campaigns > 0 && (
-        <div className="mt-4">
-          <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100">
-            {data.status_distribution.exceeded > 0 && (
-              <div className="bg-emerald-400" style={{ width: `${(data.status_distribution.exceeded / data.evaluated_campaigns) * 100}%` }} />
-            )}
-            {data.status_distribution.met > 0 && (
-              <div className="bg-blue-400" style={{ width: `${(data.status_distribution.met / data.evaluated_campaigns) * 100}%` }} />
-            )}
-            {data.status_distribution.underperformed > 0 && (
-              <div className="bg-amber-400" style={{ width: `${(data.status_distribution.underperformed / data.evaluated_campaigns) * 100}%` }} />
-            )}
-          </div>
-          <div className="mt-2 flex items-center gap-4 text-[10px] text-gray-500">
-            {data.status_distribution.exceeded > 0 && <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-400" />{data.status_distribution.exceeded} exceeded</span>}
-            {data.status_distribution.met > 0 && <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-400" />{data.status_distribution.met} met</span>}
-            {data.status_distribution.underperformed > 0 && <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-400" />{data.status_distribution.underperformed} underperformed</span>}
-          </div>
-        </div>
-      )}
-    </SectionCard>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Campaign Status
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1926,119 +1864,9 @@ function StrategicIntelligenceSection({ data }: { data: Snapshot['strategic_inte
 // 5. Campaign DNA
 // ─────────────────────────────────────────────────────────────────────────────
 
-function CampaignDnaSection({ data }: { data: Snapshot['campaign_dna'] }) {
-  const totalGoals     = Object.values(data.goal_distribution).reduce((a, b) => a + b, 0);
-  const totalStability = Object.values(data.stability_distribution).reduce((a, b) => a + b, 0);
-
-  return (
-    <SectionCard
-      sectionKey="campaign_dna"
-      title="Campaign DNA"
-      footer={<SectionCta href="/campaigns" label="View all campaigns" />}
-    >
-      <div className="space-y-5">
-        {totalGoals > 0 && (
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">Goal distribution</p>
-            <div className="space-y-1.5">
-              {Object.entries(data.goal_distribution)
-                .sort((a, b) => b[1] - a[1])
-                .map(([goal, count]) => (
-                  <div key={goal} className="flex items-center gap-2">
-                    <span className="text-[11px] text-gray-600 w-24 shrink-0">{GOAL_LABELS[goal] ?? goal}</span>
-                    <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                      <div className="h-full bg-[#0A66C2] rounded-full" style={{ width: `${(count / totalGoals) * 100}%` }} />
-                    </div>
-                    <span className="text-[11px] text-gray-400 w-4 text-right">{count}</span>
-                  </div>
-                ))}
-            </div>
-          </div>
-        )}
-        {data.topic_clusters.length > 0 && (
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">Topic clusters by performance</p>
-            <div className="space-y-2">
-              {data.topic_clusters.map((t, i) => (
-                <div key={i} className="flex items-center gap-2 rounded-lg border border-gray-100 px-3 py-2">
-                  <span className="text-xs font-medium text-gray-700 flex-1 capitalize">{t.cluster}</span>
-                  <span className="text-[11px] text-gray-400">{t.count} campaign{t.count !== 1 ? 's' : ''}</span>
-                  <span className={`text-xs font-bold ml-2 ${scoreColour(t.avg_score)}`}>{t.avg_score}/100</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {totalStability > 0 && (
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-2">Decision stability</p>
-            <div className="flex gap-2 flex-wrap">
-              {Object.entries(data.stability_distribution).filter(([, n]) => n > 0).map(([signal, count]) => {
-                const cfg = STABILITY_CFG[signal as keyof typeof STABILITY_CFG];
-                return (
-                  <div key={signal} className="flex items-center gap-1.5 rounded-full border border-gray-100 bg-gray-50 px-3 py-1 text-[11px]">
-                    <span className={`h-2 w-2 rounded-full ${cfg?.dot ?? 'bg-gray-400'}`} />
-                    <span className="text-gray-600">{count} {cfg?.label ?? signal}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    </SectionCard>
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. Audience Response
 // ─────────────────────────────────────────────────────────────────────────────
-
-function AudienceResponseSection({ data }: { data: Snapshot['audience_response'] }) {
-  if (data.metric_rankings.length === 0) {
-    return <SectionCard sectionKey="audience_response" title="Audience Response"><p className="text-sm text-gray-400">No metric data yet — record performance metrics to see audience signals.</p></SectionCard>;
-  }
-
-  const maxRatio = Math.max(...data.metric_rankings.map((m) => m.avg_ratio));
-
-  return (
-    <SectionCard
-      sectionKey="audience_response"
-      title="Audience Response"
-      footer={<SectionCta href="/recommendations" label="Adjust campaign strategy" />}
-    >
-      <div className="space-y-3">
-        {data.metric_rankings.map((m) => {
-          const pct = m.avg_pct_of_target;
-          const barColour  = pct >= 100 ? 'bg-emerald-400' : pct >= 80 ? 'bg-blue-400' : 'bg-amber-400';
-          const textColour = pct >= 100 ? 'text-emerald-600' : pct >= 80 ? 'text-blue-600' : 'text-amber-600';
-          return (
-            <div key={m.metric}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-gray-600">{m.label}</span>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-400">{m.campaigns_tracked} campaigns</span>
-                  <span className={`text-xs font-bold ${textColour}`}>{pct}%</span>
-                </div>
-              </div>
-              <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
-                <div className={`h-full rounded-full ${barColour}`} style={{ width: `${Math.min(100, (m.avg_ratio / Math.max(maxRatio, 1.5)) * 100)}%` }} />
-              </div>
-              <p className="mt-0.5 text-[10px] text-gray-400">
-                {pct >= 100 ? 'Consistently exceeding benchmark' : pct >= 80 ? 'Near benchmark' : 'Below benchmark — growth area'}
-              </p>
-            </div>
-          );
-        })}
-      </div>
-      {data.weakest_metric && (
-        <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50/50 px-4 py-3 text-xs text-amber-700">
-          <span className="font-semibold">Growth area:</span> {data.weakest_metric} sits below benchmark across campaigns — worth targeting in the next planning cycle.
-        </div>
-      )}
-    </SectionCard>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. Strategic Memory
@@ -2047,82 +1875,6 @@ function AudienceResponseSection({ data }: { data: Snapshot['audience_response']
 // ─────────────────────────────────────────────────────────────────────────────
 // 8. Next Actions — Part 2 enhanced priority badges
 // ─────────────────────────────────────────────────────────────────────────────
-
-function NextActionsSection({ actions }: { actions: NextAction[] }) {
-  // Re-sort by enhanced priority (overrides API ordering)
-  const sorted = [...actions].sort((a, b) => {
-    const ord = { high: 0, medium: 1, low: 2 };
-    return ord[computeEnhancedPriority(a).priority] - ord[computeEnhancedPriority(b).priority];
-  });
-
-  const topPivot = sorted.find((a) => a.action === 'pivot' && a.next_topic);
-  const topCta   = topPivot
-    ? `/recommendations?initialTopic=${encodeURIComponent(topPivot.next_topic!)}`
-    : '/recommendations';
-
-  if (sorted.length === 0) {
-    return (
-      <SectionCard sectionKey="next_actions" title="Next Actions">
-        <p className="text-sm text-gray-400">No pending actions — record campaign performance to generate recommendations.</p>
-      </SectionCard>
-    );
-  }
-
-  return (
-    <SectionCard
-      sectionKey="next_actions"
-      title="Next Actions"
-      badge={`${sorted.length}`}
-      footer={<SectionCta href={topCta} label="Build campaign from top insight" />}
-    >
-      <div className="space-y-2.5">
-        {sorted.map((a) => {
-          const actionCfg  = ACTION_CFG[a.action];
-          const { priority, label: priorityLabel, dot, text: priorityText } = computeEnhancedPriority(a);
-          const ActionIcon = actionCfg.icon;
-
-          return (
-            <div key={a.campaign_id} className={`flex items-start gap-3 rounded-xl border p-3.5 ${actionCfg.bg}`}>
-              {/* Part 2: Priority indicator */}
-              <div className="flex flex-col items-center gap-1 shrink-0 pt-0.5">
-                <span className={`h-2 w-2 rounded-full ${dot}`} />
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Part 2: Priority badge */}
-                  <span className={`text-[10px] font-bold ${priorityText}`}>{priorityLabel}</span>
-                  <span className="text-gray-300 text-[10px]">·</span>
-                  <Link href={`/recommendations?campaign=${a.campaign_id}`} className={`text-xs font-semibold hover:underline ${actionCfg.colour}`}>
-                    {a.campaign_name}
-                  </Link>
-                  <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10px] font-semibold ${actionCfg.bg} ${actionCfg.colour}`}>
-                    <ActionIcon className="h-3 w-3" />
-                    {actionCfg.label}
-                  </span>
-                </div>
-                {a.next_topic && (
-                  <p className="mt-0.5 text-[11px] text-gray-500 truncate">→ "{a.next_topic}"</p>
-                )}
-              </div>
-
-              <div className="shrink-0 flex flex-col items-end gap-1">
-                {a.evaluation_score != null && (
-                  <span className={`text-xs font-bold ${scoreColour(a.evaluation_score)}`}>{a.evaluation_score}/100</span>
-                )}
-                {a.stability_signal && STABILITY_CFG[a.stability_signal as keyof typeof STABILITY_CFG] && (
-                  <span className={`text-[10px] ${STABILITY_CFG[a.stability_signal as keyof typeof STABILITY_CFG].text}`}>
-                    {STABILITY_CFG[a.stability_signal as keyof typeof STABILITY_CFG].label}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </SectionCard>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configure panel
@@ -2320,12 +2072,12 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
 
                 {/* System Snapshot */}
                 {isVisible('system_snapshot') && (
-                  <SystemSnapshotSection data={snapshot.system_snapshot} />
+                  <SystemSnapshotSection d={d} />
                 )}
 
                 {/* Next Actions */}
                 {isVisible('next_actions') && (
-                  <NextActionsSection actions={snapshot.next_actions} />
+                  <NextActionsSection d={d} />
                 )}
 
                 {/* Strategic Intelligence + Campaign DNA */}
@@ -2335,7 +2087,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
                       <StrategicIntelligenceSection data={snapshot.strategic_intelligence} />
                     )}
                     {isVisible('campaign_dna') && (
-                      <CampaignDnaSection data={snapshot.campaign_dna} />
+                      <CampaignDnaSection d={d} />
                     )}
                   </div>
                 )}
@@ -2344,7 +2096,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
                 {(isVisible('audience_response') || isVisible('strategic_memory')) && (
                   <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                     {isVisible('audience_response') && (
-                      <AudienceResponseSection data={snapshot.audience_response} />
+                      <AudienceResponseSection d={d} />
                     )}
                     {isVisible('strategic_memory') && (
                       <StrategicMemorySection d={d} />
