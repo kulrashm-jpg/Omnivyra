@@ -65,6 +65,7 @@ import {
   deriveTargetTracking,
   deriveTargetPotential,
   derivePrimaryBottleneck,
+  computeEnhancedPriority,
 } from '@/features/marketing-intel/derives';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,36 +79,6 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 // Part 2 — Enhanced priority classification (stability + confidence + impact)
 // ─────────────────────────────────────────────────────────────────────────────
-
-export function computeEnhancedPriority(action: NextAction): {
-  priority: 'high' | 'medium' | 'low';
-  label: string;
-  dot: string;
-  text: string;
-} {
-  let urgency = 0;
-
-  // Action base (pivot = most urgent, continue = least)
-  if (action.action === 'pivot')    urgency += 3;
-  else if (action.action === 'optimize') urgency += 2;
-  else urgency += 1;
-
-  // Stability risk (volatile decision = more urgent)
-  if (action.stability_signal === 'volatile')  urgency += 2;
-  else if (action.stability_signal === 'sensitive') urgency += 1;
-
-  // Low confidence = more urgent to resolve
-  if (action.decision_confidence_level === 'low') urgency += 1;
-
-  // Performance gap
-  const score = action.evaluation_score ?? 70;
-  if (score < 45) urgency += 2;
-  else if (score < 60) urgency += 1;
-
-  if (urgency >= 6) return { priority: 'high',   label: 'High priority', dot: 'bg-red-400',     text: 'text-red-600'     };
-  if (urgency >= 3) return { priority: 'medium',  label: 'Watch',         dot: 'bg-amber-400',   text: 'text-amber-600'   };
-  return               { priority: 'low',    label: 'Opportunity',   dot: 'bg-emerald-400', text: 'text-emerald-600' };
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Part 3 — Time range config + localStorage

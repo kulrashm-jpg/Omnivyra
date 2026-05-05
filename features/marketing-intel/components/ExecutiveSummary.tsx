@@ -7,12 +7,10 @@ import {
   derivePrimaryBottleneck,
   toneClasses,
   getIntelligenceObjectiveLabel,
+  computeEnhancedPriority,
 } from '@/features/marketing-intel/derives';
 import { SectionCta } from '@/features/marketing-intel/components/SectionCard';
-import {
-  computeEnhancedPriority,
-  deriveExecutiveSummaryCta,
-} from '@/components/MarketingIntelView';
+import { deriveExecutiveSummaryCta } from '@/components/MarketingIntelView';
 
 function generateExecutiveSummary(snapshot: Snapshot): string | null {
   const { system_snapshot: ss, strategic_intelligence, next_actions, audience_response } = snapshot;

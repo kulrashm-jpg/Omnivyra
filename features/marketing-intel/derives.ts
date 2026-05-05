@@ -5,7 +5,7 @@ import {
   GOAL_LABELS,
 } from './constants';
 import { toSentenceCase, parseTargetNumber } from './hooks/viewModel.helpers';
-import type { Snapshot, DerivedInsight } from './types';
+import type { Snapshot, DerivedInsight, NextAction } from './types';
 
 export function getIntelligenceObjectiveLabel(snapshot: Snapshot) {
   const objective = snapshot.intelligence_settings?.objective;
@@ -202,6 +202,36 @@ export function deriveTargetPotential(snapshot: Snapshot) {
           ? `${ss.status_distribution.underperformed} campaign${ss.status_distribution.underperformed === 1 ? '' : 's'} are dragging the portfolio and could slow overall progress if left unchanged.`
           : 'No major drag is visible yet, but the portfolio still needs more operating depth to avoid plateauing.',
   };
+}
+
+export function computeEnhancedPriority(action: NextAction): {
+  priority: 'high' | 'medium' | 'low';
+  label: string;
+  dot: string;
+  text: string;
+} {
+  let urgency = 0;
+
+  // Action base (pivot = most urgent, continue = least)
+  if (action.action === 'pivot')    urgency += 3;
+  else if (action.action === 'optimize') urgency += 2;
+  else urgency += 1;
+
+  // Stability risk (volatile decision = more urgent)
+  if (action.stability_signal === 'volatile')  urgency += 2;
+  else if (action.stability_signal === 'sensitive') urgency += 1;
+
+  // Low confidence = more urgent to resolve
+  if (action.decision_confidence_level === 'low') urgency += 1;
+
+  // Performance gap
+  const score = action.evaluation_score ?? 70;
+  if (score < 45) urgency += 2;
+  else if (score < 60) urgency += 1;
+
+  if (urgency >= 6) return { priority: 'high',   label: 'High priority', dot: 'bg-red-400',     text: 'text-red-600'     };
+  if (urgency >= 3) return { priority: 'medium',  label: 'Watch',         dot: 'bg-amber-400',   text: 'text-amber-600'   };
+  return               { priority: 'low',    label: 'Opportunity',   dot: 'bg-emerald-400', text: 'text-emerald-600' };
 }
 
 export function derivePrimaryBottleneck(snapshot: Snapshot): DerivedInsight {
