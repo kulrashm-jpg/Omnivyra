@@ -30,3 +30,21 @@ export const INTELLIGENCE_OBJECTIVE_LABELS: Record<string, string> = {
   pipeline_growth: 'Pipeline growth',
   revenue_acceleration: 'Revenue acceleration',
 };
+
+export const TARGET_METRIC_LABELS: Record<string, string> = {
+  qualified_leads: 'qualified leads',
+  active_leads: 'active leads',
+  engagement_rate: 'engagement rate',
+  campaigns_ready_to_scale: 'campaigns ready to scale',
+  content_velocity: 'content velocity',
+  authority_depth: 'authority depth',
+  pipeline_value: 'pipeline value',
+  revenue: 'revenue',
+};
+
+export const TIME_HORIZON_LABELS: Record<string, string> = {
+  daily: 'daily',
+  weekly: 'weekly',
+  monthly: 'monthly',
+  quarterly: 'quarterly',
+};
