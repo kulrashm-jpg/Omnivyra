@@ -6,7 +6,7 @@ import {
   ACTION_CFG,
   STABILITY_CFG,
   GOAL_LABELS,
-} from '@/components/MarketingIntelView';
+} from '@/features/marketing-intel/constants';
 import { useMarketingIntel } from '@/hooks/useMarketingIntel';
 
 type Props = {
