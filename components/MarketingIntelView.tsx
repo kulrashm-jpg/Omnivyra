@@ -61,6 +61,8 @@ import {
   INTELLIGENCE_OBJECTIVE_LABELS,
   TARGET_METRIC_LABELS,
   TIME_HORIZON_LABELS,
+  HEALTH_CFG,
+  KNOWLEDGE_GRAPH_LABELS,
 } from '@/features/marketing-intel/constants';
 import {
   getIntelligenceObjectiveLabel,
@@ -71,6 +73,7 @@ import {
   derivePrimaryBottleneck,
   computeEnhancedPriority,
   shouldRefreshCurrentReport,
+  deriveOperatingOverview,
 } from '@/features/marketing-intel/derives';
 import { deriveSystemActionLines } from '@/features/marketing-intel/actionLines';
 
@@ -129,25 +132,12 @@ function saveVisibility(v: Set<SectionKey>) {
 // Visual helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HEALTH_CFG = {
-  strong:   { label: 'Strong',   colour: 'text-emerald-600', bg: 'bg-emerald-50' },
-  moderate: { label: 'Moderate', colour: 'text-blue-600',    bg: 'bg-blue-50'    },
-  weak:     { label: 'Weak',     colour: 'text-amber-600',   bg: 'bg-amber-50'   },
-} as const;
-
 const REPORT_READINESS_LABELS: Record<string, string> = {
   not_ready: 'Not ready',
   partially_ready: 'Partially ready',
   collecting_baseline: 'Collecting baseline data',
   ready_soon: 'Ready soon',
   ready_now: 'Ready now',
-};
-
-const KNOWLEDGE_GRAPH_LABELS: Record<Snapshot['knowledge_graph_summary']['status'], string> = {
-  shallow: 'Shallow',
-  emerging: 'Emerging',
-  imbalanced: 'Imbalanced',
-  maturing: 'Maturing',
 };
 
 const PATTERN_TYPE_LABELS: Record<string, string> = {
@@ -504,76 +494,6 @@ function selectTopInsights(insights: DerivedInsight[], limit: number): DerivedIn
   }
 
   return chosen;
-}
-
-function deriveOperatingOverview(snapshot: Snapshot): Array<{ label: string; value: string; helper: string; tone: DerivedInsight['tone'] }> {
-  const { system_snapshot: ss, audience_response, strategic_memory, knowledge_graph_summary, lead_summary, reports_summary, intelligence_settings, timing_summary } = snapshot;
-  const objectiveLabel = getIntelligenceObjectiveLabel(snapshot);
-  const horizonLabel = intelligence_settings?.time_horizon ? TIME_HORIZON_LABELS[intelligence_settings.time_horizon] : 'monthly';
-  const momentumTone: DerivedInsight['tone'] =
-    ss.trend_signal === 'improving' ? 'strong' :
-    ss.trend_signal === 'declining' ? 'watch' : 'moderate';
-  const readinessTone: DerivedInsight['tone'] =
-    ss.campaigns_ready_to_scale > 0 ? 'strong' :
-    ss.status_distribution.underperformed > 0 ? 'watch' : 'moderate';
-  const confidenceTone: DerivedInsight['tone'] =
-    ss.evaluated_campaigns >= 6 ? 'strong' :
-    ss.evaluated_campaigns >= 3 ? 'moderate' : 'watch';
-  const graphTone: DerivedInsight['tone'] =
-    strategic_memory.campaigns_analyzed >= 5 && strategic_memory.dominant_topic_cluster ? 'strong' :
-    strategic_memory.campaigns_analyzed >= 2 ? 'moderate' : 'watch';
-  const rhythmTone: DerivedInsight['tone'] =
-    timing_summary.rhythm_state === 'strong' ? 'strong' :
-    timing_summary.rhythm_state === 'steady' ? 'moderate' : 'watch';
-
-  return [
-    {
-      label: 'Current state',
-      value: HEALTH_CFG[ss.health].label,
-      helper: `${ss.avg_score}/100 average across evaluated activity for ${objectiveLabel.toLowerCase()}`,
-      tone: ss.health === 'strong' ? 'strong' : ss.health === 'weak' ? 'watch' : 'moderate',
-    },
-    {
-      label: 'Momentum',
-      value: ss.trend_signal ? ss.trend_signal[0].toUpperCase() + ss.trend_signal.slice(1) : 'Stable',
-      helper: audience_response.engagement_trend ?? `No clear ${horizonLabel} shift is visible yet`,
-      tone: momentumTone,
-    },
-    {
-      label: 'Commercial readiness',
-      value: lead_summary.qualified_active_leads > 0 || ss.campaigns_ready_to_scale > 0 ? 'Ready' : lead_summary.active_leads > 0 || ss.status_distribution.met > 0 ? 'Emerging' : 'Early',
-      helper: lead_summary.qualified_active_leads > 0
-        ? `${lead_summary.qualified_active_leads} qualified lead${lead_summary.qualified_active_leads === 1 ? '' : 's'} already support a stronger next motion`
-        : ss.campaigns_ready_to_scale > 0
-          ? `${ss.campaigns_ready_to_scale} campaign${ss.campaigns_ready_to_scale === 1 ? '' : 's'} can support a stronger next motion`
-          : 'Signals still need stronger proof before full escalation',
-      tone: readinessTone,
-    },
-    {
-      label: 'Operating rhythm',
-      value: timing_summary.rhythm_state === 'strong' ? 'Strong' : timing_summary.rhythm_state === 'steady' ? 'Steady' : 'Thin',
-      helper: timing_summary.active_days > 0
-        ? `${timing_summary.active_days} active day${timing_summary.active_days === 1 ? '' : 's'} in the last ${snapshot.time_range_days} days${timing_summary.avg_gap_days != null ? ` with an average ${timing_summary.avg_gap_days}-day gap between visible content or distribution events` : ''}`
-        : `No meaningful content or distribution rhythm is visible in the last ${snapshot.time_range_days} days`,
-      tone: rhythmTone,
-    },
-    {
-      label: 'Evidence confidence',
-      value: ss.evaluated_campaigns >= 6 ? 'Strong' : ss.evaluated_campaigns >= 3 ? 'Moderate' : 'Early',
-      helper: reports_summary.total_reports > 0
-        ? `Built from ${ss.evaluated_campaigns} evaluated campaign${ss.evaluated_campaigns === 1 ? '' : 's'} plus ${reports_summary.total_reports} report${reports_summary.total_reports === 1 ? '' : 's'} in the last ${snapshot.time_range_days} days`
-        : `Built from ${ss.evaluated_campaigns} evaluated campaign${ss.evaluated_campaigns === 1 ? '' : 's'} in the last ${snapshot.time_range_days} days`,
-      tone: confidenceTone,
-    },
-    {
-      label: 'Knowledge graph',
-      value: KNOWLEDGE_GRAPH_LABELS[knowledge_graph_summary.status],
-      helper: knowledge_graph_summary.dominant_cluster
-        ? `${knowledge_graph_summary.dominant_cluster} is the strongest cluster, with ${knowledge_graph_summary.supporting_cluster_count} supporting cluster${knowledge_graph_summary.supporting_cluster_count === 1 ? '' : 's'} and ${knowledge_graph_summary.format_diversity} active format${knowledge_graph_summary.format_diversity === 1 ? '' : 's'} in the graph`
-        : 'Topic depth is still too thin to show a meaningful authority graph yet',
-      tone: graphTone,
-    },
-  ];
 }
 
 function deriveLearnedSignals(snapshot: Snapshot): DerivedInsight[] {

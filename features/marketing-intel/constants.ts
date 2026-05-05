@@ -1,4 +1,5 @@
 import { TrendingUp, RefreshCw, ArrowRight } from 'lucide-react';
+import type { Snapshot } from './types';
 
 export const STATUS_CFG = {
   exceeded:      { label: 'Exceeded',       dot: 'bg-emerald-400', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -62,4 +63,17 @@ export const REPORT_TYPE_LABELS: Record<string, string> = {
   performance: 'Performance Intelligence',
   growth: 'Market Growth Intelligence',
   strategic: 'Strategic Intelligence',
+};
+
+export const HEALTH_CFG = {
+  strong:   { label: 'Strong',   colour: 'text-emerald-600', bg: 'bg-emerald-50' },
+  moderate: { label: 'Moderate', colour: 'text-blue-600',    bg: 'bg-blue-50'    },
+  weak:     { label: 'Weak',     colour: 'text-amber-600',   bg: 'bg-amber-50'   },
+} as const;
+
+export const KNOWLEDGE_GRAPH_LABELS: Record<Snapshot['knowledge_graph_summary']['status'], string> = {
+  shallow: 'Shallow',
+  emerging: 'Emerging',
+  imbalanced: 'Imbalanced',
+  maturing: 'Maturing',
 };
