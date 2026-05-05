@@ -45,6 +45,7 @@ import CampaignStatusSection from '@/features/marketing-intel/components/Campaig
 import ContentPerformanceSection from '@/features/marketing-intel/components/ContentPerformanceSection';
 import ExecutiveSummary from '@/features/marketing-intel/components/ExecutiveSummary';
 import TargetPotentialSection from '@/features/marketing-intel/components/TargetPotentialSection';
+import OperatingOverviewSection from '@/features/marketing-intel/components/OperatingOverviewSection';
 import type {
   PatternSignal,
   CampaignRow,
@@ -1181,30 +1182,6 @@ function derivePrimaryBottleneckCta(snapshot: Snapshot): { href: string; label: 
     return { href: '/command-center/content', label: 'Build more signal' };
   }
   return { href: '/command-center/content', label: 'Broaden portfolio depth' };
-}
-
-function OperatingOverviewSection({ snapshot }: { snapshot: Snapshot }) {
-  const cards = deriveOperatingOverview(snapshot);
-
-  return (
-    <SectionCard title="Operating Overview" badge="Current system" className="h-full">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-        {cards.map((card) => {
-          const tone = toneClasses(card.tone);
-          return (
-            <div key={card.label} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{card.label}</p>
-                <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone.badge}`}>{card.value}</span>
-              </div>
-              <p className={`mt-3 text-sm font-semibold ${tone.text}`}>{card.value}</p>
-              <p className="mt-1 text-xs leading-relaxed text-gray-500">{card.helper}</p>
-            </div>
-          );
-        })}
-      </div>
-    </SectionCard>
-  );
 }
 
 function LearnedSignalsSection({ snapshot }: { snapshot: Snapshot }) {
@@ -2391,7 +2368,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
                 </span>
               </summary>
               <div className="border-t border-gray-100 px-6 py-6 space-y-6">
-                <OperatingOverviewSection snapshot={snapshot} />
+                <OperatingOverviewSection d={d} />
 
                 <TargetPotentialSection d={d} />
 
