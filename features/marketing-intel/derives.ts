@@ -234,6 +234,22 @@ export function computeEnhancedPriority(action: NextAction): {
   return               { priority: 'low',    label: 'Opportunity',   dot: 'bg-emerald-400', text: 'text-emerald-600' };
 }
 
+export function shouldRefreshCurrentReport(snapshot: Snapshot) {
+  const latestReportAgeDays = snapshot.reports_summary.latest_report_age_days;
+  if (latestReportAgeDays == null || latestReportAgeDays < 90) return false;
+
+  const tracking = deriveTargetTracking(snapshot);
+  const weakestMetric = snapshot.audience_response.metric_rankings[snapshot.audience_response.metric_rankings.length - 1];
+  const performanceIsWeak =
+    snapshot.system_snapshot.health === 'weak' ||
+    snapshot.system_snapshot.trend_signal === 'declining' ||
+    snapshot.system_snapshot.status_distribution.underperformed > 0 ||
+    (tracking.progressRatio != null && tracking.progressRatio < 0.6) ||
+    (weakestMetric?.avg_pct_of_target ?? 100) < 85;
+
+  return performanceIsWeak;
+}
+
 export function derivePrimaryBottleneck(snapshot: Snapshot): DerivedInsight {
   const { system_snapshot: ss, strategic_intelligence, audience_response, knowledge_graph_summary, timing_summary } = snapshot;
   const volatility = strategic_intelligence.patterns.find((p) => p.type === 'volatility');

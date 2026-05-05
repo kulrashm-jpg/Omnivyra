@@ -10,7 +10,7 @@ import {
   computeEnhancedPriority,
 } from '@/features/marketing-intel/derives';
 import { SectionCta } from '@/features/marketing-intel/components/SectionCard';
-import { deriveExecutiveSummaryCta } from '@/components/MarketingIntelView';
+import { deriveSystemActionLines } from '@/features/marketing-intel/actionLines';
 
 function generateExecutiveSummary(snapshot: Snapshot): string | null {
   const { system_snapshot: ss, strategic_intelligence, next_actions, audience_response } = snapshot;
@@ -199,7 +199,8 @@ export default function ExecutiveSummary({ d }: Props) {
   const objectiveLabel = getIntelligenceObjectiveLabel(snapshot);
   const tracking = deriveTargetTracking(snapshot);
   const bottleneck = derivePrimaryBottleneck(snapshot);
-  const cta = deriveExecutiveSummaryCta(snapshot);
+  const _actions = deriveSystemActionLines(snapshot);
+  const cta = _actions.doNow[0] ?? _actions.doNext[0] ?? _actions.monitor[0] ?? null;
   const target = deriveTargetPotential(snapshot);
   const healthTone = ss.health === 'strong' ? toneClasses('strong') : ss.health === 'moderate' ? toneClasses('moderate') : toneClasses('watch');
   const summaryCards = [

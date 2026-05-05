@@ -50,3 +50,31 @@ export function getContentRoute(contentType: string | null | undefined) {
   };
   return routeMap[normalized] ?? '/content';
 }
+
+import { CAMPAIGN_PATH_LABELS, REPORT_TYPE_LABELS } from '../constants';
+import type { Snapshot } from '../types';
+
+export function formatCampaignPathLabel(value: string | null | undefined) {
+  if (!value) return null;
+  return CAMPAIGN_PATH_LABELS[value] ?? value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function formatReportTypeLabel(value: string | null | undefined) {
+  if (!value) return null;
+  return REPORT_TYPE_LABELS[value] ?? value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function getCampaignPathRoute(path: Snapshot['campaign_mix_summary']['dominant_path'] | string | null | undefined) {
+  switch (path) {
+    case 'bolt_text':
+      return '/command-center/bolt-text';
+    case 'bolt_creator':
+      return '/command-center/bolt-creator-strategy';
+    case 'intelligent_mix':
+      return '/command-center/intelligent-mix-strategy';
+    case 'strategy_mix':
+      return '/command-center/bolt-combined-strategy';
+    default:
+      return '/command-center/campaigns';
+  }
+}

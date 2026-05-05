@@ -48,3 +48,18 @@ export const TIME_HORIZON_LABELS: Record<string, string> = {
   monthly: 'monthly',
   quarterly: 'quarterly',
 };
+
+export const CAMPAIGN_PATH_LABELS: Record<string, string> = {
+  bolt_text: 'BOLT Text',
+  bolt_creator: 'BOLT Creator',
+  intelligent_mix: 'Intelligent Mix',
+  strategy_mix: 'Strategy Mix',
+  unknown: 'Unclassified path',
+};
+
+export const REPORT_TYPE_LABELS: Record<string, string> = {
+  snapshot: 'Digital Authority Snapshot',
+  performance: 'Performance Intelligence',
+  growth: 'Market Growth Intelligence',
+  strategic: 'Strategic Intelligence',
+};
