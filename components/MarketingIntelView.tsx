@@ -62,6 +62,8 @@ import SystemMemorySection from '@/features/marketing-intel/components/SystemMem
 import SessionAwarenessSection from '@/features/marketing-intel/components/SessionAwarenessSection';
 import SupportingSignalsSection from '@/features/marketing-intel/components/SupportingSignalsSection';
 import EcosystemProgressSection from '@/features/marketing-intel/components/EcosystemProgressSection';
+import ObjectiveSetupNotice from '@/features/marketing-intel/components/ObjectiveSetupNotice';
+import ConfigurePanel from '@/features/marketing-intel/components/ConfigurePanel';
 import type {
   PatternSignal,
   CampaignRow,
@@ -190,34 +192,6 @@ function saveVisibility(v: Set<SectionKey>) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Part 1 — Executive Summary component
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ObjectiveSetupNotice({ snapshot }: { snapshot: Snapshot }) {
-  if (snapshot.intelligence_settings.objective && snapshot.intelligence_settings.target_metric && snapshot.intelligence_settings.target_value) {
-    return null;
-  }
-
-  return (
-    <div className="rounded-2xl border border-amber-100 bg-amber-50/80 px-6 py-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700">Target not set</p>
-          <p className="mt-2 max-w-3xl text-sm leading-relaxed text-amber-900/75">
-            No target is set yet, so pacing cannot be evaluated properly.
-            Add the primary objective, target metric, target value, and time horizon so this page can judge whether the system is behind, on track, or capable of surpassing the goal.
-          </p>
-        </div>
-        <Link
-          href="/company-profile"
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-200 bg-white px-3.5 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50"
-        >
-          Set target
-          <ArrowRight className="h-3 w-3" />
-        </Link>
-      </div>
-    </div>
-  );
-}
 
 
 
@@ -263,36 +237,6 @@ function ObjectiveSetupNotice({ snapshot }: { snapshot: Snapshot }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configure panel
-// ─────────────────────────────────────────────────────────────────────────────
-
-function ConfigurePanel({ visible, onChange, onClose }: {
-  visible: Set<SectionKey>;
-  onChange: (key: SectionKey) => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="absolute right-0 top-12 z-50 w-64 rounded-2xl border border-gray-100 bg-white p-4 shadow-xl">
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-xs font-semibold text-gray-700">Show / hide sections</p>
-        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xs">Done</button>
-      </div>
-      <div className="space-y-1">
-        {SECTIONS.map((s) => (
-          <label key={s.key} className="flex items-center gap-2.5 cursor-pointer rounded-lg px-2 py-1.5 hover:bg-gray-50">
-            <input
-              type="checkbox"
-              checked={visible.has(s.key)}
-              onChange={() => onChange(s.key)}
-              className="h-3.5 w-3.5 rounded border-gray-300 accent-[#0A66C2]"
-            />
-            <span className="text-xs text-gray-600 flex-1">{s.label}</span>
-            {visible.has(s.key) ? <Eye className="h-3 w-3 text-gray-300" /> : <EyeOff className="h-3 w-3 text-gray-200" />}
-          </label>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main page
@@ -432,7 +376,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
 
             <BottomLineSection d={d} />
 
-            <ObjectiveSetupNotice snapshot={snapshot} />
+            <ObjectiveSetupNotice d={d} />
 
             <details className="group rounded-2xl border border-gray-100 bg-white shadow-sm">
               <summary className="flex cursor-pointer list-none items-center justify-between px-6 py-4">
