@@ -8,7 +8,7 @@ import { Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import BlogGenerateModal from '../../components/blog/BlogGenerateModal';
 import { useCompanyContext } from '../../components/CompanyContext';
 import SuggestionOptionPicker from '../../components/content/SuggestionOptionPicker';
-import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import { GUIDE_FORMAT_OPTIONS, isValidGuideFormat, type GuideFormatType } from '../../lib/blog/blogStructureTemplates';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../blogs.types';
@@ -579,3 +579,4 @@ export default function GuideGeneratePage() {
     </>
   );
 }
+

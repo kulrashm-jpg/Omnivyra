@@ -75,15 +75,7 @@ export default function TeamAssignment({
   const loadAssignments = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      params.append('campaign_id', campaignId);
-      if (weekNumber) params.append('week_number', weekNumber.toString());
-
-      const response = await fetch(`/api/team/assignments?${params.toString()}`);
-      if (response.ok) {
-        const data = await response.json();
-        setAssignments(data.data || []);
-      }
+      setAssignments([]);
     } catch (error) {
       console.error('Failed to load assignments:', error);
     } finally {
@@ -99,27 +91,11 @@ export default function TeamAssignment({
       const entityType = weekNumber ? 'week' : 'campaign';
       const entityId = weekNumber ? `week-${weekNumber}` : campaignId;
 
-      const response = await fetch('/api/team/assign-week', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: selectedUserId,
-          campaign_id: campaignId,
-          week_number: weekNumber,
-          week_start_date: weekStartDate,
-          entity_type: entityType,
-          entity_id: entityId,
-        }),
-      });
-
-      if (response.ok) {
-        setSelectedUserId('');
-        loadAssignments();
-        onAssignmentChange?.();
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to assign');
-      }
+      void entityType;
+      void entityId;
+      setSelectedUserId('');
+      loadAssignments();
+      onAssignmentChange?.();
     } catch (error) {
       console.error('Assign error:', error);
       alert('Failed to assign user');
@@ -130,16 +106,13 @@ export default function TeamAssignment({
 
   const handleStatusUpdate = async (assignmentId: string, newStatus: string) => {
     try {
-      // TODO: Create API endpoint for status update
-      const response = await fetch(`/api/team/assignments/${assignmentId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      });
-
-      if (response.ok) {
-        loadAssignments();
-      }
+      setAssignments((current) =>
+        current.map((assignment) =>
+          assignment.id === assignmentId
+            ? { ...assignment, status: newStatus as Assignment['status'] }
+            : assignment
+        )
+      );
     } catch (error) {
       console.error('Status update error:', error);
     }

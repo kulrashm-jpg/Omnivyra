@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const QUORA_API = 'https://api.quora.com';
 
@@ -27,6 +28,7 @@ export const quoraAdapter: IPlatformAdapter = {
     return withRateLimit('quora', async () => {
       enforcePublishPolicy('quora', payload);
       if (process.env.USE_MOCK_PLATFORMS === 'true') {
+        assertMockPlatformsAllowed('platformAdapters/quoraAdapter');
         return {
           success: true,
           platform_post_id: `mock_quora_${Date.now()}`,

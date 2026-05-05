@@ -736,7 +736,7 @@ export default function NextStrategicDirection({ campaignId, campaignName, class
             <p className="text-[10px] font-bold uppercase tracking-widest text-[#0A66C2] mb-1.5">
               Recommended reading
             </p>
-            <Link href={`/blog/${suggested_blog.slug}`} className="flex items-start gap-2 group">
+            <Link href={`/content/blog/${suggested_blog.slug}`} className="flex items-start gap-2 group">
               <BookOpen className="h-4 w-4 text-[#0A66C2] mt-0.5 shrink-0" />
               <span className="text-sm font-medium text-[#0A66C2] group-hover:underline leading-snug">
                 {suggested_blog.title}
@@ -763,3 +763,5 @@ export default function NextStrategicDirection({ campaignId, campaignName, class
     </div>
   );
 }
+
+

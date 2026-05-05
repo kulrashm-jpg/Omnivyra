@@ -5,7 +5,7 @@
  * Extracted from runBlogGeneration.ts to keep that file under 500 lines.
  */
 
-import type { AngleType, BlogAngle, BlogGenerationOutput, SeriesSummary } from './blogGenerationEngine';
+import type { AngleType, BlogAngle, BlogGenerationOutput, SeriesSummary } from '../../content/engine/generator';
 import type { ClarificationQuestion } from './blogClarificationEngine';
 import type { AngleEffectivenessEntry } from './feedbackOptimizationEngine';
 import type { SEOIntelligenceResult } from './seoIntelligenceEngine';
@@ -115,3 +115,4 @@ export type BlogGenerationResult =
       seo_intelligence?: SEOIntelligenceResult;
       trend_intelligence?: TrendIntelligenceResult;
     };
+

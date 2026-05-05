@@ -93,7 +93,7 @@ export function BlogSeriesWidget({ currentSlug, className = '' }: Props) {
                   </div>
                 ) : (
                   <Link
-                    href={`/blog/${encodeURIComponent(post.slug)}`}
+                    href={`/content/blog/${encodeURIComponent(post.slug)}`}
                     className="flex items-start gap-2.5 rounded-lg py-1.5 hover:bg-[#0A66C2]/5 transition-colors"
                   >
                     {isPast ? (
@@ -118,7 +118,7 @@ export function BlogSeriesWidget({ currentSlug, className = '' }: Props) {
       <div className="flex items-stretch divide-x divide-[#0A66C2]/10">
         {prevPost ? (
           <Link
-            href={`/blog/${encodeURIComponent(prevPost.slug)}`}
+            href={`/content/blog/${encodeURIComponent(prevPost.slug)}`}
             className="flex flex-1 items-center gap-2 px-4 py-3 text-sm hover:bg-[#0A66C2]/5 transition-colors"
           >
             <ChevronLeft className="h-4 w-4 shrink-0 text-[#0A66C2]" />
@@ -132,7 +132,7 @@ export function BlogSeriesWidget({ currentSlug, className = '' }: Props) {
         )}
         {nextPost && (
           <Link
-            href={`/blog/${encodeURIComponent(nextPost.slug)}`}
+            href={`/content/blog/${encodeURIComponent(nextPost.slug)}`}
             className="flex flex-1 items-center justify-end gap-2 px-4 py-3 text-sm hover:bg-[#0A66C2]/5 transition-colors"
           >
             <span className="min-w-0 text-right">
@@ -146,3 +146,5 @@ export function BlogSeriesWidget({ currentSlug, className = '' }: Props) {
     </div>
   );
 }
+
+

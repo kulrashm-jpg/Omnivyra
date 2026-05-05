@@ -21,7 +21,7 @@
  */
 
 import { newId } from './blockUtils';
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import type {
@@ -711,3 +711,4 @@ export async function applyOptimizationActions(
     changes,
   };
 }
+

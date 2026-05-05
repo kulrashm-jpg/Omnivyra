@@ -18,7 +18,7 @@ import {
   Target, Layers, Lightbulb, BarChart2, Zap, TrendingUp,
   BookOpen, Check, AlertCircle, Star,
 } from 'lucide-react';
-import type { BlogGenerationOutput, BlogAngle, AngleType } from '../../lib/blog/blogGenerationEngine';
+import type { BlogGenerationOutput, BlogAngle, AngleType } from '../../content/engine/generator';
 import type { ClarificationQuestion } from '../../lib/blog/blogClarificationEngine';
 import type { HookAssessment } from '../../lib/blog/hookAssessment';
 import type { AngleEffectivenessEntry } from '../../lib/blog/feedbackOptimizationEngine';
@@ -937,3 +937,4 @@ export default function BlogGenerateModal({
     </div>
   );
 }
+

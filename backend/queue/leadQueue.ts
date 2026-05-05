@@ -2,15 +2,11 @@
  * Lead Jobs Queue
  * Production-safe queue for lead job processing. API enqueues; worker executes.
  *
- * Env: REDIS_HOST, REDIS_PORT, REDIS_PASSWORD (optional) or REDIS_URL
+ * Env: REDIS_URL
  */
 
 import { Queue } from 'bullmq';
-
-const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
-const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
-const REDIS_URL = process.env.REDIS_URL;
+import { REDIS_URL } from '../config/env';
 
 function getConnection() {
   if (REDIS_URL && REDIS_URL.includes('://')) {
@@ -25,11 +21,7 @@ function getConnection() {
       maxRetriesPerRequest: null,
     };
   }
-  return {
-    host: REDIS_HOST,
-    port: REDIS_PORT,
-    password: REDIS_PASSWORD,
-  };
+  throw new Error('REDIS_URL_INVALID');
 }
 
 export const leadQueueConnection = getConnection();

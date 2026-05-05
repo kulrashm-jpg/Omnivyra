@@ -433,11 +433,12 @@ export async function generateCampaignAuditReport(
 }
 
 export const logUserManagementAudit = (
-  event: 'USER_INVITED' | 'USER_ROLE_UPDATED' | 'USER_REMOVED',
+  event: 'USER_INVITED' | 'USER_ROLE_UPDATED' | 'USER_REMOVED' | 'USER_RESTORED',
   payload: {
     actor_user_id: string;
     target_user_id: string;
     company_id: string;
+    organization_id?: string;
     role: string | null;
   }
 ) => {

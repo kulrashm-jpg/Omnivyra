@@ -1,4 +1,8 @@
 import { createServiceRoleMigrationProxy } from './supabaseClient';
+import {
+  assertValidStateTransition,
+  isContentState,
+} from '../../content/core/contentValidator';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 
 export async function createContentAsset(input: {
@@ -135,8 +139,12 @@ export async function updateContentAssetStatus(input: {
   currentVersion?: number;
 }): Promise<any> {
   const payload: any = { status: input.status };
-  if (input.currentVersion) {
+  if (input.currentVersion !== undefined) {
     payload.current_version = input.currentVersion;
+  }
+  const existing = await getContentAssetById(input.assetId);
+  if (existing && isContentState(existing.status) && isContentState(input.status) && existing.status !== input.status) {
+    assertValidStateTransition(existing.status, input.status);
   }
   const { data, error } = await supabase
     .from('content_assets')

@@ -1,7 +1,7 @@
 import { apiFetch } from '@/lib/apiFetch';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
-import { useCompanyContext } from '../components/CompanyContext';
+import { useOrganization } from './org/useOrganization';
 import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import { getAuthToken } from '../utils/getAuthToken';
@@ -26,7 +26,7 @@ export function useCompanyProfileState() {
     isLoading: isCompanyLoading,
     isAuthenticated,
     refreshCompanies,
-  } = useCompanyContext();
+  } = useOrganization();
   const isAdmin = useMemo(() => user?.role === 'admin', [user]);
   const isContentArchitect = userRole === 'CONTENT_ARCHITECT';
   const isCompanyAdmin = userRole === 'COMPANY_ADMIN';

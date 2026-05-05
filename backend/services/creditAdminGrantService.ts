@@ -14,8 +14,8 @@
  *     Caller can pass expiryDays=0 for a no-expiry grant.
  *
  * Idempotency:
- *   - Minute-bucket key (or caller-supplied clientKey) means retries within the
- *     same bucket are absorbed by both the ledger
+ *   - Caller-supplied clientKey (e.g. the request's Idempotency-Key header) is
+ *     required and is absorbed by both the ledger
  *     (credit_transactions.idempotency_key) and the audit row
  *     (credit_admin_grants.idempotency_key UNIQUE).
  */
@@ -47,8 +47,8 @@ export interface AdminGrantOpts {
   actorUserId:    string;
   /** Grant expiry in days. Defaults to 14 (matches initial-grant expiry). Pass 0 for no expiry. */
   expiryDays?:    number;
-  /** Optional caller-supplied uniqueness scope (e.g. request id). */
-  clientKey?:     string;
+  /** Caller-supplied uniqueness scope (e.g. Idempotency-Key header). Required. */
+  clientKey:      string;
   /** Extra context for the audit row. */
   metadata?:      Record<string, unknown>;
   /** Bypass the 3-per-24h limit (escalation use only). */
@@ -139,13 +139,14 @@ export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<A
     }
   }
 
-  const minuteBucket = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
-  const scope        = opts.clientKey ?? minuteBucket;
+  if (!opts.clientKey || !opts.clientKey.trim()) {
+    throw new Error('grantAdminCreditExtension: clientKey is required (route must pass Idempotency-Key header)');
+  }
   const idempotencyKey = makeIdempotencyKey(
     opts.actorUserId,
     'admin_credit_extension',
     opts.organizationId,
-    scope,
+    opts.clientKey,
   );
 
   // ── 1. Grant credits on the ledger (idempotent at the DB layer) ──────────

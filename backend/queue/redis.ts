@@ -1,4 +1,5 @@
 import IORedis from 'ioredis';
+import { REDIS_URL } from '../config/env';
 
 function parseUrl(url: string) {
   // Strip any accidental redis-cli command prefix (e.g. "redis-cli --tls -u redis://...")
@@ -14,11 +15,11 @@ function parseUrl(url: string) {
       tls:      needsTls ? {} : undefined,
     };
   } catch {
-    return { host: 'localhost', port: 6379, password: undefined, tls: undefined };
+    throw new Error('REDIS_URL_INVALID');
   }
 }
 
-const cfg = parseUrl(process.env.REDIS_URL || 'redis://localhost:6379');
+const cfg = parseUrl(REDIS_URL);
 
 export const redis = new IORedis({
   host:             cfg.host,

@@ -63,31 +63,44 @@ async function getWalletSnapshot(orgId: string): Promise<WalletSnapshot | null> 
 
 // ── Free credit profile query ─────────────────────────────────────────────────
 
-async function findExpiredProfiles(): Promise<Array<{
+type ExpiredProfile = {
   user_id:          string;
   organization_id:  string;
   initial_credits:  number;
   credit_expiry_at: string;
-}>> {
+};
+
+const EXPIRY_PAGE_SIZE      = 1000;
+const EXPIRY_MAX_PAGES      = 100; // hard cap → max 100k profiles per run
+
+async function findExpiredProfiles(): Promise<ExpiredProfile[]> {
   const now = new Date().toISOString();
+  const all: ExpiredProfile[] = [];
+  let from = 0;
 
-  const { data, error } = await supabase
-    .from('free_credit_profiles')
-    .select('user_id, organization_id, initial_credits, credit_expiry_at')
-    .not('organization_id', 'is', null)
-    .lt('credit_expiry_at', now);
+  for (let page = 0; page < EXPIRY_MAX_PAGES; page++) {
+    const to = from + EXPIRY_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from('free_credit_profiles')
+      .select('user_id, organization_id, initial_credits, credit_expiry_at')
+      .not('organization_id', 'is', null)
+      .lt('credit_expiry_at', now)
+      .order('organization_id', { ascending: true })
+      .range(from, to);
 
-  if (error) {
-    console.error('[creditExpiry] failed to fetch expired profiles:', error.message);
-    return [];
+    if (error) {
+      console.error('[creditExpiry] failed to fetch expired profiles:', error.message);
+      return all;
+    }
+
+    const batch = (data ?? []) as ExpiredProfile[];
+    if (batch.length === 0) break;
+    all.push(...batch);
+    if (batch.length < EXPIRY_PAGE_SIZE) break;
+    from += EXPIRY_PAGE_SIZE;
   }
 
-  return (data ?? []) as Array<{
-    user_id: string;
-    organization_id: string;
-    initial_credits: number;
-    credit_expiry_at: string;
-  }>;
+  return all;
 }
 
 // ── Incentive expiry config ───────────────────────────────────────────────────

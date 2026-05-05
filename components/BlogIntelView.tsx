@@ -228,10 +228,10 @@ export default function BlogIntelView({ d }: { d: S }) {
               <h1 className="text-lg font-bold text-gray-900">Blog Intelligence</h1>
             </div>
             <div className="flex items-center gap-3">
-              <Link href="/admin/blog/new" className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B5ED7] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#0A52BE]">
+              <Link href="/admin/content" className="inline-flex items-center gap-1.5 rounded-lg bg-[#0B5ED7] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#0A52BE]">
                 <Plus className="h-3.5 w-3.5" /> New Post
               </Link>
-              <Link href="/admin/blog" className="text-sm text-gray-500 hover:text-gray-900">← Blog CMS</Link>
+              <Link href="/admin/content" className="text-sm text-gray-500 hover:text-gray-900">← Blog CMS</Link>
             </div>
           </div>
         </div>
@@ -367,7 +367,7 @@ export default function BlogIntelView({ d }: { d: S }) {
                               // Continue without storage token if browser blocks it.
                             }
                             void router.push({
-                              pathname: '/admin/blog/generate',
+                              pathname: '/admin/content',
                               query: {
                                 prefill_source: 'superadmin_blog_intelligence',
                                 prefill_topic: gap.topic,
@@ -406,7 +406,7 @@ export default function BlogIntelView({ d }: { d: S }) {
                         {rec.priority}
                       </span>
                       {rec.targetSlug && (
-                        <Link href={`/admin/blog`} className="shrink-0 text-[#0B5ED7] hover:underline text-xs font-medium">
+                        <Link href={`/admin/content`} className="shrink-0 text-[#0B5ED7] hover:underline text-xs font-medium">
                           Edit →
                         </Link>
                       )}
@@ -443,7 +443,7 @@ export default function BlogIntelView({ d }: { d: S }) {
                         .map((p) => (
                           <tr key={p.id} className="hover:bg-gray-50">
                             <td className="px-4 py-2.5 font-medium text-gray-900 max-w-xs truncate">
-                              <Link href={`/blog/${p.slug}`} target="_blank" className="hover:text-[#0B5ED7] inline-flex items-center gap-1">
+                              <Link href={`/content/blog/${p.slug}`} target="_blank" className="hover:text-[#0B5ED7] inline-flex items-center gap-1">
                                 {p.title}
                                 <ExternalLink className="h-3 w-3 opacity-40" />
                               </Link>
@@ -564,7 +564,7 @@ export default function BlogIntelView({ d }: { d: S }) {
                             <tr key={m.id} className="hover:bg-gray-50">
                               <td className="px-4 py-3 font-medium text-gray-900 max-w-[220px]">
                                 <div className="flex flex-col">
-                                  <Link href={`/blog/${m.slug}`} target="_blank" className="hover:text-[#0B5ED7] inline-flex items-center gap-1 line-clamp-1">
+                                  <Link href={`/content/blog/${m.slug}`} target="_blank" className="hover:text-[#0B5ED7] inline-flex items-center gap-1 line-clamp-1">
                                     {m.title}
                                     <ExternalLink className="h-3 w-3 opacity-40 shrink-0" />
                                   </Link>
@@ -628,7 +628,7 @@ export default function BlogIntelView({ d }: { d: S }) {
                             {ins.category}
                           </span>
                           {ins.targetSlug && (
-                            <Link href={`/admin/blog`} className="shrink-0 text-xs font-medium text-[#0B5ED7] hover:underline">
+                            <Link href={`/admin/content`} className="shrink-0 text-xs font-medium text-[#0B5ED7] hover:underline">
                               Edit →
                             </Link>
                           )}
@@ -655,7 +655,7 @@ export default function BlogIntelView({ d }: { d: S }) {
                         <p className="text-sm font-medium text-gray-900 line-clamp-2 mb-1">{d.title}</p>
                         <p className="text-xs text-gray-500 leading-relaxed">{d.reason}</p>
                         <Link
-                          href={`/blog/${d.slug}`}
+                          href={`/content/blog/${d.slug}`}
                           target="_blank"
                           className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[#0B5ED7] hover:underline"
                         >
@@ -801,7 +801,7 @@ export default function BlogIntelView({ d }: { d: S }) {
                         </p>
                         <h3 className="mt-0.5 text-base font-bold text-gray-900 line-clamp-2">{m.title}</h3>
                       </div>
-                      <Link href={`/blog/${m.slug}`} target="_blank" className="shrink-0">
+                      <Link href={`/content/blog/${m.slug}`} target="_blank" className="shrink-0">
                         <ExternalLink className="h-4 w-4 text-gray-400 hover:text-[#0B5ED7]" />
                       </Link>
                     </div>
@@ -1445,4 +1445,6 @@ export default function BlogIntelView({ d }: { d: S }) {
     </>
   );
 }
+
+
 

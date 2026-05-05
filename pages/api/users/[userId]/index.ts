@@ -1,9 +1,8 @@
-﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext } from '../../../../backend/services/userContextService';
 import { removeUser } from '../../../../backend/services/userManagementService';
-import { Role } from '../../../../backend/services/rbacService';
-import { withRBAC } from '../../../../backend/middleware/withRBAC';
+import { getOrganizationContext } from '../../../../lib/orgResolver';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'DELETE') {
@@ -15,13 +14,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'userId required' });
   }
 
-  const companyId = req.query.companyId as string | undefined;
-  if (!companyId) {
-    return res.status(400).json({ error: 'companyId required' });
-  }
-
+  const { organization_id } = getOrganizationContext(req);
   const requester = await resolveUserContext(req);
-  const result = await removeUser(userId, String(companyId), requester);
+  const result = await removeUser(userId, organization_id, requester);
   if (!result.ok) {
     const err = result as { status: number; error: string };
     return res.status(err.status).json({ error: err.error });
@@ -32,5 +27,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
 export default applyAuthGuard({
   requiresAuth: true,
-})(withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN]));
-
+  requiresOrg: true,
+  allowSuperAdminOverride: true,
+})(handler);

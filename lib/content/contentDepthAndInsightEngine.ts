@@ -27,7 +27,7 @@
  *   runContentDepthAndInsightEngine(input) → DepthInsightEngineOutput
  */
 
-import type { BlogGenerationOutput } from '../blog/blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import type { ContentGenerationInput, DepthMapEntry, DecisionBlock } from './cardToContentBridge';
 import { htmlToBlocks } from '../blog/htmlToBlocks';
 
@@ -609,3 +609,4 @@ export function runContentDepthAndInsightEngine(
     },
   };
 }
+

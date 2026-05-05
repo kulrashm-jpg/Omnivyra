@@ -3,6 +3,7 @@ import inviteHandler from '../../../pages/api/users/invite';
 import listHandler from '../../../pages/api/users/index';
 import roleHandler from '../../../pages/api/users/[userId]/role';
 import removeHandler from '../../../pages/api/users/[userId]/index';
+import restoreHandler from '../../../pages/api/users/restore';
 import { logUserManagementAudit } from '../../services/campaignAuditService';
 import { Role } from '../../services/rbacService';
 
@@ -10,13 +11,31 @@ jest.mock('../../services/rbacService', () => ({
   ...jest.requireActual('../../services/rbacService'),
   enforceRole: jest.fn(),
   getUserRole: jest.fn(),
+  isPlatformSuperAdmin: jest.fn(),
   isSuperAdmin: jest.fn(),
 }));
 
-const { enforceRole, getUserRole, isSuperAdmin } = jest.requireMock('../../services/rbacService');
+const { enforceRole, getUserRole, isPlatformSuperAdmin } = jest.requireMock('../../services/rbacService');
 
-jest.mock('../../db/supabaseClient', () => ({
-  supabase: {
+jest.mock('@/backend/middleware/applyAuthGuard', () => ({
+  applyAuthGuard: () => (handler: any) => handler,
+}));
+
+jest.mock('../../../lib/orgResolver', () => ({
+  getOrganizationContext: (req: any) => ({
+    organization_id:
+      req.body?.organization_id ||
+      req.body?.companyId ||
+      req.query?.organization_id ||
+      req.query?.companyId,
+    role: 'COMPANY_ADMIN',
+  }),
+}));
+
+var mockSupabase: any;
+
+jest.mock('../../db/supabaseClient', () => {
+  mockSupabase = {
     from: jest.fn(),
     auth: {
       admin: {
@@ -25,8 +44,13 @@ jest.mock('../../db/supabaseClient', () => ({
         getUserById: jest.fn(),
       },
     },
-  },
-}));
+  };
+  return {
+    supabase: mockSupabase,
+    runWithServiceRole: jest.fn((_reason: string, fn: any) => fn(mockSupabase)),
+    createServiceRoleMigrationProxy: jest.fn(() => mockSupabase),
+  };
+});
 
 jest.mock('../../services/userContextService', () => ({
   resolveUserContext: jest.fn(),
@@ -56,9 +80,10 @@ const createMockRes = () => {
   return res as NextApiResponse & { statusCode?: number; body?: any };
 };
 
-type RoleRow = { user_id: string; company_id: string; role: string };
+type RoleRow = { user_id: string; company_id: string; organization_id?: string; role: string; status?: string };
 const roleRows: RoleRow[] = [];
-const authUsers: Record<string, { id: string; email: string }> = {};
+const authUsers: Record<string, { id: string; email: string; state?: string }> = {};
+const invitations: any[] = [];
 
 const buildQuery = (table: string) => {
   const state: { filters: Record<string, any>; op?: string; updatePayload?: any } = { filters: {} };
@@ -73,14 +98,23 @@ const buildQuery = (table: string) => {
       state.op = 'in';
       return query;
     }),
+    gt: jest.fn((field: string, value: any) => {
+      state.filters[field] = { gt: value };
+      return query;
+    }),
     limit: jest.fn().mockReturnThis(),
     insert: jest.fn((payload: any) => {
       if (table === 'users') {
         const rows = Array.isArray(payload) ? payload : [payload];
         rows.forEach((row) => {
           const id = `user-${Object.keys(authUsers).length + 1}`;
-          authUsers[id] = { id, email: row.email };
+          authUsers[id] = { id, email: row.email, state: row.state };
         });
+        return query;
+      }
+      if (table === 'invitations') {
+        const rows = Array.isArray(payload) ? payload : [payload];
+        rows.forEach((row) => invitations.push({ id: `invite-${invitations.length + 1}`, ...row }));
         return query;
       }
       const rows = Array.isArray(payload) ? payload : [payload];
@@ -89,8 +123,14 @@ const buildQuery = (table: string) => {
     }),
     maybeSingle: jest.fn(async () => {
       if (table === 'users') {
-        const user = Object.values(authUsers).find((row) => row.email === state.filters.email) ?? null;
+        const user = state.filters.id
+          ? authUsers[state.filters.id] ?? null
+          : Object.values(authUsers).find((row) => row.email === state.filters.email) ?? null;
         return { data: user, error: null };
+      }
+      if (table === 'invitations') {
+        const invite = invitations.find((row) => row.email === state.filters.email && row.organization_id === state.filters.organization_id && row.status === state.filters.status) ?? null;
+        return { data: invite, error: null };
       }
       return { data: null, error: null };
     }),
@@ -98,6 +138,9 @@ const buildQuery = (table: string) => {
       if (table === 'users') {
         const user = Object.values(authUsers).find((row) => row.email === state.filters.email) ?? Object.values(authUsers).slice(-1)[0] ?? null;
         return { data: user, error: null };
+      }
+      if (table === 'invitations') {
+        return { data: invitations.slice(-1)[0] ?? null, error: null };
       }
       return { data: null, error: null };
     }),
@@ -111,18 +154,18 @@ const buildQuery = (table: string) => {
       return query;
     }),
     then: (resolve: any) => {
-      if (table === 'user company roles') {
+      if (table === 'user_company_roles') {
         if (state.op === 'update' && state.updatePayload) {
           roleRows.forEach((row) => {
             if (
               row.user_id === state.filters.user_id &&
-              row.company_id === state.filters.company_id
+              (row.organization_id ?? row.company_id) === (state.filters.organization_id ?? state.filters.company_id)
             ) {
               Object.assign(row, state.updatePayload);
             }
           });
           const updated = roleRows.filter(
-            (r) => r.user_id === state.filters.user_id && r.company_id === state.filters.company_id
+            (r) => r.user_id === state.filters.user_id && (r.organization_id ?? r.company_id) === (state.filters.organization_id ?? state.filters.company_id)
           );
           return resolve({ data: updated, error: null });
         }
@@ -141,8 +184,10 @@ const buildQuery = (table: string) => {
         const filtered = roleRows.filter((row) => {
           if (state.filters.user_id && row.user_id !== state.filters.user_id) return false;
           if (state.filters.company_id && row.company_id !== state.filters.company_id) return false;
+          if (state.filters.organization_id && (row.organization_id ?? row.company_id) !== state.filters.organization_id) return false;
           if (state.filters.role && row.role !== state.filters.role) return false;
-          if (state.filters.status && (row.status ?? 'active') !== state.filters.status) return false;
+          if (state.filters.status && Array.isArray(state.filters.status) && !state.filters.status.includes(row.status ?? 'active')) return false;
+          if (state.filters.status && !Array.isArray(state.filters.status) && (row.status ?? 'active') !== state.filters.status) return false;
           return true;
         });
         return resolve({ data: filtered, error: null });
@@ -154,6 +199,9 @@ const buildQuery = (table: string) => {
         }
         return resolve({ data: users, error: null });
       }
+      if (table === 'invitations') {
+        return resolve({ data: invitations, error: null });
+      }
       return resolve({ data: [], error: null });
     },
   };
@@ -163,8 +211,9 @@ const buildQuery = (table: string) => {
 describe('User lifecycle management', () => {
   beforeEach(() => {
     roleRows.splice(0, roleRows.length);
+    invitations.splice(0, invitations.length);
     Object.keys(authUsers).forEach((key) => delete authUsers[key]);
-    (isSuperAdmin as jest.Mock).mockImplementation(async (userId: string) => {
+    (isPlatformSuperAdmin as jest.Mock).mockImplementation(async (userId: string) => {
       return roleRows.some((r) => r.user_id === userId && r.role === 'SUPER_ADMIN');
     });
     (getUserRole as jest.Mock).mockImplementation(async (userId: string, companyId: string) => {
@@ -294,7 +343,7 @@ describe('User lifecycle management', () => {
     const res = createMockRes();
     await inviteHandler(req, res);
     expect(res.statusCode).toBe(403);
-    expect(res.body?.error).toBe('FORBIDDEN_ROLE');
+    expect(res.body?.error).toBe('NOT_AUTHORIZED');
   });
 
   it('Role update works', async () => {
@@ -333,7 +382,27 @@ describe('User lifecycle management', () => {
     const res = createMockRes();
     await removeHandler(req, res);
     expect(res.statusCode).toBe(200);
-    expect(roleRows.some((row) => row.user_id === 'target-2')).toBe(false);
+    expect(roleRows.find((row) => row.user_id === 'target-2')?.status).toBe('inactive');
+  });
+
+  it('Restore only accepts deleted users', async () => {
+    resolveUserContext.mockResolvedValue({
+      userId: 'admin-restore',
+      role: 'admin',
+      companyIds: ['company-a'],
+      defaultCompanyId: 'company-a',
+    });
+    roleRows.push({ user_id: 'admin-restore', company_id: 'company-a', organization_id: 'company-a', role: 'ADMIN' });
+    roleRows.push({ user_id: 'target-active', company_id: 'company-a', organization_id: 'company-a', role: 'CONTENT_CREATOR' });
+    authUsers['target-active'] = { id: 'target-active', email: 'active@example.com', state: 'active' };
+    const req = {
+      method: 'POST',
+      body: { userId: 'target-active', organization_id: 'company-a' },
+    } as unknown as NextApiRequest;
+    const res = createMockRes();
+    await restoreHandler(req, res);
+    expect(res.statusCode).toBe(409);
+    expect(res.body?.error).toBe('ONLY_DELETED_USERS_CAN_BE_RESTORED');
   });
 
   it('List users scoped to company', async () => {

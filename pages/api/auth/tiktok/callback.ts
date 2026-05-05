@@ -8,6 +8,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
+import { logger } from '../../../../backend/services/logger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -22,11 +23,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (error) {
     console.error('TikTok OAuth error:', error, error_description);
+    logger.error('oauth.callback.failure', { platform: 'tiktok', reason: 'oauth_provider_error', provider_error: String(error), provider_error_description: error_description ? String(error_description) : null });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
     console.error('No authorization code received');
+    logger.error('oauth.callback.failure', { platform: 'tiktok', reason: 'no_code' });
     return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
@@ -165,6 +168,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await setToken(accountId, tokenObj);
 
     console.log('âœ… TikTok account saved successfully:', { accountId, accountName });
+    logger.info('oauth.callback.success', { platform: 'tiktok', account_id: accountId });
 
     if (companyId && userId) {
       checkAndGrantSetupCredits(companyId, userId)
@@ -177,6 +181,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error: any) {
     console.error('TikTok OAuth callback error:', error);
+    logger.error('oauth.callback.failure', { platform: 'tiktok', reason: 'exception', error_message: error?.message ?? 'unknown' });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

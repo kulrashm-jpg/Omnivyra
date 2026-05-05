@@ -13,6 +13,7 @@ import axios from 'axios';
 import { PublishResult } from './platformAdapter';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import { assertMockPlatformsAllowed } from '../services/mockGuard';
 import { createServiceRoleMigrationProxy } from '../db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { META_GRAPH_VERSION } from '../auth/metaAuthService';
@@ -87,6 +88,7 @@ export async function publishToFacebook(
   _token: Token,
 ): Promise<PublishResult> {
   if (config.USE_MOCK_PLATFORMS === true) {
+    assertMockPlatformsAllowed('facebookAdapter');
     console.log('🧪 MOCK MODE: Simulating Facebook post');
     return {
       success: true,

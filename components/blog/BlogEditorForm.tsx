@@ -40,6 +40,7 @@ import {
   getFormattedBlockClass,
   getFormattedListClass,
 } from '../../lib/content/blockFormatting';
+import { sanitizeHTML } from '../../content/engine/sanitizer';
 import { migrateMarkdownToBlocks } from '../../lib/blog/blockMigration';
 import {
   BlockWrapper,
@@ -281,7 +282,7 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
             b,
             'text-gray-700 leading-relaxed mb-5 [&_a]:text-indigo-700 [&_a]:underline [&_strong]:font-semibold [&_em]:italic [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:rounded',
           )}
-          dangerouslySetInnerHTML={{ __html: b.html ?? '' }}
+          dangerouslySetInnerHTML={{ __html: sanitizeHTML(b.html ?? '') }}
         />
       );
     }

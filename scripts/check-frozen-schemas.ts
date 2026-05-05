@@ -11,6 +11,8 @@
  *   - action_pricing_config
  *   - pricing_intelligence
  *   - cost_anomalies
+ *   - company_domains
+ *   - user_company_roles
  *
  * An override is allowed: any migration that contains the exact marker
  *   -- APPROVED_SCHEMA_CHANGE: <reason>
@@ -32,6 +34,8 @@ const FROZEN_TABLES = [
   'action_pricing_config',
   'pricing_intelligence',
   'cost_anomalies',
+  'company_domains',
+  'user_company_roles',
 ] as const;
 
 const APPROVAL_MARKER = /--\s*APPROVED_SCHEMA_CHANGE:/i;

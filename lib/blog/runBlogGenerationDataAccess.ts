@@ -6,7 +6,7 @@
 import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { extractBlogContext } from './blockExtractor';
-import type { AngleType, SeriesSummary } from './blogGenerationEngine';
+import type { AngleType, SeriesSummary } from '../../content/engine/generator';
 import type { ContentBlock, InternalLinkBlock } from './blockTypes';
 import { uuid } from './runBlogGenerationPureHelpers';
 export type { FetchAngleDataFn, FetchSeriesDataFn } from './blogRunnerTypes';
@@ -203,3 +203,4 @@ export async function injectInternalLinks(
     return blocks;
   }
 }
+

@@ -20,6 +20,7 @@ import { categorizeError } from './errorRecoveryService';
 import { recordPostAnalytics } from './analyticsService';
 import { logActivity } from './activityLogger';
 import { checkAndCompleteCampaignIfEligible } from './CampaignCompletionService';
+import { logger } from './logger';
 
 export type PublishNowInput = {
   scheduled_post_id: string;
@@ -44,8 +45,20 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
   const { scheduled_post_id, social_account_id, user_id } = input;
   const timestamp = new Date().toISOString();
 
+  logger.info('publish.attempt', {
+    entry: 'sync',
+    scheduled_post_id,
+    social_account_id,
+    user_id,
+  });
+
   const scheduledPost = await getScheduledPost(scheduled_post_id);
   if (!scheduledPost) {
+    logger.error('publish.failure', {
+      entry: 'sync',
+      scheduled_post_id,
+      reason: 'scheduled_post_not_found',
+    });
     return {
       status: 'FAILED',
       message: `Scheduled post ${scheduled_post_id} not found`,
@@ -54,6 +67,13 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
   }
 
   if (scheduledPost.platform_post_id) {
+    logger.info('publish.success', {
+      entry: 'sync',
+      scheduled_post_id,
+      platform: scheduledPost.platform,
+      platform_post_id: scheduledPost.platform_post_id,
+      idempotent: true,
+    });
     return {
       status: 'PUBLISHED',
       external_post_id: scheduledPost.platform_post_id,
@@ -99,6 +119,13 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       void checkAndCompleteCampaignIfEligible(scheduledPost.campaign_id).catch(() => {});
     }
 
+    logger.info('publish.success', {
+      entry: 'sync',
+      scheduled_post_id,
+      platform: scheduledPost.platform,
+      platform_post_id: result.platform_post_id,
+      idempotent: false,
+    });
     return {
       status: 'PUBLISHED',
       external_post_id: result.platform_post_id,
@@ -126,6 +153,13 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     })
     .eq('id', scheduled_post_id);
 
+  logger.error('publish.failure', {
+    entry: 'sync',
+    scheduled_post_id,
+    platform: scheduledPost.platform,
+    error_code: platformError.code,
+    error_message: errorDetail,
+  });
   return {
     status: 'FAILED',
     message: errorDetail,

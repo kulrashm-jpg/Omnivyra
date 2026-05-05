@@ -60,7 +60,7 @@ const CONTENT_CARDS: ContentCard[] = [
       'Designed for teams that care about output quality',
     ],
     cta: 'Create Blog',
-    route: '/blogs/create',
+    route: '/admin/content',
     accentFrom: 'from-purple-50',
     accentTo: 'to-indigo-50',
     borderColor: 'border-purple-200',
@@ -346,3 +346,4 @@ export default function WriterContentPage() {
     </div>
   );
 }
+

@@ -31,6 +31,7 @@ import { schedulePostPolls } from '../../services/analyticsNormalizationService'
 import { logActivity } from '../../services/activityLogger';
 import { getCampaignReadiness } from '../../services/campaignReadinessService';
 import { checkAndCompleteCampaignIfEligible } from '../../services/CampaignCompletionService';
+import { logger } from '../../services/logger';
 
 interface PublishJobData {
   scheduled_post_id: string;
@@ -46,8 +47,15 @@ interface PublishJobData {
 export async function processPublishJob(job: Job<PublishJobData>): Promise<void> {
   const { scheduled_post_id, social_account_id, user_id } = job.data;
   const jobId = job.id;
-  
+
   console.log(`📝 Processing publish job ${jobId} for scheduled_post ${scheduled_post_id}`);
+  logger.info('publish.attempt', {
+    entry: 'queue',
+    job_id: jobId,
+    scheduled_post_id,
+    social_account_id,
+    user_id,
+  });
 
   try {
     // Step 1: Idempotency check - verify job not already processed
@@ -72,6 +80,14 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
       console.log(`✅ Post ${scheduled_post_id} already published (platform_post_id: ${scheduledPost.platform_post_id}), skipping`);
       await updateQueueJobStatus(jobId as string, 'completed', {
         result_data: { message: 'Already published (idempotency check)' },
+      });
+      logger.info('publish.success', {
+        entry: 'queue',
+        job_id: jobId,
+        scheduled_post_id,
+        platform: scheduledPost.platform,
+        platform_post_id: scheduledPost.platform_post_id,
+        idempotent: true,
       });
       return;
     }
@@ -151,6 +167,14 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
       );
 
       console.log(`✅ Post published successfully. Platform ID: ${result.platform_post_id}`);
+      logger.info('publish.success', {
+        entry: 'queue',
+        job_id: jobId,
+        scheduled_post_id,
+        platform: scheduledPost.platform,
+        platform_post_id: result.platform_post_id,
+        idempotent: false,
+      });
 
       // Record analytics (mock metrics for now - integrate with platform APIs later)
       try {
@@ -243,12 +267,28 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
       );
 
       console.error(`❌ Post publish failed: ${platformError.user_message}`);
+      logger.error('publish.failure', {
+        entry: 'queue',
+        job_id: jobId,
+        scheduled_post_id,
+        platform: scheduledPost.platform,
+        error_code: platformError.code,
+        error_message: platformError.user_message,
+        attempt_number: queueJob.attempts || 0,
+      });
       throw new Error(platformError.user_message);
     }
   } catch (error: any) {
     console.error(`❌ Error processing job ${jobId}:`, error.message);
-    
+
     if (error?.skipQueueStatusUpdate) {
+      logger.error('publish.failure', {
+        entry: 'queue',
+        job_id: jobId,
+        scheduled_post_id,
+        reason: 'campaign_blocked',
+        error_code: error?.message ?? 'unknown',
+      });
       throw error;
     }
 
@@ -269,8 +309,24 @@ export async function processPublishJob(job: Job<PublishJobData>): Promise<void>
         `Job processing error: ${error.message}`,
         { error: error.stack }
       );
+      logger.error('publish.failure', {
+        entry: 'queue',
+        job_id: jobId,
+        scheduled_post_id,
+        platform: scheduledPost?.platform ?? null,
+        reason: 'exception',
+        error_code: platformError.code,
+        error_message: platformError.user_message,
+      });
     } catch (updateError) {
       console.error('Failed to update job status:', updateError);
+      logger.error('publish.failure', {
+        entry: 'queue',
+        job_id: jobId,
+        scheduled_post_id,
+        reason: 'exception_with_status_update_failure',
+        error_message: error?.message ?? 'unknown',
+      });
     }
 
     // Re-throw to trigger BullMQ retry logic

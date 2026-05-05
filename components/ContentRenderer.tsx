@@ -23,6 +23,7 @@
 
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { sanitizeHTML } from '../content/engine/sanitizer';
 import rehypeRaw from 'rehype-raw';
 import { FormattedAIMessage } from './campaign-ai/FormattedAIMessage';
 import { getPlatformLimits } from '../backend/utils/contentFormatter';
@@ -955,7 +956,7 @@ function HtmlContent({ content, linkCls }: { content: string; linkCls: string })
     <div
       className="html-content-renderer prose prose-sm max-w-none text-gray-800"
       // eslint-disable-next-line react/no-danger
-      dangerouslySetInnerHTML={{ __html: content }}
+      dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }}
     />
   );
 }

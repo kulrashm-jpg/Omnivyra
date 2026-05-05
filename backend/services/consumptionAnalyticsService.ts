@@ -521,23 +521,21 @@ export async function grantCredits(params: {
   usdEquivalent?: number;
   note?: string;
   performedBy: string;
+  idempotencyKey: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  // Time-bucketed idempotency key (minute precision) — allows multiple distinct
-  // grants per org per admin, while making retries within 1 minute safe.
-  const minuteBucket = new Date().toISOString().slice(0, 16); // 'YYYY-MM-DDTHH:MM'
   try {
     await createCredit({
       orgId:          params.organizationId,
       amount:         params.credits,
       category:       'paid',
       referenceType:  'manual_grant',
-      referenceId:    `${params.organizationId}:${minuteBucket}`,
+      referenceId:    `${params.organizationId}:${params.idempotencyKey}`,
       note:           params.note ?? undefined,
       performedBy:    params.performedBy,
       idempotencyKey: makeIdempotencyKey(
         params.performedBy,
         'manual_grant',
-        `${params.organizationId}:${minuteBucket}`,
+        params.idempotencyKey,
       ),
     });
     return { ok: true };
@@ -551,9 +549,9 @@ export async function adjustCredits(params: {
   credits: number;  // positive = add credit, negative = deduct credit
   note: string;
   performedBy: string;
+  idempotencyKey: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const minuteBucket = new Date().toISOString().slice(0, 16);
-  const refId = `adj:${params.organizationId}:${minuteBucket}`;
+  const refId = `adj:${params.organizationId}:${params.idempotencyKey}`;
 
   if (params.credits > 0) {
     // Positive adjustment — grant path

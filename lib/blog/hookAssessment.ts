@@ -9,7 +9,7 @@
  * No DB calls. Uses AI gateway only.
  */
 
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -70,3 +70,4 @@ Return ONLY valid JSON:
 
   return { strength: 'moderate', note: 'Review the opening paragraph before publishing.' };
 }
+

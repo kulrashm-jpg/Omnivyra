@@ -24,6 +24,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const TIKTOK_API = 'https://open.tiktokapis.com/v2';
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -41,6 +42,7 @@ export const tiktokAdapter: IPlatformAdapter = {
       enforcePublishPolicy('tiktok', payload);
 
       if (process.env.USE_MOCK_PLATFORMS === 'true') {
+        assertMockPlatformsAllowed('platformAdapters/tiktokAdapter');
         return { success: true, platform_post_id: `mock_tiktok_${Date.now()}` };
       }
 

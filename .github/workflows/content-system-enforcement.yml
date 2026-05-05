@@ -1,0 +1,42 @@
+name: Content System Enforcement
+
+on:
+  pull_request:
+    paths:
+      - 'content/**'
+      - 'lib/blog/**'
+      - 'lib/content/**'
+      - 'pages/content/**'
+      - 'pages/api/blog/**'
+      - 'pages/api/blogs/**'
+      - 'pages/api/company/blogs/**'
+      - 'pages/api/admin/blog/**'
+      - 'scripts/enforce-content-system.js'
+      - 'package.json'
+      - 'package-lock.json'
+  push:
+    branches: [main]
+    paths:
+      - 'content/**'
+      - 'lib/blog/**'
+      - 'lib/content/**'
+      - 'pages/content/**'
+      - 'pages/api/blog/**'
+      - 'pages/api/blogs/**'
+      - 'pages/api/company/blogs/**'
+      - 'pages/api/admin/blog/**'
+      - 'scripts/enforce-content-system.js'
+      - 'package.json'
+      - 'package-lock.json'
+
+jobs:
+  enforce-content-system:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node scripts/enforce-content-system.js

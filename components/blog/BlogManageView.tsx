@@ -26,7 +26,7 @@ export default function BlogManageView({ d }: Props) {
             <p className="mt-1 text-sm text-gray-600">View drafts, published blogs, and core performance without leaving the blog workflow.</p>
           </div>
           <div className="flex items-center gap-3">
-            <Link href="/blogs/create" className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900">
+            <Link href="/admin/content" className="text-sm font-medium text-gray-600 transition-colors hover:text-gray-900">
               Back to Create Blog
             </Link>
             {d.canManage && (
@@ -102,7 +102,7 @@ export default function BlogManageView({ d }: Props) {
               d.filter === 'all'
                 ? {
                     label: 'Back to create flow',
-                    href: '/blogs/create',
+                    href: '/admin/content',
                   }
                 : undefined
             }
@@ -204,3 +204,4 @@ export default function BlogManageView({ d }: Props) {
     </div>
   );
 }
+

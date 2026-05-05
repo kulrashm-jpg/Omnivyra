@@ -23,6 +23,7 @@
 
 import IORedis from 'ioredis';
 import { isCronJobAllowedByUsage } from '../../lib/redis/usageProtection';
+import { REDIS_URL } from '../config/env';
 import {
   getIntentGate,
   getJobMinFrequencyMs,
@@ -35,7 +36,7 @@ let _client: IORedis | null = null;
 
 function getClient(): IORedis {
   if (_client) return _client;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = REDIS_URL;
   _client = new IORedis(url, {
     enableReadyCheck:     false,
     maxRetriesPerRequest: 1,

@@ -9,6 +9,7 @@ import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
+import { logger } from '../../../../backend/services/logger';
 
 /** Derives base URL from the actual request host â€” never the NEXT_PUBLIC_APP_URL env var.
  *  This ensures the redirect_uri used in token exchange exactly matches what was sent
@@ -31,10 +32,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (error) {
     const desc = error_description ? ` â€” ${error_description}` : '';
     console.error('[LinkedIn callback] OAuth error from LinkedIn:', error, error_description);
+    logger.error('oauth.callback.failure', { platform: 'linkedin', reason: 'oauth_provider_error', provider_error: String(error), provider_error_description: error_description ? String(error_description) : null });
     return res.redirect(`${errDest}?error=${encodeURIComponent(`LinkedIn error: ${error}${desc}`)}`);
   }
 
   if (!code) {
+    logger.error('oauth.callback.failure', { platform: 'linkedin', reason: 'no_code' });
     return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
@@ -275,16 +278,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         connected_by_user_id: userId,
       });
       console.info('[connector_audit]', JSON.stringify({ user_id: userId, company_id: stateTenantId, platform: 'linkedin', action: 'connect' }));
+      logger.info('oauth.callback.success', { platform: 'linkedin', flow: 'community-ai', account_id: accountId, tenant_id: stateTenantId });
       const communityDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/community-ai/connectors';
       return res.redirect(`${communityDest}?connected=linkedin&status=success`);
     }
 
+    logger.info('oauth.callback.success', { platform: 'linkedin', flow: 'social-platforms', account_id: accountId });
     const successDest = returnTo || '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${sep}connected=linkedin&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('LinkedIn OAuth callback error:', error);
+    logger.error('oauth.callback.failure', { platform: 'linkedin', reason: 'exception', error_message: error?.message ?? 'unknown' });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

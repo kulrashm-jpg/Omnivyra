@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import { getProfile } from '../../../../backend/services/companyProfileService';
-import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../../../content/engine/generator';
 import { buildFormattedStyleInstructions } from '../../../../lib/content/writingStyleEngine';
 
 type SuggestionResponse = {
@@ -146,3 +146,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json(EMPTY);
   }
 }
+

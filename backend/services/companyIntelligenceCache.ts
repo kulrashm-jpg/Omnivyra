@@ -8,6 +8,7 @@
 import IORedis from 'ioredis';
 import type { CompanyIntelligenceInsights } from './companyIntelligenceAggregator';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { REDIS_URL } from '../config/env';
 
 const PREFIX = 'virality:company';
 const TTL_SEC = 300;
@@ -20,7 +21,7 @@ const inMemoryCache = new Map<
 
 function getRedisClient(): IORedis | null {
   if (redisClient) return redisClient;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = REDIS_URL;
   try {
     const raw = new IORedis(url, {
       enableReadyCheck: false,

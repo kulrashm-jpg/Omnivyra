@@ -13,10 +13,12 @@ export interface AuthContext {
   internalUser: {
     id: string;
     email: string;
-    status: string;
+    state: string;
+    organization_id: string;
   };
   memberships: Array<{
     orgId: string;
+    organization_id: string;
     role: string;
     status: string;
   }>;
@@ -97,7 +99,7 @@ export async function buildAuthContext(req: NextApiRequest): Promise<AuthContext
     'Build auth context internal user lookup',
     (client) => client
       .from('users')
-      .select('id, email, status, supabase_uid, is_deleted')
+      .select('id, email, state, status, organization_id, supabase_uid, is_deleted')
       .or(`supabase_uid.eq.${user.id},email.eq.${email}`)
       .limit(2),
   );
@@ -114,15 +116,16 @@ export async function buildAuthContext(req: NextApiRequest): Promise<AuthContext
     throw new AuthContextError('Unauthorized', 401);
   }
 
-  const internalStatus = String((internalRow as any).status ?? '');
-  if ((internalRow as any).is_deleted || internalStatus !== 'active') {
+  const internalState = String((internalRow as any).state ?? (internalRow as any).status ?? '');
+  if ((internalRow as any).is_deleted || ['deleted', 'suspended'].includes(internalState)) {
     throw new AuthContextError('Forbidden', 403);
   }
 
   const internalUser = {
     id: String((internalRow as any).id),
     email: String((internalRow as any).email ?? user.email),
-    status: internalStatus,
+    state: internalState,
+    organization_id: String((internalRow as any).organization_id),
   };
 
   const { data: membershipRows, error: membershipError } = await runWithServiceRole(
@@ -140,6 +143,7 @@ export async function buildAuthContext(req: NextApiRequest): Promise<AuthContext
 
   const memberships = (membershipRows ?? []).map((row: any) => ({
     orgId: String(row.company_id),
+    organization_id: String(row.company_id),
     role: String(row.role),
     status: String(row.status),
   }));

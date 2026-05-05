@@ -2,24 +2,20 @@
  * Intelligence Polling Queue — BullMQ queue for background API signal polling.
  * Feeds the Unified Intelligence Signal Store via workers.
  *
- * Env: REDIS_URL or REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
+ * Env: REDIS_URL
  */
 
 import { Queue } from 'bullmq';
 import { applyQueueProtection } from './bullmqClient';
 import { instrumentQueue } from './queueInstrumentation';
-
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
-const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD || undefined;
+import { REDIS_URL } from '../config/env';
 
 function getConnection() {
   if (REDIS_URL && REDIS_URL.includes('://')) {
     const parsed = new URL(REDIS_URL);
     const needsTls = parsed.hostname.includes('upstash.io');
     return {
-      host: parsed.hostname || 'localhost',
+      host: parsed.hostname,
       port: parseInt(parsed.port || '6379', 10),
       password: parsed.password || undefined,
       ...(needsTls ? { tls: {} } : {}),
@@ -27,7 +23,7 @@ function getConnection() {
       maxRetriesPerRequest: null,
     };
   }
-  return { host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD };
+  throw new Error('REDIS_URL_INVALID');
 }
 
 const QUEUE_NAME = 'intelligence-polling';

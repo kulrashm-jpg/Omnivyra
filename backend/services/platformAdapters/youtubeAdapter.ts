@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const YOUTUBE_API = 'https://www.googleapis.com/youtube/v3';
 
@@ -48,6 +49,7 @@ export const youtubeAdapter: IPlatformAdapter = {
   async publishContent(_payload: PublishContentPayload, _credentials: PlatformCredentials): Promise<PublishResult> {
     return withRateLimit('youtube', async () => {
     if (process.env.USE_MOCK_PLATFORMS === 'true') {
+      assertMockPlatformsAllowed('platformAdapters/youtubeAdapter');
       return {
         success: true,
         platform_post_id: `mock_youtube_${Date.now()}`,

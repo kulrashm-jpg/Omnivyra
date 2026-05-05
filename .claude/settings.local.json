@@ -221,7 +221,9 @@
       "Bash(head -50 c:\\\\\\\\tmp\\\\\\\\tsc20.log)",
       "Bash(wc -l c:\\\\\\\\tmp\\\\\\\\tsc21.log)",
       "Bash(head -30 c:\\\\\\\\tmp\\\\\\\\tsc21.log)",
-      "PowerShell(npx vercel whoami)"
+      "PowerShell(npx vercel whoami)",
+      "PowerShell(npx vercel alias set virality-b5cs9vcth-rawats-projects-5fb9f1f3.vercel.app www.omnivyra.com)",
+      "PowerShell(npx vercel alias --help 2>&1 | Select-Object -First 40)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const REDDIT_API = 'https://oauth.reddit.com';
 const USER_AGENT = 'community-ai/1.0';
@@ -30,6 +31,7 @@ export const redditAdapter: IPlatformAdapter = {
   async publishContent(_payload: PublishContentPayload, _credentials: PlatformCredentials): Promise<PublishResult> {
     return withRateLimit('reddit', async () => {
     if (process.env.USE_MOCK_PLATFORMS === 'true') {
+      assertMockPlatformsAllowed('platformAdapters/redditAdapter');
       return {
         success: true,
         platform_post_id: `t3_mock_${Date.now()}`,

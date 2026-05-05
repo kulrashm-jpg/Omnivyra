@@ -1,4 +1,4 @@
-﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/newsletters/generate
  *
@@ -17,7 +17,7 @@ import {
   runNewsletterGeneration,
   type NewsletterGenerationRequest,
 } from '../../../lib/newsletter/runNewsletterGeneration';
-import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
+import type { BlogAngle } from '../../../content/engine/generator';
 import { isValidNewsletterFormat } from '../../../lib/blog/blogStructureTemplates';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -45,7 +45,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!topic || typeof topic !== 'string' || !topic.trim())
     return res.status(400).json({ error: 'topic required' });
 
-  // â”€â”€ 1. Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 1. Auth ─────────────────────────────────────────────────────────────────
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
@@ -55,7 +55,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
   if (!roleGate) return;
 
-  // â”€â”€ 2. Enrich with company context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 2. Enrich with company context ──────────────────────────────────────────
   let builtContext: Awaited<ReturnType<typeof buildContentContext>> | undefined;
 
   try {
@@ -64,7 +64,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[newsletters/generate] profile enrichment failed:', err);
   }
 
-  // â”€â”€ 3. Route based on mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 3. Route based on mode ────────────────────────────────────────────────
   const resolvedMode = mode === 'angles' || mode === 'full' ? mode : undefined;
 
   if (resolvedMode) {
@@ -105,11 +105,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // No mode â€” newsletters always use the modal flow
+  // No mode — newsletters always use the modal flow
   return res.status(400).json({ error: 'mode required (angles or full)' });
 }
 
 export default applyAuthGuard({
   requiresAuth: true,
 })(handler);
+
 

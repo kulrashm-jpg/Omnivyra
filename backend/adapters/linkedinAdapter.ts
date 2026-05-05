@@ -16,6 +16,7 @@
 import { PublishResult } from './platformAdapter';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import { assertMockPlatformsAllowed } from '../services/mockGuard';
 
 interface ScheduledPost {
   id: string;
@@ -49,6 +50,7 @@ export async function publishToLinkedIn(
   token: Token
 ): Promise<PublishResult> {
   if (config.USE_MOCK_PLATFORMS === true) {
+    assertMockPlatformsAllowed('linkedinAdapter');
     console.log('[linkedin] MOCK MODE: simulating post');
     return {
       success: true,

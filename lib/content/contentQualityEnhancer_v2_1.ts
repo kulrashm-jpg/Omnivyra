@@ -45,7 +45,7 @@ import { wordCount } from '../../pages/blogs.helpers';
  *   runContentQualityEnhancer(input) → QualityEnhancerOutput
  */
 
-import type { BlogGenerationOutput } from '../blog/blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import type { ContentGenerationInput, DepthMapEntry } from './cardToContentBridge';
 import { htmlToBlocks } from '../blog/htmlToBlocks';
 
@@ -108,7 +108,7 @@ export interface InternalLink {
   section_id:  string;
   /** The anchor text used in the HTML <a> element */
   anchor_text: string;
-  /** Slug of the linked post, e.g. "/blog/some-slug" */
+  /** Slug of the linked post, e.g. "/content/blog/some-slug" */
   target_slug: string;
   /** Human-readable explanation of why this link is contextually relevant */
   context:     string;
@@ -635,7 +635,7 @@ function findLinksForSection(
   return selected.map(({ entry, overlap }) => ({
     section_id:  section.id,
     anchor_text: entry.title.length > 60 ? entry.title.slice(0, 57) + '...' : entry.title,
-    target_slug: `/blog/${entry.slug}`,
+    target_slug: `/content/blog/${entry.slug}`,
     context:     `${overlap} shared content tokens with section "${section.heading}" — category: ${entry.category || 'uncategorised'}`,
   }));
 }
@@ -667,7 +667,7 @@ function runInternalLinking(
     const links = findLinksForSection(section, catalog, catalogIndex, usedSlugs);
     if (links.length === 0) return section;
 
-    links.forEach((l) => usedSlugs.add(l.target_slug.replace('/blog/', '')));
+    links.forEach((l) => usedSlugs.add(l.target_slug.replace('/content/blog/', '')));
     allLinks.push(...links);
 
     return { ...section, body: injectLinksIntoSection(section, links) };
@@ -959,3 +959,6 @@ export function runContentQualityEnhancer(
     },
   };
 }
+
+
+

@@ -21,7 +21,7 @@ import { enforceNodeRuntime } from '@/lib/runtime/guard';
 enforceNodeRuntime('lib/redis/client');
 
 import IORedis from 'ioredis';
-import { config } from '@/config';
+import { REDIS_URL } from '../../backend/config/env';
 import type { RedisFeature } from './instrumentation';
 import { createInstrumentedClient } from './instrumentation';
 import { initializeHealthMetrics, recordTerminalStateDetection } from './healthMetrics';
@@ -38,7 +38,7 @@ let _initPromise: Promise<IORedis> | null = null;
  * Automatically detects TLS for Upstash
  */
 export function getRedisConnectionConfig() {
-  const url = config.REDIS_URL;
+  const url = REDIS_URL;
   
   try {
     const parsed = new URL(url);

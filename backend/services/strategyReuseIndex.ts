@@ -16,8 +16,8 @@ import IORedis from 'ioredis';
 import { createHash } from 'crypto';
 import type { CampaignStrategy } from './campaignStrategyEngine';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { REDIS_URL } from '../config/env';
 
-const REDIS_URL      = process.env.REDIS_URL || 'redis://localhost:6379';
 const PREFIX         = 'omnivyra:strategy_idx:v1';
 const MAX_ENTRIES    = 200;
 const ENTRY_TTL_SECS = 7 * 24 * 3600;   // 7 days

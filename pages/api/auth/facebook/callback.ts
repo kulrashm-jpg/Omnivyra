@@ -11,6 +11,7 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { META_GRAPH_VERSION } from '../../../../backend/auth/metaAuthService';
 import { saveToken as saveConnectorMetadata } from '../../../../backend/services/platformTokenService';
+import { logger } from '../../../../backend/services/logger';
 
 const META_GRAPH = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
@@ -105,11 +106,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? decodedState.returnTo
       : '/social-platforms';
 
-  if (error) return redirectError(res, errDest, String(error));
+  if (error) {
+    logger.error('oauth.callback.failure', { platform: 'facebook', reason: 'oauth_provider_error', provider_error: String(error) });
+    return redirectError(res, errDest, String(error));
+  }
   if (!code || typeof code !== 'string') {
+    logger.error('oauth.callback.failure', { platform: 'facebook', reason: 'no_code' });
     return redirectError(res, errDest, 'No authorization code received');
   }
   if (!decodedState.valid) {
+    logger.error('oauth.callback.failure', { platform: 'facebook', reason: 'invalid_state' });
     return redirectError(res, errDest, 'Invalid OAuth state');
   }
 
@@ -273,6 +279,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
     }
 
+    logger.info('oauth.callback.success', {
+      platform: 'facebook',
+      user_id: userId,
+      company_id: companyId,
+      pages_count: pagesPayload.length,
+      instagrams_count: instagramsPayload.length,
+      threads_count: threadsPayload.length,
+    });
     const successDest = returnTo && returnTo.startsWith('/') ? returnTo : '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
     const params = new URLSearchParams({
@@ -287,6 +301,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (err: unknown) {
     const msg = (err as Error)?.message || 'Connection failed';
     console.error('Facebook OAuth callback error:', msg);
+    logger.error('oauth.callback.failure', { platform: 'facebook', reason: 'exception', error_message: msg });
     return redirectError(res, errDest, msg);
   }
 }

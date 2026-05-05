@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const TWITTER_API = 'https://api.twitter.com/2';
 
@@ -30,6 +31,7 @@ export const twitterAdapter: IPlatformAdapter = {
     return withRateLimit('twitter', async () => {
       enforcePublishPolicy('twitter', payload);
     if (process.env.USE_MOCK_PLATFORMS === 'true') {
+      assertMockPlatformsAllowed('platformAdapters/twitterAdapter');
       return {
         success: true,
         platform_post_id: `mock_twitter_${Date.now()}`,

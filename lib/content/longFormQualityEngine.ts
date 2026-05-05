@@ -1,4 +1,4 @@
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import type { CompanyContext } from '../blog/blogRunnerTypes';
 import type { ContentBlock } from '../blog/blockTypes';
 import { htmlToBlocks } from '../blog/htmlToBlocks';
@@ -572,4 +572,5 @@ export async function generatePlannedLongFormContent(input: GeneratePlannedLongF
     validationReport: report,
   };
 }
+
 

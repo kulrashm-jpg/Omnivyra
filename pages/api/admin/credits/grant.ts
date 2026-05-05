@@ -18,8 +18,9 @@
  *   }
  *
  * Auth: Super-admin token via requireAuthenticatedInternalUser + RBAC check.
- * Idempotency: withIdempotency middleware (Idempotency-Key header) + minute-
- *              bucketed ledger key inside grantAdminCreditExtension.
+ * Idempotency: withIdempotency middleware enforces the Idempotency-Key header,
+ *              which is then forwarded to grantAdminCreditExtension as the
+ *              ledger/audit uniqueness scope.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -88,6 +89,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'expiryDays must be a non-negative number' });
   }
 
+  const headerKey = String(req.headers['idempotency-key'] ?? '');
+  const effectiveClientKey = (clientKey && clientKey.trim()) || headerKey;
+  if (!effectiveClientKey) {
+    return res.status(400).json({ error: 'Idempotency-Key header required' });
+  }
+
   let result: AdminGrantResult;
   try {
     result = await grantAdminCreditExtension({
@@ -98,7 +105,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       actorUserId: ctx.id,
       expiryDays,
       allowOverLimit,
-      clientKey,
+      clientKey:   effectiveClientKey,
       metadata,
     });
   } catch (err: any) {

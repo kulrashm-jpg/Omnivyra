@@ -8,13 +8,13 @@ import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { useCredits } from '../../hooks/useCredits';
 import { ChevronDown, LayoutDashboard, LogOut, User, Menu, X, Coins } from 'lucide-react';
 
-const LANDING_ROUTES = ['/', '/pricing', '/about', '/blog'];
+const LANDING_ROUTES = ['/', '/pricing', '/about', '/content/blog'];
 
 const NAV_LINKS = [
   { label: 'Solutions', href: '/solutions' },
   { label: 'Features', href: '/features' },
   { label: 'Pricing', href: '/pricing' },
-  { label: 'Blog', href: '/blog' },
+  { label: 'Blog', href: '/content/blog' },
   { label: 'About', href: '/about' },
 ];
 
@@ -201,3 +201,5 @@ export function useIsLandingRoute(): boolean {
   const router = useRouter();
   return LANDING_ROUTES.includes(router.pathname);
 }
+
+

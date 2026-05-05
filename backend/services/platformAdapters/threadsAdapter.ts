@@ -20,6 +20,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const THREADS_API = 'https://graph.threads.net/v1.0';
 const VIDEO_POLL_INTERVAL_MS = 3000;
@@ -36,6 +37,7 @@ export const threadsAdapter: IPlatformAdapter = {
       enforcePublishPolicy('threads', payload);
 
       if (process.env.USE_MOCK_PLATFORMS === 'true') {
+        assertMockPlatformsAllowed('platformAdapters/threadsAdapter');
         return { success: true, platform_post_id: `mock_threads_${Date.now()}` };
       }
 

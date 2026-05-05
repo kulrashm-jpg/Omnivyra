@@ -9,6 +9,7 @@
 
 import { z } from 'zod';
 import { normalizeRedisUrl, maskRedisUrl } from '@/lib/redis/sanitizer';
+import { REDIS_URL } from '@/backend/config/env';
 
 type SupabaseServiceCredentialKey = `SUPABASE_${'SERVICE'}_${'ROLE_KEY'}`;
 const SUPABASE_SERVICE_CREDENTIAL_KEY = ['SUPABASE', 'SERVICE', 'ROLE_KEY'].join('_') as SupabaseServiceCredentialKey;
@@ -18,7 +19,7 @@ const SUPABASE_SERVICE_CREDENTIAL_KEY = ['SUPABASE', 'SERVICE', 'ROLE_KEY'].join
  * Uses sanitizer to handle common mistakes
  */
 function parseRedisUrl(raw: string | undefined) {
-  if (!raw) return 'redis://localhost:6379';
+  if (!raw) throw new Error('REDIS_URL_MISSING');
   
   try {
     return normalizeRedisUrl(raw);
@@ -27,20 +28,6 @@ function parseRedisUrl(raw: string | undefined) {
       `REDIS_URL validation failed: ${(err as Error).message}`
     );
   }
-}
-
-/**
- * Parse Redis port from env (numeric)
- */
-function parseRedisPort(raw: string | undefined): number | undefined {
-  if (!raw) return undefined;
-  const port = parseInt(raw, 10);
-  if (isNaN(port) || port < 1 || port > 65535) {
-    throw new Error(
-      `REDIS_PORT must be a number between 1-65535. Got: ${raw}`
-    );
-  }
-  return port;
 }
 
 /**
@@ -90,26 +77,9 @@ export const envSchema = z.object({
   // ── Redis (required) ───────────────────────────────────────────────────────
   REDIS_URL: z
     .string()
+    .min(1, 'REDIS_URL_MISSING')
     .transform(parseRedisUrl)
     .describe('Redis connection URL (redis:// or rediss://)'),
-  
-  REDIS_HOST: z
-    .string()
-    .default('localhost')
-    .describe('Redis host (fallback if REDIS_URL not available)'),
-  
-  REDIS_PORT: z
-    .number()
-    .int()
-    .min(1)
-    .max(65535)
-    .default(6379)
-    .describe('Redis port (fallback)'),
-  
-  REDIS_PASSWORD: z
-    .string()
-    .optional()
-    .describe('Redis password (fallback)'),
   
   // ── Redis tuning ───────────────────────────────────────────────────────────
   REDIS_MAX_BYTES: z
@@ -283,10 +253,7 @@ export function validateEnv(): EnvConfig {
       NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       
       // Redis
-      REDIS_URL: process.env.REDIS_URL,
-      REDIS_HOST: process.env.REDIS_HOST,
-      REDIS_PORT: process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT, 10) : undefined,
-      REDIS_PASSWORD: process.env.REDIS_PASSWORD,
+      REDIS_URL,
       REDIS_MAX_BYTES: process.env.REDIS_MAX_BYTES ? parseInt(process.env.REDIS_MAX_BYTES, 10) : undefined,
       UPSTASH_DAILY_REQUEST_LIMIT: process.env.UPSTASH_DAILY_REQUEST_LIMIT 
         ? parseInt(process.env.UPSTASH_DAILY_REQUEST_LIMIT, 10) 

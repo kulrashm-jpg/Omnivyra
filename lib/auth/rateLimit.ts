@@ -43,6 +43,7 @@ import { detectAnomaly } from '../anomaly/detectionEngine';
 import { createInstrumentedClient } from '../redis/instrumentation';
 import { getRateLimitAdminConfig, getRateLimitOverride } from '../../backend/services/adminRuntimeConfig';
 import { logger } from '../../backend/services/logger';
+import { REDIS_URL } from '../../backend/config/env';
 
 // â”€â”€ In-memory fallback limiter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Used ONLY when Redis is unavailable (fail-open path).
@@ -72,7 +73,7 @@ let _rl: IORedis | null = null;
 
 function getRlRedis(): IORedis {
   if (_rl) return _rl;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = REDIS_URL;
   const raw = new IORedis(url, {
     enableReadyCheck: false,
     maxRetriesPerRequest: 1,         // fail fast; rate limiting is non-critical

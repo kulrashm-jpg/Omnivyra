@@ -18,7 +18,7 @@ module.exports = {
   
   // Transform TypeScript files
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.(ts|tsx)$': 'ts-jest',
   },
   
   // TypeScript configuration
@@ -62,4 +62,3 @@ module.exports = {
     '/.next/',
   ],
 };
-

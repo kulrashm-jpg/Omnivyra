@@ -7,7 +7,7 @@ import { useRouter } from 'next/router';
 import { Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import BlogGenerateModal from '../../components/blog/BlogGenerateModal';
 import { useCompanyContext } from '../../components/CompanyContext';
-import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import { NEWSLETTER_FORMAT_OPTIONS, isValidNewsletterFormat, type NewsletterFormatType } from '../../lib/blog/blogStructureTemplates';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../blogs.types';
@@ -528,3 +528,4 @@ export default function NewsletterGeneratePage() {
     </>
   );
 }
+

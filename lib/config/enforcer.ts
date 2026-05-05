@@ -99,8 +99,7 @@ export function initEnforcer() {
   if (process.env.NODE_ENV === 'production' || process.env.ENFORCE_CONFIG_SECURITY === 'true') {
     // In production or when explicitly enabled, wrap process.env with a proxy
     // BUT: Skip proxying during build time to avoid Error prototype issues
-    const isBuildTime = process.env.SKIP_ENV_PROXY === 'true' || 
-                        (process.env.NODE_ENV === 'production' && !process.env.REDIS_URL);
+    const isBuildTime = process.env.SKIP_ENV_PROXY === 'true';
     
     if (isBuildTime) {
       console.warn('[Enforcer] Skipping process.env proxy during build time');

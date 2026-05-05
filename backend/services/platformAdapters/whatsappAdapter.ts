@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const WHATSAPP_API = 'https://graph.facebook.com/v22.0';
 
@@ -27,6 +28,7 @@ export const whatsappAdapter: IPlatformAdapter = {
     return withRateLimit('whatsapp', async () => {
       enforcePublishPolicy('whatsapp', payload);
       if (process.env.USE_MOCK_PLATFORMS === 'true') {
+        assertMockPlatformsAllowed('platformAdapters/whatsappAdapter');
         return {
           success: true,
           platform_post_id: `mock_wa_${Date.now()}`,

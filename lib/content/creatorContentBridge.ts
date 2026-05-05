@@ -250,7 +250,9 @@ export function launchBlogFromCreator({
   };
   const token = persistCreatorBlogPrefill(payload);
   void router.push({
-    pathname: '/blogs/new',
+    pathname: '/admin/content',
     query: token ? { prefill: token } : undefined,
   });
 }
+
+

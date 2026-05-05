@@ -4,10 +4,10 @@
  * DEPRECATED:
  * No active long-form generation path should import this file. Prompt assembly
  * now flows through lib/content/unifiedLongFormEngine.ts and the existing
- * blogGenerationEngine.ts compatibility core.
+ * content/engine/generator.ts compatibility core.
  *
  * Prompt-building functions for blog/content generation.
- * Extracted from blogGenerationEngine.ts.
+ * Extracted into content/engine/generator.ts.
  *
  * Exports:
  *   buildAnglesSystemPrompt
@@ -38,11 +38,11 @@ import {
   type StoryFormatType,
   type GuideFormatType,
 } from './blogStructureTemplates';
-import type { BlogGenerationInput } from './blogGenerationEngine';
+import type { BlogGenerationInput } from '../../content/engine/generator';
 import type { ContentBlock } from './blockTypes';
 
 // ── Re-exported from generationPipeline (used by callers of this module) ─────
-export type { BlogGenerationInput } from './blogGenerationEngine';
+export type { BlogGenerationInput } from '../../content/engine/generator';
 
 // ── Internal template helpers ─────────────────────────────────────────────────
 
@@ -964,3 +964,5 @@ export function buildTemplateAwareUserPrompt(
 
   return lines.join('\n');
 }
+
+

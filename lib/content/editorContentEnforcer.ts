@@ -399,7 +399,7 @@ function injectInternalLinks(
   for (const { section, entry, overlap } of matches) {
     const linkHtml =
       `<p class="internal-links">Related reading: ` +
-      `<a href="/blog/${entry.slug}">${esc(entry.title)}</a></p>`;
+      `<a href="/content/blog/${entry.slug}">${esc(entry.title)}</a></p>`;
 
     const current = sectionMap.get(section.id)!;
     sectionMap.set(section.id, { ...current, body: `${current.body}\n${linkHtml}` });
@@ -407,7 +407,7 @@ function injectInternalLinks(
     added.push({
       section_id:  section.id,
       anchor_text: entry.title,
-      target_slug: `/blog/${entry.slug}`,
+      target_slug: `/content/blog/${entry.slug}`,
       context:     `Token overlap: ${overlap} — matched via "${section.heading}"`,
     });
   }
@@ -598,3 +598,5 @@ export function onEditorSave(input: EditorEnforcerInput): EditorEnforcerOutput {
     publish_blocked: false, // saving is always allowed; hard block fires at publish time
   };
 }
+
+

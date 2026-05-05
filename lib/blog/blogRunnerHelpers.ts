@@ -7,12 +7,12 @@
  */
 
 import { flattenBlocks } from './blockUtils';
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import { getBlogTemplateDepthGuidance } from './blogTemplateGuidance';
 import { getNewsletterTemplateDepthGuidance } from '../newsletter/newsletterTemplateGuidance';
 import { calculateContentQualityScore } from '../content/qualityScoringCore';
 import type { ContentBlock, InternalLinkBlock } from './blockTypes';
-import type { BlogGenerationOutput } from './blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import type { BlogFormatType } from './blogStructureTemplates';
 import type { BlogGenerationRequest } from './blogRunnerTypes';
 import { createServiceRoleMigrationProxy } from '../../backend/db/supabaseClient';
@@ -625,3 +625,5 @@ export async function injectInternalLinks(
     return blocks;
   }
 }
+
+

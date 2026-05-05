@@ -37,6 +37,7 @@ import axios from 'axios';
 import { PublishResult } from './platformAdapter';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
+import { assertMockPlatformsAllowed } from '../services/mockGuard';
 
 interface ScheduledPost {
   id: string;
@@ -179,6 +180,7 @@ export async function publishToTikTok(
 ): Promise<PublishResult> {
   // Use mock mode if enabled
   if (config.USE_MOCK_PLATFORMS === true) {
+    assertMockPlatformsAllowed('tiktokAdapter');
     console.log('🧪 MOCK MODE: Simulating TikTok video upload');
     return {
       success: true,

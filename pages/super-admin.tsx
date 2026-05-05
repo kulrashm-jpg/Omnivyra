@@ -320,7 +320,7 @@ export default function SuperAdminPanel() {
               <button
                 key={tab.id}
                 onClick={() => {
-                  if (tab.id === 'blog') { router.push('/admin/blog'); return; }
+                  if (tab.id === 'blog') { router.push('/admin/content'); return; }
                   setActiveTab(tab.id);
                 }}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium transition-all duration-200 whitespace-nowrap ${
@@ -479,3 +479,4 @@ export default function SuperAdminPanel() {
     </div>
   );
 }
+

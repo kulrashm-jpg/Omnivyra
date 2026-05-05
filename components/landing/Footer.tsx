@@ -15,7 +15,7 @@ const COLUMNS = [
     heading: 'Company',
     links: [
       { label: 'About', href: '/about' },
-      { label: 'Blog', href: '/blog' },
+      { label: 'Blog', href: '/content/blog' },
     ],
   },
   {
@@ -134,3 +134,5 @@ export default function Footer() {
     </footer>
   );
 }
+
+

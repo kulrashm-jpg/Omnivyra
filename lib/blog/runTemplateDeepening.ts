@@ -5,7 +5,7 @@
  * Extracted from runBlogGeneration.ts to keep the main orchestrator under 500 lines.
  */
 
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import type { ContentBlock } from './blockTypes';
 import {
   stripHtmlForWordCount,
@@ -120,3 +120,4 @@ export async function deepenTemplateParagraphsIndividually(args: {
     analysis: analyzeTemplateContentBlocks(repaired),
   };
 }
+

@@ -656,7 +656,7 @@ function formatPlatformLabel(value: string | null | undefined) {
 function getContentRoute(contentType: string | null | undefined) {
   const normalized = String(contentType || '').trim().toLowerCase();
   const routeMap: Record<string, string> = {
-    blog: '/blogs/create',
+    blog: '/admin/content',
     article: '/articles/create',
     post: '/posts/create',
     story: '/stories/create',
@@ -1801,7 +1801,7 @@ function deriveSystemActionLines(snapshot: Snapshot) {
   }
 
   if (content_summary.recent_blogs === 0) {
-    pushAction('doNow', 'Publish new content this week so the system has fresh signal to learn from.', '/blogs/create', 'Publish content this week');
+    pushAction('doNow', 'Publish new content this week so the system has fresh signal to learn from.', '/admin/content', 'Publish content this week');
   } else if (content_summary.total_blogs < 3) {
     pushAction('doNext', 'Broaden the content mix slightly so one successful piece does not carry the whole authority story.', '/command-center/content', 'Broaden content mix');
   }
@@ -1839,7 +1839,7 @@ function deriveSystemActionLines(snapshot: Snapshot) {
   }
 
   if (timing_summary.rhythm_state === 'thin') {
-    pushAction('doNow', `Move to a fixed weekly publishing cadence now. The system only has ${timing_summary.active_days} active day${timing_summary.active_days === 1 ? '' : 's'} in the last ${snapshot.time_range_days} days, which is not enough to create compounding signal.`, topContentType ? getContentRoute(topContentType.type) : '/blogs/create', 'Move to weekly cadence');
+    pushAction('doNow', `Move to a fixed weekly publishing cadence now. The system only has ${timing_summary.active_days} active day${timing_summary.active_days === 1 ? '' : 's'} in the last ${snapshot.time_range_days} days, which is not enough to create compounding signal.`, topContentType ? getContentRoute(topContentType.type) : '/admin/content', 'Move to weekly cadence');
   } else if (timing_summary.rhythm_state === 'steady' && timing_summary.avg_gap_days != null && timing_summary.avg_gap_days > 5) {
     pushAction('doNext', `The system is active, but the average ${timing_summary.avg_gap_days}-day gap between visible events is still slowing compounding momentum. Tighten the publishing rhythm a little further.`, topContentType ? getContentRoute(topContentType.type) : '/command-center/content', 'Tighten rhythm');
   }
@@ -1852,7 +1852,7 @@ function deriveSystemActionLines(snapshot: Snapshot) {
         ? '/posts/create'
         : knowledge_graph_summary.weakest_stage === 'decision'
           ? '/case-studies/create'
-          : '/blogs/create';
+          : '/admin/content';
     pushAction('doNow', `Fill the ${knowledge_graph_summary.weakest_stage} stage next so the system stops over-relying on one part of the buyer journey.`, weakestStageRoute, 'Fill weak stage');
   } else if (knowledge_graph_summary.status === 'maturing') {
     pushAction('monitor', 'The knowledge graph is maturing well enough that the next move should focus on exploiting the strongest clusters rather than rebuilding the foundation.', '/command-center/content', 'Use strong clusters');
@@ -1892,10 +1892,10 @@ function deriveSystemActionLines(snapshot: Snapshot) {
 
   if (objective === 'authority_growth') {
     if (content_summary.recent_blogs === 0) {
-      actions.doNow.unshift({ text: 'Publish a fresh authority asset now because authority growth stalls quickly when the content graph goes quiet.', href: '/blogs/create', label: 'Publish authority asset' });
+      actions.doNow.unshift({ text: 'Publish a fresh authority asset now because authority growth stalls quickly when the content graph goes quiet.', href: '/admin/content', label: 'Publish authority asset' });
     }
     if (topContentType?.type === 'post' || topContentType?.type === 'story') {
-      pushAction('doNext', 'Authority growth should not rely only on short-form. Add at least one deeper format like blog, article, guide, or whitepaper to build stronger depth.', '/blogs/create', 'Add deeper format');
+      pushAction('doNext', 'Authority growth should not rely only on short-form. Add at least one deeper format like blog, article, guide, or whitepaper to build stronger depth.', '/admin/content', 'Add deeper format');
     }
     if (dominantCampaignPath === 'bolt_text') {
       pushAction('doNext', 'Authority growth may now need a richer campaign mix than BOLT Text alone. Try Intelligent Mix or a creator-supported path if strong topics already exist.', '/command-center/intelligent-mix-strategy', 'Enrich campaign mix');
@@ -2119,7 +2119,7 @@ function deriveLearnedSignalsCta(snapshot: Snapshot): { href: string; label: str
           ? '/posts/create'
           : snapshot.knowledge_graph_summary.weakest_stage === 'decision'
             ? '/case-studies/create'
-            : '/blogs/create',
+            : '/admin/content',
       label: 'Strengthen weak stage',
     };
   }
@@ -2142,12 +2142,12 @@ function deriveEcosystemProgressCta(snapshot: Snapshot): { href: string; label: 
           ? '/posts/create'
           : snapshot.knowledge_graph_summary.weakest_stage === 'decision'
             ? '/case-studies/create'
-            : '/blogs/create',
+            : '/admin/content',
       label: 'Fix graph imbalance',
     };
   }
   if (snapshot.timing_summary.rhythm_state === 'thin') {
-    return { href: '/blogs/create', label: 'Tighten operating rhythm' };
+    return { href: '/admin/content', label: 'Tighten operating rhythm' };
   }
   if (snapshot.distribution_summary.active_platforms <= 1 || snapshot.distribution_summary.publish_success_rate < 85) {
     return { href: '/engagement', label: 'Strengthen distribution' };
@@ -2423,7 +2423,7 @@ function derivePrimaryBottleneckCta(snapshot: Snapshot): { href: string; label: 
   const title = bottleneck.title.toLowerCase();
 
   if (title.includes('rhythm')) {
-    return { href: '/blogs/create', label: 'Tighten operating rhythm' };
+    return { href: '/admin/content', label: 'Tighten operating rhythm' };
   }
   if (title.includes('stage depth')) {
     const weakestStage = snapshot.knowledge_graph_summary.weakest_stage;
@@ -2433,7 +2433,7 @@ function derivePrimaryBottleneckCta(snapshot: Snapshot): { href: string; label: 
           ? '/posts/create'
           : weakestStage === 'decision'
             ? '/case-studies/create'
-            : '/blogs/create',
+            : '/admin/content',
       label: 'Strengthen weak stage',
     };
   }
@@ -3908,3 +3908,4 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
     </>
   );
 }
+

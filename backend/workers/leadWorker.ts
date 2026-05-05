@@ -3,7 +3,7 @@
  * Processes lead-jobs from BullMQ queue. Handles execution and timeout recovery.
  *
  * Run: npm run worker:leads
- * Requires: REDIS_HOST, REDIS_PORT, REDIS_PASSWORD (optional) or REDIS_URL
+ * Requires: REDIS_URL
  */
 
 import * as dotenv from 'dotenv';

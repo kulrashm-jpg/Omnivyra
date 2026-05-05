@@ -6,6 +6,7 @@
 
 import IORedis from 'ioredis';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { REDIS_URL } from '../config/env';
 
 const PREFIX = 'virality:ext_api';
 const CACHE_TTL_SEC = 720;
@@ -65,7 +66,7 @@ export function shutdownRedisExternalApiCache(): void {
 
 function getRedisClient(): IORedis | null {
   if (redisClient) return redisClient;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = REDIS_URL;
   try {
     const raw = new IORedis(url, {
       enableReadyCheck: false,

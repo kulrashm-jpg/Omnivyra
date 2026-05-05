@@ -4,6 +4,7 @@ import { saveToken } from '../../../../../backend/services/platformTokenService'
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
+import { logger } from '../../../../../backend/services/logger';
 // IG/Threads social_accounts rows are now provisioned exclusively by the
 // /api/auth/facebook OAuth flow via the meta_oauth_apply RPC. The community-ai
 // connector flow only populates community_ai_platform_tokens (engagement layer).
@@ -33,16 +34,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (error) {
     const message = typeof error_description === 'string' ? error_description : error;
+    logger.error('oauth.callback.failure', { platform: 'meta', flow: 'community-ai', reason: 'oauth_provider_error', provider_error: String(error), provider_error_description: error_description ? String(error_description) : null });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent(String(message || 'Meta OAuth failed'))}`
     );
   }
 
   if (!code || typeof code !== 'string') {
+    logger.error('oauth.callback.failure', { platform: 'meta', flow: 'community-ai', reason: 'no_code' });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Missing authorization code')}`);
   }
 
   if (!state || typeof state !== 'string') {
+    logger.error('oauth.callback.failure', { platform: 'meta', flow: 'community-ai', reason: 'no_state' });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Missing OAuth state')}`);
   }
 
@@ -163,10 +167,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       meta_user_id: metaUserId,
       meta_name: metaName,
     }));
+    logger.info('oauth.callback.success', { platform: 'meta', flow: 'community-ai', user_id: access.userId, organization_id: organizationId, meta_user_id: metaUserId });
 
     return res.redirect(`${redirectTo}?connected=meta&status=success`);
   } catch (err: any) {
     console.error('[meta/callback] error:', err?.message);
+    logger.error('oauth.callback.failure', { platform: 'meta', flow: 'community-ai', reason: 'exception', error_message: err?.message ?? 'unknown' });
     return res.redirect(`/community-ai/connectors?error=${encodeURIComponent('Meta connection failed. Please try again.')}`);
   }
 }

@@ -1,7 +1,7 @@
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import { flattenBlocks } from './blockUtils';
 import type { ContentBlock } from './blockTypes';
-import type { BlogGenerationInput } from './blogGenerationEngine';
+import type { BlogGenerationInput } from '../../content/engine/generator';
 import { buildSectionEnforcementPrompt, type CompanyIdentity } from '../content/companyContextBlock';
 
 type EditorialDraft = {
@@ -581,3 +581,5 @@ export async function runEditorialBlogGeneration(args: {
     content_blocks: contentBlocks,
   };
 }
+
+

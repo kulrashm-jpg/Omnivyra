@@ -29,7 +29,7 @@
  * Injectable overrides let callers eliminate all DB coupling in unit tests.
  */
 
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import { htmlToBlocks } from './htmlToBlocks';
 import type { ContentBlock } from './blockTypes';
 import {
@@ -46,7 +46,7 @@ import {
   type AngleType,
   type BlogGenerationInput,
   type SeriesSummary,
-} from './blogGenerationEngine';
+} from '../../content/engine/generator';
 import { extractPrimaryKeyword } from './seoIntelligenceEngine';
 import {
   buildGenerationContext,
@@ -65,7 +65,7 @@ import type { CompanyContext, BlogGenerationRequest, BlogGenerationResult } from
 // Re-export types for callers that import them from this module
 export type { CompanyContext, BlogGenerationRequest, BlogGenerationResult } from './blogRunnerTypes';
 import { runStandardHtmlBlogGeneration } from './runStandardBlogGeneration';
-import { runTemplateBlogGenerationPath } from './runTemplateBlogGeneration';
+import { runTemplateGenerationPath } from '../../content/engine/templateGenerator';
 
 // ── Main function ─────────────────────────────────────────────────────────────
 
@@ -430,7 +430,7 @@ export async function runBlogGeneration(
     // When a template is provided, AI fills the block structure directly
     // instead of generating a monolithic HTML blob.
     if (effectiveTemplateBlocks && Array.isArray(effectiveTemplateBlocks) && effectiveTemplateBlocks.length > 0) {
-      const templateResult = await runTemplateBlogGenerationPath({
+      const templateResult = await runTemplateGenerationPath({
         company_id, topic, blogTable, cache_version, contentType, formatType,
         effectiveTemplateBlocks, effectiveTemplateName, targetWc, maxTokens,
         generationInput, ctx, confidence, selected_angle: selected_angle as BlogAngle | undefined,
@@ -483,3 +483,6 @@ export async function runBlogGeneration(
     };
   }
 }
+
+
+

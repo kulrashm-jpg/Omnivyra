@@ -6,7 +6,7 @@
  * Extracted from runBlogGeneration.ts to keep the main orchestrator under 500 lines.
  */
 
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import { flattenBlocks } from './blockUtils';
 import { htmlToBlocks } from './htmlToBlocks';
 import {
@@ -16,7 +16,7 @@ import {
   buildGenerationFallback,
   type BlogGenerationInput,
   type BlogGenerationOutput,
-} from './blogGenerationEngine';
+} from '../../content/engine/generator';
 import type { BlogFormatType } from './blogStructureTemplates';
 import {
   checkHookStrength,
@@ -565,3 +565,5 @@ export async function runStandardHtmlBlogGeneration(
     trend_intelligence:  ctx?.trends ?? undefined,
   };
 }
+
+

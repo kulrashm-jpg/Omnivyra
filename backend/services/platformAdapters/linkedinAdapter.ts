@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const LINKEDIN_API = 'https://api.linkedin.com/v2';
 
@@ -24,6 +25,7 @@ export const linkedinAdapter: IPlatformAdapter = {
     return withRateLimit('linkedin', async () => {
       enforcePublishPolicy('linkedin', _payload);
     if (process.env.USE_MOCK_PLATFORMS === 'true') {
+      assertMockPlatformsAllowed('platformAdapters/linkedinAdapter');
       return {
         success: true,
         platform_post_id: `mock_linkedin_${Date.now()}`,

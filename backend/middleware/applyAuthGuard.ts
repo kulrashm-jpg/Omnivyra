@@ -68,7 +68,7 @@ export function applyAuthGuard(config: AuthGuardConfig) {
       if (config.requiresOrg) {
         const orgId = resolveOrgId(req, ctx);
         if (!orgId) {
-          return res.status(400).json({ error: 'Missing orgId' });
+          return res.status(400).json({ error: 'Missing organization_id' });
         }
 
         orgMembership = ctx?.memberships.find((item) => item.orgId === orgId);
@@ -76,7 +76,7 @@ export function applyAuthGuard(config: AuthGuardConfig) {
           return res.status(403).json({ error: 'Invalid org access' });
         }
 
-        (req as any).orgId = orgId;
+        (req as any).organization_id = orgId;
       }
 
       if (config.requiredRole) {

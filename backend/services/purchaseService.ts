@@ -148,3 +148,161 @@ export async function failPurchase(
   if (referenceId) fields.reference_id = referenceId;
   await sb.from('credit_purchases').update(fields).eq('id', purchaseId).eq('status', 'pending');
 }
+
+export type RefundResult =
+  | { success: true; purchaseId: string; creditsRefunded: number; alreadyRefunded?: boolean }
+  | {
+      success: false;
+      reason:
+        | 'not_found'
+        | 'not_completed'
+        | 'insufficient_paid_balance'
+        | 'ledger_failed';
+      detail?: string;
+      availableCredits?: number;
+    };
+
+/**
+ * Reverse a completed purchase by debiting the org's paid balance and writing a
+ * compensating ledger row, then marking the purchase as refunded.
+ *
+ * Idempotency:
+ *   - `idempotencyKey` is required (typically the request's Idempotency-Key
+ *     header). It scopes the underlying hold/confirm reservation pair so retries
+ *     are absorbed at the ledger layer.
+ *   - If the purchase is already 'refunded', the call is a no-op success.
+ *
+ * Failure modes:
+ *   - 'not_found'                : no purchase row with this id
+ *   - 'not_completed'            : purchase is pending/failed (nothing to reverse)
+ *   - 'insufficient_paid_balance': org has spent some/all of the credits;
+ *                                  caller must decide whether to allow a partial
+ *                                  refund or take the loss
+ *   - 'ledger_failed'            : RPC error during hold/confirm
+ */
+export async function refundPurchase(opts: {
+  purchaseId:     string;
+  performedBy:    string;
+  idempotencyKey: string;
+  reason?:        string;
+}): Promise<RefundResult> {
+  if (!opts.idempotencyKey || !opts.idempotencyKey.trim()) {
+    throw new Error('refundPurchase: idempotencyKey is required');
+  }
+  const sb = serviceSupabase();
+
+  // ── 1. Fetch purchase ─────────────────────────────────────────────────────
+  const { data: purchase, error: fetchErr } = await sb
+    .from('credit_purchases')
+    .select('id, organization_id, credits, status')
+    .eq('id', opts.purchaseId)
+    .maybeSingle();
+
+  if (fetchErr || !purchase) {
+    return { success: false, reason: 'not_found' };
+  }
+  if (purchase.status === 'refunded') {
+    // Idempotent — already refunded.
+    return { success: true, purchaseId: purchase.id, creditsRefunded: purchase.credits, alreadyRefunded: true };
+  }
+  if (purchase.status !== 'completed') {
+    return { success: false, reason: 'not_completed', detail: `status=${purchase.status}` };
+  }
+
+  // ── 2. Verify the org still has the paid credits to reverse ──────────────
+  const { data: wallet } = await sb
+    .from('organization_credits')
+    .select('paid_balance, reserved_paid')
+    .eq('organization_id', purchase.organization_id)
+    .maybeSingle();
+  const paidAvailable = Math.max(
+    0,
+    ((wallet as any)?.paid_balance ?? 0) - ((wallet as any)?.reserved_paid ?? 0),
+  );
+  if (paidAvailable < purchase.credits) {
+    return {
+      success:          false,
+      reason:           'insufficient_paid_balance',
+      detail:           'Some credits have already been consumed; full refund would create a negative balance',
+      availableCredits: paidAvailable,
+    };
+  }
+
+  // ── 3. HOLD + CONFIRM the refund amount on paid_balance ───────────────────
+  const baseKey       = makeIdempotencyKey(opts.performedBy, 'purchase_refund', `${purchase.id}:${opts.idempotencyKey}`);
+  const holdKey       = `${baseKey}:hold`;
+  const confirmKey    = `${baseKey}:confirm`;
+  const note          = `Refund of purchase ${purchase.id}${opts.reason ? ` — ${opts.reason}` : ''}`;
+
+  const hold = await sb.rpc('apply_credit_reservation', {
+    p_org_id:           purchase.organization_id,
+    p_phase:            'hold',
+    p_free_amount:      0,
+    p_incentive_amount: 0,
+    p_paid_amount:      purchase.credits,
+    p_idempotency_key:  holdKey,
+    p_reference_type:   'purchase_refund',
+    p_reference_id:     purchase.id,
+    p_note:             note,
+    p_performed_by:     opts.performedBy,
+    p_parent_id:        null,
+  });
+  if (hold.error) {
+    return { success: false, reason: 'ledger_failed', detail: hold.error.message };
+  }
+
+  const confirm = await sb.rpc('apply_credit_reservation', {
+    p_org_id:           purchase.organization_id,
+    p_phase:            'confirm',
+    p_free_amount:      0,
+    p_incentive_amount: 0,
+    p_paid_amount:      purchase.credits,
+    p_idempotency_key:  confirmKey,
+    p_reference_type:   'purchase_refund',
+    p_reference_id:     purchase.id,
+    p_note:             note,
+    p_performed_by:     opts.performedBy,
+    p_parent_id:        null,
+  });
+  if (confirm.error) {
+    // Compensating release so we don't leave reserved_paid stuck.
+    try {
+      await sb.rpc('apply_credit_reservation', {
+        p_org_id:           purchase.organization_id,
+        p_phase:            'release',
+        p_free_amount:      0,
+        p_incentive_amount: 0,
+        p_paid_amount:      purchase.credits,
+        p_idempotency_key:  `${baseKey}:release`,
+        p_reference_type:   'purchase_refund',
+        p_reference_id:     purchase.id,
+        p_note:             `${note} (release after confirm failure)`,
+        p_performed_by:     opts.performedBy,
+        p_parent_id:        null,
+      });
+    } catch {
+      // Best-effort — log already captured upstream by the RPC error.
+    }
+    return { success: false, reason: 'ledger_failed', detail: confirm.error.message };
+  }
+
+  // ── 4. Mark purchase as refunded ─────────────────────────────────────────
+  const { error: updateErr } = await sb
+    .from('credit_purchases')
+    .update({
+      status:              'refunded',
+      refunded_at:         new Date().toISOString(),
+      refund_reason:       opts.reason ?? null,
+      refunded_by_user_id: opts.performedBy,
+      refund_credits:      purchase.credits,
+    })
+    .eq('id', purchase.id)
+    .eq('status', 'completed');
+
+  if (updateErr) {
+    // Ledger reversal already succeeded — log but do not unwind.
+    console.warn('[purchaseService] refund status update failed (ledger already reversed):', updateErr.message);
+  }
+
+  return { success: true, purchaseId: purchase.id, creditsRefunded: purchase.credits };
+}

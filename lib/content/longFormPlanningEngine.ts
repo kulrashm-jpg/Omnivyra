@@ -1,4 +1,4 @@
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import { htmlToBlocks } from '../blog/htmlToBlocks';
 import type { BlogGenerationRequest, BlogGenerationResult, CompanyContext } from '../blog/runBlogGeneration';
 import { injectInternalLinks } from '../blog/runBlogGenerationDataAccess';
@@ -1021,3 +1021,4 @@ export async function runPlannedLongFormGeneration(
     },
   };
 }
+

@@ -14,6 +14,7 @@ import type {
   ConnectionTestResult,
 } from './baseAdapter';
 import { withRateLimit, enforcePublishPolicy, fetchJsonWithBearer } from './baseAdapter';
+import { assertMockPlatformsAllowed } from '../mockGuard';
 
 const PINTEREST_API = 'https://api.pinterest.com/v5';
 
@@ -27,6 +28,7 @@ export const pinterestAdapter: IPlatformAdapter = {
     return withRateLimit('pinterest', async () => {
       enforcePublishPolicy('pinterest', payload);
       if (process.env.USE_MOCK_PLATFORMS === 'true') {
+        assertMockPlatformsAllowed('platformAdapters/pinterestAdapter');
         return {
           success: true,
           platform_post_id: `mock_pin_${Date.now()}`,

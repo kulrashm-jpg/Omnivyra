@@ -67,7 +67,7 @@ function hashtagsFromTags(tags: string[], category: string, max = 5): string[] {
 }
 
 function blogUrl(slug: string): string {
-  return `https://omnivyra.com/blog/${slug}`;
+  return `https://omnivyra.com/content/blog/${slug}`;
 }
 
 function firstSentence(text: string): string {
@@ -292,3 +292,5 @@ export function extractRepurposeInput(post: {
     h2Headings:  h2_headings,
   };
 }
+
+

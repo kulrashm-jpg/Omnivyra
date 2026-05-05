@@ -4,7 +4,7 @@
  * Initializes Redis connection and creates Queue/Worker instances for background job processing.
  * 
  * Requirements:
- * - REDIS_URL environment variable (e.g., redis://localhost:6379)
+ * - REDIS_URL environment variable
  * - Redis server running (use docker run -p 6379:6379 redis:7)
  * 
  * Usage:
@@ -38,8 +38,7 @@ import {
 import { startMetricsPersistence } from '../../lib/instrumentation/metricsPersistence';
 import { getSystemMetrics }        from '../../lib/instrumentation/systemMetrics';
 import { estimateCost }            from '../../lib/instrumentation/costEngine';
-
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+import { REDIS_URL } from '../config/env';
 
 // Parse Redis connection options — includes TLS for Upstash hosts
 function parseRedisUrl(url: string) {
@@ -58,16 +57,11 @@ function parseRedisUrl(url: string) {
       ...(needsTls ? { tls: {} } : {}),
     };
   }
-  return {
-    host: 'localhost',
-    port: 6379,
-    password: undefined,
-  };
+  throw new Error('REDIS_URL_INVALID');
 }
 
 const redisConfig = parseRedisUrl(REDIS_URL);
-const IS_OPTIONAL_LOCAL_REDIS =
-  redisConfig.host === 'localhost' || redisConfig.host === '127.0.0.1';
+const IS_OPTIONAL_LOCAL_REDIS = false;
 const REDIS_ERROR_LOG_COOLDOWN_MS = 30_000;
 
 export function getRedisConfig() {

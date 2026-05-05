@@ -12,7 +12,7 @@
  */
 
 import { getAngleEffectiveness, getToneEffectiveness } from '../../backend/services/contentFeedbackLoop';
-import type { AngleType } from './blogGenerationEngine';
+import type { AngleType } from '../../content/engine/generator';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -148,3 +148,4 @@ function buildPerformanceHint(
   const pct = Math.round(entry.score * 100);
   return `Performance hint: ${recommended.charAt(0).toUpperCase() + recommended.slice(1)} angles have ${pct}% effectiveness for this company (${entry.sample_size} samples).`;
 }
+

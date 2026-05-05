@@ -88,12 +88,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
       const { action, companyId, credits, usdEquivalent, note, creditRateUsd } = req.body ?? {};
       if (!companyId) return res.status(400).json({ error: 'companyId required' });
+      const idempotencyKey = String(req.headers['idempotency-key'] ?? '');
 
       if (action === 'grant') {
         if (typeof credits !== 'number' || credits <= 0) {
           return res.status(400).json({ error: 'credits must be a positive number' });
         }
-        const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId });
+        const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId, idempotencyKey });
         if (!result.ok) return res.status(500).json({ error: result.error });
         await recordAdminAudit({
           actorUserId: userId,
@@ -109,7 +110,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (action === 'adjust') {
         if (typeof credits !== 'number') return res.status(400).json({ error: 'credits must be a number (positive or negative)' });
         if (!note) return res.status(400).json({ error: 'note required for adjustments' });
-        const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId });
+        const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId, idempotencyKey });
         if (!result.ok) return res.status(500).json({ error: result.error });
         await recordAdminAudit({
           actorUserId: userId,
@@ -148,4 +149,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
-export default handler;
+export default withIdempotency(handler, { scope: 'admin-credits', methods: ['POST'] });

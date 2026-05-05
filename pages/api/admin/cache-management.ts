@@ -13,10 +13,10 @@ import IORedis from 'ioredis';
 import { requireAdminScope } from '../../../backend/services/requestAccessService';
 import { getCacheStats as getExtApiStats } from '../../../backend/services/redisExternalApiCache';
 import { invalidateCacheByPrefix } from '../../../backend/services/aiResponseCache';
+import { REDIS_URL } from '../../../backend/config/env';
 
 function getRedisClient(): IORedis | null {
-  const url = process.env.REDIS_URL || process.env.REDIS_PRIVATE_URL;
-  if (!url) return null;
+  const url = REDIS_URL;
   try {
     return new IORedis(url, { lazyConnect: true, maxRetriesPerRequest: 1, connectTimeout: 3000 });
   } catch {

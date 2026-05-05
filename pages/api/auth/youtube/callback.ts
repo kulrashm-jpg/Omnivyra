@@ -9,6 +9,7 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { logger } from '../../../../backend/services/logger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -23,10 +24,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     : ((earlyReturnTo && earlyReturnTo.startsWith('/')) ? earlyReturnTo : '/social-platforms');
 
   if (error) {
+    logger.error('oauth.callback.failure', { platform: 'youtube', reason: 'oauth_provider_error', provider_error: String(error) });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
+    logger.error('oauth.callback.failure', { platform: 'youtube', reason: 'no_code' });
     return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
@@ -212,16 +215,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         expires_at: expiresAt,
         connected_by_user_id: userId,
       });
+      logger.info('oauth.callback.success', { platform: 'youtube', flow: 'community-ai', account_id: accountId, tenant_id: stateTenantId });
       const communityDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/community-ai/connectors';
       return res.redirect(`${communityDest}?connected=youtube&status=success`);
     }
 
+    logger.info('oauth.callback.success', { platform: 'youtube', flow: 'social-platforms', account_id: accountId });
     const successDest = returnTo || '/social-platforms';
     const sep = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${sep}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
 
   } catch (error: any) {
     console.error('YouTube OAuth callback error:', error);
+    logger.error('oauth.callback.failure', { platform: 'youtube', reason: 'exception', error_message: error?.message ?? 'unknown' });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

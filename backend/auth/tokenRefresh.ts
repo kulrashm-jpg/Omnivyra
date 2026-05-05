@@ -22,6 +22,7 @@ import { config } from '@/config';
 import { getOAuthCredentialsForPlatform } from './oauthCredentialResolver';
 import { withRefreshLock } from './refreshLock';
 import { buildXRefreshLockKey } from './refreshAccountResolver';
+import { logger } from '../services/logger';
 
 export type TwitterTokenRefreshStatus = 'refreshed' | 'still_valid' | 'requires_reconnect' | 'refresh_failed';
 
@@ -100,16 +101,24 @@ export async function refreshLinkedInToken(
     await setToken(socialAccountId, newToken);
 
     console.log('✅ LinkedIn token refreshed successfully');
+    logger.info('token.refresh.success', { platform: 'linkedin', account_id: socialAccountId });
     return newToken;
   } catch (error: any) {
     const errorDetails = error.response?.data || error.message;
     console.error('❌ LinkedIn token refresh error:', errorDetails);
-    
+
     // Check if refresh token is invalid
     if (error.response?.status === 400 || error.response?.status === 401) {
       console.error('⚠️ Refresh token may be invalid or expired - user needs to reconnect');
     }
-    
+
+    logger.error('token.refresh.failure', {
+      platform: 'linkedin',
+      account_id: socialAccountId,
+      reason: error.response?.status === 400 || error.response?.status === 401 ? 'requires_reconnect' : 'exception',
+      http_status: error.response?.status ?? null,
+      error_message: typeof errorDetails === 'string' ? errorDetails : (error?.message ?? 'unknown'),
+    });
     return null;
   }
 }
@@ -248,6 +257,11 @@ async function doRefreshTwitterTokenInner(
     // is now the single token source for both publishing and connector reads.
     await setToken(account.account_id, refreshed);
     await recordTwitterRefreshOutcome(account.account_id, 'success', null);
+    logger.info('token.refresh.success', {
+      platform: 'x',
+      account_id: account.account_id,
+      rotated: Boolean(rotatedRefreshToken),
+    });
 
     return {
       access_token: refreshed.access_token,
@@ -273,6 +287,13 @@ async function doRefreshTwitterTokenInner(
       errorDescription
     );
     await recordTwitterRefreshOutcome(account.account_id, 'failed', persistedError);
+    logger.error('token.refresh.failure', {
+      platform: 'x',
+      account_id: account.account_id,
+      reason: 'exception',
+      error_code: errorCode,
+      error_description: errorDescription || null,
+    });
     return { status: 'refresh_failed' };
   }
 }
@@ -413,6 +434,7 @@ export async function refreshFacebookToken(
     await setToken(socialAccountId, newToken);
 
     console.log('✅ Facebook token refreshed successfully');
+    logger.info('token.refresh.success', { platform: 'facebook', account_id: socialAccountId });
     return newToken;
   } catch (error: any) {
     const errorDetails = error.response?.data || error.message;
@@ -423,6 +445,12 @@ export async function refreshFacebookToken(
       return await refreshFacebookTokenWithRefreshToken(socialAccountId, currentToken, appId, appSecret);
     }
 
+    logger.error('token.refresh.failure', {
+      platform: 'facebook',
+      account_id: socialAccountId,
+      reason: 'exception',
+      error_message: typeof errorDetails === 'string' ? errorDetails : (error?.message ?? 'unknown'),
+    });
     return null;
   }
 }
@@ -460,9 +488,16 @@ async function refreshFacebookTokenWithRefreshToken(
 
     await setToken(socialAccountId, refreshedToken);
     console.log('✅ Facebook token refreshed via refresh_token');
+    logger.info('token.refresh.success', { platform: 'facebook', account_id: socialAccountId, path: 'refresh_token_fallback' });
     return refreshedToken;
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Facebook refresh token also failed:', error);
+    logger.error('token.refresh.failure', {
+      platform: 'facebook',
+      account_id: socialAccountId,
+      reason: 'refresh_token_fallback_failed',
+      error_message: error?.message ?? String(error),
+    });
     return null;
   }
 }
@@ -535,18 +570,24 @@ export async function refreshYouTubeToken(
     await setToken(socialAccountId, newToken);
 
     console.log('✅ YouTube token refreshed successfully');
+    logger.info('token.refresh.success', { platform: 'youtube', account_id: socialAccountId });
     return newToken;
   } catch (error: any) {
     const errorDetails = error.response?.data || error.message;
     console.error('❌ YouTube token refresh error:', errorDetails);
-    
-    if (error.response?.status === 400) {
-      const errorData = error.response?.data;
-      if (errorData?.error === 'invalid_grant') {
-        console.error('⚠️ Refresh token invalid or expired - user needs to reconnect');
-      }
+
+    const isInvalidGrant = error.response?.status === 400 && error.response?.data?.error === 'invalid_grant';
+    if (isInvalidGrant) {
+      console.error('⚠️ Refresh token invalid or expired - user needs to reconnect');
     }
-    
+
+    logger.error('token.refresh.failure', {
+      platform: 'youtube',
+      account_id: socialAccountId,
+      reason: isInvalidGrant ? 'requires_reconnect' : 'exception',
+      http_status: error.response?.status ?? null,
+      error_message: typeof errorDetails === 'string' ? errorDetails : (error?.message ?? 'unknown'),
+    });
     return null;
   }
 }
@@ -604,10 +645,18 @@ export async function refreshSpotifyToken(
     await setToken(socialAccountId, newToken);
 
     console.log('✅ Spotify token refreshed successfully');
+    logger.info('token.refresh.success', { platform: 'spotify', account_id: socialAccountId });
     return newToken;
   } catch (error: any) {
     const errorDetails = error.response?.data || error.message;
     console.error('❌ Spotify token refresh error:', errorDetails);
+    logger.error('token.refresh.failure', {
+      platform: 'spotify',
+      account_id: socialAccountId,
+      reason: 'exception',
+      http_status: error.response?.status ?? null,
+      error_message: typeof errorDetails === 'string' ? errorDetails : (error?.message ?? 'unknown'),
+    });
     return null;
   }
 }
@@ -667,15 +716,24 @@ export async function refreshTikTokToken(
     await setToken(socialAccountId, newToken);
 
     console.log('✅ TikTok token refreshed successfully');
+    logger.info('token.refresh.success', { platform: 'tiktok', account_id: socialAccountId });
     return newToken;
   } catch (error: any) {
     const errorDetails = error.response?.data || error.message;
     console.error('❌ TikTok token refresh error:', errorDetails);
-    
-    if (error.response?.status === 400 || error.response?.status === 401) {
+
+    const isAuthFailure = error.response?.status === 400 || error.response?.status === 401;
+    if (isAuthFailure) {
       console.error('⚠️ Refresh token may be invalid or expired - user needs to reconnect');
     }
-    
+
+    logger.error('token.refresh.failure', {
+      platform: 'tiktok',
+      account_id: socialAccountId,
+      reason: isAuthFailure ? 'requires_reconnect' : 'exception',
+      http_status: error.response?.status ?? null,
+      error_message: typeof errorDetails === 'string' ? errorDetails : (error?.message ?? 'unknown'),
+    });
     return null;
   }
 }
@@ -737,15 +795,24 @@ export async function refreshRedditToken(
     await setToken(socialAccountId, newToken);
 
     console.log('✅ Reddit token refreshed successfully');
+    logger.info('token.refresh.success', { platform: 'reddit', account_id: socialAccountId });
     return newToken;
   } catch (error: any) {
     const errorDetails = error.response?.data || error.message;
     console.error('❌ Reddit token refresh error:', errorDetails);
 
-    if (error.response?.status === 400 || error.response?.status === 401) {
+    const isAuthFailure = error.response?.status === 400 || error.response?.status === 401;
+    if (isAuthFailure) {
       console.error('⚠️ Refresh token may be invalid or expired - user needs to reconnect');
     }
 
+    logger.error('token.refresh.failure', {
+      platform: 'reddit',
+      account_id: socialAccountId,
+      reason: isAuthFailure ? 'requires_reconnect' : 'exception',
+      http_status: error.response?.status ?? null,
+      error_message: typeof errorDetails === 'string' ? errorDetails : (error?.message ?? 'unknown'),
+    });
     return null;
   }
 }
@@ -805,15 +872,24 @@ export async function refreshPinterestToken(
     await setToken(socialAccountId, newToken);
 
     console.log('✅ Pinterest token refreshed successfully');
+    logger.info('token.refresh.success', { platform: 'pinterest', account_id: socialAccountId });
     return newToken;
   } catch (error: any) {
     const errorDetails = error.response?.data || error.message;
     console.error('❌ Pinterest token refresh error:', errorDetails);
-    
-    if (error.response?.status === 400 || error.response?.status === 401) {
+
+    const isAuthFailure = error.response?.status === 400 || error.response?.status === 401;
+    if (isAuthFailure) {
       console.error('⚠️ Refresh token may be invalid or expired - user needs to reconnect');
     }
-    
+
+    logger.error('token.refresh.failure', {
+      platform: 'pinterest',
+      account_id: socialAccountId,
+      reason: isAuthFailure ? 'requires_reconnect' : 'exception',
+      http_status: error.response?.status ?? null,
+      error_message: typeof errorDetails === 'string' ? errorDetails : (error?.message ?? 'unknown'),
+    });
     return null;
   }
 }

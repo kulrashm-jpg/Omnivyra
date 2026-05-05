@@ -1,4 +1,4 @@
-﻿import '../styles/globals.css';
+import '../styles/globals.css';
 import type { AppProps } from 'next/app';
 import Head from 'next/head';
 import Script from 'next/script';
@@ -16,7 +16,7 @@ import { WEBSITE_GA_MEASUREMENT_ID } from '../lib/websiteAnalytics';
 // link / password-reset flows and prevented sessions from persisting across
 // long complete.
 
-const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
+const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/content/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
 
 const WebsiteAnalytics: React.FC = () => {
   return (
@@ -115,9 +115,9 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     setMounted(true);
   }, []);
 
-  const publicRoutes = ['/login', '/super-admin/login', '/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite'];
-  const isBlogRoute = router.pathname === '/blog' || router.pathname.startsWith('/blog/');
-  const isAdminBlogRoute = router.pathname === '/admin/blog' || router.pathname.startsWith('/admin/blog/');
+  const publicRoutes = ['/login', '/super-admin/login', '/', '/landing', '/pricing', '/about', '/content/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/get-free-credits', '/create-account', '/auth/callback', '/auth/verify', '/auth/set-password', '/auth/accept-invite'];
+  const isBlogRoute = router.pathname === '/content/[type]' || router.pathname === '/content/[type]/[slug]';
+  const isAdminBlogRoute = router.pathname === '/admin/content';
   const isSuperAdminRoute = router.pathname.startsWith('/super-admin');
   const isPlatformExternalApis =
     router.pathname === '/external-apis' && router.asPath.includes('mode=platform');
@@ -142,7 +142,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const showLandingNavbar = LANDING_PUBLIC_ROUTES.includes(router.pathname) || isBlogRoute || isAuditRoute;
 
   // After auth settles: redirect unauthenticated users away from protected routes.
-  // Must be a useEffect â€” calling router.replace() synchronously during render causes
+  // Must be a useEffect — calling router.replace() synchronously during render causes
   // Next.js to attempt a hard navigation while a soft navigation is in flight, which
   // triggers "Invariant: attempted to hard navigate to the same URL".
   useEffect(() => {
@@ -206,3 +206,4 @@ function MyApp({ Component, pageProps }: AppProps) {
 }
 
 export default MyApp;
+

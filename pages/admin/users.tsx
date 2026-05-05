@@ -41,7 +41,7 @@ export default function AdminUsersPage() {
     if (!selectedCompanyId) return;
     try {
       setErrorMessage(null);
-      const response = await fetch(`/api/users?companyId=${encodeURIComponent(selectedCompanyId)}`);
+      const response = await fetch(`/api/users?organization_id=${encodeURIComponent(selectedCompanyId)}`);
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data?.error || 'Failed to load users');
@@ -69,7 +69,7 @@ export default function AdminUsersPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: inviteEmail,
-          companyId: selectedCompanyId,
+          organization_id: selectedCompanyId,
           role: inviteRole,
         }),
       });
@@ -94,7 +94,7 @@ export default function AdminUsersPage() {
       const response = await fetch(`/api/users/${userId}/role`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role, companyId: selectedCompanyId }),
+        body: JSON.stringify({ role, organization_id: selectedCompanyId }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -110,7 +110,7 @@ export default function AdminUsersPage() {
     if (!selectedCompanyId) return;
     try {
       setErrorMessage(null);
-      const response = await fetch(`/api/users/${userId}?companyId=${selectedCompanyId}`, {
+      const response = await fetch(`/api/users/${userId}?organization_id=${encodeURIComponent(selectedCompanyId)}`, {
         method: 'DELETE',
       });
       const data = await response.json();

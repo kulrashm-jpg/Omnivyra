@@ -19,6 +19,7 @@ import { promisify } from 'util';
 import { recordCacheExactHit, recordCacheNearHit, recordCacheMiss } from './metricsCollector';
 import { hotGet, hotSet, recordAccess as hotRecordAccess } from './hotKeyCache';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { REDIS_URL } from '../config/env';
 
 const gzipAsync   = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -86,7 +87,7 @@ let _available = false;
 
 function getClient(): IORedis | null {
   if (_client) return _client;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = REDIS_URL;
   try {
     const raw = new IORedis(url, {
       enableReadyCheck: false,

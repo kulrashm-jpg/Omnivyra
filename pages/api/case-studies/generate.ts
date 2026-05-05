@@ -1,4 +1,4 @@
-﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/case-studies/generate
  *
@@ -14,7 +14,7 @@ import {
   runCaseStudyGeneration,
   type CaseStudyGenerationRequest,
 } from '../../../lib/case-study/runCaseStudyGeneration';
-import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
+import type { BlogAngle } from '../../../content/engine/generator';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -118,4 +118,5 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 export default applyAuthGuard({
   requiresAuth: true,
 })(handler);
+
 

@@ -1,4 +1,4 @@
-﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 
 /**
  * POST /api/blogs/[id]/repurpose
@@ -9,7 +9,7 @@
  *
  * Body params (all optional):
  *   tone?:   'professional' | 'conversational' | 'bold' | 'educational'
- *   source?: 'company' | 'public'  â€” defaults to 'company'
+ *   source?: 'company' | 'public'  — defaults to 'company'
  *
  * Auth: company members can repurpose their own blogs;
  *       public blogs require no auth (pass source=public).
@@ -18,7 +18,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createServiceRoleMigrationProxy } from '../../../../backend/db/supabaseClient';
 const supabase = createServiceRoleMigrationProxy('AUTO_MIGRATION_REQUIRED');
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
-import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../../../content/engine/generator';
 import { extractBlogContext } from '../../../../lib/blog/blockExtractor';
 import {
   buildRepurposeSystemPrompt,
@@ -29,12 +29,12 @@ import {
 } from '../../../../lib/blog/blogRepurposingEngine';
 
 // ---------------------------------------------------------------------------
-// Deterministic fallback (no-AI) â€” simple template-based output
+// Deterministic fallback (no-AI) — simple template-based output
 // ---------------------------------------------------------------------------
 
 function buildFallback(input: BlogRepurposeInput): RepurposeOutput {
   const top3 = input.key_insights.slice(0, 3);
-  const bullets = input.key_insights.slice(0, 5).map((i) => `â€¢ ${i}`);
+  const bullets = input.key_insights.slice(0, 5).map((i) => `• ${i}`);
 
   return {
     linkedin_posts: [
@@ -55,7 +55,7 @@ function buildFallback(input: BlogRepurposeInput): RepurposeOutput {
       },
     ],
     twitter_thread: [
-      `ðŸ§µ ${input.title} â€” here's what you need to know:`,
+      `🧵 ${input.title} — here's what you need to know:`,
       ...input.key_insights.slice(0, 6).map((ins, i) => `${i + 2}/ ${ins}`),
       `9/ Read the full article for the complete picture.`,
     ],
@@ -63,7 +63,7 @@ function buildFallback(input: BlogRepurposeInput): RepurposeOutput {
       subject: input.title.slice(0, 60),
       preview: input.summary.slice(0, 100) || `Key insights from: ${input.title}`,
       bullet_insights: bullets,
-      cta: 'Read the full article â†’',
+      cta: 'Read the full article →',
     },
     instagram_caption: `${input.title}\n\n${top3[0] ?? ''}\n\n#marketing #content #insights`,
   };
@@ -84,7 +84,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     ? req.body.tone as BlogRepurposeInput['tone']
     : 'professional';
 
-  // â”€â”€ Auth: company blogs require company membership â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Auth: company blogs require company membership ────────────────────────
   let companyId: string | null = null;
 
   if (source === 'company') {
@@ -99,7 +99,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     companyId = companyIdParam;
   }
 
-  // â”€â”€ Fetch blog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Fetch blog ────────────────────────────────────────────────────────────
   const table = source === 'public' ? 'public_blogs' : 'blogs';
 
   const query = supabase
@@ -115,7 +115,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { data: blog, error: blogErr } = await query.maybeSingle();
   if (blogErr || !blog) return res.status(404).json({ error: 'Blog not found or not published' });
 
-  // â”€â”€ Extract structured context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Extract structured context ────────────────────────────────────────────
   const { key_insights, summary, h2_headings } = extractBlogContext(blog.content_blocks);
 
   const input: BlogRepurposeInput = {
@@ -126,7 +126,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     tone,
   };
 
-  // â”€â”€ AI generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── AI generation ─────────────────────────────────────────────────────────
   let output: RepurposeOutput | null = null;
 
   try {
@@ -145,11 +145,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const raw = result.output ? JSON.parse(result.output) : null;
     output = validateRepurposeOutput(raw);
   } catch (_err) {
-    // AI failure â†’ deterministic fallback (no hallucination risk)
+    // AI failure → deterministic fallback (no hallucination risk)
     output = null;
   }
 
-  // â”€â”€ Fallback if AI returned invalid/empty output â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Fallback if AI returned invalid/empty output ──────────────────────────
   if (!output) {
     output = buildFallback(input);
   }
@@ -160,4 +160,5 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 export default applyAuthGuard({
   requiresAuth: true,
 })(handler);
+
 

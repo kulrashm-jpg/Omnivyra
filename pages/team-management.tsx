@@ -49,7 +49,7 @@ export default function TeamManagement() {
     setIsLoading(true);
     try {
       const response = await apiFetch(
-        `/api/company/users?companyId=${selectedCompanyId}&ts=${Date.now()}`,
+        `/api/users?organization_id=${encodeURIComponent(selectedCompanyId)}&ts=${Date.now()}`,
         { cache: 'no-store' }
       );
       const data = await response.json();
@@ -115,14 +115,13 @@ export default function TeamManagement() {
     if (!inviteForm.email || !inviteForm.role || !selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await apiFetch('/api/company/users', {
+      const response = await apiFetch('/api/users/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: inviteForm.name,
           email: inviteForm.email,
           role: inviteForm.role,
-          companyId: selectedCompanyId,
+          organization_id: selectedCompanyId,
         }),
       });
       const result = await response.json();
@@ -146,10 +145,10 @@ export default function TeamManagement() {
     if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await apiFetch('/api/company/users', {
-        method: 'PUT',
+      const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}/role`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: selectedCompanyId, role, userId }),
+        body: JSON.stringify({ organization_id: selectedCompanyId, role }),
       });
       if (!response.ok) {
         const result = await response.json();
@@ -169,10 +168,10 @@ export default function TeamManagement() {
     if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await apiFetch('/api/company/users', {
+      const response = await apiFetch('/api/users/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, role, name, companyId: selectedCompanyId }),
+        body: JSON.stringify({ email, role, organization_id: selectedCompanyId }),
       });
       const result = await response.json();
       if (!response.ok) {
@@ -193,10 +192,8 @@ export default function TeamManagement() {
     if (!selectedCompanyId) return;
     setIsLoading(true);
     try {
-      const response = await apiFetch('/api/company/users', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: selectedCompanyId, role, userId, status: 'inactive' }),
+      const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}?organization_id=${encodeURIComponent(selectedCompanyId)}`, {
+        method: 'DELETE',
       });
       const result = await response.json();
       if (!response.ok) {
@@ -218,10 +215,8 @@ export default function TeamManagement() {
     if (!window.confirm('Remove this user from the company?')) return;
     setIsLoading(true);
     try {
-      const response = await apiFetch('/api/company/users', {
+      const response = await apiFetch(`/api/users/${encodeURIComponent(userId)}?organization_id=${encodeURIComponent(selectedCompanyId)}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: selectedCompanyId, userId }),
       });
       const result = await response.json();
       if (!response.ok) {

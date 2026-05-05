@@ -5,7 +5,7 @@
 
 import { flattenBlocks } from './blockUtils';
 import type { ContentBlock } from './blockTypes';
-import type { BlogGenerationOutput } from './blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import { getBlogTemplateDepthGuidance } from './blogTemplateGuidance';
 import { getNewsletterTemplateDepthGuidance } from '../newsletter/newsletterTemplateGuidance';
 import { calculateContentQualityScore } from '../content/qualityScoringCore';
@@ -913,3 +913,4 @@ export function assessBlogQualityScore(
     content_type: 'blog',
   });
 }
+

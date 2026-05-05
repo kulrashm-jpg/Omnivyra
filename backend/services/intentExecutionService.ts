@@ -45,6 +45,7 @@
  */
 
 import IORedis from 'ioredis';
+import { REDIS_URL } from '../config/env';
 import { createClient } from '@supabase/supabase-js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -277,7 +278,7 @@ let _redis: IORedis | null = null;
 
 function getRedis(): IORedis {
   if (_redis) return _redis;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = REDIS_URL;
   _redis = new IORedis(url, {
     enableReadyCheck:     false,
     maxRetriesPerRequest: 1,

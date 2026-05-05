@@ -35,12 +35,14 @@ import { enforceCompanyAccess } from '../../../../backend/services/userContextSe
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
 import type { BlogGenerationRequest } from '../../../../lib/blog/runBlogGeneration';
 import { runUnifiedLongFormGeneration } from '../../../../lib/content/unifiedLongFormEngine';
-import type { BlogAngle } from '../../../../lib/blog/blogGenerationEngine';
+import type { BlogAngle } from '../../../../content/engine/generator';
+import { assertValidContentPipelineCall } from '../../../../content/pipeline/pipelineGuard';
 import { buildContentContext } from '../../../../lib/content/buildContentContext';
 import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  assertValidContentPipelineCall(req);
 
   const {
     company_id,
@@ -111,3 +113,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   return res.status(200).json(result);
 }
+

@@ -20,7 +20,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { requireAdminScope } from '../../../../backend/services/requestAccessService';
-import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../../../content/engine/generator';
 
 function extractFirstParagraph(html: string): string {
   const m = html.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
@@ -94,3 +94,4 @@ The value must be a complete <p> tag with the rewritten text inside. No markdown
     return res.status(500).json({ error: 'Hook rewrite failed' });
   }
 }
+

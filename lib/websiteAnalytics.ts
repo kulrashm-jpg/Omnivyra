@@ -5,7 +5,7 @@ const WEBSITE_ROUTE_EXACT_MATCHES = new Set([
   '/',
   '/pricing',
   '/about',
-  '/blog',
+  '/content/blog',
   '/solutions',
   '/features',
   '/privacy',
@@ -20,7 +20,7 @@ const WEBSITE_ROUTE_EXACT_MATCHES = new Set([
   '/audit/campaign-conversion-check',
 ]);
 
-const WEBSITE_ROUTE_PREFIXES = ['/blog/'];
+const WEBSITE_ROUTE_PREFIXES = ['/content/blog/'];
 
 declare global {
   interface Window {
@@ -65,3 +65,5 @@ export function trackWebsiteEvent(
 
   window.gtag('event', name, cleanedParams);
 }
+
+

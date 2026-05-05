@@ -9,6 +9,10 @@
 interface BlockBase {
   id: string;
   type: string;
+  /** Runtime safety marker set only by the canonical sanitizer pipeline. */
+  __sanitized?: true;
+  /** Hash of sanitized block payload, verified by the canonical renderer. */
+  __hash?: string;
   /** AI generation hint — describes what content should fill this block. Ephemeral: stripped before DB save. */
   hint?: string;
   /** Shared visual formatting metadata consumed by all content renderers. */

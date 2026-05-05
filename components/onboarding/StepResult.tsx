@@ -64,7 +64,7 @@ export default function StepResult({
 
   const handleCreateContent = () => {
     onComplete();
-    onNavigate('/blogs');
+    onNavigate('/content/blog');
   };
 
   return (
@@ -186,3 +186,5 @@ export default function StepResult({
     </div>
   );
 }
+
+

@@ -6,19 +6,14 @@
 import { Worker, Job } from 'bullmq';
 import { ingestSignals } from '../services/intelligenceIngestionModule';
 import type { IntelligencePollingJobPayload } from '../queue/intelligencePollingQueue';
-import { config } from '@/config';
-
-const REDIS_URL = config.REDIS_URL;
-const REDIS_HOST = config.REDIS_HOST;
-const REDIS_PORT = config.REDIS_PORT;
-const REDIS_PASSWORD = config.REDIS_PASSWORD;
+import { REDIS_URL } from '../config/env';
 
 function getConnection() {
   if (REDIS_URL && REDIS_URL.includes('://')) {
     const parsed = new URL(REDIS_URL);
     const needsTls = parsed.hostname.includes('upstash.io');
     return {
-      host: parsed.hostname || 'localhost',
+      host: parsed.hostname,
       port: parseInt(parsed.port || '6379', 10),
       password: parsed.password || undefined,
       ...(needsTls ? { tls: {} } : {}),
@@ -26,7 +21,7 @@ function getConnection() {
       maxRetriesPerRequest: null,
     };
   }
-  return { host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD };
+  throw new Error('REDIS_URL_INVALID');
 }
 
 const QUEUE_NAME = 'intelligence-polling';

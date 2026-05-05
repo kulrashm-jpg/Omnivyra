@@ -41,7 +41,7 @@
 import type { RecommendationStrategicCard } from '../recommendationStrategicCard';
 import type { PlannerStrategicCard } from '../plannerStrategicCard';
 import type { BlogGenerationRequest } from '../blog/runBlogGeneration';
-import type { BlogAngle, AngleType } from '../blog/blogGenerationEngine';
+import type { BlogAngle, AngleType } from '../../content/engine/generator';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -992,3 +992,4 @@ export function cardToBlogRequest(
     blogTable: 'blogs',
   };
 }
+

@@ -45,7 +45,7 @@ export function ReadNextSection({
         {posts.map((post) => (
           <Link
             key={post.id}
-            href={`/blog/${encodeURIComponent(post.slug)}`}
+            href={`/content/blog/${encodeURIComponent(post.slug)}`}
             className="group block overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-[0_2px_12px_rgba(0,0,0,0.04)] transition-all duration-300 hover:border-[#0B5ED7]/40 hover:shadow-[0_8px_24px_rgba(0,0,0,0.1)]"
           >
             <div className="relative aspect-[16/9] w-full overflow-hidden bg-slate-100">
@@ -102,3 +102,5 @@ export function ReadNextSection({
     </section>
   );
 }
+
+

@@ -10,7 +10,7 @@ import { ContentQualityPanel, type ImproveArea } from '../../components/content/
 import EditorShareActions from '../../components/content/EditorShareActions';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { createDefaultBlogTemplate } from '../../lib/blog/blogTemplate';
-import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../lib/blog/topicDetection';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
@@ -433,3 +433,4 @@ export default function CaseStudyNewPage() {
     </>
   );
 }
+

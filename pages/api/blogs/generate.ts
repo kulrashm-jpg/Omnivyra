@@ -1,13 +1,13 @@
-﻿import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
+import { applyAuthGuard } from '@/backend/middleware/applyAuthGuard';
 /**
  * POST /api/blogs/generate
  *
  * Company Admin blog generation.
  *
  * Supports the full BlogGenerateModal flow:
- *   mode: 'angles'  â†’ synchronous angle generation via runBlogGeneration
- *   mode: 'full'    â†’ synchronous full blog generation via runBlogGeneration
- *   (no mode)       â†’ queue-based generation via blogContentAdapter (legacy)
+ *   mode: 'angles'  → synchronous angle generation via runBlogGeneration
+ *   mode: 'full'    → synchronous full blog generation via runBlogGeneration
+ *   (no mode)       → queue-based generation via blogContentAdapter (legacy)
  *
  * Super Admin uses /api/admin/blog/generate (public_blogs, SA role only).
  *
@@ -37,11 +37,13 @@ import {
   type BlogGenerationRequest,
 } from '../../../lib/blog/runBlogGeneration';
 import { runUnifiedLongFormGeneration } from '../../../lib/content/unifiedLongFormEngine';
-import type { BlogAngle } from '../../../lib/blog/blogGenerationEngine';
+import type { BlogAngle } from '../../../content/engine/generator';
+import { assertValidContentPipelineCall } from '../../../content/pipeline/pipelineGuard';
 import { isValidBlogFormat } from '../../../lib/blog/blogStructureTemplates';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  assertValidContentPipelineCall(req);
 
   const {
     company_id,
@@ -68,7 +70,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!topic || typeof topic !== 'string' || !topic.trim())
     return res.status(400).json({ error: 'topic required' });
 
-  // â”€â”€ 1. Auth â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 1. Auth ─────────────────────────────────────────────────────────────────
   const access = await enforceCompanyAccess({ req, res, companyId: company_id });
   if (!access) return;
 
@@ -78,7 +80,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
   if (!roleGate) return;
 
-  // â”€â”€ 2. Enrich with company context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 2. Enrich with company context ──────────────────────────────────────────
   let builtContext: Awaited<ReturnType<typeof buildContentContext>> | undefined;
 
   try {
@@ -88,7 +90,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     console.warn('[blogs/generate] profile enrichment failed:', err);
   }
 
-  // â”€â”€ 3. Route based on mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── 3. Route based on mode ────────────────────────────────────────────────
   const resolvedMode = mode === 'angles' || mode === 'full' ? mode : undefined;
 
   // Mode 'angles' or 'full': use runBlogGeneration (synchronous, supports the
@@ -140,7 +142,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
   }
 
-  // â”€â”€ No mode: legacy queue-based generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── No mode: legacy queue-based generation ────────────────────────────────
   try {
     const { getContentQueue } = await import('../../../backend/queue/contentGenerationQueues');
     const contentGenerationQueue = getContentQueue('content-blog');
@@ -167,4 +169,5 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 export default applyAuthGuard({
   requiresAuth: true,
 })(handler);
+
 

@@ -4,6 +4,7 @@ import { saveToken } from '../../../../../backend/services/platformTokenService'
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
+import { logger } from '../../../../../backend/services/logger';
 
 const decodeState = (state: string) => {
   const padded = state.replace(/-/g, '+').replace(/_/g, '/');
@@ -23,18 +24,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { code, state, error, error_description } = req.query;
   if (error) {
     const message = typeof error_description === 'string' ? error_description : error;
+    logger.error('oauth.callback.failure', { platform: 'reddit', flow: 'community-ai', reason: 'oauth_provider_error', provider_error: String(error), provider_error_description: error_description ? String(error_description) : null });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent(String(message || 'OAuth failed'))}`
     );
   }
 
   if (!code || typeof code !== 'string') {
+    logger.error('oauth.callback.failure', { platform: 'reddit', flow: 'community-ai', reason: 'no_code' });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Missing authorization code')}`
     );
   }
 
   if (!state || typeof state !== 'string') {
+    logger.error('oauth.callback.failure', { platform: 'reddit', flow: 'community-ai', reason: 'no_state' });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Missing OAuth state')}`
     );
@@ -120,9 +124,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // G5.5: Audit log
     console.info('[connector_audit]', JSON.stringify({ user_id: access!.userId, company_id: organizationId, platform: 'reddit', action: 'connect' }));
+    logger.info('oauth.callback.success', { platform: 'reddit', flow: 'community-ai', user_id: access!.userId, organization_id: organizationId });
 
     return res.redirect(`${redirectTo}?connected=reddit&status=success`);
   } catch (err: any) {
+    logger.error('oauth.callback.failure', { platform: 'reddit', flow: 'community-ai', reason: 'exception', error_message: err?.message ?? 'unknown' });
     return res.redirect(
       `/community-ai/connectors?error=${encodeURIComponent('Connection failed. Please try again.')}`
     );

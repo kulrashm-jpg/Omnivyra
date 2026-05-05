@@ -18,6 +18,8 @@ export async function register() {
   // Domain-ownership tokens are HMAC'd with this secret. If it's missing the
   // first INSERT or verify call would 500 mid-request — louder to crash now.
   try {
+    const { assertMockPlatformsAllowed } = await import('./backend/services/mockGuard');
+    assertMockPlatformsAllowed('startup');
     const { getVerificationSecret } = await import('./backend/services/verificationSecret');
     getVerificationSecret();
     const { assertExecutionEngineSchemaReady } = await import('./backend/jobs/startupSchemaCheck');
@@ -53,7 +55,8 @@ export async function register() {
     try {
     const IORedis   = (await import('ioredis')).default;
     const { startUsageProtection } = await import('./lib/redis/usageProtection');
-    const redisUrl  = process.env.REDIS_URL || 'redis://localhost:6379';
+    const { REDIS_URL } = await import('./backend/config/env');
+    const redisUrl  = REDIS_URL;
     let _monClient: InstanceType<typeof IORedis> | null = null;
     function getMonClient() {
       if (!_monClient) {

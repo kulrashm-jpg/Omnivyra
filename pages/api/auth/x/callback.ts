@@ -9,6 +9,7 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
+import { logger } from '../../../../backend/services/logger';
 
 function getRequestBaseUrl(req: NextApiRequest): string {
   const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
@@ -28,10 +29,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     : ((returnToEarly && returnToEarly.startsWith('/')) ? returnToEarly : '/social-platforms');
 
   if (error) {
+    logger.error('oauth.callback.failure', { platform: 'x', reason: 'oauth_provider_error', provider_error: String(error) });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error as string)}`);
   }
 
   if (!code) {
+    logger.error('oauth.callback.failure', { platform: 'x', reason: 'no_code' });
     return res.redirect(`${errDest}?error=${encodeURIComponent('No authorization code received')}`);
   }
 
@@ -191,15 +194,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         connected_by_user_id: userId,
       });
       console.info('[connector_audit]', JSON.stringify({ user_id: userId, company_id: stateTenantId, platform, action: 'connect' }));
+      logger.info('oauth.callback.success', { platform: 'x', flow: 'community-ai', account_id: accountId, tenant_id: stateTenantId });
       const communityDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/community-ai/connectors';
       return res.redirect(`${communityDest}?connected=${platform}&status=success`);
     }
 
+    logger.info('oauth.callback.success', { platform: 'x', flow: 'social-platforms', account_id: accountId });
     const successDest = (returnTo && returnTo.startsWith('/')) ? returnTo : '/social-platforms';
     const separator = successDest.includes('?') ? '&' : '?';
     return res.redirect(`${successDest}${separator}connected=${platform}&account=${encodeURIComponent(accountName)}&success=true`);
   } catch (error: any) {
     console.error('X OAuth callback error:', error);
+    logger.error('oauth.callback.failure', { platform: 'x', reason: 'exception', error_message: error?.message ?? 'unknown' });
     return res.redirect(`${errDest}?error=${encodeURIComponent(error.message || 'Connection failed')}`);
   }
 }

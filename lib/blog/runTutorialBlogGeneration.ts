@@ -1,7 +1,7 @@
-import { runCompletionWithOperation } from '../../backend/services/aiGateway';
+import { runCompletionWithOperation } from '../../content/engine/generator';
 import { flattenBlocks } from './blockUtils';
 import type { ContentBlock } from './blockTypes';
-import type { BlogGenerationInput } from './blogGenerationEngine';
+import type { BlogGenerationInput } from '../../content/engine/generator';
 import { calculateContentQualityScore } from '../content/qualityScoringCore';
 import { buildSectionEnforcementPrompt, type CompanyIdentity } from '../content/companyContextBlock';
 
@@ -547,3 +547,5 @@ export async function runTutorialBlogGeneration(args: {
 
   return draft;
 }
+
+

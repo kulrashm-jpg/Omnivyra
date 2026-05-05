@@ -11,7 +11,7 @@ import { createDefaultBlogTemplate } from '../../lib/blog/blogTemplate';
 import { checkDuplication, type DuplicationResult, type ExistingPostMeta } from '../../lib/blog/topicDetection';
 import { AlertTriangle, XCircle, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
-import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
+import type { BlogGenerationOutput } from '../../content/engine/generator';
 import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromContent';
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
@@ -448,3 +448,4 @@ export default function GuideNewPage() {
     </>
   );
 }
+

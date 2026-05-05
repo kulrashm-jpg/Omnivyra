@@ -1,0 +1,19 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`content pipeline contracts editor output renders without mutation 1`] = `
+"<div><h2 id="editorial-system" class="mt-14 mb-6 border-b border-gray-100 pb-3 text-2xl font-bold tracking-tight text-[#0B1F33]">Editorial System</h2><div class="prose prose-lg prose-slate max-w-none
+  prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-[#0B1F33]
+  prose-h2:mt-14 prose-h2:mb-6 prose-h2:border-b prose-h2:border-gray-100 prose-h2:pb-3 prose-h2:text-2xl
+  prose-h3:mt-10 prose-h3:text-xl prose-h3:text-[#0B1F33]
+  prose-p:leading-[1.8] prose-p:text-[#3D4F61] prose-p:text-[1.0625rem]
+  prose-a:text-[#0A66C2] prose-a:no-underline prose-a:font-medium hover:prose-a:underline
+  prose-img:rounded-2xl prose-img:shadow-lg
+  prose-ul:my-5 prose-ol:my-5 prose-li:my-1.5 prose-li:text-[#3D4F61]
+  prose-blockquote:border-l-4 prose-blockquote:border-[#0A66C2] prose-blockquote:bg-[#F5F9FF]/80
+  prose-blockquote:py-2 prose-blockquote:pl-6 prose-blockquote:italic prose-blockquote:text-[#3D4F61]
+  prose-blockquote:rounded-r-xl prose-blockquote:not-italic
+  prose-strong:text-[#0B1F33] prose-strong:font-bold
+  prose-pre:rounded-xl prose-pre:bg-slate-900
+  prose-code:rounded prose-code:bg-slate-100 prose-code:px-1.5 prose-code:py-0.5
+  prose-code:text-slate-800 prose-code:before:content-none prose-code:after:content-none"><p>Safe <strong>editor</strong> output.</p></div></div>"
+`;
