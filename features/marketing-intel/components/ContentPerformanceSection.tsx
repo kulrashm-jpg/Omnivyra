@@ -1,10 +1,10 @@
 import Link from 'next/link';
 import { SectionCard } from '@/features/marketing-intel/components/SectionCard';
 import { scoreColour } from '@/features/marketing-intel/hooks/viewModel.helpers';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 
 type Props = {
-  d: ReturnType<typeof useMarketingIntel>;
+  d: MarketingIntelData;
 };
 
 export default function ContentPerformanceSection({ d }: Props) {

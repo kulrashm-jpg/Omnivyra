@@ -1,5 +1,5 @@
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 import type { Snapshot, NextAction } from '@/features/marketing-intel/types';
 import {
   deriveTargetTracking,
@@ -185,7 +185,7 @@ function generateExecutiveSummaryV2(snapshot: Snapshot): string | null {
 }
 
 type Props = {
-  d: ReturnType<typeof useMarketingIntel>;
+  d: MarketingIntelData;
 };
 
 export default function ExecutiveSummary({ d }: Props) {

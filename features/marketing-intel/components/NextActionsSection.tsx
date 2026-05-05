@@ -3,10 +3,10 @@ import { SectionCard, SectionCta } from '@/features/marketing-intel/components/S
 import { ACTION_CFG, STABILITY_CFG } from '@/features/marketing-intel/constants';
 import { computeEnhancedPriority } from '@/features/marketing-intel/derives';
 import { scoreColour } from '@/features/marketing-intel/hooks/viewModel.helpers';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 
 type Props = {
-  d: ReturnType<typeof useMarketingIntel>;
+  d: MarketingIntelData;
 };
 
 export default function NextActionsSection({ d }: Props) {

@@ -210,3 +210,53 @@ export type RoutedSystemAction = {
   href: string;
   label: string;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Hook contract — the shape returned by useMarketingIntel(). Section
+// components and the container should depend on this explicit type instead
+// of `ReturnType<typeof useMarketingIntel>` so the contract is locked.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import type React from 'react';
+import type { NextRouter } from 'next/router';
+import type { SectionKey } from './components/SectionCard';
+
+export type MarketingIntelTimeRange = 7 | 30 | 90;
+
+export type MarketingIntelData = {
+  // Snapshot state
+  snapshot: Snapshot | null;
+  setSnapshot: React.Dispatch<React.SetStateAction<Snapshot | null>>;
+
+  // Loading/error flags (legacy names preserved for view consumers)
+  loading: boolean;
+  setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  isLoading: boolean;
+  error: string | null;
+  setError: React.Dispatch<React.SetStateAction<string | null>>;
+  _ef1: boolean;
+  _ef2: string | null;
+
+  // Section visibility
+  visible: Set<SectionKey>;
+  setVisible: React.Dispatch<React.SetStateAction<Set<SectionKey>>>;
+  isVisible: (k: SectionKey) => boolean;
+  toggleSection: (k: SectionKey) => void;
+
+  // Time range
+  timeRange: MarketingIntelTimeRange;
+  setTimeRange: React.Dispatch<React.SetStateAction<MarketingIntelTimeRange>>;
+  handleTimeRange: (d: MarketingIntelTimeRange) => void;
+
+  // Configure panel toggle
+  configOpen: boolean;
+  setConfigOpen: React.Dispatch<React.SetStateAction<boolean>>;
+
+  // Imperative fetch
+  fetchSnapshot: (days?: MarketingIntelTimeRange) => Promise<void>;
+
+  // Context passthrough
+  router: NextRouter;
+  selectedCompanyId: string | null | undefined;
+  userRole: string | null | undefined;
+};

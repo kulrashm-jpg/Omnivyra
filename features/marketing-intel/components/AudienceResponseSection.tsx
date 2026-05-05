@@ -1,8 +1,8 @@
 import { SectionCard, SectionCta } from '@/features/marketing-intel/components/SectionCard';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 
 type Props = {
-  d: ReturnType<typeof useMarketingIntel>;
+  d: MarketingIntelData;
 };
 
 export default function AudienceResponseSection({ d }: Props) {

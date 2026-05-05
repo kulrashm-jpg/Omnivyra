@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 import {
   scoreColour,
   toSentenceCase,
@@ -10,7 +10,7 @@ import {
 } from './viewModel.helpers';
 
 export function useMarketingIntelViewModel(
-  d: ReturnType<typeof useMarketingIntel>
+  d: MarketingIntelData
 ) {
   return useMemo(() => {
     const helpers = {

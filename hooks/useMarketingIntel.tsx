@@ -3,10 +3,14 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { fetchMarketingIntel } from '@/features/marketing-intel/data/fetchMarketingIntel';
 import { SECTIONS, type SectionKey } from '@/features/marketing-intel/components/SectionCard';
-import type { Snapshot } from '@/features/marketing-intel/types';
+import type {
+  Snapshot,
+  MarketingIntelData,
+  MarketingIntelTimeRange,
+} from '@/features/marketing-intel/types';
 
 const TIME_RANGES = [7, 30, 90] as const;
-type TimeRange = typeof TIME_RANGES[number];
+type TimeRange = MarketingIntelTimeRange;
 
 const TIME_RANGE_KEY = 'omnivyra_micc_timerange';
 const SECTIONS_KEY   = 'omnivyra_micc_sections';
@@ -33,43 +37,7 @@ function saveVisibility(v: Set<SectionKey>) {
   localStorage.setItem(SECTIONS_KEY, JSON.stringify([...v]));
 }
 
-export type MarketingIntelData = {
-  // Snapshot state
-  snapshot: Snapshot | null;
-  setSnapshot: React.Dispatch<React.SetStateAction<Snapshot | null>>;
-
-  // Loading/error flags (legacy names preserved for view consumers)
-  loading: boolean;
-  setLoading: React.Dispatch<React.SetStateAction<boolean>>;
-  isLoading: boolean;
-  error: string | null;
-  setError: React.Dispatch<React.SetStateAction<string | null>>;
-  _ef1: boolean;
-  _ef2: string | null;
-
-  // Section visibility
-  visible: Set<SectionKey>;
-  setVisible: React.Dispatch<React.SetStateAction<Set<SectionKey>>>;
-  isVisible: (k: SectionKey) => boolean;
-  toggleSection: (k: SectionKey) => void;
-
-  // Time range
-  timeRange: TimeRange;
-  setTimeRange: React.Dispatch<React.SetStateAction<TimeRange>>;
-  handleTimeRange: (d: TimeRange) => void;
-
-  // Configure panel toggle
-  configOpen: boolean;
-  setConfigOpen: React.Dispatch<React.SetStateAction<boolean>>;
-
-  // Imperative fetch
-  fetchSnapshot: (days?: TimeRange) => Promise<void>;
-
-  // Context passthrough
-  router: ReturnType<typeof useRouter>;
-  selectedCompanyId: string | null | undefined;
-  userRole: string | null | undefined;
-};
+export type { MarketingIntelData } from '@/features/marketing-intel/types';
 
 export function useMarketingIntel(): MarketingIntelData {
   const router = useRouter();

@@ -1,9 +1,9 @@
 import { SectionCard, SectionCta } from '@/features/marketing-intel/components/SectionCard';
 import { deriveTargetPotential, toneClasses } from '@/features/marketing-intel/derives';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 
 type Props = {
-  d: ReturnType<typeof useMarketingIntel>;
+  d: MarketingIntelData;
 };
 
 export default function TargetPotentialSection({ d }: Props) {

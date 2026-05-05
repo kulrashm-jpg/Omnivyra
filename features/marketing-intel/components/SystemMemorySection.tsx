@@ -1,8 +1,8 @@
 import { deriveSystemMemory } from '@/features/marketing-intel/derives';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 
 type Props = {
-  d: ReturnType<typeof useMarketingIntel>;
+  d: MarketingIntelData;
 };
 
 export default function SystemMemorySection({ d }: Props) {

@@ -242,8 +242,8 @@ function saveVisibility(v: Set<SectionKey>) {
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { useMarketingIntel } from '../hooks/useMarketingIntel';
-type MarketingIntelHookState = ReturnType<typeof useMarketingIntel>;
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
+type MarketingIntelHookState = MarketingIntelData;
 type MarketingIntelState = Omit<MarketingIntelHookState, 'snapshot' | 'setSnapshot'> & {
   snapshot: Snapshot | null;
   setSnapshot: React.Dispatch<React.SetStateAction<Snapshot | null>>;

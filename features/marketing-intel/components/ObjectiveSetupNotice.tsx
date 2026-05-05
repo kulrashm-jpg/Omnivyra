@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
-import { useMarketingIntel } from '@/hooks/useMarketingIntel';
+import type { MarketingIntelData } from '@/features/marketing-intel/types';
 
 type Props = {
-  d: ReturnType<typeof useMarketingIntel>;
+  d: MarketingIntelData;
 };
 
 export default function ObjectiveSetupNotice({ d }: Props) {
