@@ -152,35 +152,6 @@ const TIME_RANGES = [
   { days: 30, label: '30d' },
   { days: 90, label: '90d' },
 ] as const;
-type TimeRange = typeof TIME_RANGES[number]['days'];
-
-const TIME_RANGE_KEY    = 'omnivyra_micc_timerange';
-const SECTIONS_KEY      = 'omnivyra_micc_sections';
-
-function loadTimeRange(): TimeRange {
-  if (typeof window === 'undefined') return 30;
-  const raw = localStorage.getItem(TIME_RANGE_KEY);
-  const n = parseInt(raw ?? '', 10);
-  return (TIME_RANGES.map((r) => r.days) as number[]).includes(n) ? (n as TimeRange) : 30;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Section config
-// ─────────────────────────────────────────────────────────────────────────────
-
-const ALL_SECTION_KEYS = new Set<SectionKey>(SECTIONS.map((s) => s.key));
-
-function loadVisibility(): Set<SectionKey> {
-  if (typeof window === 'undefined') return new Set(ALL_SECTION_KEYS);
-  try {
-    const raw = localStorage.getItem(SECTIONS_KEY);
-    if (!raw) return new Set(ALL_SECTION_KEYS);
-    return new Set(JSON.parse(raw) as SectionKey[]);
-  } catch { return new Set(ALL_SECTION_KEYS); }
-}
-function saveVisibility(v: Set<SectionKey>) {
-  localStorage.setItem(SECTIONS_KEY, JSON.stringify([...v]));
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Visual helpers
