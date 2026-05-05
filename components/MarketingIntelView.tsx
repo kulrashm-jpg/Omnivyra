@@ -53,6 +53,10 @@ import AudienceResponseSection from '@/features/marketing-intel/components/Audie
 import NextActionsSection from '@/features/marketing-intel/components/NextActionsSection';
 import PrimaryBottleneckSection from '@/features/marketing-intel/components/PrimaryBottleneckSection';
 import ActionBucketsSection from '@/features/marketing-intel/components/ActionBucketsSection';
+import LearnedSignalsSection from '@/features/marketing-intel/components/LearnedSignalsSection';
+import BottomLineSection from '@/features/marketing-intel/components/BottomLineSection';
+import CommercialReadinessSection from '@/features/marketing-intel/components/CommercialReadinessSection';
+import StrategicIntelligenceSection from '@/features/marketing-intel/components/StrategicIntelligenceSection';
 import type {
   PatternSignal,
   CampaignRow,
@@ -211,35 +215,6 @@ function ObjectiveSetupNotice({ snapshot }: { snapshot: Snapshot }) {
 }
 
 
-function LearnedSignalsSection({ snapshot }: { snapshot: Snapshot }) {
-  const learned = deriveLearnedSignals(snapshot);
-  const cta = deriveLearnedSignalsCta(snapshot);
-
-  if (learned.length === 0) return null;
-
-  return (
-    <SectionCard
-      title="What We Have Learned"
-      badge="Top signals"
-      footer={<SectionCta href={cta.href} label={cta.label} />}
-    >
-      <div className="space-y-3">
-        {learned.map((item) => {
-          const tone = toneClasses(item.tone);
-          return (
-            <div key={item.title} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
-              <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-full ${item.tone === 'strong' ? 'bg-emerald-400' : item.tone === 'watch' ? 'bg-amber-400' : 'bg-blue-400'}`} />
-                <p className={`text-sm font-semibold ${tone.text}`}>{item.title}</p>
-              </div>
-              <p className="mt-2 text-xs leading-relaxed text-gray-600">{item.detail}</p>
-            </div>
-          );
-        })}
-      </div>
-    </SectionCard>
-  );
-}
 
 function SystemDiagnosisSection({ snapshot }: { snapshot: Snapshot }) {
   const diagnosis = deriveDiagnosis(snapshot);
@@ -363,47 +338,7 @@ function SupportingSignalsSection({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
-function BottomLineSection({ snapshot }: { snapshot: Snapshot }) {
-  const bottomLine = deriveBottomLine(snapshot);
 
-  return (
-    <SectionCard
-      title="Bottom Line"
-      badge="Decision"
-    >
-      <div className="rounded-xl border border-slate-300 bg-slate-100 p-6 shadow-md">
-        <p className="text-lg font-bold text-slate-950">Do not scale noise. Build signal first.</p>
-        <p className="mt-2 text-sm leading-relaxed text-slate-700">{bottomLine.text}</p>
-      </div>
-    </SectionCard>
-  );
-}
-
-function CommercialReadinessSection({ snapshot }: { snapshot: Snapshot }) {
-  const insights = deriveCommercialReadiness(snapshot);
-  const cta = deriveCommercialReadinessCta(snapshot);
-
-  return (
-    <SectionCard
-      title="Commercial Readiness"
-      badge="Next commercial move"
-      className="h-full"
-      footer={<SectionCta href={cta.href} label={cta.label} />}
-    >
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {insights.map((item) => {
-          const tone = toneClasses(item.tone);
-          return (
-            <div key={item.title} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
-              <p className={`text-sm font-semibold ${tone.text}`}>{item.title}</p>
-              <p className="mt-2 text-xs leading-relaxed text-gray-600">{item.detail}</p>
-            </div>
-          );
-        })}
-      </div>
-    </SectionCard>
-  );
-}
 
 function EcosystemProgressSection({ snapshot }: { snapshot: Snapshot }) {
   const graph = snapshot.knowledge_graph_summary;
@@ -497,73 +432,6 @@ function EcosystemProgressSection({ snapshot }: { snapshot: Snapshot }) {
 // 4. Strategic Intelligence
 // ─────────────────────────────────────────────────────────────────────────────
 
-function StrategicIntelligenceSection({ data }: { data: Snapshot['strategic_intelligence'] }) {
-  const nonMomentum    = data.patterns.filter((p) => p.type !== 'momentum' && p.type !== 'source_pattern');
-  const momentum       = data.patterns.find((p) => p.type === 'momentum');
-  const sourcePattern  = data.patterns.find((p) => p.type === 'source_pattern');
-  const isUp           = momentum?.pattern.toLowerCase().includes('upward');
-  const companyWins    = sourcePattern?.recommendation.toLowerCase().includes('proprietary');
-
-  if (data.campaigns_analyzed === 0) {
-    return <SectionCard sectionKey="strategic_intelligence" title="Strategic Intelligence"><p className="text-sm text-gray-400">Need at least 3 evaluated campaigns to surface patterns.</p></SectionCard>;
-  }
-
-  return (
-    <SectionCard
-      sectionKey="strategic_intelligence"
-      title="Strategic Intelligence"
-      badge={`${data.campaigns_analyzed} campaigns`}
-      footer={
-        data.dominant_topic_cluster
-          ? <SectionCta href={`/recommendations?initialTopic=${encodeURIComponent(data.dominant_topic_cluster)}`} label="Explore related topics" />
-          : undefined
-      }
-    >
-      {momentum && (
-        <div className={`mb-4 flex items-center gap-3 rounded-xl border px-4 py-3 ${isUp ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
-          {isUp ? <TrendingUp className="h-4 w-4 shrink-0 text-emerald-500" /> : <TrendingDown className="h-4 w-4 shrink-0 text-amber-500" />}
-          <div>
-            <p className={`text-xs font-semibold ${isUp ? 'text-emerald-700' : 'text-amber-700'}`}>{momentum.pattern}</p>
-            <p className="text-[11px] text-gray-500 mt-0.5">→ {momentum.recommendation}</p>
-          </div>
-        </div>
-      )}
-      {/* Content Source Performance micro-section */}
-      {sourcePattern && (
-        <div className={`mb-4 rounded-xl border px-4 py-3 ${companyWins ? 'border-blue-100 bg-blue-50' : 'border-purple-100 bg-purple-50'}`}>
-          <div className="flex items-center gap-2 mb-1.5">
-            <span className={`text-[10px] font-bold uppercase tracking-widest ${companyWins ? 'text-blue-500' : 'text-purple-500'}`}>
-              Content Source Performance
-            </span>
-            <span className={`ml-auto text-[10px] font-semibold ${sourcePattern.confidence === 'high' ? 'text-emerald-600' : 'text-blue-600'}`}>
-              {sourcePattern.confidence} confidence · {sourcePattern.evidence_count} campaigns
-            </span>
-          </div>
-          <p className={`text-xs font-medium leading-relaxed ${companyWins ? 'text-blue-800' : 'text-purple-800'}`}>{sourcePattern.pattern}</p>
-          <p className="mt-1 text-[11px] text-gray-500">→ {sourcePattern.recommendation}</p>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {nonMomentum.map((p, i) => (
-          <div key={i} className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{PATTERN_TYPE_LABELS[p.type] ?? p.type}</span>
-              <span className={`ml-auto text-[10px] font-semibold ${p.confidence === 'high' ? 'text-emerald-600' : p.confidence === 'medium' ? 'text-blue-600' : 'text-amber-600'}`}>
-                {p.confidence} · {p.evidence_count} pts
-              </span>
-            </div>
-            <p className="text-xs text-gray-700 leading-relaxed">{p.pattern}</p>
-            <p className="mt-1 text-[11px] text-gray-500">→ {p.recommendation}</p>
-          </div>
-        ))}
-        {nonMomentum.length === 0 && !momentum && !sourcePattern && (
-          <p className="text-sm text-gray-400">No patterns detected — more campaign data required.</p>
-        )}
-      </div>
-    </SectionCard>
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5. Campaign DNA
@@ -750,7 +618,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
 
             <SupportingSignalsSection snapshot={snapshot} />
 
-            <BottomLineSection snapshot={snapshot} />
+            <BottomLineSection d={d} />
 
             <ObjectiveSetupNotice snapshot={snapshot} />
 
@@ -769,9 +637,9 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
 
                 <TargetPotentialSection d={d} />
 
-                <LearnedSignalsSection snapshot={snapshot} />
+                <LearnedSignalsSection d={d} />
 
-                <CommercialReadinessSection snapshot={snapshot} />
+                <CommercialReadinessSection d={d} />
 
                 <EcosystemProgressSection snapshot={snapshot} />
 
@@ -789,7 +657,7 @@ export default function MarketingIntelView({ d }: { d: MarketingIntelState }) {
                 {(isVisible('strategic_intelligence') || isVisible('campaign_dna')) && (
                   <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                     {isVisible('strategic_intelligence') && (
-                      <StrategicIntelligenceSection data={snapshot.strategic_intelligence} />
+                      <StrategicIntelligenceSection d={d} />
                     )}
                     {isVisible('campaign_dna') && (
                       <CampaignDnaSection d={d} />
