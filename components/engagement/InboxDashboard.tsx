@@ -24,7 +24,7 @@ import { useEngagementPlatformPreferences } from '@/hooks/useEngagementPlatformP
 import { useEngagementMessages } from '@/hooks/useEngagementMessages';
 import { useLinkedInEngagementWorkspace } from '@/hooks/useLinkedInEngagementWorkspace';
 import { useReply } from '@/hooks/useReply';
-import { useBrowserAssistState } from '@/hooks/useBrowserAssist';
+import { useBrowserAssistState, useBrowserAssistHandlers } from '@/hooks/useBrowserAssist';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import { trackEngagementEvent } from '@/lib/engagementTelemetry';
 import { EVENTS } from '@/analytics/events';
@@ -66,9 +66,10 @@ function InboxDashboardComponent({
   className = '',
 }: InboxDashboardProps) {
   const router = useRouter();
-  // Phase 35-D-5a: browser-assist state (7 useState + 3 useRef + the
-  // feature-flag read) extracted to hooks/useBrowserAssist.ts. Effects +
-  // handlers + sub-hook calls remain inline this pass.
+  // Phase 35-D-5a + 5b: browser-assist state at top, handlers later
+  // (after sub-hook calls so they can be passed as deps). Effects +
+  // sub-hook calls remain inline this pass (35-D-5c next).
+  const browserState = useBrowserAssistState();
   const {
     browserAssistEnabled,
     browserAssistError,
@@ -88,7 +89,7 @@ function InboxDashboardComponent({
     attemptedExtensionAuthRef,
     initialPlatformSyncKeyRef,
     lastPlatformSyncAtRef,
-  } = useBrowserAssistState();
+  } = browserState;
 
   const [selectedPlatform, setSelectedPlatform] = useState<string>('all');
   const [selectedThread, setSelectedThread] = useState<InboxThread | null>(null);
@@ -966,48 +967,37 @@ function InboxDashboardComponent({
     refreshMessages();
   }, [hideThreadAfterResponse, refresh, refreshCounts, refreshWorkQueue, refreshMessages, selectedThread]);
 
-  const handleToggleExtensionPlatform = useCallback(
-    async (platform: string, enabled: boolean) => {
-      await setWorkspacePlatformEnabled(platform, enabled);
-      await setBrowserPlatformEnabled(platform, enabled);
-    },
-    [setBrowserPlatformEnabled, setWorkspacePlatformEnabled]
-  );
-
-  const bootstrapExtensionAuth = useCallback(async () => {
-    if (!organizationId || !extensionStatus?.runtimeId || extensionError) return false;
-    if (extensionAuth?.isAuthenticated) {
-      attemptedExtensionAuthRef.current = null;
-      return true;
-    }
-
-    const attemptKey = `${organizationId}:${extensionStatus.runtimeId}`;
-    if (attemptedExtensionAuthRef.current === attemptKey) return false;
-    attemptedExtensionAuthRef.current = attemptKey;
-
-    try {
-      await authenticateExtensionViaClaimCode(organizationId);
-      attemptedExtensionAuthRef.current = null;
-      return true;
-    } catch (authError) {
-      attemptedExtensionAuthRef.current = null;
-      console.warn('[engagement] extension auto-auth failed:', authError);
-      return false;
-    }
-  }, [
-    authenticateExtensionViaClaimCode,
-    extensionAuth?.isAuthenticated,
-    extensionError,
-    extensionStatus?.runtimeId,
+  // ── Phase 35-D-5b: 7 useCallback handlers extracted to hooks/useBrowserAssist.ts ──
+  // Sub-hook calls + useEffects remain inline this pass (35-D-5c next).
+  const {
+    handleToggleExtensionPlatform,
+    bootstrapExtensionAuth,
+    handleRefreshExtensionPanel,
+    handleSyncLinkedIn,
+    handleRunLinkedInBrowserAssist,
+    handleRunPlatformBrowserAssist,
+    handleCaptureLinkedInSurface,
+  } = useBrowserAssistHandlers(browserState, {
     organizationId,
-  ]);
-
-  const handleRefreshExtensionPanel = useCallback(() => {
-    void refreshExtension();
-    void refreshWorkspacePreferences();
-    void refreshLinkedInOverview();
-    void bootstrapExtensionAuth();
-  }, [bootstrapExtensionAuth, refreshExtension, refreshWorkspacePreferences, refreshLinkedInOverview]);
+    extensionStatus,
+    extensionAuth,
+    extensionError,
+    authenticateExtensionViaClaimCode,
+    setBrowserPlatformEnabled,
+    triggerPlatformSync,
+    executePlatformAction,
+    refreshExtension,
+    setWorkspacePlatformEnabled,
+    refreshWorkspacePreferences,
+    syncLinkedInNow,
+    refreshLinkedInOverview,
+    getBrowserActionPlatform,
+    getBrowserPlatformState,
+    refresh,
+    refreshCounts,
+    refreshWorkQueue,
+    refreshMessages,
+  });
 
   // ── Reply orchestration extracted to hooks/useReply.ts (Phase 35-B) ──
   // The hook owns the dispatch flow (api/browser-mode branching, queued
@@ -1027,125 +1017,6 @@ function InboxDashboardComponent({
     refreshCounts,
     refreshWorkQueue,
   });
-
-  const handleSyncLinkedIn = useCallback(async () => {
-    await syncLinkedInNow();
-    refresh();
-    refreshCounts();
-    refreshWorkQueue();
-  }, [refresh, refreshCounts, refreshWorkQueue, syncLinkedInNow]);
-
-  const handleRunLinkedInBrowserAssist = useCallback(async () => {
-    setBrowserAssistError(null);
-    setLinkedInSurfaceActionStatus(null);
-    try {
-      await bootstrapExtensionAuth();
-      await triggerPlatformSync('linkedin');
-      const settleDelays = [1200, 2500, 4500];
-
-      for (const delay of settleDelays) {
-        await new Promise((resolve) => window.setTimeout(resolve, delay));
-        await refreshLinkedInOverview();
-        refresh();
-        refreshCounts();
-        refreshWorkQueue();
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'LinkedIn browser assist is not available right now';
-      setBrowserAssistError(message);
-    }
-  }, [bootstrapExtensionAuth, triggerPlatformSync, refreshLinkedInOverview, refresh, refreshCounts, refreshWorkQueue]);
-
-  const handleRunPlatformBrowserAssist = useCallback(
-    async (platform: string) => {
-      const browserActionPlatform = getBrowserActionPlatform(platform);
-      setBrowserAssistBusyPlatform(browserActionPlatform);
-      setBrowserAssistStatusByPlatform((current) => ({ ...current, [browserActionPlatform]: null }));
-      setBrowserAssistErrorByPlatform((current) => ({ ...current, [browserActionPlatform]: null }));
-      try {
-        await bootstrapExtensionAuth();
-        await triggerPlatformSync(browserActionPlatform);
-        await new Promise((resolve) => window.setTimeout(resolve, 1500));
-        await Promise.allSettled([
-          refresh(),
-          refreshCounts(),
-          refreshWorkQueue(),
-          refreshMessages(),
-        ]);
-        setBrowserAssistStatusByPlatform((current) => ({
-          ...current,
-          [browserActionPlatform]: `${browserActionPlatform === 'x' ? 'X' : browserActionPlatform.charAt(0).toUpperCase() + browserActionPlatform.slice(1)} browser assist ran successfully.`,
-        }));
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : `${browserActionPlatform} browser assist is not available right now`;
-        setBrowserAssistErrorByPlatform((current) => ({
-          ...current,
-          [browserActionPlatform]: message,
-        }));
-      } finally {
-        setBrowserAssistBusyPlatform(null);
-      }
-    },
-    [bootstrapExtensionAuth, getBrowserActionPlatform, refresh, refreshCounts, refreshMessages, refreshWorkQueue, triggerPlatformSync]
-  );
-
-  const handleCaptureLinkedInSurface = useCallback(
-    async (surface: 'sales_navigator' | 'recruiter') => {
-      setBrowserAssistError(null);
-      setLinkedInSurfaceActionStatus(null);
-      setLinkedInSurfaceActionBusy(surface);
-      try {
-        const browserState = getBrowserPlatformState('linkedin');
-        const surfaceReady =
-          surface === 'sales_navigator'
-            ? browserState?.hasSalesNavigatorTab
-            : browserState?.hasRecruiterTab;
-
-        if (!surfaceReady) {
-          throw new Error(
-            surface === 'sales_navigator'
-              ? 'Open Sales Navigator to capture lead workflows'
-              : 'Open Recruiter to capture candidate workflows'
-          );
-        }
-
-        await bootstrapExtensionAuth();
-        // Direct platform action dispatch is disabled in the hardened
-        // bridge. Sales Navigator / Recruiter capture is deferred until
-        // the server-issued command path for those surfaces ships.
-        void executePlatformAction;
-        setLinkedInSurfaceActionStatus(
-          surface === 'sales_navigator'
-            ? 'Sales Navigator capture is deferred until server-issued command dispatch ships for this surface.'
-            : 'Recruiter capture is deferred until server-issued command dispatch ships for this surface.',
-        );
-
-        await Promise.allSettled([
-          refresh(),
-          refreshCounts(),
-          refreshWorkQueue(),
-          refreshLinkedInOverview(),
-        ]);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : 'LinkedIn advanced surface capture is not available right now';
-        setBrowserAssistError(message);
-      } finally {
-        setLinkedInSurfaceActionBusy(null);
-      }
-    },
-    [
-      bootstrapExtensionAuth,
-      executePlatformAction,
-      getBrowserPlatformState,
-      refresh,
-      refreshCounts,
-      refreshLinkedInOverview,
-      refreshWorkQueue,
-    ]
-  );
 
   useEffect(() => {
     // Extension auth (claim-code redemption → HMAC secret) is required for
