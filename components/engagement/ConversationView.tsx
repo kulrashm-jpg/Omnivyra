@@ -9,18 +9,13 @@ import { ReplyComposer } from './ReplyComposer';
 import { AISuggestionPanel } from './AISuggestionPanel';
 import type { EngagementMessage } from '@/hooks/useEngagementMessages';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
-import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
 import {
   compareMessagesAscending,
   compareMessagesDescending,
   getEffectiveMessageTimeMs,
 } from '@/lib/engagement/messageTime';
-import {
-  formatTimestamp,
-  authorDisplay,
-  authorInitials,
-  avatarTone,
-} from './inbox/messageRenderHelpers';
+import { MessageList } from './inbox/MessageList';
+import { useMessageActions } from '@/hooks/useMessageActions';
 
 export interface ConversationViewProps {
   thread: InboxThread | null;
@@ -337,252 +332,20 @@ export const ConversationView = React.memo(function ConversationView({
     }
   }, [organizationId, replyText, inferPatternFromText, onReplySent]);
 
-  const handleLike = useCallback(
-    async (msg: EngagementMessage) => {
-      if (!onLike) return;
-      onLike(msg.id, msg.platform ?? '');
+  // Phase 35-C-2: side effects extracted to useMessageActions hook;
+  // pure rendering extracted to <MessageList>/<MessageItem>. The hook
+  // returns 5 callbacks (cancelQueued, retryQueued, markSelf, like,
+  // replyTo) that MessageList passes to each MessageItem.
+  const messageActions = useMessageActions({
+    organizationId,
+    onLike,
+    onReplyTo: (msg) => {
+      setReplyingTo(msg);
+      setShowSuggestions(true);
     },
-    [onLike]
-  );
-
-  const renderMessage = (msg: EngagementMessage & { children?: EngagementMessage[] }, depth = 0) => {
-    // Pending outbound DM — server-side virtual row representing a queued
-    // community_ai_actions row that the Chrome extension hasn't delivered
-    // yet. Renders as a dimmed self-message with an explicit "queued" badge
-    // and a Cancel button. Cancel routes to /api/engagement/cancel-queued
-    // which marks the row failed/user_cancelled, freeing the composer to
-    // accept a new reply.
-    if (msg.is_pending_outbound) {
-      const claimedAndActive = msg.pending_action_claimed === true && msg.pending_action_lease_expired !== true;
-      const statusLabel = claimedAndActive
-        ? 'Handed to LinkedIn - awaiting delivery'
-        : 'Queued - not yet delivered';
-      const statusDetail = claimedAndActive
-        ? 'Omnivyra has handed this to the LinkedIn tab. Waiting for LinkedIn to report the send result.'
-        : 'Will be sent when the LinkedIn tab is open and the Omnivyra extension claims the action.';
-      return (
-        <div key={msg.id} className="my-2 ml-auto max-w-[80%]">
-          <div className={`rounded-2xl border px-3 py-2 ${
-            claimedAndActive
-              ? 'border-blue-200 bg-blue-50'
-              : 'border-amber-200 bg-amber-50'
-          }`}>
-            <div className={`flex items-center gap-2 text-[11px] uppercase tracking-wide ${
-              claimedAndActive ? 'text-blue-800' : 'text-amber-800'
-            }`}>
-              <span>{statusLabel}</span>
-            </div>
-            <p className="mt-1 text-sm text-slate-800 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
-            <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
-              <span>{statusDetail}</span>
-              {msg.pending_action_id && onRetryQueuedDelivery && !claimedAndActive && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const result = await onRetryQueuedDelivery(msg.pending_action_id as string);
-                      if (result && 'message' in result && result.message) window.alert(result.message);
-                    } catch (e) {
-                      window.alert((e as Error)?.message ?? 'Failed to retry queued delivery');
-                    }
-                  }}
-                  className="font-medium text-blue-700 hover:text-blue-900 underline-offset-2 hover:underline"
-                >
-                  Retry delivery
-                </button>
-              )}
-              {!claimedAndActive && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!msg.pending_action_id) return;
-                    if (typeof window !== 'undefined' && !window.confirm('Cancel this queued reply? You can rewrite and send a new one after.')) return;
-                    try {
-                      const res = await fetch('/api/engagement/cancel-queued', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        credentials: 'include',
-                        body: JSON.stringify({
-                          organization_id: organizationId,
-                          action_id: msg.pending_action_id,
-                        }),
-                      });
-                      if (!res.ok) {
-                        const body = await res.json().catch(() => ({}));
-                        window.alert(body?.error ?? 'Failed to cancel queued reply');
-                        return;
-                      }
-                      onReplySent?.();
-                    } catch (e) {
-                      window.alert((e as Error)?.message ?? 'Failed to cancel queued reply');
-                    }
-                  }}
-                  className="font-medium text-amber-900 hover:text-amber-700 underline-offset-2 hover:underline"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    const displayName = authorDisplay(msg, depth === 0 ? threadAuthor : null);
-    // Avatar initials should reflect the actual account, not the display
-    // string. When the comment is the logged-in user's own ("You"), use the
-    // account's real name (carried on author_display_name) to compute KR;
-    // showing a "Y" initial is wrong because two different LinkedIn accounts
-    // named "Kuldeep" would otherwise be indistinguishable.
-    const isSelfAuthor = msg.author_self === true || msg.author_id === '__self__';
-    const accountName = isSelfAuthor ? (msg.author_display_name || displayName) : displayName;
-    const initials = authorInitials(accountName);
-    const avatarClasses = avatarTone(accountName, isSelfAuthor);
-    // Profile pic — when present, render an actual image. Initials are
-    // the fallback for when the scraper hasn't captured a pic or the URL
-    // fails to load (LinkedIn CDN can return 403 in rare cases).
-    const avatarImgSrc = (msg.author_avatar_url ?? '').trim() || null;
-    return (
-    <div key={msg.id} className={depth > 0 ? 'ml-6 mt-2 pl-4 border-l-2 border-slate-200' : ''}>
-      <div className="flex gap-2 py-2">
-        {avatarImgSrc ? (
-          <img
-            src={avatarImgSrc}
-            alt={displayName}
-            className={`w-8 h-8 rounded-full border object-cover shrink-0 ${isSelfAuthor ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-slate-200'}`}
-            referrerPolicy="no-referrer"
-            onError={(e) => {
-              // Fall back to initials by hiding the broken img.
-              (e.currentTarget as HTMLImageElement).style.display = 'none';
-              const fallback = (e.currentTarget.nextSibling as HTMLElement | null);
-              if (fallback) fallback.style.display = 'flex';
-            }}
-          />
-        ) : null}
-        <div
-          className={`w-8 h-8 rounded-full border flex items-center justify-center text-xs font-semibold shrink-0 ${avatarClasses}`}
-          style={{ display: avatarImgSrc ? 'none' : 'flex' }}
-          title={displayName}
-        >
-          {initials}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-slate-800">
-              {displayName}
-            </span>
-            {msg.author_handle && (
-              <a
-                href={`https://www.linkedin.com/in/${msg.author_handle}/`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-slate-500 hover:text-slate-700"
-              >
-                @{msg.author_handle}
-              </a>
-            )}
-            <PlatformIcon platform={msg.platform ?? ''} size={12} />
-            <span className="text-xs text-slate-500">{formatTimestamp(msg.platform_created_at ?? msg.created_at, msg.display_time_label)}</span>
-          </div>
-          <p className="text-sm text-slate-700 mt-0.5 whitespace-pre-wrap">{msg.content || '(empty)'}</p>
-          {/* Per-comment engagement chips — mirrors LinkedIn's tiny
-              "👍 N · 💬 N replies" row underneath each comment. Hidden when
-              both counts are zero so we don't clutter empty rows. */}
-          {((msg.like_count ?? 0) > 0 || (msg.reply_count ?? 0) > 0) && (
-            <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-500">
-              {(msg.like_count ?? 0) > 0 && (
-                <span title="Reactions on this comment">👍 {msg.like_count}</span>
-              )}
-              {(msg.reply_count ?? 0) > 0 && (
-                <span title="Replies to this comment">
-                  💬 {msg.reply_count} {msg.reply_count === 1 ? 'reply' : 'replies'}
-                </span>
-              )}
-            </div>
-          )}
-          <div className="flex items-center gap-2 mt-1">
-            {!isSelfAuthor && (
-              <button
-                type="button"
-                onClick={async () => {
-                  if (typeof window !== 'undefined' && !window.confirm('Mark this message as sent by you? It will drop from "Needs Response".')) return;
-                  try {
-                    const res = await fetch('/api/engagement/message/mark-self', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      credentials: 'include',
-                      body: JSON.stringify({
-                        organization_id: organizationId,
-                        message_id: msg.id,
-                      }),
-                    });
-                    if (!res.ok) {
-                      const body = await res.json().catch(() => ({}));
-                      window.alert(body?.error ?? 'Failed to mark message as sent by you');
-                      return;
-                    }
-                    onReplySent?.();
-                  } catch (e) {
-                    window.alert((e as Error)?.message ?? 'Failed to mark message');
-                  }
-                }}
-                title="Use this when LinkedIn attributed your own reply to the other party (common when you and the contact share a display name)."
-                className="text-xs text-slate-400 hover:text-amber-700 underline-offset-2 hover:underline"
-              >
-                I sent this
-              </button>
-            )}
-            {(() => {
-              const msgPlatform = msg.platform ?? '';
-              const likeCap = resolveEngagementCapability(msgPlatform, 'like');
-              const replyCap = resolveEngagementCapability(msgPlatform, 'reply');
-              // Both Like and Reply stay enabled even on placeholder rows
-              // so the operator can validate the full UI flow. The actions
-              // will hit a 502 from LinkedIn when targeting a synthetic
-              // URN, but that's surfaced via toast/tooltip rather than
-              // blocking the UX. Real scraped comments work end-to-end.
-              const isPlaceholder = msg.is_placeholder === true;
-              const likeDisabled = likeCap.status !== 'api_verified' || isSelfAuthor;
-              const replyDisabled = replyCap.status !== 'api_verified' || isSelfAuthor;
-              const likeTitle = isPlaceholder
-                ? 'Demo seed — clicking will call LinkedIn but the synthetic URN is rejected; real scraped comments will succeed.'
-                : (likeCap.status === 'api_verified' ? undefined : likeCap.reason);
-              const replyTitle = isPlaceholder
-                ? 'Demo seed: composer + AI suggestion will work; sending requires a real scraped URN.'
-                : (replyCap.status === 'api_verified' ? undefined : replyCap.reason);
-              return (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => handleLike(msg)}
-                    disabled={likeDisabled}
-                    title={likeTitle}
-                    className="text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Like {typeof msg.like_count === 'number' && msg.like_count > 0 ? `(${msg.like_count})` : ''}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReplyingTo(msg);
-                      setShowSuggestions(true);
-                    }}
-                    disabled={replyDisabled}
-                    title={replyTitle}
-                    className="text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Reply
-                  </button>
-                </>
-              );
-            })()}
-          </div>
-        </div>
-      </div>
-      {(msg.children ?? []).map((child) => renderMessage(child, depth + 1))}
-    </div>
-    );
-  };
+    onRetryQueuedDelivery,
+    onReplySent,
+  });
 
   if (!thread) {
     return (
@@ -730,7 +493,17 @@ export const ConversationView = React.memo(function ConversationView({
       )}
 
       <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
-        {messageTree.map((msg) => renderMessage(msg))}
+        <MessageList
+          messages={messageTree}
+          threadAuthor={threadAuthor}
+          showRetryQueued={Boolean(onRetryQueuedDelivery)}
+          onCancelQueued={messageActions.cancelQueued}
+          onRetry={messageActions.retryQueued}
+          onMarkSelf={messageActions.markSelf}
+          onLike={messageActions.like}
+          onReply={messageActions.replyTo}
+        />
+
       </div>
 
       {(() => {
