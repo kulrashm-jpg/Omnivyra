@@ -24,11 +24,11 @@ import { useEngagementPlatformPreferences } from '@/hooks/useEngagementPlatformP
 import { useEngagementMessages } from '@/hooks/useEngagementMessages';
 import { useLinkedInEngagementWorkspace } from '@/hooks/useLinkedInEngagementWorkspace';
 import { useReply } from '@/hooks/useReply';
+import { useBrowserAssistState } from '@/hooks/useBrowserAssist';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import { trackEngagementEvent } from '@/lib/engagementTelemetry';
 import { EVENTS } from '@/analytics/events';
 import { normalizePlatform } from '@/utils/platformIcons';
-import { isBrowserAssistRuntimeEnabled } from '@/lib/featureFlags';
 import { resolveEngagementCapability } from '@/lib/engagementCapabilities';
 import type { ThreadQueueGroup } from './threadQueueModel';
 import {
@@ -46,9 +46,12 @@ import {
   readServerPlatformSyncStatus,
 } from './inbox/helpers';
 import type {
-  PlatformSyncTrustState,
   ServerPlatformSyncStart,
 } from './inbox/helpers';
+import {
+  bulkIgnoreEngagementThreads,
+  likeEngagementMessage,
+} from '@/features/engagement/data/engagement.api';
 
 const RECOMMENDATION_TTL_MS = 12 * 60 * 1000;
 const RECOMMENDATION_FADE_WINDOW_MS = 2 * 60 * 1000;
@@ -63,7 +66,30 @@ function InboxDashboardComponent({
   className = '',
 }: InboxDashboardProps) {
   const router = useRouter();
-  const browserAssistEnabled = isBrowserAssistRuntimeEnabled();
+  // Phase 35-D-5a: browser-assist state (7 useState + 3 useRef + the
+  // feature-flag read) extracted to hooks/useBrowserAssist.ts. Effects +
+  // handlers + sub-hook calls remain inline this pass.
+  const {
+    browserAssistEnabled,
+    browserAssistError,
+    setBrowserAssistError,
+    browserAssistBusyPlatform,
+    setBrowserAssistBusyPlatform,
+    browserAssistStatusByPlatform,
+    setBrowserAssistStatusByPlatform,
+    browserAssistErrorByPlatform,
+    setBrowserAssistErrorByPlatform,
+    linkedInSurfaceActionBusy,
+    setLinkedInSurfaceActionBusy,
+    linkedInSurfaceActionStatus,
+    setLinkedInSurfaceActionStatus,
+    platformSyncTrust,
+    setPlatformSyncTrust,
+    attemptedExtensionAuthRef,
+    initialPlatformSyncKeyRef,
+    lastPlatformSyncAtRef,
+  } = useBrowserAssistState();
+
   const [selectedPlatform, setSelectedPlatform] = useState<string>('all');
   const [selectedThread, setSelectedThread] = useState<InboxThread | null>(null);
   const [mobileTab, setMobileTab] = useState<'threads' | 'conversation' | 'assistant'>('threads');
@@ -80,20 +106,6 @@ function InboxDashboardComponent({
   // for that view — kick a re-fetch. Skips first mount (the inbox load
   // already runs there) and avoids a double-fetch on initial render.
   const isFirstFilterRender = useRef(true);
-  const [browserAssistError, setBrowserAssistError] = useState<string | null>(null);
-  const [browserAssistBusyPlatform, setBrowserAssistBusyPlatform] = useState<string | null>(null);
-  const [browserAssistStatusByPlatform, setBrowserAssistStatusByPlatform] = useState<Record<string, string | null>>({});
-  const [browserAssistErrorByPlatform, setBrowserAssistErrorByPlatform] = useState<Record<string, string | null>>({});
-  const [linkedInSurfaceActionBusy, setLinkedInSurfaceActionBusy] = useState<'sales_navigator' | 'recruiter' | null>(null);
-  const [linkedInSurfaceActionStatus, setLinkedInSurfaceActionStatus] = useState<string | null>(null);
-  const [platformSyncTrust, setPlatformSyncTrust] = useState<PlatformSyncTrustState>({
-    status: 'idle',
-    lastSyncedAt: null,
-    message: null,
-  });
-  const attemptedExtensionAuthRef = useRef<string | null>(null);
-  const initialPlatformSyncKeyRef = useRef<string | null>(null);
-  const lastPlatformSyncAtRef = useRef<number>(0);
   // Clear the "already-attempted" lock whenever the user returns to the tab
   // or refocuses the window. The lock prevents redundant retries during a
   // single page session, but it also prevents recovery from a transient
@@ -1241,15 +1253,10 @@ function InboxDashboardComponent({
       }
 
       try {
-        const res = await fetch('/api/engagement/like', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            organization_id: organizationId,
-            message_id: messageId,
-            platform,
-          }),
+        const res = await likeEngagementMessage({
+          organizationId,
+          messageId,
+          platform,
         });
         const json = (await res.json().catch(() => ({}))) as {
           error?: string;
@@ -1364,14 +1371,9 @@ function InboxDashboardComponent({
         return;
       }
       try {
-        const res = await fetch('/api/engagement/thread/bulk-ignore', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            organization_id: organizationId,
-            thread_ids: threadIds,
-          }),
+        const res = await bulkIgnoreEngagementThreads({
+          organizationId,
+          threadIds,
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || res.statusText);
