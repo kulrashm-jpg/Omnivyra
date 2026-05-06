@@ -30,6 +30,7 @@
     "setup:verify": "node scripts/setup-helpers/verify-setup.js",
     "setup:redis": "node scripts/setup-helpers/check-redis.js",
     "migrate:p2": "node scripts/apply-p2-migrations.js",
+    "db:push": "bash ./scripts/db-push.sh",
     "test:p0": "node scripts/test-p0-module.js",
     "test:p2": "node scripts/test-p2-module.js",
     "test:all": "node scripts/test-p0-module.js && node scripts/test-p2-module.js",
