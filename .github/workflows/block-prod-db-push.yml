@@ -1,0 +1,20 @@
+name: Block Prod DB Push
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  block-prod-db-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block direct prod DB push
+        run: |
+          if [[ "${{ github.event.head_commit.message }}" == *"db push"* ]]; then
+            echo "🚫 Potential DB push detected in commit message"
+          fi
+
+          if [[ "${PROJECT_REF}" == "klkiseupptzbecbxwrky" ]]; then
+            echo "🚫 BLOCKED: Direct DB push to PROD is not allowed"
+            exit 1
+          fi
