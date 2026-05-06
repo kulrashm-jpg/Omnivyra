@@ -18,6 +18,7 @@ import { BrowserOperationsPanel } from '@/components/engagement/BrowserOperation
 import { ThreadList } from '@/components/engagement/ThreadList';
 import { ThreadView } from '@/components/engagement/ThreadView';
 import { AIEngagementAssistant } from '@/components/engagement/AIEngagementAssistant';
+import { InboxLayout } from '@/components/engagement/inbox/InboxLayout';
 import { useEngagementInbox } from '@/hooks/useEngagementInbox';
 import { usePlatformCounts } from '@/hooks/usePlatformCounts';
 import { useWorkQueue } from '@/hooks/useWorkQueue';
@@ -1009,7 +1010,9 @@ function InboxDashboardComponent({
     organizationId,
     getBrowserPlatformState,
     hideThreadAfterResponse,
-    bootstrapExtensionAuth,
+    bootstrapExtensionAuth: async () => {
+      await bootstrapExtensionAuth();
+    },
     pollExtensionCommandsNow,
     refresh,
     refreshMessages,
@@ -1599,69 +1602,66 @@ function InboxDashboardComponent({
         </div>
       </div>
 
-      <div className="flex min-h-[56vh] flex-1 flex-col overflow-visible md:min-h-[60vh] md:flex-row lg:h-[calc(100vh-20rem)]">
-        <section
-          className={`flex flex-col overflow-hidden border-r border-slate-200 bg-white ${
-            mobileTab !== 'threads' ? 'hidden md:flex' : 'flex'
-          } md:min-w-0 md:max-w-[360px] md:flex-[0_0_30%]`}
-        >
-          {/* Sticky primary view-mode tabs at the top of the left column.
-              These are duplicated from the page header so they stay visible
-              when the user scrolls the thread list. Two tabs cover the two
-              fundamental triage modes (DMs vs reactions on your posts). */}
-          <div className="sticky top-0 z-10 flex shrink-0 border-b border-slate-200 bg-white">
-            <button
-              type="button"
-              onClick={() => setActiveQueueFilter('Needs Response')}
-              aria-pressed={activeQueueFilter !== 'People Reacted'}
-              className={`flex flex-1 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold transition ${activeQueueFilter !== 'People Reacted' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-transparent text-slate-600 hover:bg-slate-50'}`}
-            >
-              <span>📥 Needs Response</span>
-              <span className={`rounded-full px-2 py-0.5 text-xs ${activeQueueFilter !== 'People Reacted' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
-                {actionableThreads}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveQueueFilter('People Reacted')}
-              aria-pressed={activeQueueFilter === 'People Reacted'}
-              className={`flex flex-1 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold transition ${activeQueueFilter === 'People Reacted' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-transparent text-slate-600 hover:bg-slate-50'}`}
-            >
-              <span>💬 People Reaction</span>
-              <span className={`rounded-full px-2 py-0.5 text-xs ${activeQueueFilter === 'People Reacted' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
-                {peopleReactedCount}
-              </span>
-            </button>
-          </div>
-          <ThreadList
-            items={visibleQueueItems}
-            loading={loading}
-            selectedThreadId={selectedThread?.thread_id}
-            recommendedThreadId={recommendedThread?.thread_id ?? null}
-            recommendationIsFading={recommendationIsFading}
-            activeFilter={activeQueueFilter}
-            onSelectThread={(thread) => {
-              handleSelectThread(thread);
-              setMobileTab('conversation');
-            }}
-            emptyMessage={
-              authorFilter
-                ? `No threads from ${authorFilter.authorName} on ${authorFilter.platform}.`
-                : activeQueueFilter === 'all'
-                  ? 'No threads in inbox.'
-                  : `No threads in ${activeQueueFilter.toLowerCase()} right now.`
-            }
-            emptyState={queueEmptyState}
-            authorFilter={authorFilter}
-            onClearAuthorFilter={authorFilter ? () => setAuthorFilter(null) : undefined}
-          />
-        </section>
-
-        <section
-          className={`relative flex flex-col overflow-hidden border-r border-slate-200 bg-slate-50 ${
-            mobileTab !== 'conversation' ? 'hidden md:flex' : 'flex'
-          } md:min-w-0 md:flex-[0_0_45%]`}
-        >
+      <InboxLayout
+        mobileTab={mobileTab}
+        aiDrawerOpen={aiDrawerOpen}
+        onAiDrawerToggle={() => setAiDrawerOpen(!aiDrawerOpen)}
+        onAiDrawerClose={() => setAiDrawerOpen(false)}
+        threadList={(
+          <>
+            {/* Sticky primary view-mode tabs at the top of the left column.
+                These are duplicated from the page header so they stay visible
+                when the user scrolls the thread list. Two tabs cover the two
+                fundamental triage modes (DMs vs reactions on your posts). */}
+            <div className="sticky top-0 z-10 flex shrink-0 border-b border-slate-200 bg-white">
+              <button
+                type="button"
+                onClick={() => setActiveQueueFilter('Needs Response')}
+                aria-pressed={activeQueueFilter !== 'People Reacted'}
+                className={`flex flex-1 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold transition ${activeQueueFilter !== 'People Reacted' ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-transparent text-slate-600 hover:bg-slate-50'}`}
+              >
+                <span>📥 Needs Response</span>
+                <span className={`rounded-full px-2 py-0.5 text-xs ${activeQueueFilter !== 'People Reacted' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                  {actionableThreads}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveQueueFilter('People Reacted')}
+                aria-pressed={activeQueueFilter === 'People Reacted'}
+                className={`flex flex-1 items-center justify-center gap-2 border-b-2 px-3 py-3 text-sm font-semibold transition ${activeQueueFilter === 'People Reacted' ? 'border-emerald-600 bg-emerald-50 text-emerald-700' : 'border-transparent text-slate-600 hover:bg-slate-50'}`}
+              >
+                <span>💬 People Reaction</span>
+                <span className={`rounded-full px-2 py-0.5 text-xs ${activeQueueFilter === 'People Reacted' ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                  {peopleReactedCount}
+                </span>
+              </button>
+            </div>
+            <ThreadList
+              items={visibleQueueItems}
+              loading={loading}
+              selectedThreadId={selectedThread?.thread_id}
+              recommendedThreadId={recommendedThread?.thread_id ?? null}
+              recommendationIsFading={recommendationIsFading}
+              activeFilter={activeQueueFilter}
+              onSelectThread={(thread) => {
+                handleSelectThread(thread);
+                setMobileTab('conversation');
+              }}
+              emptyMessage={
+                authorFilter
+                  ? `No threads from ${authorFilter.authorName} on ${authorFilter.platform}.`
+                  : activeQueueFilter === 'all'
+                    ? 'No threads in inbox.'
+                    : `No threads in ${activeQueueFilter.toLowerCase()} right now.`
+              }
+              emptyState={queueEmptyState}
+              authorFilter={authorFilter}
+              onClearAuthorFilter={authorFilter ? () => setAuthorFilter(null) : undefined}
+            />
+          </>
+        )}
+        conversation={(
           <ThreadView
             thread={selectedThread}
             messages={messages}
@@ -1677,81 +1677,8 @@ function InboxDashboardComponent({
             onMarkResolved={handleMarkResolved}
             onRetryQueuedDelivery={handleRetryQueuedDelivery}
           />
-        </section>
-
-        <>
-          <section className="hidden min-w-[240px] shrink-0 flex-[0_0_25%] flex-col overflow-hidden border-l border-slate-200 bg-slate-50 lg:flex">
-            <AIEngagementAssistant
-              thread={selectedThread}
-              messages={messages}
-              organizationId={organizationId}
-              recommendedThread={recommendedThread}
-              onSelectThread={(threadId) => {
-                handleSelectThreadById(threadId);
-                setMobileTab('threads');
-              }}
-              onFilterByAuthor={(authorName, platform) => {
-                setAuthorFilter({ authorName, platform });
-                setMobileTab('threads');
-              }}
-            />
-          </section>
-
-          <div className="hidden shrink-0 items-center border-l border-slate-200 px-2 md:flex lg:hidden">
-            <button
-              type="button"
-              onClick={() => setAiDrawerOpen(!aiDrawerOpen)}
-              className="rounded px-3 py-2 text-sm text-slate-600 hover:bg-slate-100"
-            >
-              Copilot {aiDrawerOpen ? 'Hide' : 'Open'}
-            </button>
-          </div>
-
-          {aiDrawerOpen && (
-            <div className="fixed inset-0 z-50 hidden md:block lg:hidden" aria-modal>
-              <div
-                className="absolute inset-0 bg-black/30"
-                onClick={() => setAiDrawerOpen(false)}
-              />
-              <div className="absolute right-0 top-0 bottom-0 flex w-full max-w-sm flex-col bg-white shadow-xl">
-                <div className="flex items-center justify-between border-b border-slate-200 p-3">
-                  <span className="font-medium">Engagement Copilot</span>
-                  <button
-                    type="button"
-                    onClick={() => setAiDrawerOpen(false)}
-                    className="p-1 text-slate-500 hover:text-slate-700"
-                  >
-                    Close
-                  </button>
-                </div>
-                <div className="flex-1 overflow-hidden">
-                  <AIEngagementAssistant
-                    thread={selectedThread}
-                    messages={messages}
-                    organizationId={organizationId}
-                    recommendedThread={recommendedThread}
-                    onSelectThread={(threadId) => {
-                      handleSelectThreadById(threadId);
-                      setMobileTab('threads');
-                    }}
-                    onFilterByAuthor={(authorName, platform) => {
-                      setAuthorFilter({ authorName, platform });
-                      setMobileTab('threads');
-                      setAiDrawerOpen(false);
-                    }}
-                    className="h-full border-0"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-        </>
-
-        <section
-          className={`flex flex-col overflow-hidden bg-slate-50 md:hidden ${
-            mobileTab !== 'assistant' ? 'hidden' : 'flex'
-          }`}
-        >
+        )}
+        rightPanelDesktop={(
           <AIEngagementAssistant
             thread={selectedThread}
             messages={messages}
@@ -1766,8 +1693,42 @@ function InboxDashboardComponent({
               setMobileTab('threads');
             }}
           />
-        </section>
-      </div>
+        )}
+        rightPanelDrawer={(
+          <AIEngagementAssistant
+            thread={selectedThread}
+            messages={messages}
+            organizationId={organizationId}
+            recommendedThread={recommendedThread}
+            onSelectThread={(threadId) => {
+              handleSelectThreadById(threadId);
+              setMobileTab('threads');
+            }}
+            onFilterByAuthor={(authorName, platform) => {
+              setAuthorFilter({ authorName, platform });
+              setMobileTab('threads');
+              setAiDrawerOpen(false);
+            }}
+            className="h-full border-0"
+          />
+        )}
+        rightPanelMobile={(
+          <AIEngagementAssistant
+            thread={selectedThread}
+            messages={messages}
+            organizationId={organizationId}
+            recommendedThread={recommendedThread}
+            onSelectThread={(threadId) => {
+              handleSelectThreadById(threadId);
+              setMobileTab('threads');
+            }}
+            onFilterByAuthor={(authorName, platform) => {
+              setAuthorFilter({ authorName, platform });
+              setMobileTab('threads');
+            }}
+          />
+        )}
+      />
     </div>
   );
 }
