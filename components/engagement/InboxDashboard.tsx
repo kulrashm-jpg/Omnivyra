@@ -9,7 +9,6 @@ import {
   selectNeedsResponseThreads,
   selectPeopleReactionThreads,
 } from '@/lib/engagement/queueRules';
-import { useEngagementPlatformHealth } from '@/hooks/useEngagementPlatformHealth';
 import { ThreadList } from '@/components/engagement/ThreadList';
 import { ThreadView } from '@/components/engagement/ThreadView';
 import { AIEngagementAssistant } from '@/components/engagement/AIEngagementAssistant';
@@ -19,12 +18,14 @@ import { useEngagementInbox } from '@/hooks/useEngagementInbox';
 import { usePlatformCounts } from '@/hooks/usePlatformCounts';
 import { useWorkQueue } from '@/hooks/useWorkQueue';
 import { useCompanyIntegrations } from '@/hooks/useCompanyIntegrations';
-import { useExtensionBridge } from '@/hooks/useExtensionBridge';
-import { useEngagementPlatformPreferences } from '@/hooks/useEngagementPlatformPreferences';
 import { useEngagementMessages } from '@/hooks/useEngagementMessages';
-import { useLinkedInEngagementWorkspace } from '@/hooks/useLinkedInEngagementWorkspace';
 import { useReply } from '@/hooks/useReply';
-import { useBrowserAssistState, useBrowserAssistHandlers } from '@/hooks/useBrowserAssist';
+import {
+  useBrowserAssistState,
+  useBrowserAssistData,
+  useBrowserAssistHandlers,
+  useBrowserAssistEffects,
+} from '@/hooks/useBrowserAssist';
 import type { InboxThread } from '@/hooks/useEngagementInbox';
 import { trackEngagementEvent } from '@/lib/engagementTelemetry';
 import { EVENTS } from '@/analytics/events';
@@ -66,9 +67,10 @@ function InboxDashboardComponent({
   className = '',
 }: InboxDashboardProps) {
   const router = useRouter();
-  // Phase 35-D-5a + 5b: browser-assist state at top, handlers later
-  // (after sub-hook calls so they can be passed as deps). Effects +
-  // sub-hook calls remain inline this pass (35-D-5c next).
+  // Phase 35-D-5a + 5b + 5c: browser-assist state at top of component,
+  // sub-hook data after connected-platform memos, handlers after data,
+  // effects last. This component still drives the order; the four hooks
+  // in @/hooks/useBrowserAssist contain the bodies.
   const browserState = useBrowserAssistState();
   const {
     browserAssistEnabled,
@@ -87,7 +89,6 @@ function InboxDashboardComponent({
     platformSyncTrust,
     setPlatformSyncTrust,
     attemptedExtensionAuthRef,
-    initialPlatformSyncKeyRef,
     lastPlatformSyncAtRef,
   } = browserState;
 
@@ -107,22 +108,6 @@ function InboxDashboardComponent({
   // for that view — kick a re-fetch. Skips first mount (the inbox load
   // already runs there) and avoids a double-fetch on initial render.
   const isFirstFilterRender = useRef(true);
-  // Clear the "already-attempted" lock whenever the user returns to the tab
-  // or refocuses the window. The lock prevents redundant retries during a
-  // single page session, but it also prevents recovery from a transient
-  // initial failure (e.g. SW cold start, content-script not yet injected).
-  // On focus/visibility we know the user is engaging — let the auto-bootstrap
-  // try again from a clean slate.
-  useEffect(() => {
-    const clearLock = () => { attemptedExtensionAuthRef.current = null; };
-    const onVisibility = () => { if (document.visibilityState === 'visible') clearLock(); };
-    window.addEventListener('focus', clearLock);
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      window.removeEventListener('focus', clearLock);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, []);
 
   const filters = useMemo(
     () => ({
@@ -153,37 +138,44 @@ function InboxDashboardComponent({
     ),
     [integrations]
   );
-  // Per-platform health (API / RPA / Extension / Publish adapter + ingress).
-  // Renders as a compact strip under the platform tabs so the operator
-  // can tell at a glance whether a given platform's selected actions
-  // will actually execute. Read-only; no mutation of tokens or sessions.
+  const hasLinkedInConnection = useMemo(
+    () => integrations.some((integration) => normalizePlatform(integration.platform) === 'linkedin'),
+    [integrations]
+  );
+  // Phase 35-D-5c: 4 sub-hooks (platform health, extension bridge,
+  // workspace preferences, LinkedIn workspace) extracted into
+  // useBrowserAssistData. Returns a flat object whose keys match the
+  // names this component already uses, so the destructure is byte-equivalent.
   const {
-    platforms: platformHealth,
-    loading: platformHealthLoading,
-    refresh: refreshPlatformHealth,
-  } = useEngagementPlatformHealth(organizationId);
-  const {
-    status: extensionStatus,
-    auth: extensionAuth,
-    loading: extensionLoading,
-    error: extensionError,
-    refresh: refreshExtension,
+    platformHealth,
+    platformHealthLoading,
+    refreshPlatformHealth,
+    extensionStatus,
+    extensionAuth,
+    extensionLoading,
+    extensionError,
+    refreshExtension,
     mergedPlatforms,
-    updatingPlatform: updatingBrowserPlatform,
-    authenticating: extensionAuthenticating,
+    updatingBrowserPlatform,
+    extensionAuthenticating,
     setBrowserPlatformEnabled,
     authenticateExtensionViaClaimCode,
     pollExtensionCommandsNow,
     triggerPlatformSync,
-    executePlatformAction
-  } = useExtensionBridge(integrations.map((integration) => integration.platform));
-  const {
-    preferenceMap: workspacePreferenceMap,
-    loading: workspacePreferencesLoading,
-    refresh: refreshWorkspacePreferences,
-    updatingPlatform: updatingWorkspacePlatform,
-    setPlatformEnabled: setWorkspacePlatformEnabled,
-  } = useEngagementPlatformPreferences(organizationId);
+    executePlatformAction,
+    workspacePreferenceMap,
+    workspacePreferencesLoading,
+    refreshWorkspacePreferences,
+    updatingWorkspacePlatform,
+    setWorkspacePlatformEnabled,
+    linkedinOverview,
+    linkedinOverviewLoading,
+    linkedinSyncing,
+    linkedinOverviewError,
+    linkedinLastSyncResult,
+    refreshLinkedInOverview,
+    syncLinkedInNow,
+  } = useBrowserAssistData({ organizationId, integrations, hasLinkedInConnection });
   const { items, loading, error, refresh, patchThread } = useEngagementInbox(organizationId, filters);
   useEffect(() => {
     if (isFirstFilterRender.current) {
@@ -201,19 +193,6 @@ function InboxDashboardComponent({
     selectedThread?.thread_id ?? null,
     selectedThread?.sibling_thread_ids ?? []
   );
-  const hasLinkedInConnection = useMemo(
-    () => integrations.some((integration) => normalizePlatform(integration.platform) === 'linkedin'),
-    [integrations]
-  );
-  const {
-    overview: linkedinOverview,
-    loading: linkedinOverviewLoading,
-    syncing: linkedinSyncing,
-    error: linkedinOverviewError,
-    lastSyncResult: linkedinLastSyncResult,
-    refresh: refreshLinkedInOverview,
-    syncNow: syncLinkedInNow,
-  } = useLinkedInEngagementWorkspace(organizationId, hasLinkedInConnection);
 
   const threadIdFromUrl = typeof router.query.thread === 'string' ? router.query.thread : null;
 
@@ -968,7 +947,6 @@ function InboxDashboardComponent({
   }, [hideThreadAfterResponse, refresh, refreshCounts, refreshWorkQueue, refreshMessages, selectedThread]);
 
   // ── Phase 35-D-5b: 7 useCallback handlers extracted to hooks/useBrowserAssist.ts ──
-  // Sub-hook calls + useEffects remain inline this pass (35-D-5c next).
   const {
     handleToggleExtensionPlatform,
     bootstrapExtensionAuth,
@@ -1018,96 +996,19 @@ function InboxDashboardComponent({
     refreshWorkQueue,
   });
 
-  useEffect(() => {
-    // Extension auth (claim-code redemption → HMAC secret) is required for
-    // EVERY /api/extension/* call: DM/comment scraping, command polling,
-    // platform health, etc. It is NOT specific to the browser-assist
-    // feature, so we don't gate the bootstrap on browserAssistEnabled.
-    // Without this, the SW never gets an HMAC secret and every signed
-    // POST returns SIGNATURE_UNAVAILABLE.
-    if (!organizationId || !extensionStatus?.runtimeId || extensionError) return;
-    if (extensionAuth?.isAuthenticated) {
-      attemptedExtensionAuthRef.current = null;
-      return;
-    }
-
-    const attemptKey = `${organizationId}:${extensionStatus.runtimeId}`;
-    if (attemptedExtensionAuthRef.current === attemptKey) {
-      return;
-    }
-    void bootstrapExtensionAuth();
-  }, [
-    browserAssistEnabled,
-    bootstrapExtensionAuth,
-    extensionAuth?.isAuthenticated,
-    extensionError,
-    extensionStatus?.runtimeId,
+  // Phase 35-D-5c: 4 useEffects (visibility lock, auto-bootstrap, initial
+  // platform sync, background sync interval) moved into useBrowserAssistEffects.
+  // Bodies + dep arrays + cleanup functions all preserved verbatim.
+  useBrowserAssistEffects(browserState, {
     organizationId,
-  ]);
-
-  useEffect(() => {
-    if (!organizationId || !extensionStatus?.runtimeId || extensionError) return;
-    if (syncableBrowserPlatforms.length === 0) return;
-
-    const syncKey = `${organizationId}:${extensionStatus.runtimeId}:${syncableBrowserPlatforms.join(',')}`;
-    if (initialPlatformSyncKeyRef.current === syncKey) return;
-
-    let cancelled = false;
-    initialPlatformSyncKeyRef.current = syncKey;
-
-    void (async () => {
-      const authenticated = await bootstrapExtensionAuth();
-      if (!authenticated || cancelled) {
-        if (!cancelled) initialPlatformSyncKeyRef.current = null;
-        return;
-      }
-      await runPlatformSyncAndRefresh(syncableBrowserPlatforms);
-    })().catch((syncError) => {
-      initialPlatformSyncKeyRef.current = null;
-      console.warn('[engagement] initial platform inbox sync failed:', syncError);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    bootstrapExtensionAuth,
+    extensionStatus,
+    extensionAuth,
     extensionError,
-    extensionStatus?.runtimeId,
-    organizationId,
-    runPlatformSyncAndRefresh,
+    bootstrapExtensionAuth,
     syncableBrowserPlatforms,
-  ]);
-
-  useEffect(() => {
-    if (!organizationId || syncableBrowserPlatforms.length === 0) return;
-
-    const runIfDue = () => {
-      if (Date.now() - lastPlatformSyncAtRef.current < BACKGROUND_PLATFORM_SYNC_INTERVAL_MS) return;
-      void (async () => {
-        const authenticated = await bootstrapExtensionAuth();
-        if (!authenticated) return;
-        await runPlatformSyncAndRefresh(syncableBrowserPlatforms);
-      })().catch((syncError) => {
-        console.warn('[engagement] scheduled platform inbox sync failed:', syncError);
-      });
-    };
-
-    const intervalId = window.setInterval(runIfDue, BACKGROUND_PLATFORM_SYNC_INTERVAL_MS);
-    const onFocus = () => runIfDue();
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') runIfDue();
-    };
-
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [bootstrapExtensionAuth, organizationId, runPlatformSyncAndRefresh, syncableBrowserPlatforms]);
+    runPlatformSyncAndRefresh,
+    browserAssistEnabled,
+  });
 
   const handleLike = useCallback(
     async (messageId: string, platform: string) => {
