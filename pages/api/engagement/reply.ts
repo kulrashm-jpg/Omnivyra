@@ -44,6 +44,14 @@ type ReplyBody = {
   reply_text?: string;
   platform?: string;
   ai_generated?: boolean;
+  /**
+   * REQUIRED when ai_generated === true. Points to an ai_message_drafts
+   * row that must be in status='approved' and match the resolved thread
+   * + platform. Enforced server-side; the DB trigger on ai_message_drafts
+   * also blocks status=sent transitions from non-approved (defence in
+   * depth). See migration 20260506000011.
+   */
+  ai_draft_id?: string;
   /** Optional suggestion id to mark as accepted on successful dispatch. */
   suggestion_id?: string;
   /**
@@ -321,6 +329,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let resolvedTargetId: string | null = null;
     let resolvedSignalId: string | null = null;
     let resolvedFromSignal = false;
+    let resolvedSignalThreadId: string | null = null;
     if (signalId && !messageId) {
       const resolved = await resolveSignal(signalId, organizationId);
       if (resolved.ok === false) {
@@ -329,6 +338,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!platform) platform = resolved.platform;
       resolvedTargetId = resolved.targetId;
       resolvedSignalId = resolved.signalId;
+      resolvedSignalThreadId = resolved.threadId;
       resolvedFromSignal = true;
     }
 
@@ -428,6 +438,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       if (!recipientDisplayName && typeof msgRawPayload.sender_name === 'string') {
         recipientDisplayName = msgRawPayload.sender_name;
+      }
+    }
+
+    // ── AI safety hard guard ─────────────────────────────────────────────
+    //    When ai_generated === true the caller MUST supply ai_draft_id, and
+    //    that draft must be in status='approved' with thread + platform
+    //    matching the resolved request. Defence in depth: the trigger on
+    //    ai_message_drafts also blocks status=sent transitions from any
+    //    state other than 'approved' (migration 20260506000011). No
+    //    fallback, no soft-validation: bypass here would defeat the entire
+    //    AI-reply safety contract.
+    if (body.ai_generated === true) {
+      if (!body.ai_draft_id) {
+        return res.status(400).json({
+          error: 'ai_draft_id is required when ai_generated=true',
+          code: 'AI_DRAFT_REQUIRED',
+        });
+      }
+      const { data: draft, error: draftErr } = await supabase
+        .from('ai_message_drafts')
+        .select('id, thread_id, platform, status')
+        .eq('id', body.ai_draft_id)
+        .maybeSingle();
+      if (draftErr || !draft) {
+        return res.status(404).json({
+          error: 'ai_draft not found',
+          code: 'AI_DRAFT_NOT_FOUND',
+        });
+      }
+      if (draft.status !== 'approved') {
+        return res.status(400).json({
+          error: `ai_draft must be approved before send (status=${draft.status})`,
+          code: 'AI_DRAFT_NOT_APPROVED',
+        });
+      }
+      const resolvedThreadId =
+        message?.thread_id ?? threadId ?? resolvedSignalThreadId ?? null;
+      if (resolvedThreadId && draft.thread_id !== resolvedThreadId) {
+        return res.status(400).json({
+          error: 'ai_draft thread mismatch',
+          code: 'AI_DRAFT_THREAD_MISMATCH',
+        });
+      }
+      if (draft.platform !== platform) {
+        return res.status(400).json({
+          error: `ai_draft platform mismatch (draft=${draft.platform}, request=${platform})`,
+          code: 'AI_DRAFT_PLATFORM_MISMATCH',
+        });
       }
     }
 
@@ -665,6 +723,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // also returned a verifiable native id — the distinction matters for UI
     // messaging and is the invariant we lock in tests.
     const confirmed = typeof result.platform_id === 'string' && result.platform_id.length > 0;
+
+    // AI safety: transition the approved draft to status='sent'. The DB
+    // trigger ensures this only succeeds if the row is currently 'approved'
+    // — so this is idempotent and safe even on retry.
+    if (body.ai_generated === true && body.ai_draft_id) {
+      const { error: draftSentErr } = await supabase
+        .from('ai_message_drafts')
+        .update({ status: 'sent' })
+        .eq('id', body.ai_draft_id);
+      if (draftSentErr) {
+        console.warn('[engagement/reply] ai_draft mark-sent failed:', draftSentErr.message);
+      }
+    }
 
     // Mirror the just-sent reply into engagement_messages so the inbox
     // tree shows it as a child of the original comment. Without this row
