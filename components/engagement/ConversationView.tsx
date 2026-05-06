@@ -15,6 +15,7 @@ import {
   getEffectiveMessageTimeMs,
 } from '@/lib/engagement/messageTime';
 import { MessageList } from './inbox/MessageList';
+import { ThreadHeader } from './inbox/ThreadHeader';
 import { useMessageActions } from '@/hooks/useMessageActions';
 
 export interface ConversationViewProps {
@@ -375,122 +376,17 @@ export const ConversationView = React.memo(function ConversationView({
 
   return (
     <div className={`flex flex-col h-full ${className}`}>
-      <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <h3 className="font-medium text-slate-800">{thread.author_name || 'Thread'}</h3>
-            <PlatformIcon platform={thread.platform} size={16} />
-          </div>
-          {thread.lead_detected ? (
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 font-medium text-amber-900">
-                Lead signal detected
-              </span>
-              <button
-                type="button"
-                onClick={() => router.push('/dashboard/intelligence?intelTab=active-leads')}
-                className="font-medium text-indigo-600 hover:text-indigo-800"
-              >
-                View in Active Leads
-              </button>
-            </div>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          {onRefresh && (
-            <button
-              type="button"
-              onClick={onRefresh}
-              className="text-sm text-blue-600 hover:text-blue-800"
-            >
-              Refresh
-            </button>
-          )}
-          {onMarkResolved && thread && (
-            <button
-              type="button"
-              onClick={handleMarkResolved}
-              className="text-sm text-slate-600 hover:text-slate-800"
-            >
-              Mark Resolved
-            </button>
-          )}
-          {onIgnore && thread && (
-            <button
-              type="button"
-              onClick={() => onIgnore(thread.thread_id)}
-              title="Remove this conversation from Omnivyra without sending a reply."
-              className="rounded-full border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
-            >
-              Drop
-            </button>
-          )}
-        </div>
-      </div>
+      <ThreadHeader
+        thread={thread}
+        isPostThread={isPostThread}
+        postUrl={postUrl}
+        messagesLength={messages.length}
+        onRefresh={onRefresh}
+        onMarkResolved={onMarkResolved && thread ? handleMarkResolved : undefined}
+        onIgnore={onIgnore}
+        onViewLeadSignal={() => router.push('/dashboard/intelligence?intelTab=active-leads')}
+      />
 
-      {/* Post banner — only shown for People Reaction threads (post URN as
-          platform_thread_id). Mirrors LinkedIn's post-on-top, comments-below
-          layout so triagers can see the actual post above the comment list. */}
-      {isPostThread && (
-        <div className="border-b border-slate-200 bg-gradient-to-b from-slate-50 to-white px-4 py-3">
-          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-50">
-              <span className="text-base">📝</span>
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                <span>Your post</span>
-                <PlatformIcon platform={thread.platform} size={12} />
-                {thread.post_stats_source === 'manual_seed' && (
-                  <span
-                    className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 normal-case tracking-normal"
-                    title="These numbers are seeded demo values, not live from LinkedIn. Open the post on LinkedIn (link below) to trigger the scraper and refresh with real numbers."
-                  >
-                    DEMO
-                  </span>
-                )}
-                {/* Stats row mirrors what LinkedIn shows under a post:
-                    impressions, reactions, comments. Falls back to the
-                    response count when scrape data is missing. */}
-                <span className="ml-2 flex items-center gap-3 text-[11px] text-slate-500 normal-case tracking-normal">
-                  {typeof thread.post_impression_count === 'number' && (
-                    <span title="Impressions">📊 {thread.post_impression_count.toLocaleString()} impressions</span>
-                  )}
-                  {typeof thread.post_reaction_count === 'number' && (
-                    <span title="Reactions">👍 {thread.post_reaction_count}</span>
-                  )}
-                  <span title="Responses captured in inbox">
-                    💬 {typeof thread.post_comment_count === 'number'
-                      ? thread.post_comment_count
-                      : messages.length}
-                    {' '}
-                    {(thread.post_comment_count ?? messages.length) === 1 ? 'response' : 'responses'}
-                  </span>
-                </span>
-              </div>
-              {thread.post_text_preview ? (
-                <p className="mt-1 line-clamp-3 text-sm text-slate-700 whitespace-pre-wrap">
-                  {thread.post_text_preview}
-                </p>
-              ) : (
-                <p className="mt-1 text-sm text-slate-500 italic">
-                  Post preview not yet ingested. Visit the post on LinkedIn to refresh.
-                </p>
-              )}
-              {postUrl && (
-                <a
-                  href={postUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-900"
-                >
-                  Open on LinkedIn ↗
-                </a>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
         <MessageList
