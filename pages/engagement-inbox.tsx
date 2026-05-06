@@ -124,6 +124,18 @@ export default function EngagementInboxPage() {
       };
       if (verbatim && suggestionId) body.suggestion_id = suggestionId;
       if (suggestionCorrelationId) body.correlation_id = suggestionCorrelationId;
+      // ── AI safety hard-fail at the UI boundary ────────────────────────
+      //    If a suggestion was generated for this signal but no draft id
+      //    is available (generate-response failed to create one — e.g.
+      //    thread resolution failed, or the response came from the queued
+      //    path that doesn't yet support drafts), the user must regenerate
+      //    instead of sending AI text without an audit row. There is no
+      //    fallback path; the API would reject this anyway via
+      //    AI_DRAFT_REQUIRED, but failing fast in the UI surfaces it as a
+      //    clearer message and avoids a wasted round-trip.
+      if (suggestion && !aiDraftId) {
+        throw new Error('AI_DRAFT_MISSING_UI: regenerate the suggestion to obtain a draft before sending');
+      }
       // Route AI-derived sends through the ai_message_drafts pipeline.
       // The server-side guard validates the draft is approved and matches
       // thread + platform; the DB trigger blocks any direct-to-sent
@@ -253,10 +265,17 @@ export default function EngagementInboxPage() {
         throw new Error(((genData as { error?: string }).error) ?? 'Suggestion generation failed');
       }
       const text =
-        (genData as { text?: string; suggested_text?: string }).text ??
+        (genData as { text?: string; suggested_text?: string; immediate_response?: string }).text ??
         (genData as { suggested_text?: string }).suggested_text ??
+        (genData as { immediate_response?: string }).immediate_response ??
         '';
       const model = (genData as { model?: string }).model ?? null;
+      // ai_draft_id is created by /api/engagement/generate-response when it
+      // produces text on the deterministic fast-path. It is the audit row
+      // /api/engagement/reply will require on send. If null here, AI send
+      // is blocked at the UI hard-fail in sendReply (no silent bypass).
+      const generatedDraftId =
+        (genData as { ai_draft_id?: string | null }).ai_draft_id ?? null;
       if (!text) throw new Error('Suggestion text was empty');
 
       // 2. Record suggestion shown.
@@ -277,7 +296,6 @@ export default function EngagementInboxPage() {
       const shownData = (await shownRes.json().catch(() => ({}))) as {
         suggestion_id?: string;
         correlation_id?: string;
-        ai_draft_id?: string | null;
         error?: string;
       };
       if (!shownRes.ok) {
@@ -288,7 +306,9 @@ export default function EngagementInboxPage() {
       setSuggestionId(shownData.suggestion_id ?? null);
       setSuggestionCorrelationId(shownData.correlation_id ?? null);
       setSuggestionModel(model);
-      setAiDraftId(shownData.ai_draft_id ?? null);
+      // ai_draft_id now comes from generate-response (the AI source) so the
+      // draft is guaranteed to exist before any UI state references it.
+      setAiDraftId(generatedDraftId);
 
       // Refresh intelligence after generating a suggestion — the
       // acceptance-rate signal changes as soon as the suggestion row

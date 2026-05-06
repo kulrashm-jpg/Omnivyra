@@ -19,35 +19,17 @@ import { withContract } from '@/lib/api/withContract';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
-import { supabase } from '../../../backend/db/supabaseClient';
 import {
   recordSuggestionShown,
   recordSuggestionAccepted,
   recordSuggestionRejected,
 } from '../../../backend/services/aiSuggestionTrackingService';
 
-/**
- * Resolve a campaign engagement signal id (target_id from the inbox UI)
- * to its underlying engagement_threads.id. Walks signal.source_id →
- * engagement_messages.thread_id. Returns null if the chain can't be
- * resolved (which is fine — caller skips draft creation, the API guard
- * in /api/engagement/reply will then reject any AI send for that signal).
- */
-async function resolveThreadIdFromSignal(signalId: string): Promise<string | null> {
-  const { data: signal } = await supabase
-    .from('campaign_activity_engagement_signals')
-    .select('source_id')
-    .eq('id', signalId)
-    .maybeSingle();
-  const sourceId = (signal as { source_id?: string | null } | null)?.source_id ?? null;
-  if (!sourceId) return null;
-  const { data: msg } = await supabase
-    .from('engagement_messages')
-    .select('thread_id')
-    .eq('id', sourceId)
-    .maybeSingle();
-  return ((msg as { thread_id?: string | null } | null)?.thread_id) ?? null;
-}
+// NOTE: ai_message_drafts row creation moved to /api/engagement/generate-response
+// (the generation endpoint, where the text is produced). This endpoint is now
+// analytics-only — it records suggestion_shown / accepted / rejected events
+// but does NOT create drafts. Closing the bypass at the generation source
+// guarantees AI text always has a draft attached before it can reach the UI.
 
 type Body =
   | {
@@ -108,40 +90,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'SUGGESTION_SHOWN_INSERT_FAILED' });
       }
 
-      // Create an ai_message_drafts row when we can resolve a thread from
-      // target_id. This is the audit row that /api/engagement/reply will
-      // require (via ai_draft_id) when the user clicks Send. If thread
-      // resolution fails, draft creation is skipped — the reply API will
-      // then reject any AI send for that signal, which is the safe fail
-      // mode (no silent unprotected path).
-      let aiDraftId: string | null = null;
-      if (body.target_id && body.content) {
-        const threadId = await resolveThreadIdFromSignal(body.target_id);
-        if (threadId) {
-          const { data: draftRow, error: draftErr } = await supabase
-            .from('ai_message_drafts')
-            .insert({
-              thread_id: threadId,
-              platform: body.platform,
-              generated_text: body.content,
-              status: 'draft',
-              created_by: user?.userId ?? null,
-            })
-            .select('id')
-            .single();
-          if (draftErr) {
-            console.warn('[engagement/ai-suggestion] ai_draft create failed:', draftErr.message);
-          } else {
-            aiDraftId = (draftRow as { id?: string } | null)?.id ?? null;
-          }
-        }
-      }
-
       return res.status(200).json({
         success: true,
         suggestion_id: record.id,
         correlation_id: record.execution_correlation_id,
-        ai_draft_id: aiDraftId,
       });
     }
 
