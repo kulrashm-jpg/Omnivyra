@@ -2,6 +2,7 @@ import { supabase } from '../db/supabaseClient';
 import type { UserContext } from './userContextService';
 import { getUserRole, isSuperAdmin, Role } from './rbacService';
 import { logUserManagementAudit } from './campaignAuditService';
+import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
 
 type AccessResult =
   | { ok: true; scope: 'super_admin' | 'admin' }
@@ -29,7 +30,7 @@ const requireUserAdminAccess = async (
 };
 
 type AuthUser = { id: string; email?: string };
-const getOrCreateUserByEmail = async (email: string): Promise<AuthUser> => {
+const getOrCreateUserByEmail = async (email: string, companyId?: string): Promise<AuthUser> => {
   const normalizedEmail = email.toLowerCase().trim();
 
   // Look up existing user row by email (DB is the authoritative identity store)
@@ -41,10 +42,21 @@ const getOrCreateUserByEmail = async (email: string): Promise<AuthUser> => {
 
   if (existing) return { id: (existing as any).id, email: (existing as any).email };
 
+  const unifiedPersonId = await ensureUnifiedPerson({
+    email: normalizedEmail,
+    phone: null,
+    companyId,
+  });
+
   // Create a stub row — firebase_uid will be populated on first sign-in
   const { data: created, error: createError } = await supabase
     .from('users')
-    .insert({ email: normalizedEmail, name: normalizedEmail.split('@')[0] || 'User', created_at: new Date().toISOString() })
+    .insert({
+      email: normalizedEmail,
+      name: normalizedEmail.split('@')[0] || 'User',
+      created_at: new Date().toISOString(),
+      unified_person_id: unifiedPersonId,
+    })
     .select('id, email')
     .single();
 
@@ -68,7 +80,7 @@ export const inviteUser = async (
   const access = await requireUserAdminAccess(requester, companyId);
   if (!access.ok) return access;
 
-  const user = await getOrCreateUserByEmail(email);
+  const user = await getOrCreateUserByEmail(email, companyId);
   const normalizedRole = role.toUpperCase();
 
   const { data: existing } = await (supabase

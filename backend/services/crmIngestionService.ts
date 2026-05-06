@@ -9,6 +9,7 @@ import {
 import { resolveUnifiedPerson, type IdentityExternalKeys } from './identityResolutionService';
 import { bulkCreateTouchpoints, type TouchpointInput } from './touchpointService';
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
+import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
 
 export interface CrmLeadRecord {
   externalId?: string | null;
@@ -104,6 +105,16 @@ async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSo
     return;
   }
 
+  const unifiedPersonId = await ensureUnifiedPerson({
+    email: row.email,
+    phone: row.phone,
+    companyId,
+  });
+
+  if (!unifiedPersonId) {
+    throw new Error('IDENTITY_REQUIRED_FOR_LEAD');
+  }
+
   await supabase.from('leads').insert({
     company_id: companyId,
     name: row.name || row.email,
@@ -111,6 +122,7 @@ async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSo
     phone: row.phone ?? null,
     source,
     unified_source: unifiedSource,
+    unified_person_id: unifiedPersonId,
     metadata: {
       ...(row.metadata ?? {}),
       external_lead_key: externalLeadKey,

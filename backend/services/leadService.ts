@@ -3,6 +3,7 @@
  * Handles: SaaS form builder, embed submissions, inbound webhook validation, manual entry
  */
 import { supabase } from '../db/supabaseClient';
+import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
 
 export type FieldType = 'text' | 'email' | 'phone';
 
@@ -47,6 +48,7 @@ export interface Lead {
   metadata: Record<string, unknown>;
   is_test: boolean;
   created_at: string;
+  unified_person_id: string | null;
 }
 
 // ─── FORMS ────────────────────────────────────────────────────────────────────
@@ -122,6 +124,16 @@ export interface CreateLeadInput {
 }
 
 export async function createLead(companyId: string, input: CreateLeadInput): Promise<Lead> {
+  const unifiedPersonId = await ensureUnifiedPerson({
+    email: input.email,
+    phone: input.phone,
+    companyId,
+  });
+
+  if (!unifiedPersonId) {
+    throw new Error('IDENTITY_REQUIRED_FOR_LEAD');
+  }
+
   const { data, error } = await supabase
     .from('leads')
     .insert({
@@ -135,6 +147,7 @@ export async function createLead(companyId: string, input: CreateLeadInput): Pro
       integration_id: input.integration_id ?? null,
       metadata: input.metadata ?? {},
       is_test: input.is_test ?? false,
+      unified_person_id: unifiedPersonId,
     })
     .select('*')
     .single();
