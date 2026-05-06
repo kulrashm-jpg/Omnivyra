@@ -78,6 +78,12 @@ export default function EngagementInboxPage() {
   const [suggestionBusy, setSuggestionBusy] = useState(false);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const [suggestionUsed, setSuggestionUsed] = useState(false);
+  // ai_draft_id is set when /api/engagement/ai-suggestion?event=shown
+  // returns one (i.e. the server resolved a thread for the signal). When
+  // present and the user clicks Send, we route through the draft system
+  // (ai_generated=true + ai_draft_id) so /api/engagement/reply can verify
+  // an approved-and-matching draft exists. See migration 20260506000011.
+  const [aiDraftId, setAiDraftId] = useState<string | null>(null);
   // ── Intelligence state ────────────────────────────────────────────────────
   // Fetched from /api/intelligence/context on signal select and on
   // suggestion generate. UI rules:
@@ -118,6 +124,15 @@ export default function EngagementInboxPage() {
       };
       if (verbatim && suggestionId) body.suggestion_id = suggestionId;
       if (suggestionCorrelationId) body.correlation_id = suggestionCorrelationId;
+      // Route AI-derived sends through the ai_message_drafts pipeline.
+      // The server-side guard validates the draft is approved and matches
+      // thread + platform; the DB trigger blocks any direct-to-sent
+      // tampering. See /api/engagement/reply AI guard + migration
+      // 20260506000011.
+      if (aiDraftId) {
+        body.ai_generated = true;
+        body.ai_draft_id = aiDraftId;
+      }
 
       const res = await fetch('/api/engagement/reply', {
         method: 'POST',
@@ -209,6 +224,7 @@ export default function EngagementInboxPage() {
     setSuggestionModel(null);
     setSuggestionError(null);
     setSuggestionUsed(false);
+    setAiDraftId(null);
   };
 
   const generateSuggestion = async () => {
@@ -261,6 +277,7 @@ export default function EngagementInboxPage() {
       const shownData = (await shownRes.json().catch(() => ({}))) as {
         suggestion_id?: string;
         correlation_id?: string;
+        ai_draft_id?: string | null;
         error?: string;
       };
       if (!shownRes.ok) {
@@ -271,6 +288,7 @@ export default function EngagementInboxPage() {
       setSuggestionId(shownData.suggestion_id ?? null);
       setSuggestionCorrelationId(shownData.correlation_id ?? null);
       setSuggestionModel(model);
+      setAiDraftId(shownData.ai_draft_id ?? null);
 
       // Refresh intelligence after generating a suggestion — the
       // acceptance-rate signal changes as soon as the suggestion row

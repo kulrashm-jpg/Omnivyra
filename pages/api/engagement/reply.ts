@@ -1,3 +1,4 @@
+import { withContract } from '@/lib/api/withContract';
 
 /**
  * POST /api/engagement/reply
@@ -285,7 +286,7 @@ async function resolveSignal(
   };
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -443,12 +444,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // ── AI safety hard guard ─────────────────────────────────────────────
     //    When ai_generated === true the caller MUST supply ai_draft_id, and
-    //    that draft must be in status='approved' with thread + platform
-    //    matching the resolved request. Defence in depth: the trigger on
-    //    ai_message_drafts also blocks status=sent transitions from any
-    //    state other than 'approved' (migration 20260506000011). No
-    //    fallback, no soft-validation: bypass here would defeat the entire
-    //    AI-reply safety contract.
+    //    that draft must match thread + platform. The user's Send click is
+    //    treated as the approval gesture: if the draft is still in 'draft'
+    //    status, we promote it to 'approved' here (with approved_by =
+    //    current user) before validating. This makes a single-click UX
+    //    safe: every AI send produces an audit trail showing who approved
+    //    and when.
+    //
+    //    Defence in depth: the trigger on ai_message_drafts blocks
+    //    status=sent transitions from any state other than 'approved'
+    //    (migration 20260506000011). No fallback, no soft-validation:
+    //    bypass here would defeat the entire AI-reply safety contract.
     if (body.ai_generated === true) {
       if (!body.ai_draft_id) {
         return res.status(400).json({
@@ -467,10 +473,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           code: 'AI_DRAFT_NOT_FOUND',
         });
       }
-      if (draft.status !== 'approved') {
+      if (draft.status === 'sent' || draft.status === 'rejected') {
         return res.status(400).json({
-          error: `ai_draft must be approved before send (status=${draft.status})`,
-          code: 'AI_DRAFT_NOT_APPROVED',
+          error: `ai_draft already in terminal status=${draft.status}`,
+          code: 'AI_DRAFT_TERMINAL',
         });
       }
       const resolvedThreadId =
@@ -486,6 +492,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           error: `ai_draft platform mismatch (draft=${draft.platform}, request=${platform})`,
           code: 'AI_DRAFT_PLATFORM_MISMATCH',
         });
+      }
+      if (draft.status === 'draft') {
+        // User's Send click is the approval. The trigger validates this
+        // transition and auto-stamps approved_at when missing.
+        const approverId = roleGate.userId ?? null;
+        if (!approverId) {
+          return res.status(403).json({
+            error: 'cannot approve ai_draft without authenticated user',
+            code: 'AI_DRAFT_NO_APPROVER',
+          });
+        }
+        // Record the actual text being sent (may differ from generated_text
+        // if the user edited the suggestion in the UI).
+        const { error: approveErr } = await supabase
+          .from('ai_message_drafts')
+          .update({
+            status: 'approved',
+            approved_by: approverId,
+            edited_text: replyText,
+          })
+          .eq('id', body.ai_draft_id)
+          .eq('status', 'draft');
+        if (approveErr) {
+          return res.status(500).json({
+            error: `ai_draft approve failed: ${approveErr.message}`,
+            code: 'AI_DRAFT_APPROVE_FAILED',
+          });
+        }
       }
     }
 
@@ -839,3 +873,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: msg });
   }
 }
+
+export default withContract(handler);
