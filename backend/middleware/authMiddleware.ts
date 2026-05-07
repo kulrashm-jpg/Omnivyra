@@ -1,23 +1,26 @@
 /**
  * Centralised auth middleware for Next.js API routes.
  *
- * ALL authentication is via Supabase JWT tokens (verified by supabase.auth.getUser).
+ * ALL authentication is via Supabase JWT tokens (Bearer or session cookie).
+ * The actual token validation + UID-backfill + soft-delete enforcement is
+ * implemented in backend/services/authResolver.ts. This file is the
+ * response-shaping layer that maps resolver outcomes to HTTP responses.
  *
  * Usage:
  *
- *   const { user } = await requireAuth(req, res);
- *   if (!user) return;   // 401 already sent
+ *   const auth = await requireAuth(req, res);
+ *   if (!auth) return;   // 401 already sent
  *
- *   await requireCompanyAccess(user.id, companyId, res);
- *   if (res.writableEnded) return;
+ *   const ok = await requireCompanyAccess(auth.user.id, companyId, res);
+ *   if (!ok) return;
  *
- *   await requireSuperAdmin(req, res);
- *   if (res.writableEnded) return;
+ *   const sa = await requireSuperAdmin(req, res);
+ *   if (!sa) return;
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { verifySupabaseAuthHeader } from '../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '../services/authResolver';
 
 // ── Resolved auth identity ────────────────────────────────────────────────────
 
@@ -32,58 +35,36 @@ export interface AuthUser {
 // ── 1. requireAuth ─────────────────────────────────────────────────────────────
 
 /**
- * Validates the Supabase Bearer token in the Authorization header.
- * Resolves the internal users.id from supabase_uid (falls back to email).
- * Returns the authenticated user or sends 401 and returns null.
+ * Validates the Supabase token in the Authorization header (or session cookie)
+ * via the canonical resolveAuthenticatedUser, then maps the result to either
+ * an authenticated user or a 401/403 response.
+ *
+ * Returns the authenticated user or sends 401/403 and returns null.
  */
 export async function requireAuth(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ user: AuthUser } | null> {
-  let supabaseUid: string;
-  let email: string;
+  const result = await resolveAuthenticatedUser(req);
 
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    supabaseUid = verified.id;
-    email = verified.email;
-  } catch {
-    res.status(401).json({ error: 'Authorization required' });
+  if (result.error === 'ACCOUNT_DELETED') {
+    res.status(403).json({ error: 'Account has been deactivated.', code: 'ACCOUNT_DELETED' });
     return null;
   }
-
-  // Resolve internal DB user id — try supabase_uid first, fall back to email
-  let userRow: { id: string; email: string } | null = null;
-  const { data: byUid } = await supabase
-    .from('users')
-    .select('id, email')
-    .eq('supabase_uid', supabaseUid)
-    .maybeSingle();
-  if (byUid) {
-    userRow = byUid as { id: string; email: string };
-  } else {
-    const { data: byEmail } = await supabase
-      .from('users')
-      .select('id, email')
-      .eq('email', email)
-      .maybeSingle();
-    if (byEmail) {
-      userRow = byEmail as { id: string; email: string };
-      // Back-fill supabase_uid
-      await supabase.from('users').update({ supabase_uid: supabaseUid }).eq('id', userRow.id);
-    }
-  }
-
-  if (!userRow) {
+  if (result.error === 'USER_NOT_FOUND') {
     res.status(401).json({ error: 'User not found — please complete sign-in' });
+    return null;
+  }
+  if (result.error !== null) {
+    res.status(401).json({ error: 'Authorization required' });
     return null;
   }
 
   return {
     user: {
-      id: userRow.id,
-      supabaseUid,
-      email: userRow.email ?? email,
+      id: result.user.id,
+      supabaseUid: result.user.supabaseUid,
+      email: result.user.email,
     },
   };
 }
@@ -170,25 +151,12 @@ export async function requireSuperAdmin(
 // ── 4. resolveActorId ──────────────────────────────────────────────────────────
 
 /**
- * Extracts the authenticated internal user.id from the Bearer token.
+ * Extracts the authenticated internal user.id from the Bearer token / cookie.
  * Returns null if no valid token — does NOT send a response.
+ *
+ * Thin wrapper over the canonical resolver, kept for non-throwing call sites.
  */
 export async function resolveActorId(req: NextApiRequest): Promise<string | null> {
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    const { data: byUid } = await supabase
-      .from('users')
-      .select('id')
-      .eq('supabase_uid', verified.id)
-      .maybeSingle();
-    if (byUid) return (byUid as any).id;
-    const { data: byEmail } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', verified.email)
-      .maybeSingle();
-    return (byEmail as any)?.id ?? null;
-  } catch {
-    return null;
-  }
+  const result = await resolveAuthenticatedUser(req);
+  return result.error === null ? result.user.id : null;
 }
