@@ -40,9 +40,12 @@ export default async function handler(
   }
 
   // ── 2. Look up user row ───────────────────────────────────────────────────
+  // Note: we no longer SELECT users.company_id / users.role — both are
+  // deprecated identity authorities. Active org and role are derived from
+  // user_company_roles below.
   const { data: userRow } = await supabase
     .from('users')
-    .select('id, name, company_id, role, last_sign_in_at, is_deleted, onboarding_state, has_password')
+    .select('id, name, last_sign_in_at, is_deleted, onboarding_state, has_password')
     .or(`supabase_uid.eq.${supabaseUid},email.eq.${email.toLowerCase()}`)
     .maybeSingle();
 
@@ -68,8 +71,6 @@ export default async function handler(
   const userId: string = (userRow as any).id;
   const onboardingState = String((userRow as any).onboarding_state ?? '');
   const hasPassword = (userRow as any).has_password === true;
-  const userCompanyId = String((userRow as any).company_id ?? '').trim();
-  const userRole = String((userRow as any).role ?? '').trim();
 
   if (!hasPassword) {
     return res.status(200).json({ route: '/auth/set-password' });
@@ -84,33 +85,20 @@ export default async function handler(
     return res.status(200).json({ route: '/onboarding/profile' });
   }
 
-  // ── 4. No active company membership → company setup ──────────────────────
-  let roleRow: { role?: string | null; company_id?: string | null } | null = null;
+  // ── 4. Active company membership lookup → company setup if missing ───────
+  // Authority: user_company_roles is the canonical role + active-org store.
+  // We do NOT back-fill users.company_id / users.role any more — both are
+  // deprecated runtime authorities.
+  const { data: activeRoleRow } = await supabase
+    .from('user_company_roles')
+    .select('role, company_id')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  if (userCompanyId && userRole) {
-    roleRow = { role: userRole, company_id: userCompanyId };
-  } else {
-    const { data: activeRoleRow } = await supabase
-      .from('user_company_roles')
-      .select('role, company_id')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    roleRow = (activeRoleRow as { role?: string | null; company_id?: string | null } | null) ?? null;
-
-    if (roleRow?.company_id || roleRow?.role) {
-      await supabase
-        .from('users')
-        .update({
-          ...(roleRow.company_id ? { company_id: roleRow.company_id } : {}),
-          ...(roleRow.role ? { role: roleRow.role } : {}),
-        })
-        .eq('id', userId);
-    }
-  }
+  const roleRow = (activeRoleRow as { role?: string | null; company_id?: string | null } | null) ?? null;
 
   if (!roleRow) {
     return res.status(200).json({ route: '/onboarding/company' });
@@ -118,7 +106,7 @@ export default async function handler(
 
   // ── 5. Validate role exists (safety fallback) ──────────────────────────────
   // If role is missing/invalid, default to command center for safety
-  const resolvedRole = (roleRow as any)?.role;
+  const resolvedRole = roleRow.role;
   if (!resolvedRole) {
     console.warn('[post-login-route] Invalid or missing role', { userId });
     return res.status(200).json({ route: '/command-center' });

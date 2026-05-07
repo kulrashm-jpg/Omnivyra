@@ -86,9 +86,12 @@ export default async function handler(
   // An existing public.users row with an active role = finished account;
   // route them to /login. Soft-deleted = blocked. Existing row without an
   // active role = abandoned onboarding; fall through (re-signup allowed).
+  // Canonical "completed account" signal is an active row in
+  // user_company_roles. users.company_id / users.role are deprecated and
+  // no longer read here.
   const { data: existingUser } = await supabase
     .from('users')
-    .select('id, is_deleted, company_id, role, onboarding_state')
+    .select('id, is_deleted, onboarding_state')
     .eq('email', normalizedEmail)
     .maybeSingle();
 
@@ -105,12 +108,7 @@ export default async function handler(
       .limit(1)
       .maybeSingle();
 
-    const hasCompletedUserRecord =
-      Boolean((existingUser as any).company_id) &&
-      Boolean((existingUser as any).role) &&
-      !!companyRole;
-
-    if (hasCompletedUserRecord) {
+    if (companyRole) {
       return res.status(409).json({
         error: 'An account with this email already exists. Please log in.',
         code:  'ACCOUNT_EXISTS',

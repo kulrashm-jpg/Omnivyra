@@ -86,9 +86,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // ── 4. Look up or verify caller's users row ───────────────────────────────
+  // active_company_id is the canonical "primary org" pointer; users.company_id
+  // is deprecated and no longer read.
   const { data: userRow } = await supabase
     .from('users')
-    .select('id, company_id')
+    .select('id, active_company_id')
     .or(`supabase_uid.eq.${callerUid},email.eq.${callerEmail.toLowerCase()}`)
     .maybeSingle();
 
@@ -142,11 +144,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     updated_at: now,
   });
 
-  // Link user's primary company if not already set
-  if (!userRow.company_id) {
+  // Link user's active company if not already set. Canonical role lives in
+  // user_company_roles (just inserted above); users.role is deprecated and
+  // no longer written here.
+  if (!userRow.active_company_id) {
     await supabase
       .from('users')
-      .update({ company_id: companyId, role: invitation.role })
+      .update({ active_company_id: companyId })
       .eq('id', userId);
   }
 

@@ -295,10 +295,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // ── 8. Backfill users.company_id ────────────────────────────────────────
+    // ── 8. Stamp active_company_id + onboarding_state ───────────────────────
+    // Canonical role authority is user_company_roles (already written
+    // upstream). users.role / users.company_id are deprecated and no longer
+    // written here.
     await supabase
       .from('users')
-      .update({ company_id: orgId, role: 'COMPANY_ADMIN', onboarding_state: 'company_complete' })
+      .update({ active_company_id: orgId, onboarding_state: 'company_complete' })
       .eq('id', userId);
 
     if (grantResult.granted) {

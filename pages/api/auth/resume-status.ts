@@ -31,9 +31,12 @@ export default async function handler(
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
   if (!email) return res.status(400).json({ error: 'email is required' });
 
+  // Canonical "completed account" signal is an active row in
+  // user_company_roles. users.company_id / users.role are deprecated and
+  // no longer read here.
   const { data: userRow } = await supabase
     .from('users')
-    .select('id, is_deleted, has_password, company_id, role')
+    .select('id, is_deleted, has_password')
     .eq('email', email)
     .maybeSingle();
 
@@ -41,11 +44,15 @@ export default async function handler(
     return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
   }
 
-  const hasCompletedUserRecord =
-    Boolean((userRow as any).company_id) &&
-    Boolean((userRow as any).role);
+  const { data: completedMembership } = await supabase
+    .from('user_company_roles')
+    .select('id')
+    .eq('user_id', (userRow as any).id)
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle();
 
-  if (hasCompletedUserRecord) {
+  if (completedMembership) {
     return res.status(400).json({ error: 'Account already exists', code: 'ACCOUNT_EXISTS' });
   }
 

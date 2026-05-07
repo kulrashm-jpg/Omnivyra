@@ -94,26 +94,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'ROLE_NOT_ALLOWED' });
   }
 
-  const { data: existing, error: lookupError } = await supabase
-    .from('users')
-    .select('id, company_id')
-    .eq('id', userId)
+  // Membership check via canonical authority (user_company_roles) instead of
+  // the deprecated users.company_id pointer.
+  const { data: existingMembership, error: lookupError } = await supabase
+    .from('user_company_roles')
+    .select('user_id')
+    .eq('user_id', userId)
+    .eq('company_id', companyId)
+    .limit(1)
     .maybeSingle();
 
   if (lookupError) {
     return res.status(500).json({ error: 'FAILED_TO_LOOKUP_USER' });
   }
-  if (!existing || existing.company_id !== companyId) {
+  if (!existingMembership) {
     return res.status(404).json({ error: 'USER_NOT_FOUND' });
-  }
-
-  const { error: updateError } = await supabase
-    .from('users')
-    .update({ role: desiredRole })
-    .eq('id', userId);
-
-  if (updateError) {
-    return res.status(500).json({ error: 'FAILED_TO_UPDATE_ROLE' });
   }
 
   const rbacRole = mapAppRoleToRbac(desiredRole);

@@ -160,9 +160,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           .update({ status: 'active', accepted_at: now, updated_at: now })
           .eq('id', invite.id);
 
+        // Stamp users.active_company_id only — users.company_id is deprecated.
         await supabase
           .from('users')
-          .update({ company_id: invite.company_id, updated_at: now })
+          .update({ active_company_id: invite.company_id, updated_at: now })
           .eq('id', user.id);
 
         return res.status(200).json({ companyId: invite.company_id });
@@ -192,9 +193,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         });
       }
 
+      // users.role / users.company_id deprecated — only stamp active_company_id
+      // and onboarding_state. Canonical role lives in user_company_roles.
       await supabase
         .from('users')
-        .update({ company_id: orgId, role: 'COMPANY_ADMIN', onboarding_state: 'company_complete', updated_at: now })
+        .update({ active_company_id: orgId, onboarding_state: 'company_complete', updated_at: now })
         .eq('id', user.id);
 
       return res.status(200).json({ companyId: orgId });
@@ -320,7 +323,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           }
           await supabase
             .from('users')
-            .update({ company_id: domainCompany.id, updated_at: new Date().toISOString() })
+            .update({ active_company_id: domainCompany.id, updated_at: new Date().toISOString() })
             .eq('id', user.id);
           return res.status(200).json({ companyId: domainCompany.id });
         }
@@ -398,9 +401,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
     if (roleErr) throw roleErr;
 
+    // Canonical authority: user_company_roles (just inserted above) +
+    // users.active_company_id. users.role / users.company_id deprecated.
     await supabase
       .from('users')
-      .update({ company_id: companyId, role: 'COMPANY_ADMIN', onboarding_state: 'company_complete', updated_at: now })
+      .update({ active_company_id: companyId, onboarding_state: 'company_complete', updated_at: now })
       .eq('id', user.id);
 
     // ── 5. Create company_profiles row ────────────────────────────────────────

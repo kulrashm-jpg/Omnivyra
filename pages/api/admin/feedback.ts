@@ -12,12 +12,12 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
+import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
 
 async function requireSuperAdmin(req: NextApiRequest): Promise<string | null> {
   const { user } = await getSupabaseUserFromRequest(req);
   if (!user) return null;
-  const { data } = await supabase.from('users').select('role').eq('id', user.id).maybeSingle();
-  return (data as any)?.role === 'SUPER_ADMIN' ? user.id : null;
+  return (await isPlatformSuperAdmin(user.id)) ? user.id : null;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

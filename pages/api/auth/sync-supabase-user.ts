@@ -452,10 +452,10 @@ async function bootstrapCompanyFromSignupIntent(input: {
         companyName: claimedCompanyName,
         nowIso: now,
       });
-      // Skip company / role creation. user.role stays NULL — verify-email
-      // and post-login-route will route them through onboarding so they
-      // can request access to the existing company once the admin invites
-      // them.
+      // Skip company / role creation. The user has no user_company_roles
+      // membership — verify-email and post-login-route will route them
+      // through onboarding so they can request access to the existing
+      // company once the admin invites them.
       return { ok: true };
     }
 
@@ -747,12 +747,14 @@ async function bootstrapCompanyFromSignupIntent(input: {
     // Stamp the user row so post-login-route routes them past the
     // /onboarding/company step. Profile fields (name etc.) are still
     // collected at /onboarding/profile.
+    //
+    // Canonical authority: user_company_roles.role (already inserted above)
+    // and users.active_company_id. users.role / users.company_id are
+    // deprecated and no longer written.
     await supabase
       .from('users')
       .update({
-        company_id:        companyId,
         active_company_id: companyId,
-        role:              'COMPANY_ADMIN',
         onboarding_state:  'company_complete',
         updated_at:        now,
       })

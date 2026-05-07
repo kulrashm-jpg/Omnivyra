@@ -74,16 +74,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (insertErr) return res.status(500).json({ error: insertErr.message });
 
-  // Notify super admins of new feedback
-  const { data: superAdmins } = await supabase
-    .from('users')
-    .select('id')
+  // Notify super admins of new feedback. Canonical authority is
+  // user_company_roles.role='SUPER_ADMIN' — no longer read from users.role.
+  const { data: superAdminRoles } = await supabase
+    .from('user_company_roles')
+    .select('user_id')
     .eq('role', 'SUPER_ADMIN');
 
-  if (superAdmins?.length) {
+  const superAdminIds = Array.from(
+    new Set((superAdminRoles ?? []).map((r: any) => r.user_id).filter(Boolean))
+  );
+
+  if (superAdminIds.length > 0) {
     await supabase.from('notifications').insert(
-      superAdmins.map((sa: any) => ({
-        user_id:  sa.id,
+      superAdminIds.map((id: string) => ({
+        user_id:  id,
         type:     'feedback_submitted',
         title:    'New feedback pending review',
         message:  `User submitted feedback: "${feedbackText.trim().slice(0, 80)}${feedbackText.length > 80 ? '…' : ''}"`,

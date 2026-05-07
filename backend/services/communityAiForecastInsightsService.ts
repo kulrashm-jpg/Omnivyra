@@ -72,9 +72,9 @@ const getRecentContentSummary = async (input: {
   let query = supabase
     .from('content_analytics')
     .select(
-      'scheduled_post_id, platform, content_type, likes, comments, shares, views, date, scheduled_posts(content, users(company_id))'
+      'scheduled_post_id, platform, content_type, likes, comments, shares, views, date, scheduled_posts(content, users(active_company_id))'
     )
-    .eq('scheduled_posts.users.company_id', input.organizationId)
+    .eq('scheduled_posts.users.active_company_id', input.organizationId)
     .gte('date', toDateString(cutoff))
     .order('date', { ascending: false })
     .limit(5);

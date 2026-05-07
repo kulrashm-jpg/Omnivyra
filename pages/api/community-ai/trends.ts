@@ -40,9 +40,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let query = supabase
     .from('content_analytics')
     .select(
-      'scheduled_post_id, platform, content_type, likes, comments, shares, views, engagement_rate, date, scheduled_posts(engagement_goals, users(company_id))'
+      'scheduled_post_id, platform, content_type, likes, comments, shares, views, engagement_rate, date, scheduled_posts(engagement_goals, users(active_company_id))'
     )
-    .eq('scheduled_posts.users.company_id', scope.organizationId)
+    .eq('scheduled_posts.users.active_company_id', scope.organizationId)
     .gte('date', toDateString(previousStart));
 
   if (platform) {
