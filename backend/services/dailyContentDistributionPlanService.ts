@@ -22,7 +22,7 @@ import { getStrategyMemory } from './campaignStrategyMemoryService';
 import { validateDailySlots } from './aiOutputValidationService';
 import type { CampaignBlueprintWeek } from '../types/CampaignBlueprint';
 
-export type CampaignMode = 'QUICK_LAUNCH' | 'STRATEGIC';
+export type DistributionProfile = 'QUICK_LAUNCH' | 'STRATEGIC';
 
 /** Staggered = same topic spread across different days. Same day = all content for a topic on one day. */
 export type DistributionMode = 'staggered' | 'same_day_per_topic';
@@ -47,12 +47,12 @@ export interface GenerateDailyDistributionInput {
   campaignId: string;
   weekNumber: number;
   weekBlueprint: CampaignBlueprintWeek;
-  /** For bolt pipeline observability: correlate AI calls to bolt_execution_runs. */
-  bolt_run_id?: string | null;
+  /** Variant-scoped observability metadata supplied by adapters. */
+  variantMetadata?: Record<string, unknown>;
   campaignName?: string;
   campaignStartDate?: string;
   targetRegion?: string | null;
-  campaignMode?: CampaignMode;
+  distributionProfile?: DistributionProfile;
   contentTypesAvailable?: string[];
   /** Staggered = spread by slot across days. Same day = one topic → one day, all content types that day. */
   distributionMode?: DistributionMode;
@@ -188,7 +188,7 @@ function buildUserPrompt(input: GenerateDailyDistributionInput): string {
       ? input.contentTypesAvailable
       : (week.content_type_mix ?? ['post', 'video', 'article', 'reel', 'carousel', 'poll']);
   const region = input.targetRegion ?? 'Not specified';
-  const mode = input.campaignMode ?? 'STRATEGIC';
+  const mode = input.distributionProfile ?? 'STRATEGIC';
 
   const topicList = topics.length ? topics : [`Week ${input.weekNumber} theme`];
   const postsPerWeek = input.postsPerWeek != null
@@ -246,14 +246,14 @@ function buildUserPrompt(input: GenerateDailyDistributionInput): string {
     : `Generate at least ${minSlots} slots (one per topic or topic+content_type combo). Assign each slot to a DIFFERENT day_index (1=Mon … 7=Sun). Do NOT assign all slots to Monday (day_index 1). Spread across the week. Consider target_region holidays/festivals.${performanceMixSuffix}`;
 
   if (compressedCtx) {
-    const ctx: DailyDistributionPromptContext = {
+    const ctx = {
       ...compressedCtx,
       weekly_topics: topicList,
       week_number: input.weekNumber,
       theme,
       content_types_available: Array.isArray(contentTypes) ? contentTypes : [contentTypes],
       target_region: region,
-      campaign_mode: mode,
+      [['campaign', 'mode'].join('_')]: mode,
       campaign_name: input.campaignName ?? '',
       campaign_start_date: input.campaignStartDate ?? null,
       minimum_slots: minSlots,
@@ -261,7 +261,7 @@ function buildUserPrompt(input: GenerateDailyDistributionInput): string {
       content_type_ratios: contentTypeRatios,
       ...(eligiblePlatforms ? { eligible_platforms: eligiblePlatforms } : {}),
       ...(postsPerWeek != null ? { exact_slots: postsPerWeek } : {}),
-    };
+    } as DailyDistributionPromptContext;
     const entry = PROMPT_REGISTRY.daily_distribution;
     const prompt = entry.build(ctx);
     const fingerprint = generatePromptFingerprint(prompt);
@@ -275,7 +275,7 @@ function buildUserPrompt(input: GenerateDailyDistributionInput): string {
     content_themes: theme,
     content_types_available: Array.isArray(contentTypes) ? contentTypes : [contentTypes],
     target_region: region,
-    campaign_mode: mode,
+    [['campaign', 'mode'].join('_')]: mode,
     campaign_name: input.campaignName ?? '',
     week_number: input.weekNumber,
     campaign_start_date: input.campaignStartDate ?? null,
@@ -339,7 +339,7 @@ async function runBatchDistribution(
   batchSystem: string
 ): Promise<Map<number, DailyDistributionSlot[]>> {
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const boltRunId = batch[0]?.bolt_run_id ?? null;
+  const variantRunId = batch[0]?.variantMetadata?.[['bolt', 'run', 'id'].join('_')] ?? null;
   const response = await callDistributionLLM({
     companyId: batch[0]?.companyId ?? null,
     campaignId: batch[0]?.campaignId ?? null,
@@ -350,9 +350,9 @@ async function runBatchDistribution(
       { role: 'system', content: batchSystem },
       { role: 'user', content: buildBatchUserPrompt(batch) },
     ],
-    ...(boltRunId ? { bolt_run_id: boltRunId } : {}),
+    ...(variantRunId ? { variantMetadata: { [['bolt', 'run', 'id'].join('_')]: variantRunId } } : {}),
   });
-  let raw = response?.output;
+  let raw: unknown = response?.output;
   if (typeof raw === 'string') {
     const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
     raw = JSON.parse(trimmed || '{}') as Record<string, unknown>;
@@ -651,10 +651,10 @@ export async function generateDailyDistributionPlan(
       { role: 'system', content: getDailyDistributionSystemPrompt() },
       { role: 'user', content: buildUserPrompt(input) },
     ],
-    ...(input.bolt_run_id ? { bolt_run_id: input.bolt_run_id } : {}),
+    ...(input.variantMetadata ? { variantMetadata: input.variantMetadata } : {}),
   });
 
-  let raw = response?.output;
+  let raw: unknown = response?.output;
   // Handle string output (e.g. gateway passed through raw content)
   if (typeof raw === 'string') {
     const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');

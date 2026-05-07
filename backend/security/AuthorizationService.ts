@@ -160,10 +160,11 @@ export async function decideCapabilityWithStepUp(
   // Capability is held. Now check step-up.
   const stepUpDecision = evaluateStepUp(principal, stepUp);
   if (!stepUpDecision.satisfied) {
+    const denyReason = 'reason' in stepUpDecision ? stepUpDecision.reason : 'STEP_UP_DENIED';
     await logSecurityEvent({
       capability: requirement.capability,
       decision: 'step_up_required',
-      reason: `${requirement.reason} | step-up: ${stepUpDecision.reason}`,
+      reason: `${requirement.reason} | step-up: ${denyReason}`,
       actorUserId: principal!.userId,
       actorSessionId: principal!.sessionId,
       principalUserId: principal!.userId,
