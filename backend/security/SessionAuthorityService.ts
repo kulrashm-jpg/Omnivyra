@@ -246,13 +246,134 @@ export async function revokeSession(sessionId: string, reason: string): Promise<
 /**
  * Revoke all live sessions for a user. Used on password change, suspicious
  * login, etc.
+ *
+ * Optionally exempts a session id (used for "logout all OTHER sessions"
+ * flows where the current session continues).
  */
-export async function revokeAllSessionsForUser(userId: string, reason: string): Promise<number> {
-  const { data } = await db
+export async function revokeAllSessionsForUser(
+  userId: string,
+  reason: string,
+  exemptSessionId?: string,
+): Promise<number> {
+  let q = db
     .from('auth_sessions')
     .update({ revoked_at: new Date().toISOString(), revocation_reason: reason })
     .eq('user_id', userId)
-    .is('revoked_at', null)
-    .select('id');
+    .is('revoked_at', null);
+  if (exemptSessionId) q = q.neq('id', exemptSessionId);
+  const { data } = await q.select('id');
   return data?.length ?? 0;
+}
+
+/**
+ * Idempotent helper for sync / refresh entry points.
+ *
+ * If the request already carries a valid auth_session cookie that
+ * matches `input.userId`, touch it and return its id. Otherwise mint a
+ * new session, attach the cookie, and return the new id.
+ *
+ * Concurrent-session policy: if the cookie resolves to a DIFFERENT user
+ * than the one being synced (extremely unlikely in normal flow but can
+ * happen during account-switching / shared browsers), the foreign
+ * session is revoked and a new one is minted for the synced user.
+ *
+ * Fail-soft: ALL failures (env validation, DB write errors, etc.) are
+ * caught and logged. The existing Bearer-token auth path continues to
+ * work without a cookie. Returns `{ sessionId: null, minted: false }`
+ * when minting is unavailable.
+ */
+export async function ensureSessionForUser(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  input: { userId: string; supabaseUid: string; ip?: string | null; userAgent?: string | null },
+): Promise<{ sessionId: string | null; minted: boolean }> {
+  try {
+    const lookup = await resolveSessionFromRequest(req);
+
+    if (lookup.ok === true) {
+      const existing = lookup.session;
+      if (existing.user_id === input.userId) {
+        await touchSession(existing.id);
+        return { sessionId: existing.id, minted: false };
+      }
+      // Foreign session in this browser — revoke before minting fresh.
+      logger.warn('session_authority_foreign_session_detected', {
+        cookieUserId: existing.user_id,
+        syncUserId:   input.userId,
+        sessionId:    existing.id,
+      });
+      await revokeSession(existing.id, 'foreign_user_session_detected_during_sync');
+    }
+
+    const created = await createSession({
+      userId:      input.userId,
+      supabaseUid: input.supabaseUid,
+      ip:          input.ip ?? null,
+      userAgent:   input.userAgent ?? null,
+    });
+    attachSessionCookie(res, created.cookieValue);
+    return { sessionId: created.session.id, minted: true };
+  } catch (err) {
+    // Most likely SESSION_COOKIE_SECRET missing, or migration not yet
+    // applied. Either way, do NOT break authentication for the request.
+    logger.warn('session_authority_ensure_failed', {
+      userId:  input.userId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return { sessionId: null, minted: false };
+  }
+}
+
+/**
+ * Rotate a session: revoke the existing one and mint a fresh one with the
+ * same identity + device binding. Used on privilege elevation per
+ * NIST 800-63B and OWASP ASVS V3.2 — a stale cookie cannot be replayed
+ * to obtain elevated state.
+ *
+ * The new session inherits ttlSeconds from the previous session's
+ * remaining lifetime (so rotation does not extend the absolute timeout
+ * windowed against the original login event).
+ */
+export interface RotatedSession {
+  oldSessionId: string;
+  session: AuthSessionRow;
+  cookieValue: string;
+}
+
+export async function rotateSession(input: {
+  sessionId: string;
+  reason: string;
+}): Promise<RotatedSession | null> {
+  const { data: existingRow } = await db
+    .from('auth_sessions')
+    .select('*')
+    .eq('id', input.sessionId)
+    .maybeSingle();
+
+  if (!existingRow) return null;
+  const existing = existingRow as AuthSessionRow;
+  if (existing.revoked_at) return null;
+
+  // Compute remaining TTL from the previous session.
+  const remainingMs = Math.max(0, Date.parse(existing.expires_at) - Date.now());
+  const remainingSeconds = Math.max(60, Math.floor(remainingMs / 1000));
+
+  // Revoke first so a concurrent reader cannot still use the old id.
+  await revokeSession(existing.id, input.reason);
+
+  // Mint the replacement.
+  const created = await createSession({
+    userId:      existing.user_id,
+    supabaseUid: existing.supabase_uid,
+    ip:          existing.ip,
+    userAgent:   existing.user_agent,
+    deviceId:    existing.device_id,
+    ttlSeconds:  remainingSeconds,
+  });
+
+  return {
+    oldSessionId: existing.id,
+    session: created.session,
+    cookieValue: created.cookieValue,
+  };
 }

@@ -23,6 +23,8 @@ import {
   sendInboundSignupNoticeToAdmin,
 } from '../../../backend/services/emailService';
 import { resolveDomain } from '../../../backend/services/domainCanonicalService';
+import { ensureSessionForUser } from '../../../backend/security/SessionAuthorityService';
+import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { saveDomainRecord } from '../../../backend/services/domainRecordService';
 import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
@@ -93,6 +95,33 @@ export default async function handler(
     ?? (req.socket as any)?.remoteAddress
     ?? 'unknown',
   ).split(',')[0].trim();
+  const requestUserAgent = (req.headers['user-agent'] as string | undefined) ?? null;
+  const requestIp = clientIp && clientIp !== 'unknown' ? clientIp : null;
+
+  // Mint or touch the canonical auth_session for the synced user. Fail-soft:
+  // if SESSION_COOKIE_SECRET is missing or the migration hasn't been applied
+  // yet, the existing Bearer-token flow continues to work without a cookie.
+  const projectSession = async (userId: string): Promise<void> => {
+    const result = await ensureSessionForUser(req, res, {
+      userId,
+      supabaseUid,
+      ip: requestIp,
+      userAgent: requestUserAgent,
+    });
+    if (result.minted && result.sessionId) {
+      void logSecurityEvent({
+        capability: 'mfa.view_factors',
+        decision: 'auth_session_created',
+        actorUserId: userId,
+        actorSessionId: result.sessionId,
+        principalUserId: userId,
+        principalSupabaseUid: supabaseUid,
+        reason: 'sync-supabase-user',
+        ip: requestIp,
+        userAgent: requestUserAgent,
+      });
+    }
+  };
 
   // ── 2. Work-email validation (skip for invited users — they may use any domain) ──
   // Don't block social logins with personal emails if they were explicitly invited.
@@ -166,13 +195,14 @@ export default async function handler(
   // ── 4. Upsert by supabase_uid ────────────────────────────────────────────
   // First try: existing row already has supabase_uid (returning user)
   if (existingByUid) {
+    const existingUserId = (existingByUid as { id: string }).id;
     await supabase
       .from('users')
       .update({ is_email_verified: true, last_sign_in_at: now, has_password: hasPassword })
       .eq('supabase_uid', supabaseUid);
     try {
       const result = await bootstrapCompanyFromSignupIntent({
-        userId: (existingByUid as { id: string }).id,
+        userId: existingUserId,
         email: normalizedEmail,
         clientIp,
       });
@@ -190,6 +220,7 @@ export default async function handler(
             : {}),
         });
       }
+      await projectSession(existingUserId);
       return res.status(200).json({
         ok: true,
         ...(result.domain_verification
@@ -202,6 +233,7 @@ export default async function handler(
         message: err instanceof Error ? err.message : String(err),
       });
     }
+    await projectSession(existingUserId);
     return res.status(200).json({ ok: true });
   }
 
@@ -232,9 +264,10 @@ export default async function handler(
       if (roleRow) updatePayload.active_company_id = (roleRow as any).company_id;
     }
     await supabase.from('users').update(updatePayload).eq('id', (byEmail as any).id);
+    const existingUserIdByEmail = (byEmail as { id: string }).id;
     try {
       const result = await bootstrapCompanyFromSignupIntent({
-        userId: (byEmail as { id: string }).id,
+        userId: existingUserIdByEmail,
         email: normalizedEmail,
         clientIp,
       });
@@ -252,6 +285,7 @@ export default async function handler(
             : {}),
         });
       }
+      await projectSession(existingUserIdByEmail);
       return res.status(200).json({
         ok: true,
         ...(result.domain_verification
@@ -264,6 +298,7 @@ export default async function handler(
         message: err instanceof Error ? err.message : String(err),
       });
     }
+    await projectSession(existingUserIdByEmail);
     return res.status(200).json({ ok: true });
   }
 
@@ -299,6 +334,7 @@ export default async function handler(
   // Captured from the brand-new-user bootstrap so the success response can
   // surface the raw verification token to the client.
   let insertBranchVerification: SuccessResponse['domain_verification'] | undefined;
+  let freshlyInsertedUserId: string | null = null;
 
   // Look the row up separately (instead of chaining .select() onto the
   // insert) so the success/failure of the insert is decoupled from any
@@ -313,6 +349,7 @@ export default async function handler(
       .maybeSingle();
     if (insertedUser) {
       const insertedUserId = (insertedUser as { id: string }).id;
+      freshlyInsertedUserId = insertedUserId;
       const result = await bootstrapCompanyFromSignupIntent({
         userId: insertedUserId,
         email: normalizedEmail,
@@ -359,6 +396,9 @@ export default async function handler(
     });
   }
 
+  if (freshlyInsertedUserId) {
+    await projectSession(freshlyInsertedUserId);
+  }
   return res.status(200).json({
     ok: true,
     ...(insertBranchVerification

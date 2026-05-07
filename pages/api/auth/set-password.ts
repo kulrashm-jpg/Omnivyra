@@ -4,6 +4,11 @@ import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAu
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
+import {
+  clearSessionCookie,
+  revokeAllSessionsForUser,
+} from '../../../backend/security/SessionAuthorityService';
+import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse = { error: string; code?: string };
@@ -135,5 +140,44 @@ export default async function handler(
     return res.status(500).json({ error: 'Failed to update password status' });
   }
 
+  // Credential rotation: revoke ALL existing auth_sessions for this user
+  // (NIST 800-63B; OWASP ASVS V3.6). The user must re-authenticate. The
+  // current session cookie (if any) is also cleared so the next request
+  // forces a fresh login.
+  //
+  // Fail-soft: a failure here does not block password change — but it is
+  // logged loudly so an operator can investigate.
+  let revokedCount = 0;
+  try {
+    revokedCount = await revokeAllSessionsForUser(user.id, `credential_rotation:${flow}`);
+    clearSessionCookie(res);
+  } catch (err) {
+    logger.warn('auth_set_password_session_revoke_failed', {
+      userId: user.id,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  void logSecurityEvent({
+    capability: 'mfa.view_factors',
+    decision: 'auth_session_revoked',
+    actorUserId: user.id,
+    principalUserId: user.id,
+    reason: `password_changed_flow=${flow} revoked=${revokedCount}`,
+    ip: clientIp(req),
+    userAgent: userAgent(req),
+  });
+
   return res.status(200).json({ success: true, route });
+}
+
+function clientIp(req: NextApiRequest): string | null {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string') return xff.split(',')[0]?.trim() ?? null;
+  return req.socket?.remoteAddress ?? null;
+}
+
+function userAgent(req: NextApiRequest): string | null {
+  const ua = req.headers['user-agent'];
+  return typeof ua === 'string' ? ua : null;
 }

@@ -21,7 +21,12 @@ import { verifyAuthentication } from '../../../../backend/security/webauthn/WebA
 import { verifyTotp } from '../../../../backend/security/totp/TotpVerificationService';
 import { verifyAndConsume } from '../../../../backend/security/totp/RecoveryCodeService';
 import { mint } from '../../../../backend/security/stepup/StepUpSessionService';
-import type { Capability } from '../../../../shared/contracts/security';
+import {
+  attachSessionCookie,
+  rotateSession,
+} from '../../../../backend/security/SessionAuthorityService';
+import { logSecurityEvent } from '../../../../backend/security/audit/SecurityAuditService';
+import type { AuthenticatedPrincipal, Capability } from '../../../../shared/contracts/security';
 
 type Factor = 'webauthn' | 'totp' | 'recovery_code';
 
@@ -102,9 +107,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Unsupported factor', code: 'UNSUPPORTED_FACTOR' });
   }
 
-  // ── 2. Mint the step-up session ─────────────────────────────────────────
+  // ── 2. Rotate the auth_session before minting elevation ────────────────
+  // Per NIST 800-63B / OWASP ASVS V3.2: rotate the session id on
+  // privilege elevation so a stale cookie cannot be replayed to obtain
+  // elevated state. The rotation reuses the existing session's identity
+  // + device binding and inherits its remaining TTL (does not extend
+  // the original login event's absolute timeout window).
+  let elevatedPrincipal: AuthenticatedPrincipal = p;
+  const rotated = await rotateSession({
+    sessionId: p.sessionId!,
+    reason:    `step_up_elevation:${factor}`,
+  });
+  if (rotated) {
+    attachSessionCookie(res, rotated.cookieValue);
+    elevatedPrincipal = { ...p, sessionId: rotated.session.id };
+    void logSecurityEvent({
+      capability: 'step_up.session',
+      decision: 'auth_session_rotated',
+      actorUserId: p.userId,
+      actorSessionId: rotated.session.id,
+      principalUserId: p.userId,
+      principalSupabaseUid: p.supabaseUid,
+      reason: `step_up_elevation:${factor}; old=${rotated.oldSessionId}`,
+      stepupFactor: factor,
+      ip,
+      userAgent: ua,
+    });
+  }
+
+  // ── 3. Mint the step-up session bound to the (rotated) auth session ────
   const minted = await mint({
-    principal:        p,
+    principal:        elevatedPrincipal,
     factor,
     scopedCapability,
     ip,
@@ -115,6 +148,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(409).json({ error: 'Could not mint step-up session', code: minted.reason });
   }
 
+  void logSecurityEvent({
+    capability: scopedCapability ?? 'step_up.session',
+    decision: 'stepup_session_bound',
+    actorUserId: elevatedPrincipal.userId,
+    actorSessionId: elevatedPrincipal.sessionId,
+    principalUserId: elevatedPrincipal.userId,
+    principalSupabaseUid: elevatedPrincipal.supabaseUid,
+    resourceId: minted.session.id,
+    stepupFactor: factor,
+    mfaPhishingResistant: factor === 'webauthn',
+    ip,
+    userAgent: ua,
+  });
+
   return res.status(201).json({
     stepUp: {
       id:               minted.session.id,
@@ -123,6 +170,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       startedAt:        minted.session.startedAt.toISOString(),
       expiresAt:        minted.session.expiresAt.toISOString(),
     },
+    authSessionRotated: !!rotated,
   });
 }
 

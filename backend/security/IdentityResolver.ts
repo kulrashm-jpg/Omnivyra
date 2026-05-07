@@ -25,6 +25,7 @@ import { supabase as db } from '../db/supabaseClient';
 import { logger } from '../services/logger';
 import {
   resolveSessionFromRequest,
+  touchSession,
   type AuthSessionRow,
 } from './SessionAuthorityService';
 import { resolveUserCapabilities } from './CapabilityService';
@@ -277,6 +278,17 @@ async function buildPrincipalFromAuth(
   let session: AuthSessionRow | null = null;
   if (sessionLookup.ok === true) {
     session = sessionLookup.session;
+    // Throttled last_seen update — only when stale (>60s) so hot endpoints
+    // don't spam the auth_sessions table.
+    const lastSeenMs = Date.parse(session.last_seen_at);
+    if (Number.isFinite(lastSeenMs) && Date.now() - lastSeenMs > 60_000) {
+      void touchSession(session.id).catch((err) => {
+        logger.warn('identity_resolver_touch_session_failed', {
+          sessionId: session?.id,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
   } else {
     if (sessionLookup.reason === 'BAD_SIGNATURE' || sessionLookup.reason === 'REVOKED') {
       logger.warn('identity_resolver_session_invalid', {
