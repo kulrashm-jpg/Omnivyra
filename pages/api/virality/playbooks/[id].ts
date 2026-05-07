@@ -1,25 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import {
-  getUserRole,
-  isPlatformSuperAdmin,
-  isSuperAdmin,
-  Role,
-} from '../../../../backend/services/rbacService';
-
-const canManagePlaybooks = (role: Role | 'SUPER_ADMIN') =>
-  role === 'SUPER_ADMIN' || role === Role.COMPANY_ADMIN;
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { ORGANIZATION_MANAGE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Playbook ID is required' });
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    return res.status(401).json({ error: 'UNAUTHORIZED' });
   }
 
   const { data: playbook, error: playbookError } = await supabase
@@ -32,31 +19,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: 'Playbook not found' });
   }
 
-  let role: Role | 'SUPER_ADMIN' | null = null;
-  if (await isPlatformSuperAdmin(user.id)) {
-    role = 'SUPER_ADMIN';
-  } else if (await isSuperAdmin(user.id)) {
-    console.debug('SUPER_ADMIN_FALLBACK', {
-      path: req.url,
-      userId: user.id,
-      source: 'rbacService.isSuperAdmin',
-    });
-    role = 'SUPER_ADMIN';
-  } else {
-    const { role: companyRole, error: roleError } = await getUserRole(
-      user.id,
-      playbook.company_id
-    );
-    if (roleError || !companyRole) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
-    role = companyRole;
-  }
-
   if (req.method === 'PUT') {
-    if (!role || !canManagePlaybooks(role)) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    }
+    // Wave 2C-B: capability-based gate with org scope. organization.manage
+    // is granted to COMPANY_ADMIN + SUPER_ADMIN. No step-up required for
+    // playbook updates (medium-risk; not in STEP_UP_REQUIRED_CAPABILITIES).
+    const guard = await requireCapability(req, res, {
+      capability: ORGANIZATION_MANAGE,
+      organizationId: playbook.company_id,
+      reason: 'update virality playbook',
+      resourceId: id,
+    });
+    if (guard.ok !== true) return;
     const {
       name,
       objective,

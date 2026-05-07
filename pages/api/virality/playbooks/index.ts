@@ -7,6 +7,8 @@ import {
   isSuperAdmin,
   Role,
 } from '../../../../backend/services/rbacService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { ORGANIZATION_MANAGE } from '../../../../shared/contracts/security';
 
 const requirePlaybookAccess = async (
   req: NextApiRequest,
@@ -64,11 +66,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
-    const access = await requirePlaybookAccess(req, res, companyId);
-    if (!access) return;
-    if (!canManagePlaybooks(access.role)) {
-      return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
+    if (!companyId) {
+      return res.status(400).json({ error: 'companyId required' });
     }
+    // Wave 2C-B: capability-based gate replaces requirePlaybookAccess +
+    // canManagePlaybooks. organization.manage is granted to COMPANY_ADMIN
+    // and SUPER_ADMIN. Read-side (GET) keeps the legacy helper since it's
+    // a less-restrictive read.
+    const guard = await requireCapability(req, res, {
+      capability: ORGANIZATION_MANAGE,
+      organizationId: companyId,
+      reason: 'create virality playbook',
+    });
+    if (guard.ok !== true) return;
     const {
       name,
       objective,

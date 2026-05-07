@@ -10,7 +10,10 @@ import { saveDomainRecord, reassignDomain } from '../../../backend/services/doma
 import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
 import { requireCapability } from '../../../backend/security/requireCapability';
-import { IDENTITY_ADMIN_DELETE } from '../../../shared/contracts/security';
+import {
+  IDENTITY_ADMIN_ASSIGN,
+  IDENTITY_ADMIN_DELETE,
+} from '../../../shared/contracts/security';
 
 const ALLOWED_OVERRIDE_TYPES = ['no_website', 'domain_exception', 'manual_assignment'] as const;
 type OverrideType = typeof ALLOWED_OVERRIDE_TYPES[number];
@@ -360,6 +363,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           required_fields: ['email', 'companyId']
         });
       }
+
+      // Wave 2C-B: capability + step-up gate. identity.admin.assign is
+      // policy-marked phishing-resistant + trusted-device. Bridge
+      // principals are rejected.
+      const guard = await requireCapability(req, res, {
+        capability: IDENTITY_ADMIN_ASSIGN,
+        reason: `super-admin invites/assigns role to user (${email})`,
+        organizationId: companyId,
+        resourceId: email,
+      });
+      if (guard.ok !== true) return;
+
       if (!companyId) {
         return res.status(400).json({
           error: 'MISSING_REQUIRED_PARAMETER',
@@ -586,22 +601,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (req.method === 'PATCH') {
     const { userId, companyId, status, role } = req.body || {};
-    
+
     // Validate required parameters
     if (!userId) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'MISSING_REQUIRED_PARAMETER',
         details: 'userId is required to update a user',
         required_fields: ['userId', 'companyId']
       });
     }
     if (!companyId) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'MISSING_REQUIRED_PARAMETER',
         details: 'companyId is required to update a user',
         required_fields: ['userId', 'companyId']
       });
     }
+
+    // Wave 2C-B: capability + step-up gate.
+    const patchGuard = await requireCapability(req, res, {
+      capability: IDENTITY_ADMIN_ASSIGN,
+      reason: `super-admin updates user role/status (target=${userId})`,
+      organizationId: companyId,
+      resourceId: userId,
+    });
+    if (patchGuard.ok !== true) return;
     if (!status && !role) {
       return res.status(400).json({ 
         error: 'MISSING_UPDATE_FIELDS',

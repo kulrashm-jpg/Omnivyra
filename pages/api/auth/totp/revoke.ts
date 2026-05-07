@@ -5,22 +5,26 @@
  *
  * Revoke the principal's TOTP factor. If `factorId` is omitted the
  * active factor is targeted (Wave 2A migration enforces single active
- * factor per user). Wave 2C will gate this on the `mfa.revoke`
- * capability AND require step-up; for Wave 2B-B we accept any
- * authenticated non-bridge principal so the management UI can land.
+ * factor per user).
+ *
+ * Wave 2C-B: gated on `mfa.revoke` capability + phishing-resistant
+ * step-up (registered policy: 10-min window, factor=webauthn). Note
+ * that revoking TOTP requires a passkey factor — TOTP cannot revoke
+ * itself.
  *
  * Soft-deletes the factor row. Vault secret is left intact (deferred
  * to a Wave 2C cleanup job) — the row's revoked_at flag prevents reuse.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
 import {
   findActiveForUser,
   findByIdForUser,
   revokeFactor,
 } from '../../../../backend/security/totp/TotpFactorRepository';
 import { logSecurityEvent } from '../../../../backend/security/audit/SecurityAuditService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { MFA_REVOKE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -28,14 +32,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const principalResult = await resolvePrincipal(req);
-  if (principalResult.ok !== true) {
-    return res.status(401).json({ error: 'Not authenticated', code: principalResult.reason });
-  }
-  const p = principalResult.principal;
-  if (p.legacyCookieSuperAdmin) {
-    return res.status(403).json({ error: 'Bridge principals have no TOTP factor', code: 'BRIDGE_FACTOR_INSUFFICIENT' });
-  }
+  const guard = await requireCapability(req, res, {
+    capability: MFA_REVOKE,
+    reason: 'user revokes their TOTP factor',
+  });
+  if (guard.ok !== true) return;
+  const p = guard.principal;
 
   const body = parseBody(req);
   const factorId = typeof body.factorId === 'string' ? body.factorId : null;

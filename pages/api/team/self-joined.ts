@@ -16,43 +16,25 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-
-async function getRequestingUser(req: NextApiRequest) {
-  const { user } = await getSupabaseUserFromRequest(req);
-  return user ?? null;
-}
-
-async function isCompanyAdmin(userId: string, companyId: string): Promise<boolean> {
-  // Super admin check
-  const { data: superRole } = await supabaseAdmin
-    .from('user_company_roles')
-    .select('role')
-    .eq('user_id', userId)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .maybeSingle();
-  if (superRole) return true;
-
-  const { data: role } = await supabaseAdmin
-    .from('user_company_roles')
-    .select('role')
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .eq('status', 'active')
-    .maybeSingle();
-  return role?.role === 'COMPANY_ADMIN';
-}
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { ORGANIZATION_MANAGE } from '../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { companyId, userId } = req.query as { companyId?: string; userId?: string };
   if (!companyId) return res.status(400).json({ error: 'companyId is required' });
 
-  const user = await getRequestingUser(req);
-  if (!user) return res.status(401).json({ error: 'Unauthorized' });
-
-  const isAdmin = await isCompanyAdmin(user.id, companyId);
-  if (!isAdmin) return res.status(403).json({ error: 'Company admin access required' });
+  // Wave 2C-B: capability-based gate replaces inline isCompanyAdmin helper.
+  // organization.manage is granted to COMPANY_ADMIN + SUPER_ADMIN — same
+  // surface the inline helper allowed. No step-up required for these
+  // membership-management actions on self-joined users (medium-risk).
+  const guard = await requireCapability(req, res, {
+    capability: ORGANIZATION_MANAGE,
+    organizationId: companyId,
+    reason: `manage self-joined member (${req.method})`,
+    resourceId: userId,
+  });
+  if (guard.ok !== true) return;
+  const user = guard.principal;
 
   // ── GET: list self-joined users ──────────────────────────────────────────
   if (req.method === 'GET') {
@@ -106,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       type: 'role_updated',
       title: 'Your company membership was confirmed',
       message: `A company admin has confirmed your membership and set your role to ${role.replace(/_/g, ' ').toLowerCase()}.`,
-      metadata: { company_id: companyId, role, confirmed_by: user.id },
+      metadata: { company_id: companyId, role, confirmed_by: user.userId },
       is_read: false,
     });
 
@@ -132,7 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       type: 'membership_removed',
       title: 'Company membership removed',
       message: 'A company admin has removed your automatic membership. Contact them if you believe this is a mistake.',
-      metadata: { company_id: companyId, removed_by: user.id },
+      metadata: { company_id: companyId, removed_by: user.userId },
       is_read: false,
     });
 

@@ -131,3 +131,39 @@ export async function triggerTotpStepUp(opts: {
   }
   return await r.json() as WebAuthnStepUpResult;
 }
+
+// ── withStepUp: orchestrated retry wrapper ────────────────────────────────────
+
+/**
+ * Run a fetch and, if the response is 401 STEP_UP_REQUIRED, launch
+ * a WebAuthn step-up challenge and retry once.
+ *
+ * Caller pattern:
+ *
+ *   const r = await withStepUp(() => fetch('/api/super-admin/free-credits/grant', { ... }));
+ *   if (!r.ok) handle(r);
+ *   else await r.json();
+ *
+ * If the user cancels the WebAuthn prompt, the underlying error is
+ * re-thrown so the caller can show a UX message.
+ *
+ * This helper does NOT cache or trust step-up state. Each retry hits
+ * the server-authoritative gate; if step-up has expired between calls,
+ * the caller will see another STEP_UP_REQUIRED.
+ */
+export async function withStepUp<T extends Response>(
+  doRequest: () => Promise<T>,
+  opts: { retryOnce?: boolean } = {},
+): Promise<T> {
+  const retryOnce = opts.retryOnce !== false; // default true
+
+  const first = await doRequest();
+  const stepUp = await detectStepUpFromResponse(first);
+  if (!stepUp) return first;
+
+  // Server rejected with STEP_UP_REQUIRED. Launch the challenge.
+  await triggerWebAuthnStepUp({ scopedCapability: stepUp.capability });
+
+  if (!retryOnce) return first;
+  return await doRequest();
+}
