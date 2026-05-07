@@ -15,22 +15,12 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
 import { completePurchase, failPurchase } from '../../../../backend/services/purchaseService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_PURCHASE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { action = 'complete', purchase_id, reference_id } = body as {
@@ -45,6 +35,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     amount_paid?: number;
     currency?: string;
   };
+
+  // Wave 2C-A: capability + step-up gate. billing.purchase is policy-marked
+  // as phishing-resistant step-up (10-min window). Bridge principals fail.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_PURCHASE,
+    reason: `super-admin ${action}s a credit purchase`,
+    resourceId: purchase_id ?? body?.organization_id ?? null,
+    organizationId: body?.organization_id,
+  });
+  if (guard.ok !== true) return;
 
   // ── action = 'create': create a pending purchase ───────────────────────────
   if (action === 'create') {

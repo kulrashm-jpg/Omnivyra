@@ -2,27 +2,36 @@
 /**
  * POST /api/admin/revoke-super-admin
  *
- * Super-admin only. Revokes platform super-admin status from a user by:
+ * Revokes platform super-admin status from a user by:
  *  1. Setting profiles.is_super_admin = false
  *  2. Downgrading any SUPER_ADMIN role in user_company_roles to COMPANY_ADMIN
+ *
+ * Authorization: capability `identity.admin.revoke` + step-up policy
+ * (phishing-resistant + trusted device, 10-minute window). Bridge
+ * principals cannot satisfy step-up and are rejected.
  *
  * Body: { userId: string }
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireSuperAdmin } from '@/backend/middleware/authMiddleware';
 import { supabase } from '@/backend/db/supabaseClient';
+import { requireCapability } from '@/backend/security/requireCapability';
+import { IDENTITY_ADMIN_REVOKE } from '@/shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
-  const auth = await requireSuperAdmin(req, res);
-  if (!auth) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body ?? {});
   const { userId } = body as { userId?: string };
 
   if (!userId) return res.status(400).json({ error: 'Missing required field: userId' });
+
+  const guard = await requireCapability(req, res, {
+    capability: IDENTITY_ADMIN_REVOKE,
+    reason: 'super-admin revokes platform super-admin status from another user',
+    resourceId: userId,
+  });
+  if (guard.ok !== true) return;
 
   try {
     const now = new Date().toISOString();

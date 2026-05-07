@@ -10,19 +10,9 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
-import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
-
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return 'cookie';
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return user.id;
-  res.status(403).json({ error: 'Forbidden' });
-  return null;
-}
+import { requireCapability } from '@/backend/security/requireCapability';
+import { BILLING_MANAGE } from '@/shared/contracts/security';
 
 const VALID_CATEGORIES = [
   'manual','recommendation','first_campaign','referral',
@@ -31,8 +21,6 @@ const VALID_CATEGORIES = [
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  const adminId = await requireSuperAdmin(req, res);
-  if (!adminId) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { organizationId, userId, creditsAmount, category = 'manual', reason, referenceId, note } = body as {
@@ -50,8 +38,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!reason) return res.status(400).json({ error: 'reason is required' });
   if (!VALID_CATEGORIES.includes(category as any)) return res.status(400).json({ error: 'Invalid category' });
 
+  // Wave 2C-A: capability-based gate with phishing-resistant step-up.
+  // billing.manage is policy-marked in StepUpPolicyRegistry. Bridge
+  // principals cannot satisfy step-up — they get a structured 401 with
+  // STEP_UP_REQUIRED and granted_by attribution will only be set if the
+  // call clears the gate (which a cookie principal cannot).
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_MANAGE,
+    reason: `super-admin grants ${creditsAmount} ${category} credits to org`,
+    resourceId: organizationId,
+    organizationId,
+  });
+  if (guard.ok !== true) return;
+
   const sb = supabase;
-  const grantedBy = adminId === 'cookie' ? null : adminId;
+  const grantedBy = guard.principal.userId;
 
   // ── 1. Log grant record FIRST — the grantId becomes the idempotency anchor ─
   // If this endpoint is retried, the same grantId produces the same idempotency

@@ -9,6 +9,8 @@ import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { saveDomainRecord, reassignDomain } from '../../../backend/services/domainRecordService';
 import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { IDENTITY_ADMIN_DELETE } from '../../../shared/contracts/security';
 
 const ALLOWED_OVERRIDE_TYPES = ['no_website', 'domain_exception', 'manual_assignment'] as const;
 type OverrideType = typeof ALLOWED_OVERRIDE_TYPES[number];
@@ -672,11 +674,23 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const { userId, companyId } = req.body || {};
     // Validate required parameter
     if (!userId) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'MISSING_REQUIRED_PARAMETER',
         details: 'userId is required to delete a user',
       });
     }
+
+    // Wave 2C-A: enforce capability + step-up on the delete path.
+    // identity.admin.delete is policy-marked as requiring phishing-resistant
+    // step-up on a trusted device (StepUpPolicyRegistry). Bridge principals
+    // cannot satisfy this and are rejected automatically.
+    const guard = await requireCapability(req, res, {
+      capability: IDENTITY_ADMIN_DELETE,
+      reason: 'super-admin deletes a user (auth + DB soft-delete + role deactivation)',
+      resourceId: userId,
+      organizationId: companyId,
+    });
+    if (guard.ok !== true) return;
 
     // Route 1: Delete user from specific company
     if (companyId) {

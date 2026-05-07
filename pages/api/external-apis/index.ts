@@ -19,6 +19,8 @@ import {
 } from '../../../backend/services/rbacService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { checkAndGrantSetupCredits } from '../../../backend/services/earnCreditsService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { INTEGRATION_SECRETS_READ } from '../../../shared/contracts/security';
 
 const requireExternalApiAccess = async (
   req: NextApiRequest,
@@ -418,6 +420,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
+    // Wave 2C-A: platform-scoped POST creates/edits PLATFORM-LEVEL
+    // integration configs (with OAuth client_id / client_secret).
+    // Gate it on integration.secrets.read with phishing-resistant step-up.
+    // Tenant-scoped POSTs continue to use the existing role-based gate
+    // until Wave 2C-B / 2C-C migrate them.
+    if (platformScopeRequested && !companyId) {
+      const guard = await requireCapability(req, res, {
+        capability: INTEGRATION_SECRETS_READ,
+        reason: 'super-admin creates / edits a platform-level external API config',
+      });
+      if (guard.ok !== true) return;
+    }
+
     const access = platformScopeRequested && !companyId
       ? await requirePlatformAdmin(req, res)
       : await requireExternalApiAccess(req, res, companyId, true);
