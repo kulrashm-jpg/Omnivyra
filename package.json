@@ -65,12 +65,10 @@
   "dependencies": {
     "@alloc/quick-lru": "^5.2.0",
     "@dnd-kit/core": "^6.3.1",
-    "@simplewebauthn/browser": "^11.0.0",
-    "@simplewebauthn/server": "^11.0.0",
-    "argon2": "^0.43.0",
-    "otplib": "^12.0.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@simplewebauthn/browser": "^11.0.0",
+    "@simplewebauthn/server": "^11.0.0",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.103.2",
     "@tailwindcss/typography": "^0.5.19",
@@ -87,6 +85,7 @@
     "@tiptap/starter-kit": "^2.27.2",
     "@types/formidable": "^3.4.6",
     "@types/node": "^24.5.2",
+    "argon2": "^0.43.0",
     "axios": "^1.13.5",
     "bullmq": "^5.76.1",
     "caniuse-lite": "^1.0.30001777",
@@ -97,6 +96,7 @@
     "lucide-react": "^0.544.0",
     "next": "^16.1.6",
     "openai": "^5.23.0",
+    "otplib": "^12.0.1",
     "pdfkit": "^0.17.2",
     "pg": "^8.16.3",
     "playwright": "^1.49.0",
@@ -126,5 +126,10 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "5.9.2"
+  },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.14"
+    }
   }
 }
