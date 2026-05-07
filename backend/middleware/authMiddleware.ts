@@ -22,10 +22,10 @@ import { verifySupabaseAuthHeader } from '../../lib/auth/serverValidation';
 // ── Resolved auth identity ────────────────────────────────────────────────────
 
 export interface AuthUser {
-  /** Internal users.id (UUID from our DB) */
+  /** Internal users.id (UUID from our DB). */
   id: string;
-  /** Supabase auth UUID (kept as firebaseUid for interface compatibility) */
-  firebaseUid: string;
+  /** Supabase auth UUID (auth.users.id). Mirrors users.supabase_uid. */
+  supabaseUid: string;
   email: string;
 }
 
@@ -82,7 +82,7 @@ export async function requireAuth(
   return {
     user: {
       id: userRow.id,
-      firebaseUid: supabaseUid, // kept for interface compatibility
+      supabaseUid,
       email: userRow.email ?? email,
     },
   };

@@ -255,7 +255,7 @@ export const DOMAIN_RESOLUTION_LIMIT: RateLimitConfig = {
 };
 
 // ── Post-auth UID-based limiters ──────────────────────────────────────────────
-// Applied AFTER Firebase token verification, keyed by firebaseUid.
+// Applied AFTER Supabase token verification, keyed by supabaseUid.
 // Prevents rotating-proxy abuse: a single user cannot exceed these regardless
 // of how many IP addresses they use.
 

@@ -79,7 +79,7 @@ const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; err
     return { id: existingId, error: null };
   }
 
-  // 2. Create a stub row — firebase_uid and phone will be filled on first sign-in.
+  // 2. Create a stub row — supabase_uid and phone will be filled on first sign-in.
   //    Only include columns that we know exist (email, name, created_at are always
   //    present). is_email_verified / is_phone_verified were added by migration
   //    20260331_auth_columns with NOT NULL DEFAULT false, so we include them but
@@ -714,14 +714,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     // Route 2: Delete unassigned user entirely from the system.
     // Order of operations is critical for consistency:
-    //   1. Look up firebase_uid from DB
-    //   2. Delete from Firebase Auth first (abort if it fails — prevents ghost sessions)
-    //   3. Delete from users table
+    //   1. Look up supabase_uid from DB
+    //   2. Delete from Supabase Auth first (abort if it fails — prevents ghost sessions)
+    //   3. Soft-delete the users row
+    //   4. Deactivate every user_company_roles row for the user
     try {
-      // Step A: look up the user row to get firebase_uid
+      // Step A: look up the user row to get the auth identity
       const { data: userRecord, error: lookupError } = await supabase
         .from('users')
-        .select('id, supabase_uid, firebase_uid')
+        .select('id, supabase_uid')
         .eq('id', userId)
         .maybeSingle();
 
@@ -730,8 +731,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'FAILED_TO_DELETE_USER', details: lookupError.message });
       }
 
-      // Only use supabase_uid — firebase_uid is a legacy column and cannot be used
-      // with supabase.auth.admin.deleteUser(). Using it would cause a silent 404 or error.
       const supabaseUid: string | null = (userRecord as any)?.supabase_uid ?? null;
 
       // Step B: delete from Supabase Auth.

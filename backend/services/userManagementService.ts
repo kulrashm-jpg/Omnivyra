@@ -48,7 +48,7 @@ const getOrCreateUserByEmail = async (email: string, companyId?: string): Promis
     companyId,
   });
 
-  // Create a stub row — firebase_uid will be populated on first sign-in
+  // Create a stub row — supabase_uid is populated on first sign-in via sync-supabase-user.
   const { data: created, error: createError } = await supabase
     .from('users')
     .insert({

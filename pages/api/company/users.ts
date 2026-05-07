@@ -93,23 +93,6 @@ const ensureCompanyAdminAccess = async (
   return { userId: access.userId, role: access.role };
 };
 
-/**
- * Find an existing user row by email, or create a stub row.
- * No supabase.auth calls — users table is the authoritative identity store.
- * firebase_uid will be populated when the user completes their first Firebase sign-in.
- */
-const findExistingUserByEmail = async (email: string) => {
-  const { data } = await supabase
-    .from('users')
-    .select('id, email, firebase_uid, is_deleted, created_at')
-    .eq('email', email.toLowerCase())
-    .maybeSingle();
-  if (!data) return null;
-  // Treat soft-deleted rows as non-existent for invite purposes
-  if ((data as any).is_deleted) return null;
-  return data;
-};
-
 const findOrCreateUserByEmail = async (email: string): Promise<{ id: string; error: string | null }> => {
   // Check for a soft-deleted user BEFORE attempting to create (unique constraint on email).
   const { data: existing, error: selectErr } = await supabase
@@ -241,44 +224,6 @@ const insertAuditLog = async (input: {
     logger.error('company_users_audit_log_failed', { actorUserId: input.actorUserId, action: input.action, companyId: input.companyId, message: error.message });
     throw new Error(`AUDIT_LOG_FAILED:${error.message}`);
   }
-};
-
-const addExistingUserToCompany = async (input: {
-  userId: string;
-  companyId: string;
-  role: string;
-  name: string;
-  actorUserId: string;
-}) => {
-  const { error: upsertError } = await upsertUserCompanyRole(
-    input.userId,
-    input.companyId,
-    input.role,
-    input.name
-  );
-  if (upsertError) {
-    return { error: 'FAILED_TO_ASSIGN_ROLE', details: upsertError };
-  }
-  const { error: activateError } = await supabase
-    .from('user_company_roles')
-    .update({
-      status: 'active',
-      accepted_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      name: input.name || null,
-    })
-    .eq('user_id', input.userId)
-    .eq('company_id', input.companyId);
-  if (activateError) {
-    return { error: 'FAILED_TO_ACTIVATE_USER', details: activateError.message };
-  }
-  await insertAuditLog({
-    actorUserId: input.actorUserId,
-    action: 'ADD_EXISTING_USER',
-    targetUserId: input.userId,
-    companyId: input.companyId,
-  });
-  return { error: null };
 };
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -416,7 +361,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
 
-      // 2. Find or create user row by email (no supabase.auth — Firebase-only)
+      // 2. Find or create user row by email (auth identity is established by Supabase
+      //    on first sign-in; this stub gets linked via supabase_uid then).
       const { id: invitedUserId, error: userErr } = await findOrCreateUserByEmail(normalizedEmail);
       if (userErr === 'ACCOUNT_DELETED') {
         return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' } as any);
@@ -425,22 +371,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         return res.status(500).json({ error: 'FAILED_TO_SAVE_USER', details: userErr } as any);
       }
 
-      // 4. Check if user already has an active role in this company
-      const existingUser = await findExistingUserByEmail(normalizedEmail);
-      if (existingUser && (existingUser as any).firebase_uid) {
-        // User has signed in before — add directly without invite flow
-        const result = await addExistingUserToCompany({
-          userId: invitedUserId,
-          companyId,
-          role: desiredRole,
-          name: displayName,
-          actorUserId: access.userId,
-        });
-        if (result.error) return res.status(500).json(result);
-        return res.status(200).json({ message: 'User added to team.' });
-      }
+      // 3. Upsert role to invited + send invitation. Existing-user fast-path
+      //    (auto-add without invite) was removed: it depended on firebase_uid
+      //    which was dropped in 20260407_drop_firebase_uid.sql, so the gate was
+      //    permanently false. All adds now flow through the invite.
 
-      // 5. User exists in DB but has not signed in yet — create/update role + send invite
       const { error: upsertError } = await upsertUserCompanyRole(
         invitedUserId,
         companyId,

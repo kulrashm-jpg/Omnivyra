@@ -35,9 +35,8 @@ export type AuthAuditEvent =
  * Insert a row into auth_audit_logs.
  *
  * @param event       One of the AuthAuditEvent string literals.
- * @param opts.userId Internal Supabase users.id (nullable — may be unknown
- *                    when a ghost session has no matching DB row).
- * @param opts.firebaseUid  Firebase UID from the token (always available post-verify).
+ * @param opts.userId Internal users.id (nullable — may be unknown when a
+ *                    ghost session has no matching DB row).
  * @param opts.metadata     Arbitrary JSON context for the event.
  */
 // Mapping from audit event types to anomaly detection types.
@@ -53,17 +52,15 @@ const AUDIT_TO_ANOMALY: Partial<Record<AuthAuditEvent, string>> = {
 export async function logAuthEvent(
   event: AuthAuditEvent,
   opts: {
-    userId?:      string | null;
-    firebaseUid?: string | null;
-    metadata?:    Record<string, unknown>;
+    userId?:   string | null;
+    metadata?: Record<string, unknown>;
   } = {},
 ): Promise<void> {
   try {
     await getAuditClient().from('auth_audit_logs').insert({
       event,
-      user_id:      opts.userId      ?? null,
-      firebase_uid: opts.firebaseUid ?? null,
-      metadata:     opts.metadata    ?? null,
+      user_id:  opts.userId   ?? null,
+      metadata: opts.metadata ?? null,
     } as any);
   } catch (err) {
     // Audit failure must never block auth flows
@@ -75,7 +72,7 @@ export async function logAuthEvent(
   if (anomalyType) {
     void detectAnomaly({
       type:      anomalyType,
-      entityId:  opts.userId ?? opts.firebaseUid ?? undefined,
+      entityId:  opts.userId ?? undefined,
       metadata:  opts.metadata,
     });
   }

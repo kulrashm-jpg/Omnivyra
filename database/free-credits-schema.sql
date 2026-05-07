@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS free_credit_profiles (
   organization_id     uuid,                         -- populated after org creation
   phone_number        text        UNIQUE NOT NULL,   -- E.164 format, e.g. +447911123456
   phone_verified_at   timestamptz NOT NULL DEFAULT now(),
-  firebase_uid        text,                          -- Firebase UID from phone auth
 
   -- Intent data from onboarding questionnaire
   intent_goals        text[]      NOT NULL DEFAULT '{}',   -- Q1 answers
