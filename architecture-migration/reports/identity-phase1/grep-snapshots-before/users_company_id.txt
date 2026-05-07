@@ -1,0 +1,201 @@
+## users.company_id / company_id literal references in production code
+backend/adapters/campaign/masterContentAdapter.ts:19:async function getTenantPriority(_company_id: string): Promise<number> {
+backend/adapters/campaign/masterContentAdapter.ts:63:  company_id: string,
+backend/adapters/campaign/masterContentAdapter.ts:74:    company_id,
+backend/adapters/campaign/masterContentAdapter.ts:93:        company_id,
+backend/adapters/campaign/masterContentAdapter.ts:121:        company_id,
+backend/adapters/campaign/masterContentAdapter.ts:135:        priority: await getTenantPriority(company_id),
+backend/adapters/campaign/masterContentAdapter.ts:168:    company_id,
+backend/adapters/campaign/masterContentAdapter.ts:272:  company_id: string,
+backend/adapters/campaign/masterContentAdapter.ts:281:    return generateCampaignBatchJob(company_id, contentGenerationQueue, input, options);
+backend/adapters/campaign/masterContentAdapter.ts:285:  return generateCampaignMasterContent(company_id, contentGenerationQueue, input, options as any);
+backend/adapters/campaign/masterContentAdapter.ts:289:  company_id: string,
+backend/adapters/campaign/masterContentAdapter.ts:295:    company_id,
+backend/adapters/campaign/masterContentAdapter.ts:319:    company_id,
+backend/adapters/campaign/masterContentAdapter.ts:326:    priority: await getTenantPriority(company_id),
+backend/adapters/commandCenter/blogContentAdapter.ts:28:  company_id: string,
+backend/adapters/commandCenter/blogContentAdapter.ts:37:  const jobId = makeStableJobId('blog', { company_id, topic: input.topic });
+backend/adapters/commandCenter/blogContentAdapter.ts:51:    company_id,
+backend/adapters/commandCenter/blogContentAdapter.ts:81:  company_id: string,
+backend/adapters/commandCenter/blogContentAdapter.ts:93:  const jobId = makeStableJobId('post', { company_id, topic: input.topic, platforms: input.platforms });
+backend/adapters/commandCenter/blogContentAdapter.ts:96:    company_id,
+backend/adapters/commandCenter/blogContentAdapter.ts:123:  company_id: string,
+backend/adapters/commandCenter/blogContentAdapter.ts:135:  const jobId = makeStableJobId('whitepaper', { company_id, topic: input.topic });
+backend/adapters/commandCenter/blogContentAdapter.ts:138:    company_id,
+backend/adapters/commandCenter/blogContentAdapter.ts:167:  company_id: string,
+backend/adapters/commandCenter/blogContentAdapter.ts:179:  const jobId = makeStableJobId('story', { company_id, topic: input.topic });
+backend/adapters/commandCenter/blogContentAdapter.ts:182:    company_id,
+backend/adapters/commandCenter/blogContentAdapter.ts:211:  company_id: string,
+backend/adapters/commandCenter/blogContentAdapter.ts:222:  const jobId = makeStableJobId('newsletter', { company_id, topic: input.topic });
+backend/adapters/commandCenter/blogContentAdapter.ts:225:    company_id,
+backend/adapters/commandCenter/creatorContentAdapter.ts:74:  company_id: string,
+backend/adapters/commandCenter/creatorContentAdapter.ts:102:  company_id: string,
+backend/adapters/commandCenter/creatorContentAdapter.ts:113:    company_id,
+backend/adapters/commandCenter/creatorContentAdapter.ts:130:    company_id,
+backend/adapters/commandCenter/creatorContentAdapter.ts:159:  company_id: string,
+backend/adapters/commandCenter/creatorContentAdapter.ts:171:    company_id,
+backend/adapters/commandCenter/creatorContentAdapter.ts:189:    company_id,
+backend/adapters/commandCenter/creatorContentAdapter.ts:219:  company_id: string,
+backend/adapters/commandCenter/creatorContentAdapter.ts:230:    company_id,
+backend/adapters/commandCenter/creatorContentAdapter.ts:247:    company_id,
+backend/adapters/engagement/responseAdapter.ts:38:  company_id: string,
+backend/adapters/engagement/responseAdapter.ts:64:    company_id,
+backend/adapters/engagement/responseAdapter.ts:71:    company_id,
+backend/adapters/engagement/responseAdapter.ts:100:  company_id: string,
+backend/adapters/engagement/responseAdapter.ts:134:      company_id,
+backend/adapters/engagement/responseAdapter.ts:140:      company_id,
+backend/auth/refreshAccountResolver.ts:29:    .eq('company_id', organizationId)
+backend/auth/tokenRefresh.ts:838:    .eq('company_id', companyId)
+backend/auth/tokenRefresh.ts:849:    .or(`company_id.eq.${companyId},company_id.is.null`)
+backend/auth/tokenStore.ts:224:      .eq('company_id', companyId)
+backend/auth/tokenStore.ts:244:        company_id: companyId,
+backend/auth/tokenStore.ts:278:      .eq('company_id', opts.companyId)
+backend/contracts/actionApiContract.ts:96:  company_id: z.string().trim().min(1),
+backend/contracts/actionApiContract.ts:105:  company_id: z.string().trim().min(1),
+backend/contracts/decisionObject.ts:34:  company_id: z.string().uuid(),
+backend/contracts/viralityPlaybookContract.ts:14:  company_id: string;
+backend/db/campaignApprovedVersionStore.ts:13:    .eq('company_id', companyId)
+backend/db/campaignApprovedVersionStore.ts:37:        .eq('company_id', companyId)
+backend/db/campaignApprovedVersionStore.ts:54:          company_id: companyId,
+backend/db/campaignMemoryStore.ts:8:    company_id: input.companyId,
+backend/db/campaignMemoryStore.ts:22:    .eq('company_id', companyId)
+backend/db/campaignMemoryStore.ts:37:    company_id: input.companyId,
+backend/db/campaignVersionStore.ts:11:    company_id: input.companyId,
+backend/db/campaignVersionStore.ts:32:    company_id: input.companyId,
+backend/db/campaignVersionStore.ts:53:    company_id: input.companyId,
+backend/db/campaignVersionStore.ts:72:    company_id: input.companyId,
+backend/db/campaignVersionStore.ts:90:    .eq('company_id', companyId);
+backend/db/campaignVersionStore.ts:109:    .eq('company_id', companyId);
+backend/db/campaignVersionStore.ts:114:/** Get latest campaign_versions row by campaign_id (resolves company_id from mapping). */
+backend/db/campaignVersionStore.ts:118:  company_id: string;
+backend/db/campaignVersionStore.ts:130:    .select('company_id, build_mode, context_scope, campaign_types, campaign_weights, campaign_snapshot, company_stage, market_scope, baseline_override')
+backend/db/campaignVersionStore.ts:136:  if (error || !data?.company_id) return null;
+backend/db/campaignVersionStore.ts:161:    company_id: String(data.company_id),
+backend/db/campaignVersionStore.ts:175:  let query = supabase.from('week_versions').select('*').eq('company_id', companyId);
+backend/db/campaignVersionStore.ts:188:  let query = supabase.from('optimization_history').select('*').eq('company_id', companyId);
+backend/db/campaignVersionStore.ts:198:  let query = supabase.from('trend_snapshots').select('*').eq('company_id', companyId);
+backend/db/campaignVersionStore.ts:221:      query = query.eq('company_id', companyId);
+backend/db/campaignVersionStore.ts:252:    company_id: input.companyId,
+backend/db/campaignVersionStore.ts:300:    .eq('company_id', input.companyId)
+backend/db/performanceStore.ts:52:    company_id: input.companyId,
+backend/db/performanceStore.ts:69:    company_id: input.companyId,
+backend/db/performanceStore.ts:81:  let query = supabase.from('analytics_reports').select('*').eq('company_id', companyId);
+backend/db/performanceStore.ts:91:  let query = supabase.from('learning_insights').select('*').eq('company_id', companyId);
+backend/db/platformExecutionStore.ts:10:    company_id: input.companyId,
+backend/db/platformExecutionStore.ts:30:    .eq('company_id', input.companyId)
+backend/db/platformExecutionStore.ts:50:    company_id: input.companyId,
+backend/db/platformMetricsSnapshotStore.ts:17: * Uses index on (company_id, platform, captured_at DESC) for efficiency.
+backend/db/platformMetricsSnapshotStore.ts:25:    .eq('company_id', companyId)
+backend/jobs/analyticsIngestionJob.ts:48:    .select('id, company_id, platform, platform_user_id, user_id')
+backend/jobs/analyticsIngestionJob.ts:64:      const companyId   = String(account.company_id);
+backend/jobs/analyticsIngestionJob.ts:93:          company_id:        companyId,
+backend/jobs/analyticsIngestionJob.ts:128:    .select('id, scheduled_post_id, social_account_id, platform, platform_post_id, company_id, user_id, attempts')
+backend/jobs/campaignHealthEvaluationJob.ts:225:      .select('campaign_id, company_id')
+backend/jobs/campaignHealthEvaluationJob.ts:239:      const coId = row?.company_id;
+backend/jobs/dailyIntelligenceScheduler.ts:72:    .select('campaign_id, company_id')
+backend/jobs/dailyIntelligenceScheduler.ts:83:    const coId = row?.company_id;
+backend/jobs/dailyIntelligenceScheduler.ts:281:          company_id: companyId,
+backend/jobs/dailyIntelligenceScheduler.ts:310:            company_id: companyId,
+backend/jobs/dailyIntelligenceScheduler.ts:391:            company_id: companyId,
+backend/jobs/dailyIntelligenceScheduler.ts:437:              company_id: companyId,
+backend/jobs/dailyIntelligenceScheduler.ts:458:              company_id: companyId,
+backend/jobs/dailyIntelligenceScheduler.ts:504:            company_id: companyId,
+backend/jobs/dailyIntelligenceScheduler.ts:523:            company_id: companyId,
+backend/jobs/engagementOpportunityScanner.ts:129:      .select('id, company_id')
+backend/jobs/engagementOpportunityScanner.ts:132:      const camp = c as { id: string; company_id?: string };
+backend/jobs/engagementOpportunityScanner.ts:133:      if (camp.company_id) campaignToOrg.set(camp.id, camp.company_id);
+backend/jobs/governanceAuditJob.ts:16: * Loads distinct company_id from campaign_versions.
+backend/jobs/governanceAuditJob.ts:29:      .select('company_id');
+backend/jobs/governanceAuditJob.ts:37:      new Set((data || []).map((r: any) => r.company_id).filter(Boolean))
+backend/jobs/performanceAggregationJob.ts:12:  company_id?: string;
+backend/jobs/performanceAggregationJob.ts:65:      .select('company_id, theme, platform, content_type, engagement, impressions')
+backend/jobs/performanceAggregationJob.ts:94:      const cid = String(row.company_id ?? '').trim();
+backend/jobs/performanceAggregationJob.ts:134:        company_id: companyId,
+backend/jobs/performanceAggregationJob.ts:150:        company_id: companyId,
+backend/jobs/performanceAggregationJob.ts:166:        company_id: companyId,
+backend/jobs/performanceAggregationJob.ts:179:        .upsert(themeUpserts, { onConflict: 'company_id,theme' });
+backend/jobs/performanceAggregationJob.ts:187:        .upsert(platformUpserts, { onConflict: 'company_id,platform' });
+backend/jobs/performanceAggregationJob.ts:195:        .upsert(contentTypeUpserts, { onConflict: 'company_id,content_type' });
+backend/jobs/performanceIngestionJob.ts:98:      .select('id, company_id')
+backend/jobs/performanceIngestionJob.ts:102:    (campaigns || []).forEach((c: { id: string; company_id?: string }) => {
+backend/jobs/performanceIngestionJob.ts:103:      if (c.company_id) campaignToCompany.set(c.id, String(c.company_id));
+backend/jobs/performanceIngestionJob.ts:191:        company_id: companyId,
+backend/jobs/performanceIngestionJob.ts:231:    const affectedCompanyIds = [...new Set(toInsert.map((r) => r.company_id as string).filter(Boolean))];
+backend/lib/railwayComputeMiddleware.ts:20: * Extracts company_id from req.headers['x-company-id'] or req.query.companyId
+backend/lib/railwayComputeMiddleware.ts:51:                        (req.body?.company_id as string);
+backend/lib/railwayComputeMiddleware.ts:58:        company_id: companyId,
+backend/lib/railwayComputeMiddleware.ts:92: * Extracts company_id from job.data.company_id or job.data.companyId
+backend/lib/railwayComputeMiddleware.ts:106:      const companyId = job?.data?.company_id || job?.data?.companyId;
+backend/lib/railwayComputeMiddleware.ts:111:        company_id: companyId,
+backend/lib/railwayComputeMiddleware.ts:124: * Note: Cron jobs are system-level, so company_id is typically not available.
+backend/lib/userContext.ts:62:      if (latest?.company_id) {
+backend/lib/userContext.ts:63:        companyIds = [latest.company_id];
+backend/middleware/authMiddleware.ts:105:    res.status(400).json({ error: 'company_id is required' });
+backend/middleware/authMiddleware.ts:125:    .eq('company_id', companyId)
+backend/queue/contentGenerationQueues.ts:466:async function getTenantPlan(_company_id: string): Promise<string> {
+backend/queue/contentGenerationQueues.ts:471:export async function checkRateLimitForTenant(company_id: string, content_type: string): Promise<boolean> {
+backend/queue/contentGenerationQueues.ts:472:  const plan = await getTenantPlan(company_id);
+backend/queue/contentGenerationQueues.ts:488:export async function checkBackpressure(queueName: string, company_id?: string): Promise<void> {
+backend/queue/contentGenerationQueues.ts:498:  if (company_id && count > 500) {
+backend/queue/contentGenerationQueues.ts:499:    const plan = await getTenantPlan(company_id);
+backend/queue/jobProcessors/boltContentJobProcessor.ts:56:    company_id: string | null;
+backend/queue/jobProcessors/boltContentJobProcessor.ts:170:      .eq('company_id', companyId)
+backend/queue/jobProcessors/boltContentJobProcessor.ts:179:      .eq('company_id', companyId)
+backend/queue/jobProcessors/boltContentJobProcessor.ts:197:        company_id:     companyId,
+backend/queue/jobProcessors/boltContentJobProcessor.ts:205:      { onConflict: 'company_id,topic_hash', ignoreDuplicates: false }
+backend/queue/jobProcessors/boltContentJobProcessor.ts:297:  const companyId = campaign.company_id ?? null;
+backend/queue/jobProcessors/boltContentJobProcessor.ts:341:        company_id: companyId,
+backend/queue/jobProcessors/boltContentJobProcessor.ts:398:        company_id:       companyId,
+backend/queue/jobProcessors/boltContentJobProcessor.ts:426:      topic, title: topic, company_id: companyId,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:42:  getRecentFeedback: async (_company_id: string, _content_type: string) => ({}),
+backend/queue/jobProcessors/contentGenerationProcessor.ts:43:  getResponseFeedback: async (_company_id: string, _platform: string) => ({}),
+backend/queue/jobProcessors/contentGenerationProcessor.ts:46:  getContextFor: async (_company_id: string) => ({}),
+backend/queue/jobProcessors/contentGenerationProcessor.ts:47:  getEngagementContext: async (_company_id: string) => ({}),
+backend/queue/jobProcessors/contentGenerationProcessor.ts:49:async function checkCredits(_company_id: string, _content_type: string): Promise<boolean> { return true; }
+backend/queue/jobProcessors/contentGenerationProcessor.ts:50:async function deductCredits(_company_id: string, _key: string, _cost: number): Promise<void> {}
+backend/queue/jobProcessors/contentGenerationProcessor.ts:51:async function refundCredits(_company_id: string, _key: string): Promise<void> {}
+backend/queue/jobProcessors/contentGenerationProcessor.ts:58:  const { company_id, content_type, bulk_mode } = job.data;
+backend/queue/jobProcessors/contentGenerationProcessor.ts:62:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:90:      company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:97:      await refundCredits(company_id, `content_${content_type}_attempt`).catch(() => {});
+backend/queue/jobProcessors/contentGenerationProcessor.ts:102:      company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:115:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:128:  const builtContext = await buildContentContext(company_id).catch(() => null);
+backend/queue/jobProcessors/contentGenerationProcessor.ts:145:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:172:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:187:  const hasCredits = await checkCredits(company_id, content_type);
+backend/queue/jobProcessors/contentGenerationProcessor.ts:195:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:209:        company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:212:          .getRecentFeedback(company_id, content_type)
+backend/queue/jobProcessors/contentGenerationProcessor.ts:215:          .getContextFor(company_id)
+backend/queue/jobProcessors/contentGenerationProcessor.ts:223:      company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:257:      company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:267:  await deductCredits(company_id, `content_${content_type}`, costUsd);
+backend/queue/jobProcessors/contentGenerationProcessor.ts:285:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:308:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:323:  const { company_id, items } = job.data;
+backend/queue/jobProcessors/contentGenerationProcessor.ts:327:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:340:          company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:372:    await deductCredits(company_id, 'content_bulk_generation', costUsd);
+backend/queue/jobProcessors/contentGenerationProcessor.ts:392:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:403:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:411:  const hasCredits = await checkCredits(company_id, 'engagement_response');
+backend/queue/jobProcessors/contentGenerationProcessor.ts:427:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:435:      .getResponseFeedback(company_id, platform)
+backend/queue/jobProcessors/contentGenerationProcessor.ts:438:      .getEngagementContext(company_id)
+backend/queue/jobProcessors/contentGenerationProcessor.ts:447:  await deductCredits(company_id, 'content_engagement', costUsd);
+backend/queue/jobProcessors/contentGenerationProcessor.ts:453:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:464:    company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:478:  const { company_id, items } = job.data;
+backend/queue/jobProcessors/contentGenerationProcessor.ts:488:        company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:517:    await deductCredits(company_id, 'content_engagement_bulk', costUsd);
+backend/queue/jobProcessors/contentGenerationProcessor.ts:592:  const company_id = data.company_id as string;
+backend/queue/jobProcessors/contentGenerationProcessor.ts:597:  if (!company_id || !platform || !tone_used) return;
+backend/queue/jobProcessors/contentGenerationProcessor.ts:601:      company_id,
+backend/queue/jobProcessors/contentGenerationProcessor.ts:609:      company_id,
+backend/queue/jobProcessors/creatorContentProcessor.ts:39:    company_id,
+backend/queue/jobProcessors/creatorContentProcessor.ts:50:    console.log(`[creatorContentProcessor] Processing ${content_type} for company ${company_id}`);
+backend/queue/jobProcessors/creatorContentProcessor.ts:61:      campaignId: String((activity_workspace as any)?.campaign_id || `creator-${company_id}`),
+backend/queue/jobProcessors/creatorContentProcessor.ts:62:      companyId: company_id,
+backend/queue/jobProcessors/creatorContentProcessor.ts:94:    await deductCredits(company_id, `content_${content_type}`, costUsd);
+backend/queue/jobProcessors/creatorContentProcessor.ts:110:      company_id,

@@ -5,7 +5,7 @@
  * scoped to the requesting company only.
  *
  * Auth: COMPANY_ADMIN and above (withRBAC).
- * Company isolation: signals filtered to req.user.company_id only.
+ * Company isolation: signals filtered to the caller's active_company_id only.
  *
  * Looks for:
  *   1. Campaigns with source_blog_id = this blog's id

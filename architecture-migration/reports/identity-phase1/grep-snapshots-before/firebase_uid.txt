@@ -1,0 +1,18 @@
+## firebase_uid (production code only)
+backend/middleware/authMiddleware.ts:27:  /** Supabase auth UUID (kept as firebaseUid for interface compatibility) */
+backend/middleware/authMiddleware.ts:28:  firebaseUid: string;
+backend/middleware/authMiddleware.ts:85:      firebaseUid: supabaseUid, // kept for interface compatibility
+backend/services/userManagementService.ts:51:  // Create a stub row — firebase_uid will be populated on first sign-in
+lib/auth/auditLog.ts:40: * @param opts.firebaseUid  Firebase UID from the token (always available post-verify).
+lib/auth/auditLog.ts:57:    firebaseUid?: string | null;
+lib/auth/auditLog.ts:65:      firebase_uid: opts.firebaseUid ?? null,
+lib/auth/auditLog.ts:78:      entityId:  opts.userId ?? opts.firebaseUid ?? undefined,
+lib/auth/rateLimit.ts:258:// Applied AFTER Firebase token verification, keyed by firebaseUid.
+pages/api/company/users.ts:99: * firebase_uid will be populated when the user completes their first Firebase sign-in.
+pages/api/company/users.ts:104:    .select('id, email, firebase_uid, is_deleted, created_at')
+pages/api/company/users.ts:430:      if (existingUser && (existingUser as any).firebase_uid) {
+pages/api/super-admin/users.ts:82:  // 2. Create a stub row — firebase_uid and phone will be filled on first sign-in.
+pages/api/super-admin/users.ts:717:    //   1. Look up firebase_uid from DB
+pages/api/super-admin/users.ts:721:      // Step A: look up the user row to get firebase_uid
+pages/api/super-admin/users.ts:724:        .select('id, supabase_uid, firebase_uid')
+pages/api/super-admin/users.ts:733:      // Only use supabase_uid — firebase_uid is a legacy column and cannot be used
