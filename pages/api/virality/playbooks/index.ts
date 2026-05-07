@@ -43,9 +43,6 @@ const requirePlaybookAccess = async (
   return { userId: user.id, role };
 };
 
-const canManagePlaybooks = (role: Role | 'SUPER_ADMIN') =>
-  role === 'SUPER_ADMIN' || role === Role.COMPANY_ADMIN;
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =
     (req.query.companyId as string | undefined) ||

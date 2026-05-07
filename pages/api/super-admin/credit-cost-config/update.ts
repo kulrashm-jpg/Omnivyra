@@ -14,9 +14,11 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_MANAGE } from '../../../../shared/contracts/security';
 
 type UpdateEntry = {
   action_type: string;
@@ -27,8 +29,17 @@ type UpdateEntry = {
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:credit-cost-config', 20, 60))) return;
-  const admin = await requireSuperAdminUser(req, res);
-  if (!admin) return;
+
+  // Wave 2C-C: capability + step-up gate. billing.manage covers credit
+  // cost configuration. Both GET (read config) and POST (mutate) flow
+  // through the same capability — viewing platform pricing tunables is
+  // also super-admin scope.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_MANAGE,
+    reason: `super-admin ${req.method === 'GET' ? 'reads' : 'updates'} credit cost config`,
+  });
+  if (guard.ok !== true) return;
+  const admin = guard.principal;
 
   // ── GET: return all current costs ──────────────────────────────────────────
   if (req.method === 'GET') {
@@ -75,7 +86,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     await recordAdminAudit({
-      actorUserId: admin.id,
+      actorUserId: admin.userId,
       action: 'SUPER_ADMIN_CREDIT_COST_CONFIG_UPDATE',
       targetType: 'credit_cost_config',
       metadata: { results },

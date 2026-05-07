@@ -11,24 +11,21 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
-import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
-
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return 'cookie';
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return user.id;
-  res.status(403).json({ error: 'Forbidden' });
-  return null;
-}
+import { requireCapability } from '@/backend/security/requireCapability';
+import { BILLING_MANAGE } from '@/shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const adminId = await requireSuperAdmin(req, res);
-  if (!adminId) return;
+  // Wave 2C-C: capability + step-up gate. billing.manage covers
+  // approving/rejecting access requests (credit grants are downstream).
+  // Bridge principals are rejected.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_MANAGE,
+    reason: `super-admin reviews free-credit access request (${req.method})`,
+  });
+  if (guard.ok !== true) return;
+  const adminId = guard.principal.userId;
 
   const sb = supabase;
 
@@ -65,7 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       await sb.from('access_requests').update({
         status: 'approved',
-        reviewed_by: adminId === 'cookie' ? null : adminId,
+        reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
         admin_note: adminNote ?? null,
         credits_granted_amount: creditsToGrant,
@@ -74,14 +71,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (whitelistDomain && request.domain) {
         await sb.from('domain_whitelist').upsert({
           domain: request.domain,
-          added_by: adminId === 'cookie' ? null : adminId,
+          added_by: adminId,
           reason: adminNote ?? `Approved via access request ${requestId}`,
         }, { onConflict: 'domain' });
         await invalidateDomainCache(request.domain);
       }
 
       if (creditsToGrant > 0 && request.organization_id) {
-        const actor = adminId === 'cookie' ? request.organization_id : adminId;
+        const actor = adminId;
         try {
           await createCredit({
             orgId:          request.organization_id,
@@ -133,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!reason) return res.status(400).json({ error: 'reason required for rejection' });
       await sb.from('access_requests').update({
         status: 'rejected',
-        reviewed_by: adminId === 'cookie' ? null : adminId,
+        reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
         rejection_reason: reason,
       }).eq('id', requestId);
@@ -143,7 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (action === 'delete') {
       await sb.from('access_requests').update({
         status: 'deleted',
-        reviewed_by: adminId === 'cookie' ? null : adminId,
+        reviewed_by: adminId,
         reviewed_at: new Date().toISOString(),
       }).eq('id', requestId);
       return res.status(200).json({ success: true });

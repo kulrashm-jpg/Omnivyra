@@ -151,9 +151,12 @@ export async function triggerTotpStepUp(opts: {
  * the server-authoritative gate; if step-up has expired between calls,
  * the caller will see another STEP_UP_REQUIRED.
  */
+/** Custom event name dispatched after successful step-up elevation. */
+export const STEP_UP_ELEVATED_EVENT = 'omnivyra:step-up-elevated';
+
 export async function withStepUp<T extends Response>(
   doRequest: () => Promise<T>,
-  opts: { retryOnce?: boolean } = {},
+  opts: { retryOnce?: boolean; onElevated?: () => Promise<void> | void } = {},
 ): Promise<T> {
   const retryOnce = opts.retryOnce !== false; // default true
 
@@ -163,6 +166,21 @@ export async function withStepUp<T extends Response>(
 
   // Server rejected with STEP_UP_REQUIRED. Launch the challenge.
   await triggerWebAuthnStepUp({ scopedCapability: stepUp.capability });
+
+  // Notify subscribers so they can refresh capability + session
+  // projections (the auth_session may have been rotated server-side).
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    try {
+      window.dispatchEvent(new CustomEvent(STEP_UP_ELEVATED_EVENT, {
+        detail: { capability: stepUp.capability },
+      }));
+    } catch {
+      // CustomEvent unavailable in some test/SSR environments — ignore.
+    }
+  }
+  if (opts.onElevated) {
+    await opts.onElevated();
+  }
 
   if (!retryOnce) return first;
   return await doRequest();

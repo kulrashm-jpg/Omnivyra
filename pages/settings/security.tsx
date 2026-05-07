@@ -20,7 +20,7 @@ import {
   type FrontendSessionSnapshot,
   type FrontendCapabilitiesSnapshot,
 } from '@/lib/security/sessionClient';
-import { withStepUp, triggerWebAuthnStepUp } from '@/lib/security/stepUpClient';
+import { withStepUp, triggerWebAuthnStepUp, STEP_UP_ELEVATED_EVENT } from '@/lib/security/stepUpClient';
 import { startRegistration } from '@simplewebauthn/browser';
 
 // ── Shared types (mirror server route shapes) ────────────────────────────────
@@ -81,12 +81,20 @@ export default function SecuritySettingsPage() {
   const reloadAuthState = useCallback(async () => {
     try {
       const [s, c] = await Promise.all([fetchSessionSnapshot(), fetchCapabilities()]);
+      // Wave 2C-C: revoked-session detection. If the server reports
+      // unauthenticated where we previously had a session, redirect to
+      // /login so the user re-authenticates. We do this BEFORE setState
+      // so the dashboard never renders a stale-state mismatch.
+      if (s === null && session !== null) {
+        window.location.href = '/login?reason=session_revoked';
+        return;
+      }
       setSession(s);
       setCapabilities(c);
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : String(err));
     }
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     void (async () => {
@@ -94,6 +102,25 @@ export default function SecuritySettingsPage() {
       await reloadAuthState();
       setLoading(false);
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refresh session + capability projections when any nested action
+  // performs a step-up — the auth_session may have been rotated and the
+  // capability set may now include elevated entries for the next 10 min.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handler = () => { void reloadAuthState(); };
+    window.addEventListener(STEP_UP_ELEVATED_EVENT, handler);
+    return () => window.removeEventListener(STEP_UP_ELEVATED_EVENT, handler);
+  }, [reloadAuthState]);
+
+  // Periodic stale-session check: every 60s, refresh session snapshot.
+  // Catches revoked-on-another-device cases without requiring user action.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const id = window.setInterval(() => { void reloadAuthState(); }, 60_000);
+    return () => window.clearInterval(id);
   }, [reloadAuthState]);
 
   if (loading) {
@@ -376,30 +403,18 @@ function RecoveryCodesSection() {
   async function regenerate() {
     setBusy(true); setErr(null);
     try {
-      // Regenerating recovery codes is sensitive — runs through step-up
-      // because the underlying route will require it once Wave 2C wires
-      // the recovery-regenerate endpoint. For now, the codes endpoint
-      // itself does not require step-up; the wave 2C-B retry helper is
-      // a no-op here but kept for forward compatibility.
-      const r = await withStepUp(() => fetch('/api/auth/totp/recovery', {
+      // Wave 2C-C: standalone regenerate endpoint. Gated on mfa.revoke +
+      // phishing-resistant step-up. withStepUp launches a WebAuthn
+      // challenge on 401 STEP_UP_REQUIRED and retries once.
+      const r = await withStepUp(() => fetch('/api/auth/totp/recovery/regenerate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ regenerate: true, code: '' }),
+        body: JSON.stringify({}),
       }));
-      // The recovery endpoint requires a valid code to consume; here we
-      // are using the {regenerate: true} flag without a code, which is
-      // not yet supported as a standalone regenerate. Treat 4xx as
-      // expected until Wave 2C-C adds a dedicated regenerate endpoint.
-      if (!r.ok && r.status !== 401) {
-        throw new Error(`Regenerate failed: ${r.status}`);
-      }
-      if (r.ok) {
-        const data = await r.json() as { regenerated: { codes: ReadonlyArray<string> } | null };
-        setCodes(data.regenerated?.codes ?? null);
-      } else {
-        setErr('Regeneration requires consuming an existing recovery code (Wave 2C-C will add a standalone path).');
-      }
+      if (!r.ok) throw new Error(`Regenerate failed: ${r.status}`);
+      const data = await r.json() as { codes: ReadonlyArray<string>; batchId: string };
+      setCodes(data.codes);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
@@ -408,17 +423,20 @@ function RecoveryCodesSection() {
   return (
     <Card title="Recovery codes">
       <p style={muted}>
-        Each code can be used once to sign in if you lose access to your authenticator. Generating
-        a new batch invalidates any unused codes from a previous batch.
+        Each code can be used once to sign in if you lose access to your authenticator. Regenerating
+        revokes any unused codes from a previous batch and requires a passkey verification.
       </p>
       {err ? <ErrorRow message={err} /> : null}
       <button onClick={regenerate} disabled={busy} style={btn}>
-        {busy ? 'Working…' : 'Regenerate (consume one code)'}
+        {busy ? 'Working…' : 'Regenerate recovery codes'}
       </button>
       {codes ? (
-        <pre style={{ marginTop: 8, padding: 12, background: '#fffbeb', border: '1px solid #f59e0b', borderRadius: 6 }}>
-          {codes.join('\n')}
-        </pre>
+        <div style={{ marginTop: 8 }}>
+          <strong>Save these codes — they will not be shown again.</strong>
+          <pre style={{ marginTop: 8, padding: 12, background: '#fffbeb', border: '1px solid #f59e0b', borderRadius: 6 }}>
+            {codes.join('\n')}
+          </pre>
+        </div>
       ) : null}
     </Card>
   );

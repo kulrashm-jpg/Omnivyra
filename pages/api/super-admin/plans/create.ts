@@ -1,18 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_MANAGE } from '../../../../shared/contracts/security';
 
 const RESOURCE_KEYS = [
   'llm_tokens',
@@ -33,7 +22,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdmin(req, res))) return;
+  // Wave 2C-C: capability + step-up gate. Platform pricing-plan creation
+  // is billing.manage scope; bridge principals are rejected.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_MANAGE,
+    reason: 'super-admin creates / updates a pricing plan',
+  });
+  if (guard.ok !== true) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const planKey        = body.plan_key ?? body.planKey;

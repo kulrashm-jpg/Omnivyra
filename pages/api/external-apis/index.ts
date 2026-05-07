@@ -20,7 +20,10 @@ import {
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { checkAndGrantSetupCredits } from '../../../backend/services/earnCreditsService';
 import { requireCapability } from '../../../backend/security/requireCapability';
+import { hasCapability } from '../../../backend/security/AuthorizationService';
+import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
 import { INTEGRATION_SECRETS_READ } from '../../../shared/contracts/security';
+import type { AuthenticatedPrincipal } from '../../../shared/contracts/security';
 
 const requireExternalApiAccess = async (
   req: NextApiRequest,
@@ -423,20 +426,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Wave 2C-A: platform-scoped POST creates/edits PLATFORM-LEVEL
     // integration configs (with OAuth client_id / client_secret).
     // Gate it on integration.secrets.read with phishing-resistant step-up.
-    // Tenant-scoped POSTs continue to use the existing role-based gate
-    // until Wave 2C-B / 2C-C migrate them.
+    // Tenant-scoped POSTs use the existing tenant-level access helper
+    // and rely on hasCapability(INTEGRATION_SECRETS_READ) for the
+    // OAuth-secret persistence decision.
+    let elevatedPrincipal: AuthenticatedPrincipal | null = null;
     if (platformScopeRequested && !companyId) {
       const guard = await requireCapability(req, res, {
         capability: INTEGRATION_SECRETS_READ,
         reason: 'super-admin creates / edits a platform-level external API config',
       });
       if (guard.ok !== true) return;
+      elevatedPrincipal = guard.principal;
     }
 
     const access = platformScopeRequested && !companyId
       ? await requirePlatformAdmin(req, res)
       : await requireExternalApiAccess(req, res, companyId, true);
     if (!access) return;
+
+    // Resolve the AuthenticatedPrincipal once for OAuth-secret shaping.
+    // Tenant-scoped POSTs reach here without requireCapability; they
+    // need their own principal lookup. Bridge cookie principals get a
+    // synthetic principal that DOES NOT include INTEGRATION_SECRETS_READ.
+    if (!elevatedPrincipal) {
+      const r = await resolvePrincipal(req);
+      if (r.ok === true) elevatedPrincipal = r.principal;
+    }
+    const canManageIntegrationSecrets = !!elevatedPrincipal
+      && hasCapability(elevatedPrincipal, INTEGRATION_SECRETS_READ);
     const {
       name,
       base_url,
@@ -465,10 +482,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const resolvedPlatformType = platform_type || 'social';
 
-    // Phase 4: Only SUPER_ADMIN can submit OAuth credentials. Tenant users: api_key, base_url, purpose only.
+    // Wave 2C-C: capability-based OAuth-secret shaping.
+    // The integration.secrets.read capability is granted to SUPER_ADMIN
+    // (capabilityRegistry) and is the canonical authority for who can
+    // submit OAuth credentials. Tenant users (COMPANY_ADMIN +) lack the
+    // capability and are rejected if they attempt to submit secrets.
     let oauthClientIdEncrypted: string | null = null;
     let oauthClientSecretEncrypted: string | null = null;
-    if (access.role === 'SUPER_ADMIN') {
+    if (canManageIntegrationSecrets) {
       if (typeof oauth_client_id === 'string' && oauth_client_id.trim()) {
         try {
           oauthClientIdEncrypted = encryptCredential(oauth_client_id.trim());
@@ -488,7 +509,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       (typeof oauth_client_secret === 'string' && oauth_client_secret.trim())
     ) {
       return res.status(403).json({
-        error: 'OAuth credentials can only be configured by Super Admin. Use Connect Accounts to authorize social media.',
+        error: 'OAuth credentials can only be configured by users with integration-secrets capability. Use Connect Accounts to authorize social media.',
+        code: 'CAPABILITY_NOT_HELD',
       });
     }
     const validation = validatePlatformConfig({
