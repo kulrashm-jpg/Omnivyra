@@ -74,3 +74,7 @@ REPORT_CARD_*.md
 CONTEXTUAL_HELP_*.md
 CONTENT_ARCHITECT_SECURITY.md
 MONETIZATION_TRIGGERS_*.md
+
+# Auto-generated architecture analysis artifacts (oversized — exceed GitHub 50MB limit)
+architecture-migration/reports/**/call-graph.json
+architecture-migration/reports/**/unsafe-propagation-semantic.json
