@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 type ActionEventType =
   | 'approved'
@@ -24,7 +25,7 @@ export const logCommunityAiActionEvent = async (input: {
     event_payload: input.event_payload ?? null,
     created_at: new Date().toISOString(),
   };
-  const { error } = await supabase.from('community_ai_action_logs').insert(payload);
+  const { error } = await ownedDbTable('community_ai_action_logs').insert(payload);
   if (error) {
     console.warn('COMMUNITY_AI_ACTION_LOG_FAILED', error.message);
   }

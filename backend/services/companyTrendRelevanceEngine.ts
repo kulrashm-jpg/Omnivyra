@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Company Trend Relevance Engine
  * Scores how relevant each strategic theme is for a company (industry and keywords).
@@ -51,8 +52,7 @@ async function loadCompanyContext(companyId: string): Promise<CompanyContext> {
   const keywords: string[] = [];
   const competitors: string[] = [];
 
-  const { data: company, error: companyError } = await supabase
-    .from('companies')
+  const { data: company, error: companyError } = await ownedDbTable('companies')
     .select('id, industry')
     .eq('id', companyId)
     .maybeSingle();
@@ -61,8 +61,7 @@ async function loadCompanyContext(companyId: string): Promise<CompanyContext> {
     industryTerms.push(...String(company.industry).split(/[,;]/).map((s) => s.trim().toLowerCase()).filter(Boolean));
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from('company_profiles')
+  const { data: profile, error: profileError } = await ownedDbTable('company_profiles')
     .select('industry, industry_list, content_themes, content_themes_list')
     .eq('company_id', companyId)
     .maybeSingle();
@@ -96,15 +95,13 @@ async function loadCompanyContext(companyId: string): Promise<CompanyContext> {
  * Load strategic themes with topic from signal_intelligence.
  */
 async function loadThemesWithTopic(): Promise<ThemeWithTopic[]> {
-  const { data: themes, error: themesError } = await supabase
-    .from('strategic_themes')
+  const { data: themes, error: themesError } = await ownedDbTable('strategic_themes')
     .select('id, intelligence_id, keywords, companies');
 
   if (themesError || !themes?.length) return [];
 
   const intelligenceIds = [...new Set((themes as { intelligence_id: string }[]).map((t) => t.intelligence_id))];
-  const { data: intelRows, error: intelError } = await supabase
-    .from('signal_intelligence')
+  const { data: intelRows, error: intelError } = await ownedDbTable('signal_intelligence')
     .select('id, topic')
     .in('id', intelligenceIds);
 
@@ -201,7 +198,7 @@ async function upsertRelevance(
     matched_companies: matchedCompanies,
   };
 
-  const { error } = await supabase.from('theme_company_relevance').upsert(row, {
+  const { error } = await ownedDbTable('theme_company_relevance').upsert(row, {
     onConflict: 'company_id,theme_id',
   });
 
@@ -370,8 +367,7 @@ async function loadCompanyConfigByApiSource(companyId: string): Promise<Record<s
  */
 async function getClusterToSourceApiId(clusterIds: string[]): Promise<Record<string, string>> {
   if (clusterIds.length === 0) return {};
-  const { data } = await supabase
-    .from('signal_clusters')
+  const { data } = await ownedDbTable('signal_clusters')
     .select('cluster_id, source_api_id')
     .in('cluster_id', clusterIds);
   const map: Record<string, string> = {};
@@ -392,8 +388,7 @@ export async function getThemesForCompany(
   companyId: string,
   minScore: number = 0.4
 ): Promise<Array<{ theme: Record<string, unknown>; relevance_score: number; matched_keywords: unknown; matched_companies: unknown }>> {
-  const { data: relRows, error: relError } = await supabase
-    .from('theme_company_relevance')
+  const { data: relRows, error: relError } = await ownedDbTable('theme_company_relevance')
     .select('theme_id, relevance_score, matched_keywords, matched_companies')
     .eq('company_id', companyId)
     .gte('relevance_score', minScore)
@@ -409,8 +404,7 @@ export async function getThemesForCompany(
   if (relList.length === 0) return [];
 
   const themeIds = relList.map((r) => r.theme_id);
-  const { data: themes, error: themesError } = await supabase
-    .from('strategic_themes')
+  const { data: themes, error: themesError } = await ownedDbTable('strategic_themes')
     .select('*')
     .in('id', themeIds);
 

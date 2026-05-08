@@ -8,7 +8,7 @@
 
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, DollarSign, Target, TrendingUp, Zap } from 'lucide-react';
-import type { PaidRecommendation, PaidOverallRecommendation } from '../../backend/lib/ads/paidAmplificationEngine';
+import type { PaidRecommendation, PaidOverallRecommendation } from '../../lib/ads/paidAmplificationEngine';
 
 // ---------------------------------------------------------------------------
 // Badge styles
@@ -173,3 +173,4 @@ export function GrowthStrategyCard({ recommendation }: GrowthStrategyCardProps) 
     </div>
   );
 }
+

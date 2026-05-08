@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Response Pattern Service
  * Manages reusable response structure templates.
@@ -17,8 +18,7 @@ export async function createPattern(
   if (!organizationId || !patternCategory || !patternStructure) return null;
 
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('response_patterns')
+  const { data, error } = await ownedDbTable('response_patterns')
     .insert({
       organization_id: organizationId,
       pattern_structure: patternStructure,
@@ -49,8 +49,7 @@ export async function listPatterns(organizationId: string): Promise<
 > {
   if (!organizationId) return [];
 
-  const { data, error } = await supabase
-    .from('response_patterns')
+  const { data, error } = await ownedDbTable('response_patterns')
     .select('id, pattern_category, pattern_structure, usage_count, success_score, created_at')
     .eq('organization_id', organizationId)
     .order('created_at', { ascending: false });
@@ -78,8 +77,7 @@ export async function getPatternForCategory(
 } | null> {
   if (!organizationId || !category) return null;
 
-  const { data, error } = await supabase
-    .from('response_patterns')
+  const { data, error } = await ownedDbTable('response_patterns')
     .select('id, pattern_structure')
     .eq('organization_id', organizationId)
     .eq('pattern_category', category)
@@ -94,8 +92,7 @@ export async function getPatternForCategory(
 export async function incrementUsage(patternId: string): Promise<void> {
   if (!patternId) return;
 
-  const { data, error: fetchError } = await supabase
-    .from('response_patterns')
+  const { data, error: fetchError } = await ownedDbTable('response_patterns')
     .select('usage_count')
     .eq('id', patternId)
     .maybeSingle();
@@ -103,8 +100,7 @@ export async function incrementUsage(patternId: string): Promise<void> {
   if (fetchError || !data) return;
 
   const current = Number((data as { usage_count: number }).usage_count) || 0;
-  await supabase
-    .from('response_patterns')
+  await ownedDbTable('response_patterns')
     .update({
       usage_count: current + 1,
       updated_at: new Date().toISOString(),

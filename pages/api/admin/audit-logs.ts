@@ -1,20 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const hasCookie = req.cookies?.super_admin_session === '1';
-  if (!hasCookie) {
-    const { user, error: authError } = await getSupabaseUserFromRequest(req);
-    if (authError || !user) return res.status(403).json({ error: 'NOT_AUTHORIZED' });
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) return res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-  }
+  // Read-only dashboard surface; bridge principals satisfy this capability
+  // (compatibility) until Wave 3 collapses the bridge.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'platform audit log read',
+  });
+  if (guard.ok !== true) return;
 
   try {
     const { data, error } = await supabase

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Org Control Service
  *
@@ -35,8 +36,7 @@ async function loadControls(orgId: string): Promise<ControlsRow | null> {
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.row;
 
   try {
-    const { data, error } = await supabase
-      .from('org_controls')
+    const { data, error } = await ownedDbTable('org_controls')
       .select('organization_id, is_blocked, blocked_reason, is_high_risk, daily_credit_limit')
       .eq('organization_id', orgId)
       .maybeSingle();
@@ -108,8 +108,7 @@ async function getCreditsUsedToday(orgId: string): Promise<number> {
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
   try {
-    const { data } = await supabase
-      .from('unified_transactions')
+    const { data } = await ownedDbTable('unified_transactions')
       .select('credits_charged')
       .eq('organization_id', orgId)
       .eq('final_attempt', true)
@@ -141,8 +140,7 @@ export async function autoBlockLlm(
   reason: string,
 ): Promise<void> {
   try {
-    await supabase
-      .from('org_controls')
+    await ownedDbTable('org_controls')
       .upsert(
         {
           organization_id: orgId,
@@ -179,8 +177,7 @@ export async function autoFlagHighRisk(
   reason: string,
 ): Promise<void> {
   try {
-    await supabase
-      .from('org_controls')
+    await ownedDbTable('org_controls')
       .upsert(
         {
           organization_id:  orgId,
@@ -239,8 +236,7 @@ export async function applyOrgControl(opts: ApplyOrgControlOpts): Promise<void> 
   }
   if (opts.notes !== undefined) patch.notes = opts.notes;
 
-  const { error } = await supabase
-    .from('org_controls')
+  const { error } = await ownedDbTable('org_controls')
     .upsert(patch, { onConflict: 'organization_id' });
 
   if (error) throw error;

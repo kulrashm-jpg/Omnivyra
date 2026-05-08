@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Strategic Intelligence Memory Service
  * Phase 4: Stores long-term intelligence signals in strategic_memory.
@@ -33,8 +34,7 @@ export async function storeStrategicMemory(
   const themeId = options?.themeId ?? null;
 
   if (themeId) {
-    const { data, error } = await supabase
-      .from('strategic_memory')
+    const { data, error } = await ownedDbTable('strategic_memory')
       .upsert(
         {
           company_id: companyId,
@@ -51,8 +51,7 @@ export async function storeStrategicMemory(
     return data as StrategicMemoryEntry;
   }
 
-  const { data, error } = await supabase
-    .from('strategic_memory')
+  const { data, error } = await ownedDbTable('strategic_memory')
     .insert({
       company_id: companyId,
       theme_id: null,
@@ -73,8 +72,7 @@ export async function getStrategicMemoryForCompany(
   companyId: string,
   options?: { limit?: number; memoryType?: MemoryType }
 ): Promise<StrategicMemoryEntry[]> {
-  let query = supabase
-    .from('strategic_memory')
+  let query = ownedDbTable('strategic_memory')
     .select('id, company_id, theme_id, memory_type, confidence, created_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })

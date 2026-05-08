@@ -1,22 +1,13 @@
 import Head from 'next/head';
-import SeoCapabilityRadar from '@/components/reports/seo/SeoCapabilityRadar';
 import OpportunityCoverageMatrix from '@/components/reports/seo/OpportunityCoverageMatrix';
 import SearchVisibilityFunnel from '@/components/reports/seo/SearchVisibilityFunnel';
 import CrawlHealthBreakdown from '@/components/reports/seo/CrawlHealthBreakdown';
-import SeoExecutiveSummary from '@/components/reports/seo/SeoExecutiveSummary';
-import AiAnswerPresenceRadar from '@/components/reports/geo-aeo/AiAnswerPresenceRadar';
 import QueryAnswerCoverageMap from '@/components/reports/geo-aeo/QueryAnswerCoverageMap';
 import AnswerExtractionFunnel from '@/components/reports/geo-aeo/AnswerExtractionFunnel';
 import EntityAuthorityMap from '@/components/reports/geo-aeo/EntityAuthorityMap';
-import GeoAeoExecutiveSummary from '@/components/reports/geo-aeo/GeoAeoExecutiveSummary';
-import UnifiedIntelligenceSummary from '@/components/reports/unified/UnifiedIntelligenceSummary';
-import ProgressComparison from '@/components/reports/progress/ProgressComparison';
-import CompetitorMovement from '@/components/reports/competitor/CompetitorMovement';
-import SearchGrowthTimeline from '@/components/reports/timeline/SearchGrowthTimeline';
-import CompetitorExecutiveSummary from '@/components/reports/competitor/CompetitorExecutiveSummary';
-import CompetitorPositioningRadar from '@/components/reports/competitor/CompetitorPositioningRadar';
 import KeywordGapAnalysis from '@/components/reports/competitor/KeywordGapAnalysis';
 import AiAnswerGapAnalysis from '@/components/reports/competitor/AiAnswerGapAnalysis';
+import CanonicalReportSections from '@/components/reports/canonical/CanonicalReportSections';
 import ProgressIndicatorBars from '@/components/reports/shared/ProgressIndicatorBars';
 import {
   MarketPulseConfidenceBadge,
@@ -492,263 +483,30 @@ export default function ReportPageContent({
               </p>
             </div>
 
-            {isSnapshotReport(reportData) && reportData.decisionSnapshot ? (
-              <div className="mb-8 report-animate rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Decision Snapshot</p>
-                  <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                    Primary focus area: {reportData.decisionSnapshot.primaryFocusArea}
-                  </span>
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">What&apos;s broken</p>
-                    <p className="mt-1 text-sm font-semibold text-slate-900">{reportData.decisionSnapshot.whatsBroken}</p>
-                  </div>
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                    <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">What to fix first</p>
-                    <p className="mt-1 text-sm font-semibold text-emerald-900">{reportData.decisionSnapshot.whatToFixFirst}</p>
-                  </div>
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                    <p className="text-xs font-bold uppercase tracking-wide text-amber-700">What to delay</p>
-                    <p className="mt-1 text-sm text-amber-900">{reportData.decisionSnapshot.whatToDelay}</p>
-                  </div>
-                  <div className="rounded-lg border border-rose-200 bg-rose-50 p-3">
-                    <p className="text-xs font-bold uppercase tracking-wide text-rose-700">If ignored</p>
-                    <p className="mt-1 text-sm text-rose-900">{reportData.decisionSnapshot.ifIgnored}</p>
-                  </div>
-                </div>
-                {reportData.decisionSnapshot.executionSequence.length > 0 ? (
-                  <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Execution sequence</p>
-                    <ol className="mt-2 space-y-1 text-sm text-slate-800">
-                      {reportData.decisionSnapshot.executionSequence.slice(0, 3).map((step, index) => (
-                        <li key={`${step}-${index}`}>{step}</li>
-                      ))}
-                    </ol>
-                  </div>
-                ) : null}
-
-                <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">If executed well</p>
-                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold uppercase text-emerald-700">
-                      {reportData.decisionSnapshot.impactScale.replace(/_/g, ' ')}
-                    </span>
-                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-700">
-                      Outcome confidence: {reportData.decisionSnapshot.outcomeConfidence}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-sm text-emerald-900">{reportData.decisionSnapshot.ifExecutedWell}</p>
-                  <p className="mt-2 text-sm font-semibold text-emerald-900">
-                    {reportData.decisionSnapshot.currentState} {'->'} {reportData.decisionSnapshot.expectedState}
-                  </p>
-                </div>
-
-                <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">When to expect impact</p>
-                  <div className="mt-2 space-y-1 text-sm text-slate-800">
-                    <p>{reportData.decisionSnapshot.whenToExpectImpact.shortTerm}</p>
-                    <p>{reportData.decisionSnapshot.whenToExpectImpact.midTerm}</p>
-                    <p>{reportData.decisionSnapshot.whenToExpectImpact.longTerm}</p>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             <div className="mb-8">
               <ProgressIndicatorBars items={progressIndicators} />
             </div>
 
-            {isSnapshotReport(reportData) ? (
-              <div id="unified-intelligence" className="mb-8 scroll-mt-20 report-animate report-animate-delay-1">
-                {reportData.unifiedIntelligenceSummary ? (
-                  <UnifiedIntelligenceSummary data={reportData.unifiedIntelligenceSummary} />
-                ) : (
-                  <SectionPlaceholder
-                    title="Unified Intelligence"
-                    description="We could not assemble enough unified SEO and GEO/AEO signals for this run. Re-run after more crawl, search, or competitor data is available."
-                  />
-                )}
+            {/* Canonical Architecture Consolidation (Phase 2): single canonical report
+                surface that absorbs Decision Snapshot, UnifiedIntelligenceSummary, the
+                three legacy radars, time-series widgets, and the score-story block. */}
+            {reportData.canonical ? (
+              <div id="canonical" className="mb-8 scroll-mt-20 report-animate">
+                <CanonicalReportSections report={reportData.canonical as any} />
               </div>
-            ) : null}
+            ) : (
+              <SectionPlaceholder
+                title="Canonical report"
+                description="The canonical report layer is not available for this run. Regenerate after data sources reconnect."
+              />
+            )}
 
-            {isSnapshotReport(reportData) ? (
-              <div id="progress-comparison" className="mb-8 scroll-mt-20 report-animate report-animate-delay-2">
-                <ProgressComparison data={reportData.progressComparison ?? null} />
-              </div>
-            ) : null}
-
-            {isSnapshotReport(reportData) ? (
-              <div id="competitor-movement" className="mb-8 scroll-mt-20 report-animate report-animate-delay-3">
-                <CompetitorMovement data={reportData.competitorMovementComparison ?? null} />
-              </div>
-            ) : null}
-
-            {isSnapshotReport(reportData) ? (
-              <div id="search-growth-timeline" className="mb-8 scroll-mt-20 report-animate report-animate-delay-4">
-                <SearchGrowthTimeline data={reportData.timelineComparison ?? null} />
-              </div>
-            ) : null}
-
-            {isSnapshotReport(reportData) ? (
-              <div id="competitor-intelligence" className="mb-8 scroll-mt-20 space-y-5 report-animate report-animate-delay-4">
-                {reportData.competitorContext ? (
-                  <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-4">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Competitive Landscape
-                        </p>
-                        <h2 className="mt-1 text-xl font-bold text-slate-900">
-                          How you compare to your market
-                        </h2>
-                        <p className="mt-3 text-base font-semibold text-slate-900">
-                          {getMarketSummary()}
-                        </p>
-                        <p className="mt-2 text-sm leading-relaxed text-slate-600">
-                          {reportData.competitorContext.summary}
-                        </p>
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Market Pressure
-                          </span>
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getPressureStyles(
-                              getMarketPressure(),
-                            )}`}
-                          >
-                            {getMarketPressure()}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        {reportData.competitorContext.competitors.map((competitor, idx) => (
-                          <div
-                            key={`${competitor.name}-${idx}`}
-                            className="rounded-lg border border-slate-200 bg-slate-50 p-4"
-                          >
-                            <div className="flex flex-wrap items-center gap-2">
-                              <p className="font-semibold text-slate-900">{competitor.name}</p>
-                              <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                                {getCompetitorLabel(competitor.classification, competitor.source)}
-                              </span>
-                              <span
-                                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getStandingStyles(
-                                  competitor.standing,
-                                )}`}
-                              >
-                                {getStandingLabel(competitor.standing)}
-                              </span>
-                            </div>
-                            <p className="mt-2 text-sm text-slate-600">{competitor.rationale}</p>
-                          </div>
-                        ))}
-                      </div>
-
-                      {reportData.competitorContext.marketAlternatives?.length ? (
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Market Alternatives
-                          </p>
-                          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                            {reportData.competitorContext.marketAlternatives.slice(0, 3).map((alternative, idx) => (
-                              <div
-                                key={`${alternative.name}-${idx}`}
-                                className="rounded-lg border border-slate-200 bg-white p-4"
-                              >
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="font-semibold text-slate-900">{alternative.name}</p>
-                                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
-                                    {alternative.category || 'alternative'}
-                                  </span>
-                                </div>
-                                <p className="mt-2 text-sm text-slate-600">{alternative.rationale}</p>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {reportData.competitorContext.strongestGaps[0] ? (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="flex-1">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                                Strongest Gap
-                              </p>
-                              <h3 className="mt-1 font-semibold text-slate-900">
-                                {reportData.competitorContext.strongestGaps[0].title}
-                              </h3>
-                              <p className="mt-2 text-sm text-slate-700">
-                                {reportData.competitorContext.strongestGaps[0].whyItMatters}
-                              </p>
-                              <p className="mt-3 text-sm font-medium text-slate-800">
-                                Competitors win because {reportData.competitorContext.strongestGaps[0].whyItMatters.toLowerCase()}
-                              </p>
-                              {reportData.competitorContext.strongestGaps[0].leadingCompetitors.length > 0 ? (
-                                <p className="mt-2 text-xs font-medium text-slate-500">
-                                  Led by {reportData.competitorContext.strongestGaps[0].leadingCompetitors.join(', ')}
-                                </p>
-                              ) : null}
-                            </div>
-                            {competitorDrivesTopPriority ? (
-                              <div className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white">
-                                Drives top priority
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : null}
-                      <p className="text-sm font-medium text-blue-700">
-                        Fix this with your top priority below.
-                      </p>
-                    </div>
-                  </div>
-                ) : null}
-
-                <CompetitorExecutiveSummary data={reportData.competitorIntelligenceSummary ?? null} />
-                {reportData.competitorVisuals ? (
-                  <div className="grid gap-5 xl:grid-cols-2">
-                    <CompetitorPositioningRadar data={reportData.competitorVisuals.competitorPositioningRadar} />
-                    <KeywordGapAnalysis data={reportData.competitorVisuals.keywordGapAnalysis} />
-                    <AiAnswerGapAnalysis data={reportData.competitorVisuals.aiAnswerGapAnalysis} />
-                  </div>
-                ) : (
-                  <SectionPlaceholder
-                    title="Competitor Visual Intelligence"
-                    description="Competitor visual comparisons are not yet available for this report. The section remains visible so report flow stays consistent."
-                  />
-                )}
-              </div>
-            ) : null}
-
-            {isSnapshotReport(reportData) ? (
-              <div className="mb-8">
-                {reportData.seoExecutiveSummary ? (
-                  <SeoExecutiveSummary data={reportData.seoExecutiveSummary} />
-                ) : (
-                  <SectionPlaceholder
-                    title="SEO Executive Summary"
-                    description="The executive SEO layer is waiting on stronger crawl and search coverage. This section will auto-fill on the next richer run."
-                  />
-                )}
-              </div>
-            ) : null}
-
-            {isSnapshotReport(reportData) ? (
-              <div className="mb-8">
-                {reportData.geoAeoExecutiveSummary ? (
-                  <GeoAeoExecutiveSummary data={reportData.geoAeoExecutiveSummary} />
-                ) : (
-                  <SectionPlaceholder
-                    title="GEO/AEO Executive Summary"
-                    description="AI-answer visibility signals are limited in this run. We keep the section visible and explain data strength transparently."
-                  />
-                )}
-              </div>
-            ) : null}
+            {/* Canonical Architecture Consolidation (Phase 2): the legacy competitor-
+                intelligence card and the CompetitorPositioningRadar / KeywordGapAnalysis /
+                AiAnswerGapAnalysis grid are absorbed into the canonical CompetitiveSurfaceShare
+                section above. Detail panels (matrix, funnel, crawl breakdown, query coverage,
+                entity map, gap analysis) remain below as L5 evidence drill-downs and become
+                the foundation of the Phase 3 Evidence Trace drawer. */}
 
             <div className="flex items-start justify-between gap-6">
               <div className="flex-1">
@@ -801,18 +559,34 @@ export default function ReportPageContent({
           <section id="summary" className="print-section mb-12 scroll-mt-20">
             <div className="print-card rounded-xl border border-blue-100 bg-gradient-to-br from-blue-50 to-blue-50 p-8">
               <div className="mb-8 flex flex-col gap-8 sm:flex-row sm:items-center sm:gap-10">
-                {/* SCORE */}
+                {/* SCORE — honors overallScoreState; renders "—" when insufficient signal. */}
                 <div className="flex items-center gap-4">
-                  <div className="flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-blue-400 to-blue-600">
-                    <span className="text-4xl font-bold text-white">
-                      {reportData.overallScore}
+                  <div
+                    className={`flex h-24 w-24 items-center justify-center rounded-full ${
+                      reportData.overallScoreState === 'insufficient_signal' || reportData.overallScoreState === 'unavailable'
+                        ? 'bg-slate-200'
+                        : 'bg-gradient-to-br from-blue-400 to-blue-600'
+                    }`}
+                  >
+                    <span className={`text-4xl font-bold ${
+                      reportData.overallScoreState === 'insufficient_signal' || reportData.overallScoreState === 'unavailable'
+                        ? 'text-slate-500'
+                        : 'text-white'
+                    }`}>
+                      {reportData.overallScoreState === 'insufficient_signal' || reportData.overallScoreState === 'unavailable'
+                        ? '—'
+                        : reportData.overallScore}
                     </span>
                   </div>
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-wide text-blue-700">
                       Overall Score
                     </p>
-                    <p className="text-sm text-blue-900">out of 100</p>
+                    <p className="text-sm text-blue-900">
+                      {reportData.overallScoreState === 'insufficient_signal' || reportData.overallScoreState === 'unavailable'
+                        ? 'Insufficient signal'
+                        : 'out of 100'}
+                    </p>
                   </div>
                 </div>
 
@@ -820,10 +594,14 @@ export default function ReportPageContent({
                 <div className="space-y-3 border-l border-blue-200 pl-6">
                   <div className="flex items-center justify-between gap-6">
                     <p className="text-sm text-slate-600">Your Score</p>
-                    <p className="font-bold text-blue-700">{reportData.overallScore}</p>
+                    <p className="font-bold text-blue-700">
+                      {reportData.overallScoreState === 'insufficient_signal' || reportData.overallScoreState === 'unavailable'
+                        ? '—'
+                        : reportData.overallScore}
+                    </p>
                   </div>
                   <div className="inline-flex w-fit rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
-                    {getScoreStage(reportData.overallScore)}
+                    {getScoreStage(reportData.overallScore, reportData.overallScoreState)}
                   </div>
                   <div className="mt-2 text-xs text-slate-500 leading-relaxed">
                     {reportData.confidenceSource}
@@ -837,278 +615,65 @@ export default function ReportPageContent({
 
               <div className="mt-6 flex flex-wrap gap-3">
                 {scoreRanges.map((range) => {
-                  const active = reportData.overallScore >= range.min && reportData.overallScore <= range.max;
+                  // Canonical Trust Foundation: do not highlight any band when score is insufficient.
+                  const insufficientState = reportData.overallScoreState === 'insufficient_signal' || reportData.overallScoreState === 'unavailable';
+                  const active = !insufficientState && reportData.overallScore >= range.min && reportData.overallScore <= range.max;
                   return (
                     <div
                       key={range.label}
-                      className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${range.color} ${active ? 'ring-2 ring-offset-1' : 'opacity-75'}`}
+                      className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${range.color} ${active ? 'ring-2 ring-offset-1' : 'opacity-50'}`}
                     >
                       {range.label} ({range.min}-{range.max})
                     </div>
                   );
                 })}
+                {(reportData.overallScoreState === 'insufficient_signal' || reportData.overallScoreState === 'unavailable') ? (
+                  <div className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-700 ring-2 ring-offset-1">
+                    Insufficient signal
+                  </div>
+                ) : null}
               </div>
 
-              {reportData.scoreExplanation ? (
-                <div className="mt-6 rounded-xl border border-slate-200 bg-white/85 p-5">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Score Story
-                  </p>
-                  <p className="mt-3 text-base leading-relaxed text-slate-800">
-                    {getScoreStory(reportData.overallScore, reportData.scoreExplanation.weakestDimensions)}
-                  </p>
-                </div>
-              ) : null}
+              {/* Canonical Architecture Consolidation (Phase 2): the Score Story,
+                  Dimension Scores, Limiting Factors, Growth Path, top-priority cards,
+                  SEO/GEO visual intelligence sections, and the three legacy radars are
+                  absorbed into the canonical Authority Overview, Pillar Cards, and Action
+                  Playbook above. Detail panels (matrix, funnel, crawl breakdown, query
+                  coverage, entity map, gap analysis) appear in the L5 evidence section
+                  immediately below — they will become a drawer in Phase 3. */}
 
-              {reportData.topPriorities.length > 0 ? (
-                <div className="mt-8 grid gap-4 md:grid-cols-3">
-                  {reportData.topPriorities.map((priority, idx) => (
-                    <div key={idx} className="print-card rounded-lg border border-blue-200 bg-white/80 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
-                        Priority {idx + 1}
-                      </p>
-                      <h3 className="mt-2 font-semibold text-slate-900">{priority.title}</h3>
-                      <p className="mt-2 text-sm text-slate-600">{priority.whyNow}</p>
-                      <p className="mt-2 text-sm text-slate-500">{priority.expectedOutcome}</p>
-                      <p className="mt-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{priority.expectedUpside}</p>
-                      <p className="mt-2 text-sm font-medium text-slate-700">{priority.priorityWhy}</p>
-                      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <span className="rounded-full bg-violet-100 px-2.5 py-1 font-semibold text-violet-700">
-                          {formatPriorityType(priority.priorityType)}
-                        </span>
-                        <span className="rounded-full bg-blue-100 px-2.5 py-1 font-semibold text-blue-700">
-                          {priority.impactLabel}
-                        </span>
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-700">
-                          Effort: {priority.effortLevel}
-                        </span>
-                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-semibold text-emerald-700">
-                          {priority.timeToImpact}
-                        </span>
-                        <span>I:{Math.round(priority.impactScore)} C:{Math.round(priority.confidenceScore * 100)}%</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              {isSnapshotReport(reportData) ? (
-                <section id="seo-visuals" className="print-section mt-8 scroll-mt-20">
-                  <div className="mb-6">
-                    <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <Gauge size={14} />
-                      Visual Intelligence
-                    </p>
-                    <h3 className="mt-1 text-2xl font-bold text-slate-900">
-                      SEO Snapshot At A Glance
-                    </h3>
+              {isSnapshotReport(reportData) && (reportData.seoVisuals || reportData.geoAeoVisuals || reportData.competitorVisuals) ? (
+                <section id="evidence-detail-panels" className="print-section mt-8 scroll-mt-20">
+                  <div className="mb-4">
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Evidence Drill-Down</p>
+                    <h3 className="mt-1 text-xl font-bold text-slate-900">Detail panels behind the canonical scores</h3>
                     <p className="mt-2 text-sm text-slate-600">
-                      These visuals summarize where search strength is building, where coverage is weak, and where technical issues are suppressing performance.
+                      Phase 2 surfaces these as inline detail panels. In Phase 3 they collapse into a per-pillar Evidence Trace drawer.
                     </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <MarketPulseConfidenceBadge value={reportData.seoVisuals?.seoCapabilityRadar.confidence ?? 'limited data'} />
-                      <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                        Focus on comparison pages and crawl hygiene to move this area fastest.
-                      </span>
-                    </div>
-                    <div className="mt-3">
-                      <MarketPulseSignalBox
-                        title="Key Insight"
-                        text={reportData.seoVisuals?.seoCapabilityRadar.insightSentence ?? ''}
-                        tone="blue"
-                      />
-                    </div>
                   </div>
-
-                  {reportData.seoVisuals ? (
-                    <div className="grid gap-5 xl:grid-cols-2">
-                      <SeoCapabilityRadar data={reportData.seoVisuals.seoCapabilityRadar} />
-                      <OpportunityCoverageMatrix data={reportData.seoVisuals.opportunityCoverageMatrix} />
-                      <SearchVisibilityFunnel data={reportData.seoVisuals.searchVisibilityFunnel} />
-                      <CrawlHealthBreakdown data={reportData.seoVisuals.crawlHealthBreakdown} />
-                    </div>
-                  ) : (
-                    <SectionPlaceholder
-                      title="SEO Visual Intelligence"
-                      description="SEO visual diagnostics are currently limited for this report run. We keep this section pinned so your executive flow remains complete."
-                    />
-                  )}
-                </section>
-              ) : null}
-
-              {isSnapshotReport(reportData) ? (
-                <section id="geo-aeo-visuals" className="print-section mt-8 scroll-mt-20">
-                  <div className="mb-6">
-                    <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      <Zap size={14} />
-                      GEO / AEO Intelligence
-                    </p>
-                    <h3 className="mt-1 text-2xl font-bold text-slate-900">
-                      AI Answer Visibility At A Glance
-                    </h3>
-                    <p className="mt-2 text-sm text-slate-600">
-                      These visuals show how well the site can be extracted, cited, and understood in AI answer experiences.
-                    </p>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <MarketPulseConfidenceBadge value={reportData.geoAeoVisuals?.aiAnswerPresenceRadar.confidence ?? 'limited data'} />
-                      <span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-700">
-                        Strengthen structured answers and entity clarity to lift AI visibility.
-                      </span>
-                    </div>
-                    <div className="mt-3">
-                      <MarketPulseSignalBox
-                        title="Key Insight"
-                        text={reportData.geoAeoExecutiveSummary?.primaryGap.reasoning ?? ''}
-                        tone="teal"
-                      />
-                    </div>
-                  </div>
-
-                  {reportData.geoAeoVisuals ? (
-                    <div className="grid gap-5 xl:grid-cols-2">
-                      <AiAnswerPresenceRadar data={reportData.geoAeoVisuals.aiAnswerPresenceRadar} />
-                      <AnswerExtractionFunnel data={reportData.geoAeoVisuals.answerExtractionFunnel} />
-                      <QueryAnswerCoverageMap data={reportData.geoAeoVisuals.queryAnswerCoverageMap} />
-                      <EntityAuthorityMap data={reportData.geoAeoVisuals.entityAuthorityMap} />
-                    </div>
-                  ) : (
-                    <SectionPlaceholder
-                      title="GEO/AEO Visual Intelligence"
-                      description="GEO/AEO visuals are limited for this run. We still render this section with clear messaging so the report remains complete and shareable."
-                    />
-                  )}
-                </section>
-              ) : null}
-
-              {reportData.scoreExplanation ? (
-                <div className="mt-8 space-y-5">
-                  <div className="print-card rounded-lg border border-slate-200 bg-white/85 p-5">
-                    <div className="flex items-center justify-between gap-4">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Dimension Scores
-                      </p>
-                      <p className="text-sm font-medium text-slate-600">
-                        Realistic score bars by dimension
-                      </p>
-                    </div>
-                    <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                      {reportData.scoreExplanation.dimensions.map((dimension) => (
-                        <div key={dimension.key} className="rounded-lg border border-slate-100 bg-slate-50/80 p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="text-sm font-semibold text-slate-900">{dimension.label}</p>
-                            <p className="text-sm font-bold text-slate-700">{dimension.value}</p>
-                          </div>
-                          <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-200">
-                            <div
-                              className={`h-full rounded-full ${dimension.value >= 75 ? 'bg-emerald-500' : dimension.value >= 45 ? 'bg-blue-500' : 'bg-amber-500'}`}
-                              style={{ width: `${dimension.value}%` }}
-                            />
-                          </div>
-                          <p className="mt-3 text-sm text-slate-600">{dimension.explanation}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
-                  <div className="print-card rounded-lg border border-amber-200 bg-white/85 p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                      What Is Limiting The Score
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      {reportData.scoreExplanation.weakestDimensions.map((dimension) => (
-                        <div
-                          key={dimension.key}
-                          className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3"
-                        >
-                          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                            {dimension.label}
-                          </p>
-                          <p className="mt-1 text-2xl font-bold text-amber-900">
-                            {dimension.value}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="mt-4 space-y-3">
-                      {reportData.scoreExplanation.limitingFactors.map((factor, idx) => (
-                        <p key={idx} className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                          {factor}
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="print-card rounded-lg border border-emerald-200 bg-white/85 p-5">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                      Growth Path
-                    </p>
-                    <p className="mt-3 text-sm text-slate-600">
-                      Current level: <span className="font-semibold text-slate-900">{reportData.scoreExplanation.growthPath.currentLevel}</span>
-                    </p>
-                    {reportData.scoreExplanation.growthPath.nextLevel ? (
-                      <p className="mt-1 text-sm text-slate-600">
-                        Next level: <span className="font-semibold text-emerald-800">{reportData.scoreExplanation.growthPath.nextLevel}</span>
-                      </p>
+                  <div className="grid gap-5 xl:grid-cols-2">
+                    {reportData.seoVisuals ? (
+                      <>
+                        <OpportunityCoverageMatrix data={reportData.seoVisuals.opportunityCoverageMatrix} />
+                        <SearchVisibilityFunnel data={reportData.seoVisuals.searchVisibilityFunnel} />
+                        <CrawlHealthBreakdown data={reportData.seoVisuals.crawlHealthBreakdown} />
+                      </>
                     ) : null}
-                    <div className="mt-4 space-y-2">
-                      {reportData.scoreExplanation.growthPath.focus.map((item, idx) => (
-                        <p key={idx} className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-                          {item}
-                        </p>
-                      ))}
-                    </div>
-                    {reportData.scoreExplanation.growthPath.projectedScoreImprovements.length > 0 ? (
-                      <div className="mt-4 space-y-3">
-                        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                            Fastest Improvement
-                          </p>
-                          <p className="mt-2 text-sm font-semibold text-emerald-900">
-                            Improve {reportData.scoreExplanation.growthPath.projectedScoreImprovements[0].dimension.replace(/_/g, ' ')}
-                          </p>
-                          <p className="mt-1 text-sm text-emerald-800">
-                            This is the single biggest lever to move the score fastest.
-                          </p>
-                        </div>
-
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-4">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Score Trajectory
-                          </p>
-                          <div className="mt-3 flex flex-wrap items-center gap-3 text-sm font-semibold text-slate-800">
-                            <span className="rounded-full bg-white px-3 py-1 shadow-sm">
-                              Current {reportData.overallScore}
-                            </span>
-                            <ArrowRight size={16} className="text-slate-400" />
-                            <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-800">
-                              Next {reportData.scoreExplanation.growthPath.projectedScoreImprovements[0].projectedTotalScore}
-                            </span>
-                            <ArrowRight size={16} className="text-slate-400" />
-                            <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
-                              Future {Math.max(...reportData.scoreExplanation.growthPath.projectedScoreImprovements.map((item) => item.projectedTotalScore))}
-                            </span>
-                          </div>
-                        </div>
-
-                        {reportData.scoreExplanation.growthPath.projectedScoreImprovements.slice(0, 3).map((item, idx) => (
-                          <div key={idx} className="rounded-lg border border-emerald-100 bg-emerald-50/70 px-4 py-3">
-                            <p className="text-sm font-semibold text-emerald-900">
-                              Improve {item.dimension.replace(/_/g, ' ')}
-                            </p>
-                            <p className="mt-1 text-sm text-emerald-800">
-                              {item.currentValue} {'->'} {item.projectedValue} in this dimension
-                            </p>
-                            <p className="mt-1 text-sm text-slate-700">
-                              Projected total score: <span className="font-semibold text-emerald-900">{item.projectedTotalScore}</span>
-                            </p>
-                          </div>
-                        ))}
-                      </div>
+                    {reportData.geoAeoVisuals ? (
+                      <>
+                        <AnswerExtractionFunnel data={reportData.geoAeoVisuals.answerExtractionFunnel} />
+                        <QueryAnswerCoverageMap data={reportData.geoAeoVisuals.queryAnswerCoverageMap} />
+                        <EntityAuthorityMap data={reportData.geoAeoVisuals.entityAuthorityMap} />
+                      </>
+                    ) : null}
+                    {reportData.competitorVisuals ? (
+                      <>
+                        <KeywordGapAnalysis data={reportData.competitorVisuals.keywordGapAnalysis} />
+                        <AiAnswerGapAnalysis data={reportData.competitorVisuals.aiAnswerGapAnalysis} />
+                      </>
                     ) : null}
                   </div>
-                </div>
-                </div>
+                </section>
               ) : null}
             </div>
           </section>

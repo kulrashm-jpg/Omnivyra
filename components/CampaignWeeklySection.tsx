@@ -59,7 +59,7 @@ import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../config/featureFlags';
 import { useCampaignWizard, createCampaignWizardStore } from '../store/campaignWizardStore';
 import { hydrateWizardFromSnapshot, exportWizardToSaveWizardStatePayload, exportWizardToPlanningContext } from '../lib/wizard/campaignWizardAdapter';
 import { useCampaignResume } from '../hooks/useCampaignResume';
-import { PLATFORM_LABELS } from '../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../lib/shared/platforms';
 
 import WeekCard from './WeekCard';
 import type { useCampaignDetailsState } from '../hooks/useCampaignDetailsState';
@@ -342,3 +342,4 @@ export default function CampaignWeeklySection({ d }: { d: S }) {
     </>
   );
 }
+

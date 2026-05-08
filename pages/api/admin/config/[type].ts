@@ -12,13 +12,14 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
 import {
   updateConfig,
   rollbackConfig,
   invalidateConfigCache,
   type ConfigUpdateInput,
 } from '@/backend/services/configService';
+import { requireCapability } from '@/backend/security/requireCapability';
+import { INTELLIGENCE_OVERRIDE_MANAGE } from '@/shared/contracts/security';
 
 const VALID_TYPES = new Set([
   'decision_engine_config',
@@ -29,19 +30,13 @@ const VALID_TYPES = new Set([
   'prediction_config',
 ]);
 
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
-
-async function resolveChangedBy(req: NextApiRequest): Promise<string> {
-  const { user } = await getSupabaseUserFromRequest(req);
-  return user?.email ?? user?.id ?? 'super_admin';
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ success: false, error: 'Super admin access required' });
-  }
+  const guard = await requireCapability(req, res, {
+    capability: INTELLIGENCE_OVERRIDE_MANAGE,
+    reason: `admin/config/${req.query.type} (${req.method})`,
+  });
+  if (guard.ok !== true) return;
+  const resolveChangedBy = async () => guard.principal.email || guard.principal.userId;
 
   const { type } = req.query;
   if (typeof type !== 'string' || !VALID_TYPES.has(type)) {
@@ -72,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Rollback shortcut: { rollback_log_id: "<uuid>" }
     if (body?.rollback_log_id) {
-      const changedBy = await resolveChangedBy(req);
+      const changedBy = await resolveChangedBy();
       const result = await rollbackConfig(String(body.rollback_log_id), changedBy);
       if (!result.ok) return res.status(400).json({ success: false, error: result.error });
       invalidateConfigCache(type);
@@ -83,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ success: false, error: 'Request body must be a JSON object' });
     }
 
-    const changedBy = await resolveChangedBy(req);
+    const changedBy = await resolveChangedBy();
     const result = await updateConfig({
       config_type: type as ConfigUpdateInput['config_type'],
       payload: body as Record<string, unknown>,

@@ -1,0 +1,9 @@
+pages/community-ai/playbooks.tsx(121,11): error TS2322: Type 'import("C:/virality/shared/contracts/playbooks").EngagementPlaybook[]' is not assignable to type 'import("C:/virality/lib/shared/playbookTypes").EngagementPlaybook[]'.
+  Type 'import("C:/virality/shared/contracts/playbooks").EngagementPlaybook' is not assignable to type 'import("C:/virality/lib/shared/playbookTypes").EngagementPlaybook'.
+    Types of property 'safety' are incompatible.
+      Type '{ block_urls?: boolean; block_sensitive_topics?: boolean; prohibited_words?: string[]; }' is not assignable to type '{ block_urls: boolean; block_sensitive_topics: boolean; prohibited_words: string[]; }'.
+        Property 'block_urls' is optional in type '{ block_urls?: boolean; block_sensitive_topics?: boolean; prohibited_words?: string[]; }' but required in type '{ block_urls: boolean; block_sensitive_topics: boolean; prohibited_words: string[]; }'.
+pages/community-ai/playbooks.tsx(130,13): error TS2322: Type 'import("C:/virality/shared/contracts/playbooks").EngagementPlaybook' is not assignable to type 'import("C:/virality/lib/shared/playbookTypes").EngagementPlaybook'.
+  Types of property 'safety' are incompatible.
+    Type '{ block_urls?: boolean; block_sensitive_topics?: boolean; prohibited_words?: string[]; }' is not assignable to type '{ block_urls: boolean; block_sensitive_topics: boolean; prohibited_words: string[]; }'.
+      Property 'block_urls' is optional in type '{ block_urls?: boolean; block_sensitive_topics?: boolean; prohibited_words?: string[]; }' but required in type '{ block_urls: boolean; block_sensitive_topics: boolean; prohibited_words: string[]; }'.

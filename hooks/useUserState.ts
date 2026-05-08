@@ -13,8 +13,8 @@
  */
 import { useState, useEffect, useMemo } from 'react';
 import { useCompanyContext } from '../components/CompanyContext';
-import { fetchReadinessData } from '../backend/services/commandCenterReadinessService';
-import type { FeatureStatus } from '../backend/services/commandCenterReadinessService';
+import { fetchReadinessData } from '../lib/shared/commandCenterReadinessService';
+import type { FeatureStatus } from '../lib/shared/commandCenterReadinessService';
 
 export type UserJourneyState =
   | 'loading'
@@ -115,3 +115,5 @@ export function useUserState(): UserStateInfo {
     refresh: loadState,
   };
 }
+
+

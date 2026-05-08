@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export async function recordCreatorExecutionMetric(input: {
   campaignId: string;
@@ -8,8 +9,7 @@ export async function recordCreatorExecutionMetric(input: {
   metricName: 'execution_success_count' | 'execution_failure_count' | 'retry_count' | 'avg_execution_latency' | 'validation_failure_count';
   metricValue: number;
 }): Promise<void> {
-  const { error } = await supabase
-    .from('creator_execution_metrics')
+  const { error } = await ownedDbTable('creator_execution_metrics')
     .insert({
       campaign_id: input.campaignId,
       daily_plan_id: input.dailyPlanId,
@@ -40,8 +40,7 @@ export async function upsertCreatorExecutionSummary(input: {
   finalStatus: string;
   failureReason?: string | null;
 }): Promise<void> {
-  const { error } = await supabase
-    .from('creator_execution_summaries')
+  const { error } = await ownedDbTable('creator_execution_summaries')
     .upsert({
       campaign_id: input.campaignId,
       daily_plan_id: input.dailyPlanId,
@@ -73,8 +72,7 @@ export async function writeCreatorDeadLetter(input: {
   failureReason: string;
   payloadSnapshot: Record<string, unknown>;
 }): Promise<void> {
-  const { error } = await supabase
-    .from('creator_execution_dead_letter_queue')
+  const { error } = await ownedDbTable('creator_execution_dead_letter_queue')
     .insert({
       campaign_id: input.campaignId,
       daily_plan_id: input.dailyPlanId,

@@ -32,6 +32,11 @@ import { resolveUserCapabilities } from './CapabilityService';
 import {
   resolveLegacyCookieSuperAdminPrincipal,
 } from './legacyCookieSuperAdminBridge';
+import { logSecurityEvent } from './audit/SecurityAuditService';
+// Side-effect import: triggers the platform/tenant capability isolation
+// invariant at module load. Throws if any tenant role accidentally holds a
+// platform-tier capability — fail-fast hard enforcement.
+import './platformCapabilities';
 import type {
   AuthenticatedPrincipal,
   PrincipalDeviceState,
@@ -244,10 +249,45 @@ export async function resolvePrincipal(
   const auth = await resolveAuthenticatedUser(req);
   if (auth.error === null) {
     const principal = await buildPrincipalFromAuth(req, auth.user);
+    // Conflict telemetry: bridge cookie also present alongside canonical
+    // Supabase identity. Canonical wins (already chosen); audit the conflict.
+    if (hasBridgeCookie(req)) {
+      await logSecurityEvent({
+        capability: 'identity.resolve',
+        decision: 'trust_authority_conflict_detected',
+        actorUserId: principal.userId,
+        principalUserId: principal.userId,
+        principalSupabaseUid: principal.supabaseUid,
+        reason: 'supabase identity present alongside legacy cookie super-admin bridge cookie; supabase wins',
+      });
+    }
     return { ok: true, principal };
   }
 
-  // 2. Fall back to legacy cookie super-admin, IF the request carries the
+  // 2. Phase 1 — canonical session cookie alone (no Supabase token).
+  //    Used when env-credential super-admin login has minted a canonical
+  //    auth_sessions row but the operator has no Supabase Bearer/cookie.
+  //    The canonical session is bound to a real users.id with a real
+  //    user_company_roles SUPER_ADMIN row, so the principal is fully
+  //    canonical (NOT a bridge principal).
+  if (auth.error === 'NO_TOKEN') {
+    const principalFromSession = await tryResolvePrincipalFromCanonicalSession(req);
+    if (principalFromSession) {
+      if (hasBridgeCookie(req)) {
+        await logSecurityEvent({
+          capability: 'identity.resolve',
+          decision: 'trust_authority_conflict_detected',
+          actorUserId: principalFromSession.userId,
+          principalUserId: principalFromSession.userId,
+          principalSupabaseUid: principalFromSession.supabaseUid,
+          reason: 'canonical session present alongside bridge cookie; canonical wins',
+        });
+      }
+      return { ok: true, principal: principalFromSession };
+    }
+  }
+
+  // 3. Fall back to legacy cookie super-admin, IF the request carries the
   //    bridge cookie. The bridge is mutually exclusive with Supabase
   //    identity — if both are present, Supabase wins (handled above).
   const bridge = await resolveLegacyCookieSuperAdminPrincipal(req);
@@ -255,12 +295,54 @@ export async function resolvePrincipal(
     return { ok: true, principal: bridge };
   }
 
-  // 3. Map auth-failure codes to PrincipalUnresolvedReason.
+  // 4. Map auth-failure codes to PrincipalUnresolvedReason.
   if (auth.error === 'ACCOUNT_DELETED') return { ok: false, reason: 'ACCOUNT_DELETED' };
   if (auth.error === 'USER_NOT_FOUND') return { ok: false, reason: 'USER_NOT_FOUND' };
   if (auth.error === 'NO_EMAIL') return { ok: false, reason: 'NO_EMAIL' };
   if (auth.error === 'NO_TOKEN') return { ok: false, reason: 'NO_AUTH' };
   return { ok: false, reason: 'INVALID_AUTH' };
+}
+
+/**
+ * Phase 1 — canonical-session-as-identity-source path.
+ *
+ * Reads the omnivyra_session cookie via SessionAuthorityService, finds
+ * the bound users row, and constructs a full principal. Used only when
+ * Supabase identity is absent (NO_TOKEN); does NOT replace the Supabase
+ * primary path. Returns null if the canonical session is missing /
+ * invalid / expired / revoked, or the user row no longer exists.
+ */
+async function tryResolvePrincipalFromCanonicalSession(
+  req: NextApiRequest,
+): Promise<AuthenticatedPrincipal | null> {
+  const lookup = await resolveSessionFromRequest(req);
+  if (lookup.ok !== true) return null;
+
+  const session = lookup.session;
+  const { data: userRow } = await db
+    .from('users')
+    .select('id, supabase_uid, email, is_deleted')
+    .eq('id', session.user_id)
+    .maybeSingle();
+  if (!userRow) return null;
+  const u = userRow as { id: string; supabase_uid: string | null; email: string | null; is_deleted: boolean };
+  if (u.is_deleted) return null;
+
+  return buildPrincipalFromAuth(req, {
+    id: u.id,
+    supabaseUid: session.supabase_uid ?? u.supabase_uid ?? u.id,
+    email: u.email ?? '',
+    // Session was minted via a verified path (Supabase login OR
+    // env-credential bootstrap). emailVerified=true is a sound default
+    // here; the canonical Supabase path overrides this on its branch.
+    emailVerified: true,
+  });
+}
+
+/** True if request carries either bridge cookie. Cheap presence check. */
+function hasBridgeCookie(req: NextApiRequest): boolean {
+  const cookies = req.headers.cookie || '';
+  return /(?:^|; )(?:super_admin_session|content_architect_session)=1/.test(cookies);
 }
 
 /**

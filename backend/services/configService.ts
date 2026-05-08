@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Config Service — single source of truth for all runtime-configurable values.
  *
@@ -165,8 +166,7 @@ export async function getPlatformRules(
   if (cached) return cached;
 
   try {
-    const { data } = await supabase
-      .from('platform_rules_config')
+    const { data } = await ownedDbTable('platform_rules_config')
       .select('platform, content_type, rules')
       .eq('platform', platform.toLowerCase())
       .eq('content_type', contentType.toLowerCase())
@@ -179,8 +179,7 @@ export async function getPlatformRules(
     }
 
     // Fall back to any content_type for this platform
-    const { data: fallback } = await supabase
-      .from('platform_rules_config')
+    const { data: fallback } = await ownedDbTable('platform_rules_config')
       .select('platform, content_type, rules')
       .eq('platform', platform.toLowerCase())
       .limit(1)
@@ -205,8 +204,7 @@ export async function getAllPlatformRules(): Promise<PlatformRulesConfig[]> {
   if (cached) return cached;
 
   try {
-    const { data } = await supabase
-      .from('platform_rules_config')
+    const { data } = await ownedDbTable('platform_rules_config')
       .select('platform, content_type, rules')
       .order('platform');
 
@@ -229,8 +227,7 @@ export async function getDecisionConfig(): Promise<DecisionEngineConfig> {
   if (cached) return cached;
 
   try {
-    const { data } = await supabase
-      .from('decision_engine_config')
+    const { data } = await ownedDbTable('decision_engine_config')
       .select('*')
       .order('updated_at', { ascending: false })
       .limit(1)
@@ -264,8 +261,7 @@ export async function getValidationConfig(): Promise<ContentValidationConfig> {
   if (cached) return cached;
 
   try {
-    const { data } = await supabase
-      .from('content_validation_config')
+    const { data } = await ownedDbTable('content_validation_config')
       .select('*')
       .order('updated_at', { ascending: false })
       .limit(1)
@@ -298,8 +294,7 @@ export async function getToneConfig(toneName: string): Promise<ToneConfig | null
   if (cached) return cached;
 
   try {
-    const { data } = await supabase
-      .from('tone_config')
+    const { data } = await ownedDbTable('tone_config')
       .select('tone_name, rules')
       .eq('tone_name', toneName.toLowerCase())
       .maybeSingle();
@@ -323,8 +318,7 @@ export async function getActiveExperiments(): Promise<ExperimentConfig[]> {
   if (cached) return cached;
 
   try {
-    const { data } = await supabase
-      .from('experiment_config')
+    const { data } = await ownedDbTable('experiment_config')
       .select('*')
       .eq('active', true);
 
@@ -364,8 +358,7 @@ export async function getPredictionConfig(): Promise<PredictionConfig> {
   if (cached) return cached;
 
   try {
-    const { data } = await supabase
-      .from('prediction_config')
+    const { data } = await ownedDbTable('prediction_config')
       .select('*')
       .order('updated_at', { ascending: false })
       .limit(1)
@@ -416,8 +409,7 @@ export async function updateConfig(input: ConfigUpdateInput): Promise<{ ok: bool
 
   try {
     // Capture before state for audit
-    const { data: before } = await supabase
-      .from(config_type)
+    const { data: before } = await ownedDbTable(config_type)
       .select('*')
       .order('updated_at', { ascending: false })
       .limit(1)
@@ -435,22 +427,22 @@ export async function updateConfig(input: ConfigUpdateInput): Promise<{ ok: bool
       // Single-row config: update the most recent row
       const rowId = (before as any)?.id;
       if (rowId) {
-        const { error } = await supabase.from(config_type).update(upsertPayload).eq('id', rowId);
+        const { error } = await ownedDbTable(config_type).update(upsertPayload).eq('id', rowId);
         upsertError = error;
       } else {
-        const { error } = await supabase.from(config_type).insert(upsertPayload);
+        const { error } = await ownedDbTable(config_type).insert(upsertPayload);
         upsertError = error;
       }
     } else {
       // Multi-row tables: upsert by id or unique key
-      const { error } = await supabase.from(config_type).upsert(upsertPayload);
+      const { error } = await ownedDbTable(config_type).upsert(upsertPayload);
       upsertError = error;
     }
 
     if (upsertError) return { ok: false, error: upsertError.message };
 
     // Write audit log
-    await supabase.from('config_change_logs').insert({
+    await ownedDbTable('config_change_logs').insert({
       config_type,
       changed_by,
       before_json: before ?? null,
@@ -474,8 +466,7 @@ export async function updateConfig(input: ConfigUpdateInput): Promise<{ ok: bool
  */
 export async function rollbackConfig(logId: string, changedBy: string = 'admin'): Promise<{ ok: boolean; error?: string }> {
   try {
-    const { data: log } = await supabase
-      .from('config_change_logs')
+    const { data: log } = await ownedDbTable('config_change_logs')
       .select('*')
       .eq('id', logId)
       .maybeSingle();

@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 type NotificationEventType = 'approved' | 'executed' | 'failed' | 'high_risk_pending';
 
@@ -18,7 +19,7 @@ export const notifyCommunityAi = async (input: {
     });
   }
 
-  const { error } = await supabase.from('community_ai_notifications').insert({
+  const { error } = await ownedDbTable('community_ai_notifications').insert({
     tenant_id: input.tenant_id,
     organization_id: input.organization_id,
     action_id: input.action_id ?? null,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * LLM consolidation for multi-region recommendation signals.
  * Placeholder implementation: no external API calls from LLM.
@@ -109,8 +110,7 @@ function placeholderConsolidate(input: {
  * Load job and raw signals, build summary, run consolidation (placeholder LLM), persist analysis, set job COMPLETED.
  */
 export async function consolidateMultiRegionSignals(jobId: string): Promise<void> {
-  const { data: job, error: jobError } = await supabase
-    .from('recommendation_jobs')
+  const { data: job, error: jobError } = await ownedDbTable('recommendation_jobs')
     .select('*')
     .eq('id', jobId)
     .single();
@@ -119,8 +119,7 @@ export async function consolidateMultiRegionSignals(jobId: string): Promise<void
     throw new Error(`Job not found: ${jobId}`);
   }
 
-  const { data: signals, error: sigError } = await supabase
-    .from('recommendation_raw_signals')
+  const { data: signals, error: sigError } = await ownedDbTable('recommendation_raw_signals')
     .select('*')
     .eq('job_id', jobId);
 
@@ -182,7 +181,7 @@ export async function consolidateMultiRegionSignals(jobId: string): Promise<void
     failed_regions_or_apis: failedRegionsOrApis,
   };
 
-  await supabase.from('recommendation_analysis').upsert(
+  await ownedDbTable('recommendation_analysis').upsert(
     {
       job_id: jobId,
       consolidated_recommendation_json: consolidatedJson,
@@ -194,8 +193,7 @@ export async function consolidateMultiRegionSignals(jobId: string): Promise<void
     { onConflict: 'job_id' }
   );
 
-  await supabase
-    .from('recommendation_jobs')
+  await ownedDbTable('recommendation_jobs')
     .update({ status: 'COMPLETED', updated_at: new Date().toISOString() })
     .eq('id', jobId);
 }

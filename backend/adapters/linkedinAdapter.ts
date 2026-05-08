@@ -13,7 +13,7 @@
  *   3. Verify w_member_social scope is approved
  */
 
-import { PublishResult } from './platformAdapter';
+import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
 

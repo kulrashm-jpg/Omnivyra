@@ -9,6 +9,7 @@ import { assertAllowedDecisionType } from './decisionTypeRegistry';
 import { standardizeDecisionScores } from './decisionScoringService';
 import { validateActionPayload } from './actionRegistryService';
 import { recomputePrioritizationForDecisionWrites } from './prioritizationService';
+import { ownedDbTable } from '../db/writeOwner';
 
 const DecisionReportTierSchema = z.enum(['snapshot', 'growth', 'deep']);
 const ActionPayloadSchema = z.record(z.string(), z.unknown());
@@ -139,8 +140,7 @@ async function ensureDecisionEventsCreated(rows: PersistedDecisionObject[]): Pro
   if (!Array.isArray(rows) || rows.length === 0) return;
 
   const decisionIds = rows.map((row) => row.id);
-  const { data: existing, error: existingError } = await supabase
-    .from('decision_events')
+  const { data: existing, error: existingError } = await ownedDbTable('decision_events')
     .select('decision_id, event_type')
     .in('decision_id', decisionIds)
     .eq('event_type', 'created');
@@ -168,7 +168,7 @@ async function ensureDecisionEventsCreated(rows: PersistedDecisionObject[]): Pro
     changed_by: row.last_changed_by ?? 'system',
   }));
 
-  const { error } = await supabase.from('decision_events').insert(withCompanyId as any);
+  const { error } = await ownedDbTable('decision_events').insert(withCompanyId as any);
   if (!error) return;
 
   // Backward-compatible fallback for environments where decision_events.company_id is not yet present.
@@ -181,7 +181,7 @@ async function ensureDecisionEventsCreated(rows: PersistedDecisionObject[]): Pro
     new_value: row,
     changed_by: row.last_changed_by ?? 'system',
   }));
-  await supabase.from('decision_events').insert(withoutCompanyId as any);
+  await ownedDbTable('decision_events').insert(withoutCompanyId as any);
 }
 
 async function resolveActiveScopeDecisions(scope: {
@@ -191,8 +191,7 @@ async function resolveActiveScopeDecisions(scope: {
   entity_type: DecisionObjectWriteInput['entity_type'];
   entity_id?: string | null;
 }): Promise<Array<{ id: string; status: 'open' | 'resolved' | 'ignored' }>> {
-  let query = supabase
-    .from('decision_objects')
+  let query = ownedDbTable('decision_objects')
     .select('id, status')
     .eq('company_id', scope.company_id)
     .eq('report_tier', scope.report_tier)
@@ -223,8 +222,7 @@ export async function archiveDecisionScope(scope: {
 
   const ids = active.map((item) => item.id);
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('decision_objects')
+  const { error } = await ownedDbTable('decision_objects')
     .update({
       status: 'resolved',
       resolved_at: now,
@@ -247,8 +245,7 @@ export async function archiveDecisionSourceEntityType(scope: {
   changed_by?: 'system' | 'user';
 }): Promise<void> {
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('decision_objects')
+  const { error } = await ownedDbTable('decision_objects')
     .update({
       status: 'resolved',
       resolved_at: now,
@@ -278,8 +275,7 @@ export async function createDecisionObjects(
 
   if (normalized.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from('decision_objects')
+  const { data, error } = await ownedDbTable('decision_objects')
     .insert(normalized)
     .select(selectFields());
 
@@ -337,8 +333,7 @@ export async function reopenDecision(
   decisionId: string,
   changedBy: 'system' | 'user' = 'user'
 ): Promise<void> {
-  const { error } = await supabase
-    .from('decision_objects')
+  const { error } = await ownedDbTable('decision_objects')
     .update({
       status: 'open',
       resolved_at: null,
@@ -352,8 +347,7 @@ export async function reopenDecision(
     throw new Error(`Failed to reopen decision ${decisionId}: ${error.message}`);
   }
 
-  const { data: row } = await supabase
-    .from('decision_objects')
+  const { data: row } = await ownedDbTable('decision_objects')
     .select('company_id, report_tier')
     .eq('id', decisionId)
     .eq('company_id', companyId)
@@ -374,8 +368,7 @@ export async function resolveDecision(
   decisionId: string,
   changedBy: 'system' | 'user' = 'user'
 ): Promise<void> {
-  const { error } = await supabase
-    .from('decision_objects')
+  const { error } = await ownedDbTable('decision_objects')
     .update({
       status: 'resolved',
       resolved_at: new Date().toISOString(),
@@ -389,8 +382,7 @@ export async function resolveDecision(
     throw new Error(`Failed to resolve decision ${decisionId}: ${error.message}`);
   }
 
-  const { data: row } = await supabase
-    .from('decision_objects')
+  const { data: row } = await ownedDbTable('decision_objects')
     .select('company_id, report_tier')
     .eq('id', decisionId)
     .eq('company_id', companyId)
@@ -411,8 +403,7 @@ export async function ignoreDecision(
   decisionId: string,
   changedBy: 'system' | 'user' = 'user'
 ): Promise<void> {
-  const { error } = await supabase
-    .from('decision_objects')
+  const { error } = await ownedDbTable('decision_objects')
     .update({
       status: 'ignored',
       ignored_at: new Date().toISOString(),
@@ -426,8 +417,7 @@ export async function ignoreDecision(
     throw new Error(`Failed to ignore decision ${decisionId}: ${error.message}`);
   }
 
-  const { data: row } = await supabase
-    .from('decision_objects')
+  const { data: row } = await ownedDbTable('decision_objects')
     .select('company_id, report_tier')
     .eq('id', decisionId)
     .eq('company_id', companyId)
@@ -452,8 +442,7 @@ export async function listDecisionObjects(params: {
   status?: Array<'open' | 'resolved' | 'ignored'>;
   limit?: number;
 }): Promise<PersistedDecisionObject[]> {
-  let query = supabase
-    .from(params.viewName)
+  let query = ownedDbTable(params.viewName)
     .select(selectFields())
     .eq('company_id', params.companyId)
     .order('execution_score', { ascending: false })
@@ -489,8 +478,7 @@ export async function getLatestDecisionObjectsForSource(params: {
     params.reportTier === 'growth' ? 'growth_view' :
     'deep_view';
 
-  let query = supabase
-    .from(viewName)
+  let query = ownedDbTable(viewName)
     .select(selectFields())
     .eq('company_id', params.companyId)
     .eq('source_service', params.sourceService)

@@ -8,14 +8,14 @@
 import React, { useMemo, useState } from 'react';
 import { useDebounce } from '../../lib/hooks/useDebounce';
 import { ChevronDown, ChevronUp, FlaskConical, Minus, Plus, TrendingDown, TrendingUp } from 'lucide-react';
-import { simulateScenario } from '../../backend/lib/simulation/scenarioSimulator';
+import { simulateScenario } from '../../lib/simulation/scenarioSimulator';
 import type {
   SimulatorBasePlan,
   SimulatorStrategyContext,
-} from '../../backend/lib/simulation/scenarioSimulator';
-import type { CampaignValidation } from '../../backend/lib/validation/campaignValidator';
-import type { PaidRecommendation } from '../../backend/lib/ads/paidAmplificationEngine';
-import type { AccountContext } from '../../backend/types/accountContext';
+} from '../../lib/simulation/scenarioSimulator';
+import type { CampaignValidation } from '../../lib/validation/campaignValidator';
+import type { PaidRecommendation } from '../../lib/ads/paidAmplificationEngine';
+import type { AccountContext } from '../../lib/shared/accountContext';
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -440,3 +440,4 @@ export function WhatIfPanel({
     </div>
   );
 }
+

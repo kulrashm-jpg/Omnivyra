@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Platform Connector Service
  *
@@ -34,8 +35,7 @@ export async function getConnector(
   if (!organizationId || !alias) return null;
 
   try {
-    const { data, error } = await supabase
-      .from('platform_connectors')
+    const { data, error } = await ownedDbTable('platform_connectors')
       .select('*')
       .eq('organization_id', organizationId)
       .eq('platform_key', alias)
@@ -74,8 +74,7 @@ export async function storeConnector(config: PlatformConnectorConfig): Promise<P
   };
 
   try {
-    const { data, error } = await supabase
-      .from('platform_connectors')
+    const { data, error } = await ownedDbTable('platform_connectors')
       .insert(payload)
       .select('*')
       .single();
@@ -118,8 +117,7 @@ export async function updateConnector(config: PlatformConnectorConfig): Promise<
   if (config.active !== undefined) payload.active = config.active;
 
   try {
-    const { data, error } = await supabase
-      .from('platform_connectors')
+    const { data, error } = await ownedDbTable('platform_connectors')
       .update(payload)
       .eq('id', config.id)
       .select('*')

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Recommendation Persistence Service
  * Phase 5: Persist recommendations for outcome/feedback linking.
@@ -29,8 +30,7 @@ export async function persistRecommendation(
   companyId: string,
   recommendation: RecommendationPersistenceInput
 ): Promise<PersistedRecommendation> {
-  const { data, error } = await supabase
-    .from('intelligence_recommendations')
+  const { data, error } = await ownedDbTable('intelligence_recommendations')
     .insert({
       company_id: companyId,
       recommendation_type: recommendation.recommendation_type,

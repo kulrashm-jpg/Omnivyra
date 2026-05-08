@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Collaboration @mention parsing, user resolution, and notification.
  * Feature 2: Parse @username, insert message_mentions, trigger notification.
@@ -22,8 +23,7 @@ export async function resolveMentionedUserIds(
 ): Promise<Map<string, string>> {
   if (usernames.length === 0) return new Map();
   const map = new Map<string, string>();
-  const { data } = await supabase
-    .from('user_company_roles')
+  const { data } = await ownedDbTable('user_company_roles')
     .select('user_id, name')
     .eq('company_id', companyId)
     .in('status', ['active']);
@@ -52,7 +52,7 @@ export async function processMentions(
   const resolved = await resolveMentionedUserIds(usernames, companyId);
   for (const [_, userId] of resolved) {
     if (userId === createdBy) continue;
-    await supabase.from('message_mentions').upsert(
+    await ownedDbTable('message_mentions').upsert(
       {
         message_id: messageId,
         message_source: messageSource,
@@ -61,7 +61,7 @@ export async function processMentions(
       { onConflict: 'message_id,message_source,mentioned_user_id' }
     );
     try {
-      await supabase.from('intelligence_alerts').insert({
+      await ownedDbTable('intelligence_alerts').insert({
         company_id: companyId,
         event_type: 'collaboration_mention',
         title: 'You were mentioned',

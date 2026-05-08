@@ -4,9 +4,17 @@
  * No Community AI metrics, no schema changes, no refactor of existing analytics.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import StepTracker, { type StepDef } from '@/components/progress/StepTracker';
+
+const HEALTH_LOAD_STAGES: StepDef[] = [
+  { key: 'health',       label: 'Loading campaign health',     etaSeconds: 2 },
+  { key: 'intelligence', label: 'Reading intelligence summary', etaSeconds: 2 },
+  { key: 'timeline',     label: 'Reconstructing decision timeline', etaSeconds: 2 },
+  { key: 'render',       label: 'Rendering view',               etaSeconds: 2 },
+];
 import {
   ArrowLeft,
   TrendingUp,
@@ -97,10 +105,12 @@ export default function CampaignHealthPage() {
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const loadStartedAtRef = useRef<number>(Date.now());
 
   useEffect(() => {
     if (!id) return;
     setLoading(true);
+    loadStartedAtRef.current = Date.now();
     setHealthError(null);
     setHealth(null);
     setIntelligence(null);
@@ -147,10 +157,15 @@ export default function CampaignHealthPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-10 h-10 border-2 border-slate-300 border-t-violet-600 rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-slate-600">Loading campaign health…</p>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <div className="w-full max-w-md">
+          <StepTracker
+            stages={HEALTH_LOAD_STAGES}
+            startedAt={loadStartedAtRef.current}
+            accent="violet"
+            title="Loading campaign health"
+            variant="card"
+          />
         </div>
       </div>
     );

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Intelligence Governance Service
  * Phase-2: Super Admin Governance Layer
@@ -10,7 +11,6 @@
  * Does NOT call external APIs. Database only.
  */
 
-import { supabase } from '../db/supabaseClient';
 
 export type IntelligenceCategory = {
   id: string;
@@ -51,8 +51,7 @@ export type ApiPreset = {
 // --- Intelligence Categories ---
 
 export async function getCategories(enabledOnly = false): Promise<IntelligenceCategory[]> {
-  let query = supabase
-    .from('intelligence_categories')
+  let query = ownedDbTable('intelligence_categories')
     .select('id, name, description, enabled, created_at')
     .order('name');
   if (enabledOnly) {
@@ -68,8 +67,7 @@ export async function createCategory(params: {
   description?: string | null;
   enabled?: boolean;
 }): Promise<IntelligenceCategory> {
-  const { data, error } = await supabase
-    .from('intelligence_categories')
+  const { data, error } = await ownedDbTable('intelligence_categories')
     .insert({
       name: params.name.trim().toUpperCase(),
       description: params.description?.trim() || null,
@@ -89,16 +87,14 @@ export async function updateCategory(
   if (params.name !== undefined) updates.name = params.name.trim().toUpperCase();
   if (params.description !== undefined) updates.description = params.description?.trim() || null;
   if (Object.keys(updates).length === 0) {
-    const { data } = await supabase
-      .from('intelligence_categories')
+    const { data } = await ownedDbTable('intelligence_categories')
       .select('id, name, description, enabled, created_at')
       .eq('id', id)
       .single();
     if (!data) throw new Error('Category not found');
     return data as IntelligenceCategory;
   }
-  const { data, error } = await supabase
-    .from('intelligence_categories')
+  const { data, error } = await ownedDbTable('intelligence_categories')
     .update(updates)
     .eq('id', id)
     .select('id, name, description, enabled, created_at')
@@ -108,8 +104,7 @@ export async function updateCategory(
 }
 
 export async function setCategoryEnabled(id: string, enabled: boolean): Promise<IntelligenceCategory> {
-  const { data, error } = await supabase
-    .from('intelligence_categories')
+  const { data, error } = await ownedDbTable('intelligence_categories')
     .update({ enabled })
     .eq('id', id)
     .select('id, name, description, enabled, created_at')
@@ -130,8 +125,7 @@ export type PlanWithLimits = {
 };
 
 export async function listPlansWithLimits(): Promise<PlanWithLimits[]> {
-  const { data: plans, error: plansErr } = await supabase
-    .from('pricing_plans')
+  const { data: plans, error: plansErr } = await ownedDbTable('pricing_plans')
     .select('id, plan_key, name, description, is_active')
     .eq('is_active', true)
     .order('plan_key');
@@ -152,8 +146,7 @@ export async function listPlansWithLimits(): Promise<PlanWithLimits[]> {
 }
 
 export async function getPlanLimits(planId: string): Promise<PlanLimit[]> {
-  const { data, error } = await supabase
-    .from('plan_limits')
+  const { data, error } = await ownedDbTable('plan_limits')
     .select('id, plan_id, resource_key, limit_value, created_at')
     .eq('plan_id', planId)
     .order('resource_key');
@@ -169,8 +162,7 @@ export async function setPlanLimit(
   resourceKey: string,
   value: number | null
 ): Promise<PlanLimit> {
-  const { data, error } = await supabase
-    .from('plan_limits')
+  const { data, error } = await ownedDbTable('plan_limits')
     .upsert(
       { plan_id: planId, resource_key: resourceKey.trim(), limit_value: value },
       { onConflict: 'plan_id,resource_key' }
@@ -187,8 +179,7 @@ export async function setPlanLimit(
 // --- Query Templates ---
 
 export async function listQueryTemplates(): Promise<QueryTemplate[]> {
-  const { data, error } = await supabase
-    .from('intelligence_query_templates')
+  const { data, error } = await ownedDbTable('intelligence_query_templates')
     .select('id, api_source_id, category, template, enabled, created_at')
     .order('created_at');
   if (error) throw new Error(`listQueryTemplates failed: ${error.message}`);
@@ -201,8 +192,7 @@ export async function createQueryTemplate(params: {
   template: string;
   enabled?: boolean;
 }): Promise<QueryTemplate> {
-  const { data, error } = await supabase
-    .from('intelligence_query_templates')
+  const { data, error } = await ownedDbTable('intelligence_query_templates')
     .insert({
       api_source_id: params.api_source_id ?? null,
       category: params.category?.trim() || null,
@@ -223,16 +213,14 @@ export async function updateQueryTemplate(
   if (params.category !== undefined) updates.category = params.category?.trim() || null;
   if (params.template !== undefined) updates.template = params.template.trim();
   if (Object.keys(updates).length === 0) {
-    const { data } = await supabase
-      .from('intelligence_query_templates')
+    const { data } = await ownedDbTable('intelligence_query_templates')
       .select('id, api_source_id, category, template, enabled, created_at')
       .eq('id', id)
       .single();
     if (!data) throw new Error('Query template not found');
     return data as QueryTemplate;
   }
-  const { data, error } = await supabase
-    .from('intelligence_query_templates')
+  const { data, error } = await ownedDbTable('intelligence_query_templates')
     .update(updates)
     .eq('id', id)
     .select('id, api_source_id, category, template, enabled, created_at')
@@ -242,8 +230,7 @@ export async function updateQueryTemplate(
 }
 
 export async function setQueryTemplateEnabled(id: string, enabled: boolean): Promise<QueryTemplate> {
-  const { data, error } = await supabase
-    .from('intelligence_query_templates')
+  const { data, error } = await ownedDbTable('intelligence_query_templates')
     .update({ enabled })
     .eq('id', id)
     .select('id, api_source_id, category, template, enabled, created_at')
@@ -255,8 +242,7 @@ export async function setQueryTemplateEnabled(id: string, enabled: boolean): Pro
 // --- API Presets ---
 
 export async function listApiPresets(): Promise<ApiPreset[]> {
-  const { data, error } = await supabase
-    .from('external_api_sources')
+  const { data, error } = await ownedDbTable('external_api_sources')
     .select('id, name, base_url, purpose, category, is_active, is_preset, created_at')
     .eq('is_preset', true)
     .order('name');
@@ -276,8 +262,7 @@ export async function createApiPreset(params: {
   headers?: Record<string, string>;
   query_params?: Record<string, string | number>;
 }): Promise<ApiPreset> {
-  const { data, error } = await supabase
-    .from('external_api_sources')
+  const { data, error } = await ownedDbTable('external_api_sources')
     .insert({
       name: params.name.trim(),
       base_url: params.base_url.trim(),
@@ -317,8 +302,7 @@ export async function updateApiPreset(
   if (params.category !== undefined) updates.category = params.category?.trim() || null;
   if (params.is_active !== undefined) updates.is_active = params.is_active;
   if (Object.keys(updates).length === 0) {
-    const { data } = await supabase
-      .from('external_api_sources')
+    const { data } = await ownedDbTable('external_api_sources')
       .select('id, name, base_url, purpose, category, is_active, is_preset, created_at')
       .eq('id', id)
       .eq('is_preset', true)
@@ -326,8 +310,7 @@ export async function updateApiPreset(
     if (!data) throw new Error('API preset not found');
     return data as ApiPreset;
   }
-  const { data, error } = await supabase
-    .from('external_api_sources')
+  const { data, error } = await ownedDbTable('external_api_sources')
     .update(updates)
     .eq('id', id)
     .eq('is_preset', true)
@@ -338,8 +321,7 @@ export async function updateApiPreset(
 }
 
 export async function setApiPresetEnabled(id: string, is_active: boolean): Promise<ApiPreset> {
-  const { data, error } = await supabase
-    .from('external_api_sources')
+  const { data, error } = await ownedDbTable('external_api_sources')
     .update({ is_active })
     .eq('id', id)
     .eq('is_preset', true)

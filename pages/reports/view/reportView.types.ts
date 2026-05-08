@@ -8,15 +8,42 @@ export function formatPriorityType(value: 'quick_win' | 'high_impact' | 'strateg
   return 'Strategic';
 }
 
-export function getScoreStage(score: number): 'Early-stage' | 'Growing' | 'Leader' {
+export type ScoreState = 'measured' | 'inferred' | 'insufficient_signal' | 'unavailable';
+export type SystemMaturityClass =
+  | 'structurally_weak'
+  | 'early_stage'
+  | 'building_baseline'
+  | 'operational'
+  | 'leading';
+
+export function getScoreStage(
+  score: number,
+  scoreState?: ScoreState,
+): 'Insufficient signal' | 'Early-stage' | 'Growing' | 'Leader' {
+  if (scoreState === 'insufficient_signal' || scoreState === 'unavailable') return 'Insufficient signal';
   if (score >= 75) return 'Leader';
   if (score >= 45) return 'Growing';
   return 'Early-stage';
 }
 
-export function getScoreStory(score: number, weakestDimensions: Array<{ label: string; value: number }>): string {
+export function getScoreStory(
+  score: number,
+  weakestDimensions: Array<{ label: string; value: number }>,
+  systemMaturity?: SystemMaturityClass,
+  scoreState?: ScoreState,
+): string {
+  if (scoreState === 'insufficient_signal' || scoreState === 'unavailable') {
+    return 'No measured signal yet — the report will sharpen as crawl, search, and competitor evidence is observed for this brand.';
+  }
   const weakest = weakestDimensions.slice(0, 2).map((item) => item.label.toLowerCase()).join(' and ');
   const stage = getScoreStage(score);
+  // Distinguish early-stage (strong fundamentals, immature authority) from structurally weak.
+  if (systemMaturity === 'early_stage' && stage === 'Early-stage') {
+    return `Foundations are in place but market authority is still immature. The score reflects that authority signals around ${weakest || 'visibility and proof'} need time to compound, not that fundamentals are broken.`;
+  }
+  if (systemMaturity === 'structurally_weak') {
+    return `Both fundamentals and authority are below baseline. ${weakest ? `Weakness in ${weakest} compounds with` : 'Structural gaps compound with'} thin authority signal — fundamentals must be addressed first.`;
+  }
   if (stage === 'Leader') {
     return `The score is in leader territory because the business has a relatively balanced baseline, although ${weakest || 'a few weaker areas'} still limit how dominant it can become.`;
   }
@@ -76,6 +103,10 @@ export interface ReportData {
   status: 'generating' | 'completed' | 'failed';
   diagnosis: string;
   overallScore: number;
+  overallScoreState: ScoreState;
+  systemMaturity: SystemMaturityClass;
+  // Canonical Architecture Consolidation (Phase 2): single source of truth.
+  canonical: import('../../../backend/services/canonicalReport/canonicalReportTypes').CanonicalReport | null;
   scoreExplanation?: {
     dimensions: {
       key: string;

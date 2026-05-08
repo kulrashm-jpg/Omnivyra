@@ -1,0 +1,726 @@
+{
+  "executionDomains": {
+    "recommendations": {
+      "canonicalOwners": [
+        "RecommendationEngine",
+        "generateRecommendations"
+      ],
+      "owners": [
+        {
+          "domain": "recommendations",
+          "file": "backend/services/recommendationEngine/engine.ts",
+          "line": 128,
+          "symbol": "generateRecommendations",
+          "ownershipClass": "canonical-owner",
+          "canonicalOwner": true,
+          "duplicateOrchestrationViolation": false,
+          "runtimeRiskScore": 0
+        },
+        {
+          "domain": "recommendations",
+          "file": "backend/services/recommendationEngine.ts",
+          "line": 249,
+          "symbol": "generateRecommendations",
+          "ownershipClass": "canonical-owner",
+          "canonicalOwner": true,
+          "duplicateOrchestrationViolation": false,
+          "runtimeRiskScore": 0
+        },
+        {
+          "domain": "recommendations",
+          "file": "database/schema-analyzer.js",
+          "line": 111,
+          "symbol": "generateRecommendations",
+          "ownershipClass": "canonical-owner",
+          "canonicalOwner": true,
+          "duplicateOrchestrationViolation": false,
+          "runtimeRiskScore": 0
+        },
+        {
+          "domain": "recommendations",
+          "file": "hooks/useRecommendationsState.tsx",
+          "line": 410,
+          "symbol": "generateRecommendations",
+          "ownershipClass": "canonical-owner",
+          "canonicalOwner": true,
+          "duplicateOrchestrationViolation": false,
+          "runtimeRiskScore": 0
+        },
+        {
+          "domain": "recommendations",
+          "file": "lib/shared/accountContext.ts",
+          "line": 70,
+          "symbol": "generateRecommendations",
+          "ownershipClass": "canonical-owner",
+          "canonicalOwner": true,
+          "duplicateOrchestrationViolation": false,
+          "runtimeRiskScore": 0
+        }
+      ],
+      "adapters": [],
+      "entrypoints": [],
+      "violations": []
+    },
+    "contentGeneration": {
+      "canonicalOwners": [
+        "ContentGenerationPipeline"
+      ],
+      "owners": [],
+      "adapters": [],
+      "entrypoints": [],
+      "violations": [
+        {
+          "domain": "contentGeneration",
+          "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+          "line": 372,
+          "symbol": "generateMasterContentFromIntent",
+          "ownershipClass": "duplicate-orchestration-owner",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": true,
+          "runtimeRiskScore": 9
+        },
+        {
+          "domain": "contentGeneration",
+          "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+          "line": 574,
+          "symbol": "buildPlatformVariantsFromMaster",
+          "ownershipClass": "duplicate-orchestration-owner",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": true,
+          "runtimeRiskScore": 9
+        }
+      ]
+    },
+    "scheduling": {
+      "canonicalOwners": [
+        "ScheduleCommandService"
+      ],
+      "owners": [],
+      "adapters": [],
+      "entrypoints": [],
+      "violations": [
+        {
+          "domain": "scheduling",
+          "file": "backend/services/boltScheduleBlockProcessor.ts",
+          "line": 289,
+          "symbol": "processBlockSchedule",
+          "ownershipClass": "duplicate-orchestration-owner",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": true,
+          "runtimeRiskScore": 9
+        },
+        {
+          "domain": "scheduling",
+          "file": "backend/services/structuredPlanScheduler.ts",
+          "line": 1543,
+          "symbol": "scheduleStructuredPlan",
+          "ownershipClass": "duplicate-orchestration-owner",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": true,
+          "runtimeRiskScore": 9
+        },
+        {
+          "domain": "scheduling",
+          "file": "backend/services/structuredPlanScheduler.ts",
+          "line": 2047,
+          "symbol": "createLegacyScheduledPost",
+          "ownershipClass": "duplicate-orchestration-owner",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": true,
+          "runtimeRiskScore": 9
+        }
+      ]
+    },
+    "campaignExecution": {
+      "canonicalOwners": [
+        "CampaignExecutionOrchestrator"
+      ],
+      "owners": [],
+      "adapters": [
+        {
+          "domain": "campaignExecution",
+          "file": "backend/services/campaignAiOrchestrator.ts",
+          "line": 477,
+          "symbol": "runCampaignAiPlan",
+          "ownershipClass": "adapter/delegator",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": false,
+          "runtimeRiskScore": 0
+        }
+      ],
+      "entrypoints": [],
+      "violations": [
+        {
+          "domain": "campaignExecution",
+          "file": "backend/services/boltPipelineService.ts",
+          "line": 838,
+          "symbol": "executeBoltPipeline",
+          "ownershipClass": "duplicate-orchestration-owner",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": true,
+          "runtimeRiskScore": 9
+        }
+      ]
+    },
+    "aiExecution": {
+      "canonicalOwners": [
+        "AIExecutionService"
+      ],
+      "owners": [],
+      "adapters": [],
+      "entrypoints": [],
+      "violations": [
+        {
+          "domain": "aiExecution",
+          "file": "backend/services/aiGateway.ts",
+          "line": 538,
+          "symbol": "runCompletion",
+          "ownershipClass": "duplicate-orchestration-owner",
+          "canonicalOwner": false,
+          "duplicateOrchestrationViolation": true,
+          "runtimeRiskScore": 9
+        }
+      ]
+    }
+  },
+  "topRiskModules": [
+    {
+      "module": "pages/campaign-details/WeeklyContentSection.tsx",
+      "riskScore": 1998,
+      "riskCategories": {
+        "boundaryLeak": 102,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "components/WeekCard.tsx",
+      "riskScore": 1885,
+      "riskCategories": {
+        "boundaryLeak": 98,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/domain/campaigns/generateWeeklyStructure.ts",
+      "riskScore": 1878,
+      "riskCategories": {
+        "boundaryLeak": 104,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/activity-workspace/content.ts",
+      "riskScore": 1316,
+      "riskCategories": {
+        "boundaryLeak": 75,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "lib/planning/unifiedExecutionAdapter.ts",
+      "riskScore": 1297,
+      "riskCategories": {
+        "boundaryLeak": 72
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/structuredPlanScheduler.ts",
+      "riskScore": 1175,
+      "riskCategories": {
+        "duplicateOrchestration": 2,
+        "boundaryLeak": 69,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "hooks/useDailyPlanning.tsx",
+      "riskScore": 1157,
+      "riskCategories": {
+        "boundaryLeak": 60,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/omnivyraClientV1.ts",
+      "riskScore": 1126,
+      "riskCategories": {
+        "boundaryLeak": 60
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/scheduler/cron.ts",
+      "riskScore": 1107,
+      "riskCategories": {
+        "boundaryLeak": 54,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "components/campaign-ai/reviewActivityHelpers.ts",
+      "riskScore": 1091,
+      "riskCategories": {
+        "boundaryLeak": 63
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/campaignAiOrchestrator/preparePrefilledPlanningState.ts",
+      "riskScore": 1025,
+      "riskCategories": {
+        "boundaryLeak": 61
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "components/planner/hooks/useDailyPlan.ts",
+      "riskScore": 972,
+      "riskCategories": {
+        "boundaryLeak": 52,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/campaigns/ai/plan.ts",
+      "riskScore": 945,
+      "riskCategories": {
+        "boundaryLeak": 62,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "hooks/useCampaignCalendar.tsx",
+      "riskScore": 927,
+      "riskCategories": {
+        "boundaryLeak": 49,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/externalApi/dbHelpers.ts",
+      "riskScore": 915,
+      "riskCategories": {
+        "runtimeMutation": 10,
+        "boundaryLeak": 20,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/activity-workspace/resolve.ts",
+      "riskScore": 908,
+      "riskCategories": {
+        "boundaryLeak": 46
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/weeklyPlanEditEngine.ts",
+      "riskScore": 896,
+      "riskCategories": {
+        "boundaryLeak": 53
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/GovernanceSnapshotService.ts",
+      "riskScore": 810,
+      "riskCategories": {
+        "runtimeMutation": 7,
+        "boundaryLeak": 23
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/companyIntelligenceConfigService.ts",
+      "riskScore": 750,
+      "riskCategories": {
+        "runtimeMutation": 15
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/campaignPlanningInputsService.ts",
+      "riskScore": 741,
+      "riskCategories": {
+        "runtimeMutation": 1,
+        "boundaryLeak": 50
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/campaignAiOrchestrator/dailyExecutionResolutionHelpers.ts",
+      "riskScore": 720,
+      "riskCategories": {
+        "boundaryLeak": 36
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/creatorContentValidation.ts",
+      "riskScore": 720,
+      "riskCategories": {
+        "boundaryLeak": 36
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "lib/content-analyzer.ts",
+      "riskScore": 703,
+      "riskCategories": {
+        "boundaryLeak": 35,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/db/client.ts",
+      "riskScore": 683,
+      "riskCategories": {
+        "boundaryLeak": 49
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/GovernanceAnalyticsService.ts",
+      "riskScore": 680,
+      "riskCategories": {
+        "boundaryLeak": 34
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/campaign-daily-plan/[id].tsx",
+      "riskScore": 677,
+      "riskCategories": {
+        "boundaryLeak": 39,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/externalApi/platformConfig.ts",
+      "riskScore": 670,
+      "riskCategories": {
+        "runtimeMutation": 5,
+        "boundaryLeak": 21
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/weeklyLoadBalancer.ts",
+      "riskScore": 669,
+      "riskCategories": {
+        "boundaryLeak": 35
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/auth/sync-supabase-user.ts",
+      "riskScore": 662,
+      "riskCategories": {
+        "runtimeMutation": 11,
+        "boundaryLeak": 21,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/activity-workspace/creator-asset.ts",
+      "riskScore": 651,
+      "riskCategories": {
+        "boundaryLeak": 36
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "lib/shield/INTEGRATION_EXAMPLES.ts",
+      "riskScore": 640,
+      "riskCategories": {
+        "boundaryLeak": 32
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/campaignIntelligenceService.ts",
+      "riskScore": 627,
+      "riskCategories": {
+        "boundaryLeak": 41,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/GovernanceProjectionService.ts",
+      "riskScore": 610,
+      "riskCategories": {
+        "runtimeMutation": 3,
+        "boundaryLeak": 23
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/company/users.ts",
+      "riskScore": 604,
+      "riskCategories": {
+        "runtimeMutation": 8,
+        "boundaryLeak": 22,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/campaignAiOrchestrator/enrichDeterministicWeekBriefs.ts",
+      "riskScore": 603,
+      "riskCategories": {
+        "boundaryLeak": 33
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/engagementIngestionService.ts",
+      "riskScore": 599,
+      "riskCategories": {
+        "runtimeMutation": 1,
+        "boundaryLeak": 27,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/opportunityService.ts",
+      "riskScore": 576,
+      "riskCategories": {
+        "runtimeMutation": 8,
+        "boundaryLeak": 13
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/campaignAiOrchestrator/prepareRuntimePlanningContext.ts",
+      "riskScore": 576,
+      "riskCategories": {
+        "boundaryLeak": 30
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/super-admin/users.ts",
+      "riskScore": 575,
+      "riskCategories": {
+        "runtimeMutation": 11,
+        "boundaryLeak": 17,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/recommendationEngine/engineHelpers.ts",
+      "riskScore": 569,
+      "riskCategories": {
+        "boundaryLeak": 28,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/contentGeneration/blueprintGenerator.ts",
+      "riskScore": 562,
+      "riskCategories": {
+        "duplicateOrchestration": 1,
+        "boundaryLeak": 32,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "components/campaign-ai/planningContextHelpers.ts",
+      "riskScore": 561,
+      "riskCategories": {
+        "boundaryLeak": 35
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/community-ai/export.ts",
+      "riskScore": 560,
+      "riskCategories": {
+        "boundaryLeak": 28
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "pages/api/onboarding/setup-company.ts",
+      "riskScore": 558,
+      "riskCategories": {
+        "runtimeMutation": 14,
+        "boundaryLeak": 11
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/domain/campaigns/weekly-structure-helpers.ts",
+      "riskScore": 557,
+      "riskCategories": {
+        "boundaryLeak": 33,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/whatsappBroadcastService.ts",
+      "riskScore": 556,
+      "riskCategories": {
+        "runtimeMutation": 10,
+        "boundaryLeak": 4
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/intelligenceGovernanceService.ts",
+      "riskScore": 548,
+      "riskCategories": {
+        "runtimeMutation": 10,
+        "boundaryLeak": 3
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "backend/services/communityAiActionExecutor.ts",
+      "riskScore": 548,
+      "riskCategories": {
+        "boundaryLeak": 31,
+        "oversizedMixedRuntime": 1
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "archive/unreachable-api-routes/pages/api/campaigns/[id]/schedule-structured-plan.ts",
+      "riskScore": 542,
+      "riskCategories": {
+        "runtimeMutation": 1,
+        "boundaryLeak": 29
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    },
+    {
+      "module": "architecture-migration/quarantine/pages-api-campaigns-weekly-structure-helpers.ts",
+      "riskScore": 528,
+      "riskCategories": {
+        "boundaryLeak": 32
+      },
+      "executionCriticality": "critical",
+      "migrationPriority": "P0",
+      "blockerSeverity": "blocking"
+    }
+  ]
+}

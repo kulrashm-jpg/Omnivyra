@@ -30,7 +30,7 @@ export default function OnboardingWizard({ ob, onNavigate }: OnboardingWizardPro
 
   const handleTryInstant = () => {
     completeOnboarding();
-    onNavigate('/blogs');
+    onNavigate('/blogs/create');
   };
 
   return (

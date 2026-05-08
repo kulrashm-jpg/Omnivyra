@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Knowledge Graph Service
  *
@@ -74,8 +75,7 @@ async function getRelatedTopicsFromBlogGraph(topic: string): Promise<{
   if (tokens.length === 0) return { topics: [], blog_ids: [] };
 
   // Find source blogs matching the topic by title/tag keywords
-  const { data: sourceBlogs } = await supabase
-    .from('public_blogs')
+  const { data: sourceBlogs } = await ownedDbTable('public_blogs')
     .select('id, title, tags')
     .eq('status', 'published')
     .limit(40);
@@ -99,8 +99,7 @@ async function getRelatedTopicsFromBlogGraph(topic: string): Promise<{
   const sourceIds = matched.map((b) => b.id);
 
   // Follow relationships outward (related + continuation)
-  const { data: relationships } = await supabase
-    .from('blog_relationships')
+  const { data: relationships } = await ownedDbTable('blog_relationships')
     .select('source_blog_id, target_blog_id, relationship_type')
     .in('source_blog_id', sourceIds)
     .in('relationship_type', ['related', 'continuation']);
@@ -113,8 +112,7 @@ async function getRelatedTopicsFromBlogGraph(topic: string): Promise<{
 
   if (targetIds.length === 0) return { topics: [], blog_ids: [] };
 
-  const { data: targetBlogs } = await supabase
-    .from('public_blogs')
+  const { data: targetBlogs } = await ownedDbTable('public_blogs')
     .select('id, title')
     .in('id', targetIds)
     .eq('status', 'published');
@@ -134,8 +132,7 @@ async function getRelatedTopicsFromSignalGraph(topic: string): Promise<string[]>
   if (tokens.length === 0) return [];
 
   // Find signals that match the topic
-  const { data: signals } = await supabase
-    .from('market_intelligence_signals')
+  const { data: signals } = await ownedDbTable('market_intelligence_signals')
     .select('id, topic')
     .not('topic', 'is', null)
     .limit(100);
@@ -152,8 +149,7 @@ async function getRelatedTopicsFromSignalGraph(topic: string): Promise<string[]>
 
   if (matched.length === 0) return [];
 
-  const { data: edges } = await supabase
-    .from('intelligence_graph_edges')
+  const { data: edges } = await ownedDbTable('intelligence_graph_edges')
     .select('source_signal_id, target_signal_id, edge_strength')
     .in('source_signal_id', matched)
     .eq('edge_type', 'topic_similarity')
@@ -165,8 +161,7 @@ async function getRelatedTopicsFromSignalGraph(topic: string): Promise<string[]>
 
   const targetIds = [...new Set((edges as any[]).map((e) => e.target_signal_id))];
 
-  const { data: targetSignals } = await supabase
-    .from('market_intelligence_signals')
+  const { data: targetSignals } = await ownedDbTable('market_intelligence_signals')
     .select('topic')
     .in('id', targetIds)
     .not('topic', 'is', null);
@@ -187,14 +182,12 @@ export async function getBlogsForTopic(topic: string, limit = 5, companyId?: str
   if (tokens.length === 0) return [];
 
   const [publicResult, companyResult] = await Promise.allSettled([
-    supabase
-      .from('public_blogs')
+    ownedDbTable('public_blogs')
       .select('id, title, slug, tags, excerpt')
       .eq('status', 'published')
       .limit(60),
     companyId
-      ? supabase
-          .from('blogs')
+      ? ownedDbTable('blogs')
           .select('id, title, slug, tags, excerpt')
           .eq('status', 'published')
           .eq('company_id', companyId)
@@ -288,8 +281,7 @@ export async function upsertCampaignTopicMap(
   topic: string,
   graph: TopicGraphResult
 ): Promise<void> {
-  await supabase
-    .from('campaign_topic_map')
+  await ownedDbTable('campaign_topic_map')
     .upsert(
       {
         campaign_id:    campaignId,
@@ -312,8 +304,7 @@ export async function getCampaignTopicMap(campaignId: string): Promise<{
   related_topics: string[];
   blog_ids: string[];
 } | null> {
-  const { data } = await supabase
-    .from('campaign_topic_map')
+  const { data } = await ownedDbTable('campaign_topic_map')
     .select('topic, related_topics, blog_ids')
     .eq('campaign_id', campaignId)
     .maybeSingle();

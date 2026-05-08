@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Credit Admin Grant Service
  *
@@ -83,8 +84,7 @@ function isValidReasonType(v: unknown): v is AdminGrantReasonType {
 
 async function countRecentGrants(orgId: string): Promise<number> {
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { count, error } = await supabase
-    .from('credit_admin_grants')
+  const { count, error } = await ownedDbTable('credit_admin_grants')
     .select('id', { count: 'exact', head: true })
     .eq('organization_id', orgId)
     .gt('created_at', since24h);
@@ -167,7 +167,7 @@ export async function grantAdminCreditExtension(opts: AdminGrantOpts): Promise<A
   }
 
   // ── 2. Audit row — 23505 means a retry inside the same idempotency bucket ──
-  const { error: auditErr } = await supabase.from('credit_admin_grants').insert({
+  const { error: auditErr } = await ownedDbTable('credit_admin_grants').insert({
     organization_id:    opts.organizationId,
     granted_by_user_id: opts.actorUserId,
     credits_granted:    opts.credits,

@@ -39,14 +39,20 @@ import {
   validateCronConfig,
   type CronAdminConfig,
 } from '../../../backend/services/adminRuntimeConfig';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { CRON_CONFIG_MANAGE } from '../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:admin:cron-config', 20, 60))) return;
-  const admin = await requireSuperAdminUser(req, res);
-  if (!admin) return;
+  const guard = await requireCapability(req, res, {
+    capability: CRON_CONFIG_MANAGE,
+    reason: 'cron config admin',
+  });
+  if (guard.ok !== true) return;
+  const admin = { id: guard.principal.userId };
 
   if (req.method === 'GET') {
     const cfg = await getCronAdminConfig();

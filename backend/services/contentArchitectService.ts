@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
-import { getUserRole, getCompanyRoleIncludingInvited, isSuperAdmin, Role } from './rbacService';
+import { getUserRole, isSuperAdmin } from './rbacService';
+import { getCompanyRoleIncludingInvited, Role } from './rbacPrimitives';
 
 /**
  * Content Architect: platform-level role (next to Super Admin) with access to all companies'

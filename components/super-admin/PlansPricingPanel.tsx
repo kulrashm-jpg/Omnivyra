@@ -6,6 +6,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { RefreshCw, AlertCircle, CheckCircle, Pencil, X, Save } from 'lucide-react';
 import { getAuthToken } from '../../utils/getAuthToken';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 
 interface Plan {
   id: string;
@@ -58,9 +59,12 @@ export default function PlansPricingPanel() {
     try {
       const token = await getAuthToken();
       const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
-      const res = await fetch('/api/super-admin/plans/list', { credentials: 'include', headers: authHeader });
-      if (!res.ok) throw new Error((await res.json()).error ?? 'Failed to load plans');
-      const json = await res.json();
+      const result = await safeFetchJson<{ plans?: Plan[]; limitsByPlan?: Record<string, { monthly_credits?: number | null }> }>(
+        '/api/super-admin/plans/list',
+        { credentials: 'include', headers: authHeader },
+      );
+      if (result.ok !== true) throw new Error(result.message || 'Failed to load plans');
+      const json = result.data;
       const fetched: PlanWithLimits[] = (json.plans ?? []).map((p: Plan) => ({
         ...p,
         monthly_credits: json.limitsByPlan?.[p.id]?.monthly_credits ?? null,
@@ -102,24 +106,27 @@ export default function PlansPricingPanel() {
     setSuccess(null);
     try {
       const token = await getAuthToken();
-      const res = await fetch('/api/super-admin/plans/create', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          plan_key: plan.plan_key,
-          name: editForm.name.trim() || plan.name,
-          description: editForm.description.trim() || null,
-          monthly_price: editForm.monthly_price ? parseFloat(editForm.monthly_price) : null,
-          limits: {
-            monthly_credits: editForm.monthly_credits ? parseFloat(editForm.monthly_credits) : null,
+      const result = await safeFetchJson(
+        '/api/super-admin/plans/create',
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
-        }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error ?? 'Save failed');
+          body: JSON.stringify({
+            plan_key: plan.plan_key,
+            name: editForm.name.trim() || plan.name,
+            description: editForm.description.trim() || null,
+            monthly_price: editForm.monthly_price ? parseFloat(editForm.monthly_price) : null,
+            limits: {
+              monthly_credits: editForm.monthly_credits ? parseFloat(editForm.monthly_credits) : null,
+            },
+          }),
+        },
+      );
+      if (result.ok !== true) throw new Error(result.message || 'Save failed');
       setSuccess(`"${editForm.name}" saved successfully.`);
       setEditingKey(null);
       await loadPlans();

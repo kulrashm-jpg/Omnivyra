@@ -27,7 +27,7 @@ import { SkeletonBuilderPanel } from '../components/planner/SkeletonBuilderPanel
 import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter';
 import styles from '../styles/planner-layout.module.css';
 import { useCampaignResume } from '../hooks/useCampaignResume';
-import { AccountContext } from '../backend/types/accountContext';
+import { AccountContext } from '../lib/shared/accountContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 
 interface CampaignPlannerLayoutProps {
@@ -495,3 +495,4 @@ function CampaignPlannerWithSession() {
 export default function CampaignPlannerPage() {
   return <CampaignPlannerWithSession />;
 }
+

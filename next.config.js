@@ -35,9 +35,31 @@ const nextConfig = {
     { source: '/blog/rss.xml', destination: '/api/blog/rss' },
     { source: '/blog/sitemap.xml', destination: '/api/blog/sitemap' },
   ],
+  headers: async () => [
+    {
+      source: '/content-creation',
+      headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+    },
+    {
+      source: '/command-center/bolt-text-strategy',
+      headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+    },
+    {
+      source: '/content-studio/post',
+      headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+    },
+    {
+      source: '/threads/:path(generate|template|suggestions)',
+      headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+    },
+    {
+      source: '/blogs',
+      headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+    },
+  ],
   redirects: async () => [
     { source: '/blogs', destination: '/blogs/create', permanent: false },
-    { source: '/content-creation', destination: '/content-studio', permanent: false },
+    { source: '/content-creation', destination: '/posts/create', permanent: false },
     { source: '/content-studio/post', destination: '/posts/create', permanent: false },
     { source: '/threads/generate', destination: '/threads/intelligence', permanent: false },
     { source: '/threads/template', destination: '/threads/intelligence', permanent: false },

@@ -571,7 +571,7 @@ export async function generatePlatformVariantFromMaster(
   }
 }
 
-export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLike): Promise<PlatformVariantPayload[]> {
+async function buildPlatformVariantsRuntime(item: DailyExecutionItemLike): Promise<PlatformVariantPayload[]> {
   const targets = resolvePlatformTargets(item);
   if (targets.length === 0) {
     console.warn('[content-generation-pipeline][missing-platform-targets]', {
@@ -810,6 +810,8 @@ export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLi
   return validatedVariants;
 }
 
+export { buildPlatformVariantsRuntime as buildPlatformVariantsFromMaster };
+
 export async function attachGenerationPipelineToDailyItems(weeks: any[]): Promise<any[]> {
   const arr = Array.isArray(weeks) ? weeks : [];
   for (const week of arr) {
@@ -840,7 +842,7 @@ export async function attachGenerationPipelineToDailyItems(weeks: any[]): Promis
           const blueprint = await generateContentBlueprint(item);
           if (!isBlueprintQualitySufficient(blueprint)) {
             item.master_content = await generateMasterContentFromIntent(item);
-            item.platform_variants = await buildPlatformVariantsFromMaster(item);
+            item.platform_variants = await buildPlatformVariantsRuntime(item);
           } else {
             const fullText = blueprintToFullText(blueprint);
             const itemId = sanitizeIdPart(item.execution_id || item.title || item.topic || item.platform || 'daily-item');
@@ -888,7 +890,7 @@ export async function attachGenerationPipelineToDailyItems(weeks: any[]): Promis
       }
 
       if (isMedia || existingMasterGenerated) {
-        item.platform_variants = await buildPlatformVariantsFromMaster(item);
+        item.platform_variants = await buildPlatformVariantsRuntime(item);
       }
       item.execution_readiness = buildExecutionReadiness(item);
       item.execution_jobs = buildExecutionJobsFromItem(item);

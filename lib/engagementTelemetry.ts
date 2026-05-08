@@ -24,3 +24,5 @@ export function recordEngagementEvent(
     }),
   }).catch(() => {});
 }
+
+export const trackEngagementEvent = recordEngagementEvent;

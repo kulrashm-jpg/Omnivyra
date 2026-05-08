@@ -9,7 +9,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { usePlannerSession, type PlatformContentRequests } from './plannerSessionStore';
 import { getCompanyPlatformConfig, type PlatformConfigItem } from '../../lib/companyPlatformService';
-import { PLATFORM_LABELS } from '../../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import {
   DEFAULT_FREQUENCY_SUGGESTIONS,
   buildDistributionPreview,
@@ -315,3 +315,4 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
     </div>
   );
 }
+

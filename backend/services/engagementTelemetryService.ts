@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement telemetry service.
  * Records interaction events; does not block UI.
@@ -18,7 +19,7 @@ export async function recordEngagementEvent(
   payload: EngagementTelemetryPayload
 ): Promise<void> {
   try {
-    await supabase.from('engagement_telemetry_events').insert({
+    await ownedDbTable('engagement_telemetry_events').insert({
       organization_id: payload.organization_id,
       thread_id: payload.thread_id ?? null,
       user_id: payload.user_id ?? null,

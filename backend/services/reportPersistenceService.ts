@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import type { OrchestratedReport } from './ReportOrchestrator';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type PersistedReportRow = {
   id: string;
@@ -23,8 +24,7 @@ export async function getLatestPersistedReport(params: {
   companyId: string;
   reportType: OrchestratedReport['report_type'];
 }): Promise<PersistedReportRow | null> {
-  const { data, error } = await supabase
-    .from('reports')
+  const { data, error } = await ownedDbTable('reports')
     .select('id, report_id, company_id, report_type, created_at, json_output, data')
     .eq('company_id', params.companyId)
     .eq('report_type', normalizeReportType(params.reportType))
@@ -64,8 +64,7 @@ export async function persistOrchestratedReport(params: {
     },
   };
 
-  const { data, error } = await supabase
-    .from('reports')
+  const { data, error } = await ownedDbTable('reports')
     .insert(payload)
     .select('id, report_id, company_id, report_type, created_at, json_output, data')
     .single();

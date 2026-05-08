@@ -64,7 +64,7 @@ export default function StepResult({
 
   const handleCreateContent = () => {
     onComplete();
-    onNavigate('/blogs');
+    onNavigate('/blogs/create');
   };
 
   return (

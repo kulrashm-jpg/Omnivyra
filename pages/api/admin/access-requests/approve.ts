@@ -23,28 +23,21 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { IDENTITY_ADMIN_ASSIGN } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const authHeader = req.headers.authorization ?? '';
-  const isSuperAdminCookie = req.cookies?.super_admin_session === '1';
-
-  if (!isSuperAdminCookie) {
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'Missing auth token' });
-  }
-
-  // Resolve admin identity (Bearer or cookie session)
-  let adminUserId: string | null = null;
-  if (!isSuperAdminCookie) {
-    const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-    if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-    adminUserId = user.id;
-
-    adminUserId = user.id;
-  }
+  // Approving access requests grants org membership — IDENTITY_ADMIN_ASSIGN
+  // gates this with phishing-resistant step-up. Bridge principal cannot
+  // satisfy step-up so this surface is canonical-session-only post-Phase-2.
+  const guard = await requireCapability(req, res, {
+    capability: IDENTITY_ADMIN_ASSIGN,
+    reason: 'access request approve',
+  });
+  if (guard.ok !== true) return;
+  const adminUserId: string | null = guard.principal.userId;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { requestId, adminNote, brandName } = body as {

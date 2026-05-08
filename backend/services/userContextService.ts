@@ -1,9 +1,9 @@
-import { NextApiRequest, NextApiResponse } from 'next';
+import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
-import { resolveUserContext as resolveFromLib, UserContext, type MembershipType } from '../lib/userContext';
+import { resolveUserContext as resolveFromLib, type UserContext, type MembershipType } from '../lib/userContext';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
 import { getCompanyRoleIncludingInvited, normalizePermissionRole, Role } from './rbacPrimitives';
-import { getContentArchitectCompanyId, isContentArchitectSession } from './contentArchitectService';
+import { assertTenantAccess } from '../security/TenantGuard';
 
 export type { UserContext, MembershipType };
 
@@ -16,9 +16,6 @@ function normalizeMembershipType(value: string | null | undefined): MembershipTy
 
 export const resolveUserContext = async (req?: NextApiRequest): Promise<UserContext> => {
   if (!req) return resolveFromLib();
-
-  void getContentArchitectCompanyId;
-  void isContentArchitectSession;
 
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user?.id) {
@@ -80,6 +77,30 @@ export function isExternalMemberForCompany(
   return userContext.membershipByCompany?.[companyId] === 'EXTERNAL';
 }
 
+/**
+ * SHIM: tenant authorization for legacy callers. The canonical decision
+ * runs through `TenantGuard.assertTenantAccess`; this helper preserves
+ * two pre-existing fallbacks for behavior parity:
+ *
+ *   1. content-architect cookie principal — admin-tier global access
+ *      established by /api/super-admin/content-architect-login. This
+ *      principal has userId='content_architect', is NOT in user_company_roles,
+ *      and would otherwise be rejected by the canonical guard.
+ *
+ *   2. invited admin — a user with role IN (COMPANY_ADMIN, ADMIN, SUPER_ADMIN)
+ *      and status='invited' may administer the company before accepting the
+ *      invite. Existing behavior; preserved here so admin tooling that
+ *      depends on it does not regress.
+ *
+ * Tightenings inherited from the canonical guard:
+ *   - soft-deleted / suspended companies are now rejected even for
+ *     invited admins (ORG_NOT_FOUND / ORG_INACTIVE override the fallback)
+ *   - bridge principals (legacyCookieSuperAdmin) cannot satisfy tenant
+ *     access — they have no tenant identity
+ *
+ * New code should call `requireTenantAccess` directly. This helper is
+ * retained to avoid churn in 30+ existing callsites.
+ */
 export const enforceCompanyAccess = async (input: {
   req: NextApiRequest;
   res: NextApiResponse;
@@ -95,31 +116,68 @@ export const enforceCompanyAccess = async (input: {
     return null;
   }
 
-  const isContentArchitect = user.userId === 'content_architect';
-  const hasActiveAccess = user.companyIds.includes(input.companyId);
-  if (!isContentArchitect && !hasActiveAccess) {
-    const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, input.companyId);
-    const allowedViaInvited =
-      fallbackRole === Role.COMPANY_ADMIN ||
-      fallbackRole === Role.ADMIN ||
-      fallbackRole === Role.SUPER_ADMIN;
-    if (!allowedViaInvited) {
-      console.warn('ACCESS_DENIED', {
-        path: input.req.url,
-        companyId: input.companyId,
-        userId: user.userId,
-        role: user.role,
-      });
-      input.res.status(403).json({ error: 'Access denied to company' });
+  // Canonical fast path: principal is an active member of an active org.
+  // Soft-delete + bridge-principal rejection happen inside assertTenantAccess.
+  const canonical = await assertTenantAccess({
+    userId:         user.userId,
+    organizationId: input.companyId,
+  });
+
+  if (canonical.ok === true) {
+    if (input.requireCampaignId && !input.campaignId) {
+      console.warn('MISSING_CAMPAIGN_ID', { path: input.req.url, companyId: input.companyId });
+      input.res.status(400).json({ error: 'campaignId required' });
       return null;
     }
+    return user;
   }
 
-  if (input.requireCampaignId && !input.campaignId) {
-    console.warn('MISSING_CAMPAIGN_ID', { path: input.req.url, companyId: input.companyId });
-    input.res.status(400).json({ error: 'campaignId required' });
+  // Soft-deleted / missing companies: deny. Don't apply legacy fallbacks
+  // — a deleted org must remain locked, and an unknown id has no fallback
+  // to apply.
+  if (canonical.reason === 'ORG_NOT_FOUND' || canonical.reason === 'ORG_INACTIVE') {
+    console.warn('ACCESS_DENIED', {
+      path: input.req.url,
+      companyId: input.companyId,
+      userId: user.userId,
+      role: user.role,
+      reason: canonical.reason,
+    });
+    input.res.status(403).json({ error: 'Access denied to company' });
     return null;
   }
 
-  return user;
+  // Legacy fallback (a): content-architect cookie principal.
+  if (user.userId === 'content_architect') {
+    if (input.requireCampaignId && !input.campaignId) {
+      input.res.status(400).json({ error: 'campaignId required' });
+      return null;
+    }
+    return user;
+  }
+
+  // Legacy fallback (b): invited admin role.
+  const fallbackRole = await getCompanyRoleIncludingInvited(user.userId, input.companyId);
+  const allowedViaInvited =
+    fallbackRole === Role.COMPANY_ADMIN ||
+    fallbackRole === Role.ADMIN ||
+    fallbackRole === Role.SUPER_ADMIN;
+  if (allowedViaInvited) {
+    if (input.requireCampaignId && !input.campaignId) {
+      console.warn('MISSING_CAMPAIGN_ID', { path: input.req.url, companyId: input.companyId });
+      input.res.status(400).json({ error: 'campaignId required' });
+      return null;
+    }
+    return user;
+  }
+
+  console.warn('ACCESS_DENIED', {
+    path: input.req.url,
+    companyId: input.companyId,
+    userId: user.userId,
+    role: user.role,
+    reason: canonical.reason,
+  });
+  input.res.status(403).json({ error: 'Access denied to company' });
+  return null;
 };

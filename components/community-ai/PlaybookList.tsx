@@ -1,5 +1,5 @@
 import React from 'react';
-import type { EngagementPlaybook } from '../../backend/services/playbooks/playbookTypes';
+import type { EngagementPlaybook } from '../../lib/shared/playbookTypes';
 
 type PlaybookListProps = {
   playbooks: EngagementPlaybook[];
@@ -68,3 +68,4 @@ export default function PlaybookList({ playbooks, onEdit, onToggleStatus }: Play
     </div>
   );
 }
+

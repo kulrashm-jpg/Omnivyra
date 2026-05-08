@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * BOLT Pipeline Service
  *
@@ -7,6 +8,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+
 import { getProfile } from './companyProfileService';
 import { runCampaignAiPlan } from './campaignAiOrchestrator';
 import { saveStructuredCampaignPlan, commitDraftBlueprint } from '../db/campaignPlanStore';
@@ -29,6 +31,11 @@ import {
   getStoredStrategicThemeTitle,
   normalizeStoredStrategicTheme,
 } from '../../lib/recommendationStrategicCard';
+import {
+  getExecutionProfile,
+  isLegacyMediaProfile,
+  withBoltMetadata,
+} from '../../variants/bolt/boltCampaignMetadata';
 
 const AI_PLAN_TIMEOUT_MS = 120_000;
 const GENERATE_WEEKLY_TIMEOUT_MS = 90_000;
@@ -118,8 +125,7 @@ async function updateRun(
     cache_hit_ratio: number;
   }>
 ): Promise<void> {
-  const { error } = await supabase
-    .from('bolt_execution_runs')
+  const { error } = await ownedDbTable('bolt_execution_runs')
     .update({
       ...updates,
       updated_at: new Date().toISOString(),
@@ -138,7 +144,7 @@ async function logEvent(
     error_message?: string;
   }
 ): Promise<void> {
-  const { error } = await supabase.from('bolt_execution_events').insert({
+  const { error } = await ownedDbTable('bolt_execution_events').insert({
     run_id: runId,
     stage,
     status,
@@ -148,8 +154,7 @@ async function logEvent(
 }
 
 async function checkStageCompleted(runId: string, stage: string): Promise<boolean> {
-  const { data } = await supabase
-    .from('bolt_execution_events')
+  const { data } = await ownedDbTable('bolt_execution_events')
     .select('id')
     .eq('run_id', runId)
     .eq('stage', stage)
@@ -160,8 +165,7 @@ async function checkStageCompleted(runId: string, stage: string): Promise<boolea
 }
 
 async function getCompletedStagePlan(runId: string, stage: string): Promise<{ weeks: unknown[] } | null> {
-  const { data } = await supabase
-    .from('bolt_execution_events')
+  const { data } = await ownedDbTable('bolt_execution_events')
     .select('metadata')
     .eq('run_id', runId)
     .eq('stage', stage)
@@ -176,8 +180,7 @@ async function getCompletedStagePlan(runId: string, stage: string): Promise<{ we
 }
 
 async function assertCampaignValid(campaignId: string): Promise<void> {
-  const { data, error } = await supabase
-    .from('campaigns')
+  const { data, error } = await ownedDbTable('campaigns')
     .select('id')
     .eq('id', campaignId)
     .maybeSingle();
@@ -193,8 +196,7 @@ async function runSourceRecommendation(
 
   // If userId is null (auth fell back to dev context), resolve from company membership
   if (!safeUserId && companyId) {
-    const { data: companyUser } = await supabase
-      .from('user_company_roles')
+    const { data: companyUser } = await ownedDbTable('user_company_roles')
       .select('user_id')
       .eq('company_id', companyId)
       .eq('status', 'active')
@@ -210,8 +212,7 @@ async function runSourceRecommendation(
   if (generatedCampaignId) {
     campaignId = generatedCampaignId;
 
-    const { data: latestVersion, error: fetchError } = await supabase
-      .from('campaign_versions')
+    const { data: latestVersion, error: fetchError } = await ownedDbTable('campaign_versions')
       .select('id, campaign_snapshot')
       .eq('company_id', companyId)
       .eq('campaign_id', campaignId)
@@ -234,8 +235,7 @@ async function runSourceRecommendation(
     updatedSnapshot.execution_config = executionConfig;
     updatedSnapshot.mode = 'fast';
 
-    const { error: updateError } = await supabase
-      .from('campaign_versions')
+    const { error: updateError } = await ownedDbTable('campaign_versions')
       .update({ campaign_snapshot: updatedSnapshot })
       .eq('id', (latestVersion as { id: string }).id);
 
@@ -248,13 +248,13 @@ async function runSourceRecommendation(
       updates.start_date = tentativeStart.includes('T') ? tentativeStart : `${tentativeStart}T00:00:00.000Z`;
     }
     if (Object.keys(updates).length > 0) {
-      await supabase.from('campaigns').update(updates).eq('id', campaignId);
+      await ownedDbTable('campaigns').update(updates).eq('id', campaignId);
     }
   } else {
     const newCampaignId = crypto.randomUUID();
     const tentativeStart = executionConfig.tentative_start as string | undefined;
     const startDate = tentativeStart ? (tentativeStart.includes('T') ? tentativeStart : `${tentativeStart}T00:00:00.000Z`) : null;
-    const { error: campaignError } = await supabase.from('campaigns').insert({
+    const { error: campaignError } = await ownedDbTable('campaigns').insert({
       id: newCampaignId,
       name: title || 'Campaign from themes',
       description: description ?? null,
@@ -281,7 +281,7 @@ async function runSourceRecommendation(
       snapshotPayload.target_regions = regionsFromCard;
     }
 
-    const { error: versionError } = await supabase.from('campaign_versions').insert({
+    const { error: versionError } = await ownedDbTable('campaign_versions').insert({
       company_id: companyId,
       campaign_id: newCampaignId,
       campaign_snapshot: snapshotPayload,
@@ -299,7 +299,7 @@ async function runSourceRecommendation(
   return campaignId;
 }
 
-async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[], isCreatorDependent?: boolean, isCombined?: boolean): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
+async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[], requiresMediaFlow?: boolean, isCombined?: boolean): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {
   const snapshot = payload.sourceStrategicTheme as Record<string, unknown>;
   const normalizedTheme = normalizeStoredStrategicTheme(snapshot);
   const basePayload = (snapshot?.context_payload && typeof snapshot.context_payload === 'object')
@@ -345,8 +345,7 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
 
   let platformContentPrefs: Record<string, string[]> = {};
   try {
-    const { data } = await supabase
-      .from('company_profiles')
+    const { data } = await ownedDbTable('company_profiles')
       .select('platform_content_type_prefs')
       .eq('company_id', companyId)
       .maybeSingle();
@@ -360,7 +359,7 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     const prefs = platformContentPrefs[canonical] ?? platformContentPrefs[platform.toLowerCase()];
     if (Array.isArray(prefs) && prefs.length > 0) {
       // Pick the first text-compatible content type (skip video/reel for BOLT text campaigns)
-      if (isCreatorDependent) return prefs[0];
+      if (requiresMediaFlow) return prefs[0];
       const textSafe = prefs.find((t) => !['video', 'reel', 'short'].includes(t.toLowerCase()));
       return textSafe ?? prefs[0];
     }
@@ -432,10 +431,10 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   const rawPlatformRequests = (execConfig.platform_content_requests ?? formatDerivedRequests ?? defaultPlatformRequests) as Array<{ platform?: string; content_type?: string; count_per_week?: number }>;
   const boltPlatformRequests = rawPlatformRequests
     // Text BOLT excludes video-first platforms; creator and combined campaigns keep them all
-    .filter((r) => r && r.platform && (isCreatorDependent || isCombined || !['youtube', 'tiktok'].includes(String(r.platform).toLowerCase())))
+    .filter((r) => r && r.platform && (requiresMediaFlow || isCombined || !['youtube', 'tiktok'].includes(String(r.platform).toLowerCase())))
     .map((r) => ({
       platform: r.platform,
-      content_type: !isCreatorDependent && !isCombined && ['video', 'reel', 'carousel', 'slider', 'image', 'banner'].includes(String(r.content_type ?? '').toLowerCase())
+      content_type: !requiresMediaFlow && !isCombined && ['video', 'reel', 'carousel', 'slider', 'image', 'banner'].includes(String(r.content_type ?? '').toLowerCase())
         ? 'post'
         : (r.content_type ?? 'post'),
       count_per_week: r.count_per_week ?? Math.max(1, Math.floor(parsedFreq / 2)),
@@ -464,7 +463,7 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     key_messages: execConfig.key_messages ?? themeTitle ?? (typeof snapshot?.theme_or_description === 'string' ? snapshot.theme_or_description : 'Core value and expertise'),
     campaign_duration: durationWeeks,
     preplanning_form_completed: true,
-    bolt_text_only: !isCreatorDependent && !isCombined,
+    ...withBoltMetadata({}, { textOnly: !requiresMediaFlow && !isCombined }),
     // User-selected content formats and per-format frequency — tell AI exactly what to plan
     ...(Array.isArray(execConfig.content_formats) && (execConfig.content_formats as string[]).length > 0
       ? { preferred_content_types: execConfig.content_formats, content_formats: execConfig.content_formats }
@@ -501,7 +500,7 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
           // a conversational prompt instead of a plan.
           recommendationContext,
           collectedPlanningContext,
-          bolt_run_id: runId,
+          variantMetadata: withBoltMetadata({}, { runId }).variantMetadata,
         }),
         AI_PLAN_TIMEOUT_MS,
         'ai/plan'
@@ -540,9 +539,9 @@ async function runCommitPlan(
   campaignId: string,
   plan: { weeks: unknown[] },
   executionConfig?: Record<string, unknown>,
-  isCreatorDependent?: boolean
+  requiresMediaFlow?: boolean
 ): Promise<void> {
-  const sanitizedWeeks = isCreatorDependent ? plan.weeks : sanitizeBoltPlanForTextOnly(plan.weeks);
+  const sanitizedWeeks = requiresMediaFlow ? plan.weeks : sanitizeBoltPlanForTextOnly(plan.weeks);
   const blueprint = fromStructuredPlan({ weeks: sanitizedWeeks, campaign_id: campaignId });
   // Align with strategic theme card → create campaign flow: saveStructuredCampaignPlan + commitDraftBlueprint
   const snapshotHash = `bolt-${campaignId}-${Date.now()}`;
@@ -567,8 +566,7 @@ async function runCommitPlan(
         : `${String(tentativeStart).trim()}T00:00:00.000Z`
       : undefined;
 
-  const { data: existing } = await supabase
-    .from('campaigns')
+  const { data: existing } = await ownedDbTable('campaigns')
     .select('start_date')
     .eq('id', campaignId)
     .maybeSingle();
@@ -591,7 +589,7 @@ async function runCommitPlan(
     updates.start_date = startDateValue;
   }
 
-  await supabase.from('campaigns').update(updates).eq('id', campaignId);
+  await ownedDbTable('campaigns').update(updates).eq('id', campaignId);
 }
 
 const BATCH_WEEK_SIZE = 4;
@@ -636,8 +634,7 @@ async function runGenerateWeeklyStructure(
     );
     if (allDoneRes.every(Boolean)) {
       for (const wn of batchWeeks) {
-        const { data: ev } = await supabase
-          .from('bolt_execution_events')
+        const { data: ev } = await ownedDbTable('bolt_execution_events')
           .select('metadata')
           .eq('run_id', runId)
           .eq('stage', `generate-weekly-structure-week-${wn}`)
@@ -680,9 +677,8 @@ async function runGenerateWeeklyStructure(
         campaignId,
         companyId,
         weeks: batchWeeks,
-        bolt_run_id: runId,
+        variantMetadata: withBoltMetadata({}, { runId, textOnly: options?.boltTextOnly ?? true }).variantMetadata,
         eligible_platforms: options?.eligiblePlatforms,
-        bolt_text_only: options?.boltTextOnly ?? true,
         ...(options?.postsPerWeek != null ? { posts_per_week: options.postsPerWeek } : {}),
         ...(options?.campaignStartDate ? { campaign_start_date: options.campaignStartDate } : {}),
         ...(resolvedFormatFreq ? { format_frequency: resolvedFormatFreq } : {}),
@@ -728,7 +724,7 @@ async function runScheduleStructuredPlan(
   campaignId: string,
   plan: { weeks: unknown[] },
   executionConfig: Record<string, unknown>,
-  campaignMode: string | undefined,
+  executionProfile: string | undefined,
   onProgress?: (stage: string) => void,
   eligiblePlatforms?: string[],
   runId?: string
@@ -736,7 +732,7 @@ async function runScheduleStructuredPlan(
   const tentativeStart = executionConfig.tentative_start as string | undefined;
   if (tentativeStart) {
     const startDate = tentativeStart.includes('T') ? tentativeStart : `${tentativeStart}T00:00:00.000Z`;
-    await supabase.from('campaigns').update({ start_date: startDate }).eq('id', campaignId);
+    await ownedDbTable('campaigns').update({ start_date: startDate }).eq('id', campaignId);
   }
 
   const rawFreq = executionConfig.frequency_per_week;
@@ -760,11 +756,10 @@ async function runScheduleStructuredPlan(
       onProgress,
       frequencyPerWeek,
       eligiblePlatforms: eligiblePlatforms?.length ? eligiblePlatforms : undefined,
-      campaignMode,
+      executionProfile,
     }
   );
-  await supabase
-    .from('campaigns')
+  await ownedDbTable('campaigns')
     .update({
       status: 'active',
       current_stage: 'schedule',
@@ -812,9 +807,8 @@ function validateExecutionConfig(execConfig: Record<string, unknown> | undefined
   return missing;
 }
 
-export async function executeBoltPipeline(runId: string): Promise<void> {
-  const { data: run, error: fetchError } = await supabase
-    .from('bolt_execution_runs')
+async function executeBoltPipelineRuntime(runId: string): Promise<void> {
+  const { data: run, error: fetchError } = await ownedDbTable('bolt_execution_runs')
     .select('*')
     .eq('id', runId)
     .maybeSingle();
@@ -834,16 +828,16 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
 
   const payload = run.payload as BoltPayload;
   const { companyId, outcomeView } = payload;
-  const campaignMode = (payload.executionConfig as Record<string, unknown>)?.campaign_mode as string | undefined;
-  const isUnifiedCreator = campaignMode === 'creator';
-  const isLegacyCreatorDependent = campaignMode === 'creator_dependent';
-  const isCreatorDependent = isUnifiedCreator || isLegacyCreatorDependent;
+  const executionProfile = getExecutionProfile(payload.executionConfig);
+  const usesUnifiedMediaFlow = executionProfile === 'creator';
+  const usesLegacyMediaFlow = isLegacyMediaProfile(executionProfile);
+  const requiresMediaFlow = usesUnifiedMediaFlow || usesLegacyMediaFlow;
   // Combined mode: text + creator formats together. Scheduling applies to the text portion only.
-  const isCombined = campaignMode === 'combined';
+  const isCombined = executionProfile === 'combined';
 
   // Legacy creator-dependent campaigns stop at daily_plan.
   // Unified creator campaigns schedule through the creator execution engine.
-  const shouldSchedule = (isUnifiedCreator || !isCreatorDependent) && (outcomeView === 'schedule' || outcomeView === 'campaign_schedule');
+  const shouldSchedule = (usesUnifiedMediaFlow || !requiresMediaFlow) && (outcomeView === 'schedule' || outcomeView === 'campaign_schedule');
   const isWeekPlanOnly = outcomeView === 'week_plan';
 
   const missing = validateExecutionConfig(payload.executionConfig);
@@ -867,7 +861,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
     const rawPlatforms = await getConnectedPlatformsForCompany(companyId, profile);
     // Creator and Combined campaigns include all platforms (YouTube, TikTok valid for video/reel).
     // Text-only BOLT excludes video-first platforms that can't accept text posts.
-    eligiblePlatforms = (isCreatorDependent || isCombined) ? rawPlatforms : filterBoltPlatforms(rawPlatforms);
+    eligiblePlatforms = (requiresMediaFlow || isCombined) ? rawPlatforms : filterBoltPlatforms(rawPlatforms);
 
     // Honor execConfig.selected_platforms (per-campaign platform picker from the
     // BOLT Text strategy builder). Intersect with eligiblePlatforms so the user
@@ -938,8 +932,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
       const stageToCheck = stage === 'generate-weekly-structure' ? null : stage;
       if (stageToCheck && (await checkStageCompleted(runId, stageToCheck))) {
         if (stage === 'source-recommendation') {
-          const { data: runRow } = await supabase
-            .from('bolt_execution_runs')
+          const { data: runRow } = await ownedDbTable('bolt_execution_runs')
             .select('campaign_id')
             .eq('id', runId)
             .maybeSingle();
@@ -979,7 +972,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             duration_ms: Date.now() - stageStart,
           });
         } else if (stage === 'ai/plan' && campaignId) {
-          const aiResult = await runAiPlan(runId, campaignId, companyId, payload, eligiblePlatforms, isCreatorDependent, isCombined);
+          const aiResult = await runAiPlan(runId, campaignId, companyId, payload, eligiblePlatforms, requiresMediaFlow, isCombined);
           plan = aiResult.plan;
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
@@ -988,7 +981,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             plan: { weeks: plan.weeks },
           });
         } else if (stage === 'commit-plan' && campaignId && plan) {
-          await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, isCreatorDependent);
+          await runCommitPlan(campaignId, plan, payload.executionConfig as Record<string, unknown>, requiresMediaFlow);
           await logEvent(runId, stage, 'completed', {
             campaign_id: campaignId,
             duration_ms: Date.now() - stageStart,
@@ -1038,7 +1031,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
               eligiblePlatforms: eligiblePlatforms.length > 0 ? eligiblePlatforms : undefined,
               postsPerWeek,
               campaignStartDate,
-              boltTextOnly: !isCreatorDependent && !isCombined,
+              boltTextOnly: !requiresMediaFlow && !isCombined,
               execConfig: execConfig ?? undefined,
             }
           );
@@ -1049,7 +1042,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
             campaignId,
             plan,
             payload.executionConfig,
-            campaignMode,
+            executionProfile,
             (s) => updateRun(runId, { current_stage: s }),
             eligiblePlatforms.length > 0 ? eligiblePlatforms : undefined,
             runId
@@ -1124,8 +1117,7 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
         campaign_schedule: 'schedule',
       };
       const finalStage = outcomeStageMap[String(payload.outcomeView ?? '')] ?? 'week_plan';
-      await supabase
-        .from('campaigns')
+      await ownedDbTable('campaigns')
         .update({ status: 'active', current_stage: finalStage, updated_at: new Date().toISOString() })
         .eq('id', campaignId);
     }
@@ -1155,6 +1147,8 @@ export async function executeBoltPipeline(runId: string): Promise<void> {
   }
 }
 
+export { executeBoltPipelineRuntime as executeBoltPipeline };
+
 /**
  * Planner-only: runs generate-weekly-structure (same service as BOLT pipeline stage).
  * Blueprint must already be committed via campaignPlanStore before calling.
@@ -1174,7 +1168,7 @@ export async function runPlannerCommitAndGenerateWeekly(params: {
   if (params.startDate) {
     const startVal = String(params.startDate).trim();
     const startDateValue = startVal.includes('T') ? startVal : `${startVal}T00:00:00.000Z`;
-    await supabase.from('campaigns').update({
+    await ownedDbTable('campaigns').update({
       start_date: startDateValue,
       duration_weeks: durationWeeks,
       updated_at: new Date().toISOString(),

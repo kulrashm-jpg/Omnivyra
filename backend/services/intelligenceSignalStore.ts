@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Unified Intelligence Signal Store
  * Central signal storage layer for the External API Intelligence System.
@@ -111,8 +112,7 @@ export async function insertNormalizedSignals(
       relevance_score: s.relevance_score ?? null,
     };
 
-    const { data: insertedRows, error } = await supabase
-      .from('intelligence_signals')
+    const { data: insertedRows, error } = await ownedDbTable('intelligence_signals')
       .upsert(row, {
         onConflict: 'idempotency_key',
         ignoreDuplicates: true,
@@ -177,19 +177,19 @@ async function insertEntities(
 
   if (entities.topics.length > 0) {
     const rows = entities.topics.map(trim).filter(nonEmpty).map((value) => ({ signal_id: signalId, value }));
-    if (rows.length > 0) await supabase.from('signal_topics').insert(rows);
+    if (rows.length > 0) await ownedDbTable('signal_topics').insert(rows);
   }
   if (entities.companies.length > 0) {
     const rows = entities.companies.map(trim).filter(nonEmpty).map((value) => ({ signal_id: signalId, value }));
-    if (rows.length > 0) await supabase.from('signal_companies').insert(rows);
+    if (rows.length > 0) await ownedDbTable('signal_companies').insert(rows);
   }
   if (entities.keywords.length > 0) {
     const rows = entities.keywords.map(trim).filter(nonEmpty).map((value) => ({ signal_id: signalId, value }));
-    if (rows.length > 0) await supabase.from('signal_keywords').insert(rows);
+    if (rows.length > 0) await ownedDbTable('signal_keywords').insert(rows);
   }
   if (entities.influencers.length > 0) {
     const rows = entities.influencers.map(trim).filter(nonEmpty).map((value) => ({ signal_id: signalId, value }));
-    if (rows.length > 0) await supabase.from('signal_influencers').insert(rows);
+    if (rows.length > 0) await ownedDbTable('signal_influencers').insert(rows);
   }
 }
 

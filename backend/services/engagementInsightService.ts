@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Insight Service
  * Detects buyer intent, conversation clusters, and opportunity signals from engagement.
@@ -140,8 +141,7 @@ export async function generateEngagementInsights(accountId: string): Promise<Pla
   const now = new Date().toISOString();
   const since = new Date(Date.now() - 30 * 24 * 3_600_000).toISOString();
 
-  const { data } = await supabase
-    .from('community_ai_actions')
+  const { data } = await ownedDbTable('community_ai_actions')
     .select('suggested_text, intent_classification, tone')
     .eq('organization_id', accountId)
     .gte('created_at', since)
@@ -199,8 +199,7 @@ export async function storeInsightAsOpportunity(
   }
 ): Promise<string | null> {
   try {
-    const { data: existingThread } = await supabase
-      .from('engagement_threads')
+    const { data: existingThread } = await ownedDbTable('engagement_threads')
       .select('id')
       .eq('organization_id', organizationId)
       .limit(1)
@@ -208,8 +207,7 @@ export async function storeInsightAsOpportunity(
 
     let threadId = insight.source_thread_id;
     if (!threadId && existingThread?.id) {
-      const { data: firstMsg } = await supabase
-        .from('engagement_messages')
+      const { data: firstMsg } = await ownedDbTable('engagement_messages')
         .select('id')
         .eq('thread_id', existingThread.id)
         .limit(1)
@@ -217,8 +215,7 @@ export async function storeInsightAsOpportunity(
       threadId = existingThread.id;
       const msgId = insight.source_message_id || (firstMsg as { id?: string })?.id;
       if (msgId) {
-        const { data: opp } = await supabase
-          .from('engagement_opportunities')
+        const { data: opp } = await ownedDbTable('engagement_opportunities')
           .insert({
             organization_id: organizationId,
             platform: insight.platform,

@@ -3,6 +3,7 @@ import { supabase } from '../db/supabaseClient';
 import type { ReportCategory } from './reportCardService';
 import type { ReportRequestPayload } from './reportInputResolver';
 import { evaluateResolvedReportReadiness } from './reportReadinessService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type AutomationFrequency = 'weekly' | 'biweekly' | 'monthly';
 export type AutomationEventType = 'scheduled' | 'content_change' | 'traffic_change';
@@ -115,20 +116,17 @@ function safeSnapshot(input: unknown): BaselineSignals | null {
 async function buildCurrentBaselineSignals(companyId: string): Promise<BaselineSignals> {
   const nowIso = new Date().toISOString();
 
-  const canonicalPagesPromise = supabase
-    .from('canonical_pages')
+  const canonicalPagesPromise = ownedDbTable('canonical_pages')
     .select('id, updated_at')
     .eq('company_id', companyId)
     .limit(1000);
 
-  const keywordMetricsPromise = supabase
-    .from('keyword_metrics')
+  const keywordMetricsPromise = ownedDbTable('keyword_metrics')
     .select('impressions, clicks, metric_date')
     .eq('company_id', companyId)
     .gte('metric_date', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
 
-  const blogsPromise = supabase
-    .from('blogs')
+  const blogsPromise = ownedDbTable('blogs')
     .select('id, updated_at')
     .eq('company_id', companyId)
     .limit(1000);
@@ -248,8 +246,7 @@ async function createNotification(params: {
     .update(`${params.userId}|${params.type}|${params.linkedReportId}|${params.message}`)
     .digest('hex');
 
-  const insertResult = await supabase
-    .from('report_notification_events')
+  const insertResult = await ownedDbTable('report_notification_events')
     .insert({
       user_id: params.userId,
       company_id: params.companyId,
@@ -278,8 +275,7 @@ async function createNotification(params: {
         ? 'Snapshot Decline Alert'
         : 'Snapshot Opportunity';
 
-  await supabase
-    .from('notifications')
+  await ownedDbTable('notifications')
     .insert({
       user_id: params.userId,
       type: `report_${params.type}`,
@@ -303,8 +299,7 @@ async function triggerSnapshotReport(params: {
   triggerReason: AutomationEventType;
   triggerDetails: Record<string, unknown>;
 }): Promise<{ reportId: string | null; skippedReason?: string }> {
-  const existingGenerating = await supabase
-    .from('reports')
+  const existingGenerating = await ownedDbTable('reports')
     .select('id')
     .eq('company_id', params.companyId)
     .eq('domain', params.domain)
@@ -367,8 +362,7 @@ export async function ensureAutomationConfig(params: {
   const normalizedDomain = String(params.domain || '').toLowerCase();
   if (!normalizedDomain) return;
 
-  await supabase
-    .from('report_automation_configs')
+  await ownedDbTable('report_automation_configs')
     .upsert({
       user_id: params.userId,
       company_id: params.companyId,
@@ -392,8 +386,7 @@ export async function runReportAutomationCycle(): Promise<{
   events: Array<{ configId: string; eventType: AutomationEventType; reportId: string | null; reason: string }>;
 }> {
   const nowIso = new Date().toISOString();
-  const configsRes = await supabase
-    .from('report_automation_configs')
+  const configsRes = await ownedDbTable('report_automation_configs')
     .select('*')
     .eq('is_active', true)
     .order('updated_at', { ascending: true })
@@ -423,8 +416,7 @@ export async function runReportAutomationCycle(): Promise<{
 
     if (!eventType) {
       skipped += 1;
-      await supabase
-        .from('report_automation_configs')
+      await ownedDbTable('report_automation_configs')
         .update({
           last_checked_at: nowIso,
           last_change_snapshot: currentBaseline,
@@ -446,8 +438,7 @@ export async function runReportAutomationCycle(): Promise<{
       },
     });
 
-    await supabase
-      .from('report_automation_events')
+    await ownedDbTable('report_automation_events')
       .insert({
         automation_config_id: config.id,
         user_id: config.user_id,
@@ -462,8 +453,7 @@ export async function runReportAutomationCycle(): Promise<{
         },
       });
 
-    await supabase
-      .from('report_automation_configs')
+    await ownedDbTable('report_automation_configs')
       .update({
         last_checked_at: nowIso,
         last_run_at: triggerResult.reportId ? nowIso : config.last_run_at,
@@ -493,8 +483,7 @@ export async function runReportAutomationCycle(): Promise<{
   }
 
   // Count newly generated report notifications in the trailing window.
-  const notificationsRes = await supabase
-    .from('report_notification_events')
+  const notificationsRes = await ownedDbTable('report_notification_events')
     .select('id')
     .gte('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString());
   if (!notificationsRes.error) {
@@ -519,8 +508,7 @@ export async function handleSnapshotReportCompleted(params: {
   const currentSignals = extractSnapshotSignalsFromReportData(params.data);
   const nowIso = new Date().toISOString();
 
-  const previousRes = await supabase
-    .from('reports')
+  const previousRes = await ownedDbTable('reports')
     .select('id, data, created_at')
     .eq('company_id', params.companyId)
     .eq('domain', params.domain)
@@ -538,8 +526,7 @@ export async function handleSnapshotReportCompleted(params: {
   const unifiedDelta = Number((currentSignals.unified_score - previousSignals.unified_score).toFixed(2));
   const opportunityDelta = currentSignals.opportunity_count - previousSignals.opportunity_count;
 
-  const configsRes = await supabase
-    .from('report_automation_configs')
+  const configsRes = await ownedDbTable('report_automation_configs')
     .select('id, user_id, company_id, domain, frequency, is_active')
     .eq('company_id', params.companyId)
     .eq('domain', params.domain)
@@ -559,8 +546,7 @@ export async function handleSnapshotReportCompleted(params: {
   }>;
 
   for (const config of configs) {
-    await supabase
-      .from('report_automation_configs')
+    await ownedDbTable('report_automation_configs')
       .update({
         last_run_at: nowIso,
         next_run_at: buildAdaptiveNextRunAt(nowIso, params.data),

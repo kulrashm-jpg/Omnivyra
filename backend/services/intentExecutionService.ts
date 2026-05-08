@@ -45,23 +45,19 @@
  */
 
 import IORedis from 'ioredis';
-import { createClient } from '@supabase/supabase-js';
+import {
+  defaultCompanyExecutionFlags,
+  readAllCompanyExecutionFlags,
+  readCompanyExecutionFlags,
+  writeCompanyExecutionFlags,
+  type CompanyExecutionFlags,
+} from '../repositories/intentExecutionConfigRepository';
+
+export type { CompanyExecutionFlags } from '../repositories/intentExecutionConfigRepository';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
-
-export interface CompanyExecutionFlags {
-  insights: {
-    market_trends:        boolean;
-    competitor_tracking:  boolean;
-    ai_recommendations:   boolean;
-  };
-  frequency: {
-    /** Minimum cadence for insight-related jobs ('1h' | '2h' | '8h'). */
-    insights: '1h' | '2h' | '8h';
-  };
-}
 
 export type IntentEvent =
   | 'company_created'    // triggers enrichment + initial signal ingestion
@@ -303,43 +299,6 @@ export function shutdownIntentExecutionRedis(): void {
 // Supabase client (service-role, for config reads and savings log writes)
 // ─────────────────────────────────────────────────────────────────────────────
 
-let _db: ReturnType<typeof createClient> | null = null;
-function getDb() {
-  if (_db) return _db;
-  _db = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { persistSession: false, autoRefreshToken: false } },
-  );
-  return _db;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Default flags (all enabled, 2h cadence)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function defaultFlags(): CompanyExecutionFlags {
-  return {
-    insights: { market_trends: true, competitor_tracking: true, ai_recommendations: true },
-    frequency: { insights: '2h' },
-  };
-}
-
-function rowToFlags(row: Record<string, unknown>): CompanyExecutionFlags {
-  return {
-    insights: {
-      market_trends:       Boolean(row.insights_market_trends       ?? true),
-      competitor_tracking: Boolean(row.insights_competitor_tracking ?? true),
-      ai_recommendations:  Boolean(row.insights_ai_recommendations  ?? true),
-    },
-    frequency: {
-      insights: (['1h', '2h', '8h'].includes(row.frequency_insights as string)
-        ? (row.frequency_insights as '1h' | '2h' | '8h')
-        : '2h'),
-    },
-  };
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Part 1 — Company execution flags
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,14 +314,7 @@ export async function getCompanyExecutionFlags(companyId: string): Promise<Compa
   } catch { /* ignore */ }
 
   try {
-    const db = getDb();
-    const { data } = await (db as any)
-      .from('company_execution_config')
-      .select('*')
-      .eq('company_id', companyId)
-      .maybeSingle();
-
-    const flags = data ? rowToFlags(data as Record<string, unknown>) : defaultFlags();
+    const flags = (await readCompanyExecutionFlags(companyId)) ?? defaultCompanyExecutionFlags();
 
     // Cache for 10 minutes
     getRedis()
@@ -371,7 +323,7 @@ export async function getCompanyExecutionFlags(companyId: string): Promise<Compa
 
     return flags;
   } catch {
-    return defaultFlags();
+    return defaultCompanyExecutionFlags();
   }
 }
 
@@ -384,8 +336,6 @@ export async function setCompanyExecutionFlags(
   flags:     Partial<CompanyExecutionFlags>,
   updatedBy: string = 'api',
 ): Promise<void> {
-  const db = getDb();
-
   // Merge with existing to allow partial updates
   const existing = await getCompanyExecutionFlags(companyId);
   const merged: CompanyExecutionFlags = {
@@ -393,17 +343,7 @@ export async function setCompanyExecutionFlags(
     frequency: { ...existing.frequency, ...flags.frequency },
   };
 
-  await (db as any).from('company_execution_config').upsert(
-    {
-      company_id:                   companyId,
-      insights_market_trends:       merged.insights.market_trends,
-      insights_competitor_tracking: merged.insights.competitor_tracking,
-      insights_ai_recommendations:  merged.insights.ai_recommendations,
-      frequency_insights:           merged.frequency.insights,
-      updated_at:                   new Date().toISOString(),
-    },
-    { onConflict: 'company_id' },
-  );
+  await writeCompanyExecutionFlags(companyId, merged);
 
   // Invalidate cache
   getRedis().del(KEYS.companyConfigCache(companyId)).catch(() => {});
@@ -431,14 +371,8 @@ async function loadAllCompanyConfigs(): Promise<Map<string, CompanyExecutionFlag
   } catch { /* ignore */ }
 
   try {
-    const db = getDb();
-    const { data } = await (db as any)
-      .from('company_execution_config')
-      .select('company_id, insights_market_trends, insights_competitor_tracking, insights_ai_recommendations, frequency_insights');
-
-    for (const row of data ?? []) {
-      out.set(row.company_id, rowToFlags(row as Record<string, unknown>));
-    }
+    const repoConfigs = await readAllCompanyExecutionFlags();
+    for (const [companyId, flags] of repoConfigs) out.set(companyId, flags);
 
     // Cache the full list
     const payload = JSON.stringify([...out.entries()].map(([id, flags]) => ({ id, flags })));
@@ -649,7 +583,7 @@ export async function warmIntentContext(): Promise<void> {
     // For each active company → check each feature flag → if enabled, mark
     // the associated job keys as enabled and track the minimum frequency.
     for (const companyId of activeIds) {
-      const flags = allConfigs.get(companyId) ?? defaultFlags();
+      const flags = allConfigs.get(companyId) ?? defaultCompanyExecutionFlags();
       const freqMs = FREQUENCY_MS[flags.frequency.insights] ?? FREQUENCY_MS['2h'];
 
       for (const [featurePath, jobKeys] of Object.entries(FEATURE_JOB_MAP)) {

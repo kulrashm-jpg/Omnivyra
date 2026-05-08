@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Health Monitor — runs every 6 hours via cron.
  *
@@ -40,8 +41,7 @@ type WindowRow = {
 /** Retrieve the two most recent 6-hour engagement windows for all active campaigns. */
 async function getRecentEngagementWindows(): Promise<Map<string, WindowRow[]>> {
   const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(); // last 48 h
-  const { data, error } = await supabase
-    .from('performance_feedback')
+  const { data, error } = await ownedDbTable('performance_feedback')
     .select('campaign_id, engagement_rate, collected_at')
     .gte('collected_at', since)
     .order('collected_at', { ascending: true });
@@ -72,8 +72,7 @@ async function getRecentEngagementWindows(): Promise<Map<string, WindowRow[]>> {
 
 /** Load previous health report status for a campaign. */
 async function getPreviousHealthStatus(campaignId: string): Promise<{ status: CampaignHealthStatus; critical_run_count: number } | null> {
-  const { data } = await supabase
-    .from('campaign_health_reports')
+  const { data } = await ownedDbTable('campaign_health_reports')
     .select('report')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
@@ -90,8 +89,7 @@ async function getPreviousHealthStatus(campaignId: string): Promise<{ status: Ca
 
 /** Pause a campaign and record the action. */
 async function pauseCampaign(campaignId: string): Promise<void> {
-  await supabase
-    .from('campaigns')
+  await ownedDbTable('campaigns')
     .update({ status: 'paused', updated_at: new Date().toISOString() })
     .eq('id', campaignId);
 }
@@ -100,15 +98,14 @@ async function pauseCampaign(campaignId: string): Promise<void> {
 async function triggerNotification(campaignId: string, reason: string): Promise<void> {
   try {
     // Resolve company_id for the notification
-    const { data: campaign } = await supabase
-      .from('campaigns')
+    const { data: campaign } = await ownedDbTable('campaigns')
       .select('company_id, name')
       .eq('id', campaignId)
       .maybeSingle();
 
     if (!campaign?.company_id) return;
 
-    await supabase.from('notifications').insert({
+    await ownedDbTable('notifications').insert({
       company_id: campaign.company_id,
       type: 'campaign_auto_paused',
       title: 'Campaign auto-paused',
@@ -131,8 +128,7 @@ async function triggerOptimizationAdjustments(
 ): Promise<void> {
   try {
     // Load current posting frequency
-    const { data: campaign } = await supabase
-      .from('campaigns')
+    const { data: campaign } = await ownedDbTable('campaigns')
       .select('posting_frequency, platforms')
       .eq('id', campaignId)
       .maybeSingle();
@@ -148,7 +144,7 @@ async function triggerOptimizationAdjustments(
       adjustedFreq[p] = Math.max(1, Math.round(freq * 0.8));
     }
 
-    await supabase.from('campaigns')
+    await ownedDbTable('campaigns')
       .update({
         posting_frequency: adjustedFreq,
         updated_at:        new Date().toISOString(),
@@ -185,8 +181,7 @@ export async function runCampaignHealthMonitor(): Promise<CampaignHealthMonitorR
   };
 
   try {
-    const { data: activeCampaigns } = await supabase
-      .from('campaigns')
+    const { data: activeCampaigns } = await ownedDbTable('campaigns')
       .select('id, company_id')
       .in('status', ['active', 'scheduled', 'execution_ready', 'campaign_week_plan']);
 
@@ -261,7 +256,7 @@ export async function runCampaignHealthMonitor(): Promise<CampaignHealthMonitorR
         }
 
         // ── Persist report ───────────────────────────────────────────────────
-        await supabase.from('campaign_health_reports').insert({
+        await ownedDbTable('campaign_health_reports').insert({
           campaign_id: campaignId,
           health_status: newStatus,
           status: newStatus.toLowerCase(),

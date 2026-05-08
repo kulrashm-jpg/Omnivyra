@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Ingest Service
  *
@@ -140,8 +141,7 @@ export async function ingestComment(input: {
   });
 
   try {
-    const { data, error } = await supabase
-      .from('community_ai_actions')
+    const { data, error } = await ownedDbTable('community_ai_actions')
       .insert({
         organization_id: input.organization_id,
         platform: input.platform,
@@ -174,8 +174,7 @@ export async function ingestComment(input: {
 export async function computeCampaignSentimentScore(campaignId: string): Promise<number | null> {
   try {
     // Join via posts linked to campaign
-    const { data } = await supabase
-      .from('community_ai_actions')
+    const { data } = await ownedDbTable('community_ai_actions')
       .select('intent_classification')
       .contains('intent_classification', { campaign_id: campaignId });
 

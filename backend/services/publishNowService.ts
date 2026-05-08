@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Publish Now Service
  *
@@ -117,8 +118,7 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     : platformError.user_message;
 
   await updateScheduledPostOnFailure(scheduled_post_id, errorDetail);
-  await supabase
-    .from('scheduled_posts')
+  await ownedDbTable('scheduled_posts')
     .update({
       error_code: platformError.code,
       error_message: errorDetail,

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import {
   ChevronDown,
   ChevronRight,
@@ -307,12 +308,12 @@ export default function ActivityCostBreakdown({
     const fetchData = async () => {
       try {
         setLoading(true);
-        const res = await fetch(
-          `/api/super-admin/activity-cost-breakdown?period=${period}&org_id=${orgId}`
+        const result = await safeFetchJson(
+          `/api/super-admin/activity-cost-breakdown?period=${period}&org_id=${orgId}`,
+          { credentials: 'same-origin' },
         );
-        if (!res.ok) throw new Error('Failed to fetch data');
-        const json = await res.json();
-        setData(json);
+        if (result.ok !== true) throw new Error(result.message || 'Failed to fetch data');
+        setData(result.data as any);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {

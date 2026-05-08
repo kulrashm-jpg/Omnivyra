@@ -16,16 +16,16 @@ import {
   computeCompanyHealthScore,
   computeAllCompanyHealthScores,
 } from '../../../../backend/services/intelligenceHealthService';
-
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'intelligence company-health dashboard',
+  });
+  if (guard.ok !== true) return;
 
   try {
     // ── Single company ──────────────────────────────────────────────────────

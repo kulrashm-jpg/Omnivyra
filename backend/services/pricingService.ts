@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type PricingKind = 'completion' | 'embedding';
 
@@ -110,8 +111,7 @@ async function fetchModelPricingRow(
   kind: PricingKind,
   effectiveAt: string,
 ): Promise<ModelPricingRow> {
-  const { data, error } = await supabase
-    .from('llm_model_pricing')
+  const { data, error } = await ownedDbTable('llm_model_pricing')
     .select('provider, model_name, kind, input_per_1k_usd, output_per_1k_usd, effective_from, max_context_tokens, max_output_tokens')
     .eq('provider', provider)
     .eq('model_name', model)
@@ -146,8 +146,7 @@ async function fetchActionPricingRow(
   actionKey: string,
   effectiveAt: string,
 ): Promise<ActionPricingRow> {
-  const { data, error } = await supabase
-    .from('action_pricing_config')
+  const { data, error } = await ownedDbTable('action_pricing_config')
     .select('action_key, cost_multiplier, minimum_charge_usd, ceiling_usd, effective_from')
     .eq('action_key', actionKey)
     .eq('is_active', true)
@@ -173,8 +172,7 @@ async function fetchActionPricingRow(
 }
 
 async function fetchCreditRateUsd(orgId: string): Promise<number> {
-  const { data, error } = await supabase
-    .from('organization_credits')
+  const { data, error } = await ownedDbTable('organization_credits')
     .select('credit_rate_usd')
     .eq('organization_id', orgId)
     .maybeSingle();
@@ -518,7 +516,7 @@ const ANOMALY_TO_ALERT_TYPE: Record<AnomalyType, 'high_cost' | 'negative_margin'
 
 export async function recordCostAnomaly(opts: RecordAnomalyOpts): Promise<void> {
   try {
-    await supabase.from('cost_anomalies').insert({
+    await ownedDbTable('cost_anomalies').insert({
       organization_id: opts.organizationId ?? null,
       anomaly_type: opts.type,
       severity: opts.severity ?? 'warn',

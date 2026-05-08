@@ -23,22 +23,17 @@ import {
   upsertCompanyOverride,
   getCompanyOverride,
 } from '../../../../backend/services/intelligenceConfigService';
-
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
-
-async function resolveUser(req: NextApiRequest): Promise<string> {
-  const { getSupabaseUserFromRequest } = await import('../../../../backend/services/supabaseAuthService');
-  const { user } = await getSupabaseUserFromRequest(req);
-  return user?.email ?? user?.id ?? 'super_admin';
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  const guard = await requireCapability(req, res, {
+    capability: INTELLIGENCE_OVERRIDE_MANAGE,
+    reason: 'intelligence scheduler boost',
+  });
+  if (guard.ok !== true) return;
+  const resolveUser = async () => guard.principal.email || guard.principal.userId;
 
   const { company_id, action, duration_hours = 48, job_types } = req.body ?? {};
 
@@ -49,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'action must be "apply" or "remove"' });
   }
 
-  const updatedBy = await resolveUser(req);
+  const updatedBy = await resolveUser();
 
   try {
     if (action === 'apply') {

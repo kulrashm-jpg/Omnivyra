@@ -1,7 +1,15 @@
 import React from 'react';
 import EmptyState from '@/components/shared/EmptyState';
 import ExamplePreview from '@/components/shared/ExamplePreview';
+import StepTracker, { type StepDef } from '@/components/progress/StepTracker';
 import { renderPlanSummary } from './chatHelpers';
+
+const AUDIT_LOAD_STAGES: StepDef[] = [
+  { key: 'plan',     label: 'Reading campaign plan',  etaSeconds: 2 },
+  { key: 'metrics',  label: 'Pulling current metrics', etaSeconds: 2 },
+  { key: 'evaluate', label: 'Evaluating audit checks', etaSeconds: 2 },
+  { key: 'score',    label: 'Scoring confidence',     etaSeconds: 2 },
+];
 
 type TabKind = 'history' | 'audit' | 'execution' | 'content' | 'performance' | 'memory' | 'business' | 'platform';
 
@@ -11,6 +19,7 @@ type CampaignAINonChatContentProps = {
   isHistoryLoading: boolean;
   isAuditLoading: boolean;
   auditReport: any;
+  auditStartedAt?: number | null;
   isHealthLoading: boolean;
   healthReport: any;
   optimizeWeekNumber: number;
@@ -69,6 +78,7 @@ export function CampaignAINonChatContent(props: CampaignAINonChatContentProps) {
     isHistoryLoading,
     isAuditLoading,
     auditReport,
+    auditStartedAt,
     isHealthLoading,
     healthReport,
     optimizeWeekNumber,
@@ -153,7 +163,7 @@ export function CampaignAINonChatContent(props: CampaignAINonChatContentProps) {
   if (activeTab === 'audit') {
     return (
       <div className="space-y-3">
-        {isAuditLoading ? <div className="text-sm text-gray-500">Loading audit report...</div> : !auditReport ? <div className="text-sm text-gray-500">No audit report available.</div> : <div className="border rounded-lg p-4 bg-white space-y-2"><div className="flex items-center justify-between"><div className="text-sm font-semibold text-gray-900">Campaign Audit Report</div><span className={`text-xs px-2 py-1 rounded-full ${auditReport.status === 'healthy' ? 'bg-green-100 text-green-800' : auditReport.status === 'warning' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>{auditReport.status}</span></div><div className="text-xs text-gray-500">Confidence score: {auditReport.confidence_score ?? 0}%</div><div className="border-t pt-3 mt-3 space-y-2"><div className="flex items-center justify-between"><div className="text-sm font-semibold text-gray-900">Campaign Health</div>{isHealthLoading ? <span className="text-xs text-gray-500">Loading...</span> : <span title={healthReport?.issues ? healthReport.issues.map((issue: any) => `${issue.level.toUpperCase()}: ${issue.message}`).join(' | ') : 'No issues'} className={`text-xs px-2 py-1 rounded-full ${healthReport?.status === 'healthy' ? 'bg-green-100 text-green-800' : healthReport?.status === 'warning' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>{healthReport?.status ?? 'unknown'}</span>}</div><div className="text-xs text-gray-500">Confidence: {healthReport?.confidence ?? 0}%</div><div className="h-2 w-full bg-gray-100 rounded"><div className={`h-2 rounded ${(healthReport?.confidence ?? 0) >= 80 ? 'bg-green-500' : (healthReport?.confidence ?? 0) >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, Math.max(0, healthReport?.confidence ?? 0))}%` }} /></div><details className="text-xs text-gray-700"><summary className="cursor-pointer font-semibold">Health report JSON</summary><pre className="mt-2 whitespace-pre-wrap bg-gray-50 p-2 rounded border text-[11px] text-gray-800">{JSON.stringify(healthReport, null, 2)}</pre></details></div><div className="border-t pt-3 mt-3 space-y-2"><div className="text-sm font-semibold text-gray-900">Optimize Week</div><div className="flex items-center gap-2"><input type="number" min={1} max={12} value={optimizeWeekNumber} onChange={(e) => setOptimizeWeekNumber(Number(e.target.value))} className="w-20 rounded border border-gray-200 px-2 py-1 text-xs" /><input type="text" value={optimizeReason} onChange={(e) => setOptimizeReason(e.target.value)} placeholder="Reason for optimization" className="flex-1 rounded border border-gray-200 px-2 py-1 text-xs" /><button onClick={handleOptimizeWeek} disabled={isOptimizingWeek} className="px-3 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50">{isOptimizingWeek ? 'Optimizing...' : 'Optimize'}</button></div>{optimizeResult && <div className="text-xs text-gray-600">{optimizeResult.change_summary || 'Optimization complete.'}</div>}</div><details className="text-xs text-gray-700"><summary className="cursor-pointer font-semibold">View raw JSON</summary><pre className="mt-2 whitespace-pre-wrap bg-gray-50 p-2 rounded border text-[11px] text-gray-800">{JSON.stringify(auditReport, null, 2)}</pre></details></div>}
+        {isAuditLoading ? <StepTracker stages={AUDIT_LOAD_STAGES} startedAt={auditStartedAt ?? Date.now()} accent="indigo" title="Generating audit report" variant="card" /> : !auditReport ? <div className="text-sm text-gray-500">No audit report available.</div> : <div className="border rounded-lg p-4 bg-white space-y-2"><div className="flex items-center justify-between"><div className="text-sm font-semibold text-gray-900">Campaign Audit Report</div><span className={`text-xs px-2 py-1 rounded-full ${auditReport.status === 'healthy' ? 'bg-green-100 text-green-800' : auditReport.status === 'warning' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>{auditReport.status}</span></div><div className="text-xs text-gray-500">Confidence score: {auditReport.confidence_score ?? 0}%</div><div className="border-t pt-3 mt-3 space-y-2"><div className="flex items-center justify-between"><div className="text-sm font-semibold text-gray-900">Campaign Health</div>{isHealthLoading ? <span className="text-xs text-gray-500">Loading...</span> : <span title={healthReport?.issues ? healthReport.issues.map((issue: any) => `${issue.level.toUpperCase()}: ${issue.message}`).join(' | ') : 'No issues'} className={`text-xs px-2 py-1 rounded-full ${healthReport?.status === 'healthy' ? 'bg-green-100 text-green-800' : healthReport?.status === 'warning' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>{healthReport?.status ?? 'unknown'}</span>}</div><div className="text-xs text-gray-500">Confidence: {healthReport?.confidence ?? 0}%</div><div className="h-2 w-full bg-gray-100 rounded"><div className={`h-2 rounded ${(healthReport?.confidence ?? 0) >= 80 ? 'bg-green-500' : (healthReport?.confidence ?? 0) >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, Math.max(0, healthReport?.confidence ?? 0))}%` }} /></div><details className="text-xs text-gray-700"><summary className="cursor-pointer font-semibold">Health report JSON</summary><pre className="mt-2 whitespace-pre-wrap bg-gray-50 p-2 rounded border text-[11px] text-gray-800">{JSON.stringify(healthReport, null, 2)}</pre></details></div><div className="border-t pt-3 mt-3 space-y-2"><div className="text-sm font-semibold text-gray-900">Optimize Week</div><div className="flex items-center gap-2"><input type="number" min={1} max={12} value={optimizeWeekNumber} onChange={(e) => setOptimizeWeekNumber(Number(e.target.value))} className="w-20 rounded border border-gray-200 px-2 py-1 text-xs" /><input type="text" value={optimizeReason} onChange={(e) => setOptimizeReason(e.target.value)} placeholder="Reason for optimization" className="flex-1 rounded border border-gray-200 px-2 py-1 text-xs" /><button onClick={handleOptimizeWeek} disabled={isOptimizingWeek} className="px-3 py-1 text-xs rounded bg-indigo-600 text-white disabled:opacity-50">{isOptimizingWeek ? 'Optimizing...' : 'Optimize'}</button></div>{optimizeResult && <div className="text-xs text-gray-600">{optimizeResult.change_summary || 'Optimization complete.'}</div>}</div><details className="text-xs text-gray-700"><summary className="cursor-pointer font-semibold">View raw JSON</summary><pre className="mt-2 whitespace-pre-wrap bg-gray-50 p-2 rounded border text-[11px] text-gray-800">{JSON.stringify(auditReport, null, 2)}</pre></details></div>}
       </div>
     );
   }

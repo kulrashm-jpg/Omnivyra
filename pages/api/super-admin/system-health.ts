@@ -16,8 +16,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { getHourlyBaseline } from '../../../lib/anomaly/baselineService';
 import { ANOMALY_CONFIGS } from '../../../lib/anomaly/types';
 import { getUsageStatus } from '../../../lib/redis/usageProtection';
@@ -26,11 +26,11 @@ const requireSuperAdmin = async (
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'system health dashboard',
+  });
+  return guard.ok === true;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

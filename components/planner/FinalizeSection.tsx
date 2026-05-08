@@ -12,9 +12,9 @@ import { createCampaignWizardStore } from '../../store/campaignWizardStore';
 import { CampaignValidationCard } from './CampaignValidationCard';
 import { GrowthStrategyCard } from './GrowthStrategyCard';
 import { WhatIfPanel } from './WhatIfPanel';
-import type { CampaignValidation } from '../../backend/lib/validation/campaignValidator';
-import type { PaidRecommendation } from '../../backend/lib/ads/paidAmplificationEngine';
-import type { SimulatorBasePlan } from '../../backend/lib/simulation/scenarioSimulator';
+import type { CampaignValidation } from '../../lib/validation/campaignValidator';
+import type { PaidRecommendation } from '../../lib/ads/paidAmplificationEngine';
+import type { SimulatorBasePlan } from '../../lib/simulation/scenarioSimulator';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
 import { buildPlannerExecutionHandoff, buildPlannerPrefilledPlanning } from '../../lib/plannerExecutionHandoff';
 
@@ -275,3 +275,4 @@ export function FinalizeSection({
     </div>
   );
 }
+

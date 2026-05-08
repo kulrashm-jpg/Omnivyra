@@ -1,5 +1,6 @@
 import { supabase } from '../../db/supabaseClient';
 import { rpaEnvReady, isProbeFailure } from './rpaEnv';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Per-organization RPA backpressure state machine.
@@ -62,8 +63,7 @@ function cacheInvalidate(orgId?: string): void {
 
 async function fetchStateFromDb(orgId: string): Promise<OrgStateRow | null> {
   try {
-    const { data } = await supabase
-      .from('rpa_queue_state')
+    const { data } = await ownedDbTable('rpa_queue_state')
       .select('organization_id, status, reason, failure_rate, window_size, observed_at')
       .eq('organization_id', orgId)
       .maybeSingle();
@@ -100,8 +100,7 @@ export async function getRpaQueueState(
 
 async function upsertState(row: OrgStateRow): Promise<void> {
   try {
-    await supabase
-      .from('rpa_queue_state')
+    await ownedDbTable('rpa_queue_state')
       .upsert(
         {
           organization_id: row.organization_id,
@@ -122,8 +121,7 @@ async function upsertState(row: OrgStateRow): Promise<void> {
 
 async function countMetric(orgId: string, eventType: string, sinceIso: string): Promise<number> {
   try {
-    const { count } = await supabase
-      .from('community_ai_execution_metric_events')
+    const { count } = await ownedDbTable('community_ai_execution_metric_events')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', orgId)
       .eq('execution_mode', 'rpa')
@@ -255,8 +253,7 @@ export async function observeAllActiveOrgs(options?: { windowSeconds?: number })
 export async function listRecentlyActiveOrgs(windowSeconds: number): Promise<string[]> {
   const since = new Date(Date.now() - windowSeconds * 1000).toISOString();
   try {
-    const { data } = await supabase
-      .from('community_ai_execution_metric_events')
+    const { data } = await ownedDbTable('community_ai_execution_metric_events')
       .select('organization_id')
       .eq('execution_mode', 'rpa')
       .gte('created_at', since)

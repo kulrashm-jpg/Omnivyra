@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Media Service
  * 
@@ -311,8 +312,7 @@ export async function uploadMedia(options: UploadMediaOptions): Promise<MediaFil
   let currentPayload: Record<string, any> | null = insertPayload;
 
   while (currentPayload) {
-    const result = await supabase
-      .from('media_files')
+    const result = await ownedDbTable('media_files')
       .insert(currentPayload)
       .select()
       .single();
@@ -344,8 +344,7 @@ export async function uploadMedia(options: UploadMediaOptions): Promise<MediaFil
  * Get media file by ID
  */
 export async function getMediaFile(mediaId: string): Promise<MediaFile | null> {
-  const { data, error } = await supabase
-    .from('media_files')
+  const { data, error } = await ownedDbTable('media_files')
     .select('*')
     .eq('id', mediaId)
     .single();
@@ -369,7 +368,7 @@ export async function listMediaFiles(options: {
   mediaType?: MediaType;
   limit?: number;
 }): Promise<MediaFile[]> {
-  let query = supabase.from('media_files').select('*');
+  let query = ownedDbTable('media_files').select('*');
 
   if (options.userId) {
     query = query.eq('user_id', options.userId);
@@ -420,8 +419,7 @@ export async function deleteMediaFile(mediaId: string): Promise<void> {
   }
 
   // Delete from database
-  const { error: dbError } = await supabase
-    .from('media_files')
+  const { error: dbError } = await ownedDbTable('media_files')
     .delete()
     .eq('id', mediaId);
 
@@ -438,8 +436,7 @@ export async function linkMediaToPost(
   mediaFileId: string,
   displayOrder: number = 0
 ): Promise<void> {
-  const { error } = await supabase
-    .from('scheduled_post_media')
+  const { error } = await ownedDbTable('scheduled_post_media')
     .insert({
       scheduled_post_id: scheduledPostId,
       media_file_id: mediaFileId,
@@ -455,8 +452,7 @@ export async function linkMediaToPost(
  * Get media files for a scheduled post
  */
 export async function getPostMedia(scheduledPostId: string): Promise<MediaFile[]> {
-  const { data, error } = await supabase
-    .from('scheduled_post_media')
+  const { data, error } = await ownedDbTable('scheduled_post_media')
     .select(`
       media_file_id,
       display_order,

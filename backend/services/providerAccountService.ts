@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Provider Account Service
  *
@@ -99,8 +100,7 @@ export async function getAllActiveAccountsForApi(
   apiSourceId: string,
 ): Promise<ProviderAccount[]> {
   try {
-    const { data, error } = await supabase
-      .from('api_provider_accounts')
+    const { data, error } = await ownedDbTable('api_provider_accounts')
       .select('*')
       .eq('api_source_id', apiSourceId)
       .eq('is_active', true)
@@ -135,8 +135,7 @@ export async function getActiveAccountForApi(
   apiSourceId: string,
 ): Promise<ProviderAccount | null> {
   try {
-    const { data, error } = await supabase
-      .from('api_provider_accounts')
+    const { data, error } = await ownedDbTable('api_provider_accounts')
       .select('*')
       .eq('api_source_id', apiSourceId)
       .eq('is_active', true)
@@ -170,8 +169,7 @@ export async function getActiveAccountForApi(
 export async function listAccountsForApi(
   apiSourceId: string,
 ): Promise<ProviderAccount[]> {
-  const { data, error } = await supabase
-    .from('api_provider_accounts')
+  const { data, error } = await ownedDbTable('api_provider_accounts')
     .select('*')
     .eq('api_source_id', apiSourceId)
     .order('priority', { ascending: true });
@@ -272,8 +270,7 @@ export async function createProviderAccount(input: {
   rate_limit_per_day?: number | null;
   priority?: number;
 }): Promise<ProviderAccount> {
-  const { data, error } = await supabase
-    .from('api_provider_accounts')
+  const { data, error } = await ownedDbTable('api_provider_accounts')
     .insert({
       api_source_id:        input.api_source_id,
       account_name:         input.account_name,
@@ -297,8 +294,7 @@ export async function updateProviderAccount(
     'account_name' | 'credentials_encrypted' | 'rate_limit_per_min' | 'rate_limit_per_day' | 'priority' | 'is_active'
   >>
 ): Promise<ProviderAccount> {
-  const { data, error } = await supabase
-    .from('api_provider_accounts')
+  const { data, error } = await ownedDbTable('api_provider_accounts')
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq('id', id)
     .select()
@@ -310,8 +306,7 @@ export async function updateProviderAccount(
 
 /** Soft delete — sets is_active=false */
 export async function deactivateProviderAccount(id: string): Promise<void> {
-  const { error } = await supabase
-    .from('api_provider_accounts')
+  const { error } = await ownedDbTable('api_provider_accounts')
     .update({ is_active: false, updated_at: new Date().toISOString() })
     .eq('id', id);
 

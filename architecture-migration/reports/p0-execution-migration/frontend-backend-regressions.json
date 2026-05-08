@@ -1,0 +1,389 @@
+[
+    {
+        "file":  "components/blog/intelligence/useBlogIntelligence.ts",
+        "line":  17,
+        "importedModule":  "../../../backend/services/companyProfileService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/BlogIntelView.tsx",
+        "line":  56,
+        "importedModule":  "../backend/services/companyProfileService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/BoltStrategyView.tsx",
+        "line":  19,
+        "importedModule":  "../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/campaign-ai/chatHelpers.ts",
+        "line":  1,
+        "importedModule":  "../../backend/constants/campaignPlanningGatherOrder",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/campaign-ai/planningContextHelpers.ts",
+        "line":  1,
+        "importedModule":  "../../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/campaign-ai/reviewActivityHelpers.ts",
+        "line":  1,
+        "importedModule":  "../../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/campaign-ai/useCampaignAiPlanningCatalog.ts",
+        "line":  3,
+        "importedModule":  "../../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/CampaignDetailsContent.tsx",
+        "line":  62,
+        "importedModule":  "../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/CampaignWeeklySection.tsx",
+        "line":  62,
+        "importedModule":  "../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/community-ai/PlaybookEditor.tsx",
+        "line":  2,
+        "importedModule":  "../../backend/services/playbooks/playbookTypes",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/community-ai/PlaybookList.tsx",
+        "line":  2,
+        "importedModule":  "../../backend/services/playbooks/playbookTypes",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/ContentRenderer.tsx",
+        "line":  28,
+        "importedModule":  "../backend/utils/contentFormatter",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/hooks/useDashboardState.tsx",
+        "line":  6,
+        "importedModule":  "../../backend/types/CampaignStage",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/CampaignValidationCard.tsx",
+        "line":  10,
+        "importedModule":  "../../backend/lib/validation/campaignValidator",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/FinalizeSection.tsx",
+        "line":  15,
+        "importedModule":  "../../backend/lib/validation/campaignValidator",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/FinalizeSection.tsx",
+        "line":  16,
+        "importedModule":  "../../backend/lib/ads/paidAmplificationEngine",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/FinalizeSection.tsx",
+        "line":  17,
+        "importedModule":  "../../backend/lib/simulation/scenarioSimulator",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/GrowthStrategyCard.tsx",
+        "line":  11,
+        "importedModule":  "../../backend/lib/ads/paidAmplificationEngine",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/plannerSessionStore.ts",
+        "line":  15,
+        "importedModule":  "../../backend/types/accountContext",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/PlatformContentMatrix.tsx",
+        "line":  12,
+        "importedModule":  "../../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/StrategyBuilderStep.tsx",
+        "line":  8,
+        "importedModule":  "../../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/WhatIfPanel.tsx",
+        "line":  11,
+        "importedModule":  "../../backend/lib/simulation/scenarioSimulator",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/WhatIfPanel.tsx",
+        "line":  16,
+        "importedModule":  "../../backend/lib/validation/campaignValidator",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/WhatIfPanel.tsx",
+        "line":  17,
+        "importedModule":  "../../backend/lib/ads/paidAmplificationEngine",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/planner/WhatIfPanel.tsx",
+        "line":  18,
+        "importedModule":  "../../backend/types/accountContext",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "components/WeekCard.tsx",
+        "line":  62,
+        "importedModule":  "../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/commandCenterScoreModel.ts",
+        "line":  2,
+        "importedModule":  "../backend/services/commandCenterReadinessService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/useActivityWorkspaceDerivedState.ts",
+        "line":  2,
+        "importedModule":  "@/backend/services/executionModeInference",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/useBlogIntel.tsx",
+        "line":  56,
+        "importedModule":  "../backend/services/companyProfileService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/useCampaignDetailsCore.tsx",
+        "line":  62,
+        "importedModule":  "../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/useCampaignDetailsHandlers.tsx",
+        "line":  63,
+        "importedModule":  "../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/useCampaignDetailsState.tsx",
+        "line":  62,
+        "importedModule":  "../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/useUserState.ts",
+        "line":  16,
+        "importedModule":  "../backend/services/commandCenterReadinessService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "hooks/useUserState.ts",
+        "line":  17,
+        "importedModule":  "../backend/services/commandCenterReadinessService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/admin/blog/intelligence.tsx",
+        "line":  56,
+        "importedModule":  "../../../backend/services/companyProfileService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/articles/index.tsx",
+        "line":  21,
+        "importedModule":  "../../backend/services/companyProfileService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/campaign-details/helpers.ts",
+        "line":  2,
+        "importedModule":  "../../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/campaign-details/helpers.ts",
+        "line":  72,
+        "importedModule":  "../../backend/types/CampaignStage",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/campaign-details/[id].tsx",
+        "line":  62,
+        "importedModule":  "../../backend/constants/platforms",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/campaign-planner.tsx",
+        "line":  30,
+        "importedModule":  "../backend/types/accountContext",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/campaigns.tsx",
+        "line":  6,
+        "importedModule":  "../backend/types/CampaignStage",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/capture/[id].tsx",
+        "line":  10,
+        "importedModule":  "../../backend/services/leadService",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    },
+    {
+        "file":  "pages/community-ai/playbooks.tsx",
+        "line":  8,
+        "importedModule":  "../../backend/services/playbooks/playbookTypes",
+        "importDirection":  "frontend-\u003ebackend",
+        "severity":  "warn",
+        "introducedBy":  "baseline/worktree drift",
+        "rootCause":  "frontend imports backend module directly; not introduced by alias-wrapper migration"
+    }
+]

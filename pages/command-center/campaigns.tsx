@@ -35,7 +35,7 @@ const CAMPAIGN_CARDS: CampaignCard[] = [
       'Works well for consistent B2B distribution',
     ],
     cta: 'Launch BOLT (Text)',
-    route: '/command-center/bolt-text-strategy',
+    route: '/command-center/bolt-text',
     accentFrom: 'from-amber-50',
     accentTo: 'to-yellow-50',
     borderColor: 'border-amber-200',

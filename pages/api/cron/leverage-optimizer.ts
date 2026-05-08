@@ -21,6 +21,7 @@ import { measureOutcomeScore } from '../../../backend/services/outcomeTrackingSe
 import { checkAndFailFast } from '../../../backend/services/failFastService';
 import { optimizeCreditEfficiency } from '../../../backend/services/creditEfficiencyEngine';
 import { checkCreditAlerts } from '../../../backend/services/creditAlertService';
+import { runJob } from '../../../backend/services/jobRunner';
 
 type LeverageRunResult = {
   companies_processed: number;
@@ -50,6 +51,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     errors:              [],
   };
 
+  // Each per-org block below is wrapped in runJob so the canonical
+  // tenant guard rejects soft-deleted / suspended orgs BEFORE the
+  // service-level work runs. The previous loop's `WHERE status='active'`
+  // filter was insufficient — it only checks the companies row's
+  // string column, not the organization's overall canonical state, and
+  // missed orgs whose membership had been revoked.
+  const dayBucket = new Date().toISOString().slice(0, 10);
+  const triggeredByCronSecret = !!process.env.CRON_SECRET
+    && req.headers['x-cron-secret'] === process.env.CRON_SECRET;
+
   try {
     // ── 1. Get all active companies ────────────────────────────────────────
     const { data: companies } = await supabase
@@ -78,31 +89,78 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const processedCompanyIds = new Set<string>();
 
-    // ── Measure outcomes for completed campaigns ───────────────────────────
+    // ── Measure outcomes for completed campaigns (per-tenant containment) ──
     for (const campaign of (completedCampaigns ?? []) as Array<{ id: string; company_id: string }>) {
-      try {
-        await measureOutcomeScore(campaign.id, campaign.company_id);
+      const outcome = await runJob(
+        {
+          jobName:        'cron:leverage-optimizer:outcome',
+          triggerSource:  triggeredByCronSecret ? 'cron' : 'admin',
+          tenantId:       campaign.company_id,
+          principalKind:  'cron-secret',
+          idempotencyKey: `cron:leverage-optimizer:outcome:${campaign.id}:${dayBucket}`,
+          // Per-tenant analytical work is fine sequentially. Daily cron
+          // tick can't fan out a single tenant beyond 1 in flight.
+          concurrency: {
+            key:                 `tenant:${campaign.company_id}:cron:leverage-optimizer`,
+            max:                 1,
+            maxPerSecond:        5,
+            maxRetriesPerMinute: 6,
+          },
+        },
+        async () => measureOutcomeScore(campaign.id, campaign.company_id),
+      );
+
+      if (outcome.status === 'completed') {
         result.outcomes_measured++;
         processedCompanyIds.add(campaign.company_id);
-      } catch (err: any) {
-        result.errors.push(`outcome [${campaign.id}]: ${err?.message}`);
+      } else if (outcome.status === 'tenant_invalid') {
+        result.errors.push(`outcome [${campaign.id}]: tenant_invalid (${outcome.reason})`);
+      } else if (outcome.status === 'pressure_rejected') {
+        // Governor refused — next cron tick handles. Don't fail; log.
+        result.errors.push(`outcome [${campaign.id}]: pressure_rejected (${outcome.reason})`);
+      } else if (outcome.status === 'failed') {
+        result.errors.push(`outcome [${campaign.id}]: ${
+          outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+        }`);
       }
     }
 
-    // ── Fail-fast check for active campaigns ──────────────────────────────
+    // ── Fail-fast check for active campaigns (per-tenant containment) ──────
     for (const campaign of (activeCampaigns ?? []) as Array<{ id: string; company_id: string }>) {
-      try {
-        const ff = await checkAndFailFast(campaign.id, campaign.company_id);
-        if (ff.total_credits_reallocated > 0) {
+      const outcome = await runJob(
+        {
+          jobName:        'cron:leverage-optimizer:fail-fast',
+          triggerSource:  triggeredByCronSecret ? 'cron' : 'admin',
+          tenantId:       campaign.company_id,
+          principalKind:  'cron-secret',
+          idempotencyKey: `cron:leverage-optimizer:fail-fast:${campaign.id}:${dayBucket}`,
+          concurrency: {
+            key:                 `tenant:${campaign.company_id}:cron:leverage-optimizer`,
+            max:                 1,
+            maxPerSecond:        5,
+            maxRetriesPerMinute: 6,
+          },
+        },
+        async () => checkAndFailFast(campaign.id, campaign.company_id),
+      );
+
+      if (outcome.status === 'completed') {
+        if (outcome.result.total_credits_reallocated > 0) {
           result.fail_fast_triggered++;
         }
         processedCompanyIds.add(campaign.company_id);
-      } catch (err: any) {
-        result.errors.push(`fail-fast [${campaign.id}]: ${err?.message}`);
+      } else if (outcome.status === 'tenant_invalid') {
+        result.errors.push(`fail-fast [${campaign.id}]: tenant_invalid (${outcome.reason})`);
+      } else if (outcome.status === 'pressure_rejected') {
+        result.errors.push(`fail-fast [${campaign.id}]: pressure_rejected (${outcome.reason})`);
+      } else if (outcome.status === 'failed') {
+        result.errors.push(`fail-fast [${campaign.id}]: ${
+          outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+        }`);
       }
     }
 
-    // ── Efficiency optimization + credit alerts per company ────────────────
+    // ── Efficiency optimization + credit alerts (per-tenant containment) ───
     const companyIds = [...new Set([
       ...processedCompanyIds,
       ...(companies as Array<{ id: string }>).map(c => c.id).slice(0, 50),
@@ -110,19 +168,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     for (const companyId of companyIds) {
       result.companies_processed++;
-      try {
-        const [effReport, alertResult] = await Promise.all([
+      const outcome = await runJob(
+        {
+          jobName:        'cron:leverage-optimizer:efficiency',
+          triggerSource:  triggeredByCronSecret ? 'cron' : 'admin',
+          tenantId:       companyId,
+          principalKind:  'cron-secret',
+          idempotencyKey: `cron:leverage-optimizer:efficiency:${companyId}:${dayBucket}`,
+          concurrency: {
+            key:                 `tenant:${companyId}:cron:leverage-optimizer`,
+            max:                 1,
+            maxPerSecond:        5,
+            maxRetriesPerMinute: 6,
+          },
+        },
+        async () => Promise.all([
           optimizeCreditEfficiency(companyId),
           checkCreditAlerts(companyId),
-        ]);
+        ]),
+      );
 
+      if (outcome.status === 'completed') {
+        const [effReport, alertResult] = outcome.result;
         if (effReport.efficiency_tier !== 'standard') {
           result.efficiency_upgrades.push(`${companyId.slice(0, 8)}: ${effReport.efficiency_tier}`);
         }
-
         result.alerts_fired += alertResult.alerts_fired.length;
-      } catch (err: any) {
-        result.errors.push(`[${companyId}]: ${err?.message}`);
+      } else if (outcome.status === 'tenant_invalid') {
+        result.errors.push(`[${companyId}]: tenant_invalid (${outcome.reason})`);
+      } else if (outcome.status === 'pressure_rejected') {
+        result.errors.push(`[${companyId}]: pressure_rejected (${outcome.reason})`);
+      } else if (outcome.status === 'failed') {
+        result.errors.push(`[${companyId}]: ${
+          outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+        }`);
       }
     }
 

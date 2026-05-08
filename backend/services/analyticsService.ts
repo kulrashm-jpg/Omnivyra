@@ -1,4 +1,5 @@
 import { listPerformanceMetrics, saveAnalyticsReport } from '../db/performanceStore';
+import { ownedDbTable } from '../db/writeOwner';
 
 const safeNumber = (value: any): number => (typeof value === 'number' ? value : 0);
 
@@ -181,8 +182,7 @@ export async function recordPostAnalytics(
   const analyticsDate = new Date().toISOString().split('T')[0];
 
   // Insert or update analytics record
-  const { error } = await supabase
-    .from('content_analytics')
+  const { error } = await ownedDbTable('content_analytics')
     .upsert({
       scheduled_post_id: scheduledPostId,
       user_id: userId,
@@ -222,8 +222,7 @@ export async function getPostAnalytics(
   startDate?: Date,
   endDate?: Date
 ): Promise<PostAnalytics[]> {
-  let query = supabase
-    .from('content_analytics')
+  let query = ownedDbTable('content_analytics')
     .select('*')
     .eq('scheduled_post_id', scheduledPostId)
     .order('analytics_date', { ascending: false });
@@ -272,8 +271,7 @@ export async function getPlatformPerformance(
   startDate: Date,
   endDate: Date
 ): Promise<PlatformPerformance[]> {
-  const { data, error } = await supabase
-    .from('platform_performance')
+  const { data, error } = await ownedDbTable('platform_performance')
     .select('*')
     .eq('user_id', userId)
     .eq('platform', platform)
@@ -308,8 +306,7 @@ async function updatePlatformPerformance(
   date: string
 ): Promise<void> {
   // Get all posts for this platform on this date
-  const { data: analytics } = await supabase
-    .from('content_analytics')
+  const { data: analytics } = await ownedDbTable('content_analytics')
     .select('scheduled_post_id, engagement_rate, views, likes, shares, comments')
     .eq('user_id', userId)
     .eq('platform', platform)
@@ -331,8 +328,7 @@ async function updatePlatformPerformance(
   );
 
   // Upsert platform performance
-  await supabase
-    .from('platform_performance')
+  await ownedDbTable('platform_performance')
     .upsert({
       user_id: userId,
       platform,
@@ -361,8 +357,7 @@ export async function getHashtagPerformance(
 ): Promise<any> {
   // This would require joining scheduled_posts with content_analytics
   // Implementation depends on hashtag_performance table structure
-  const { data, error } = await supabase
-    .from('hashtag_performance')
+  const { data, error } = await ownedDbTable('hashtag_performance')
     .select('*')
     .eq('user_id', userId)
     .eq('hashtag', hashtag)

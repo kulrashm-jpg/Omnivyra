@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Company Intelligence Config Service
  * Phase-3: Company Intelligence Configuration Layer
@@ -8,6 +9,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+
 import {
   buildCandidatesFromNames,
   extractCompetitiveContextFromProfile,
@@ -47,16 +49,14 @@ async function getPlanLimit(
   companyId: string,
   limitKey: keyof typeof GOVERNANCE_LIMIT_KEYS
 ): Promise<number | null> {
-  const { data: assignment } = await supabase
-    .from('organization_plan_assignments')
+  const { data: assignment } = await ownedDbTable('organization_plan_assignments')
     .select('plan_id')
     .eq('organization_id', companyId)
     .maybeSingle();
   if (!assignment?.plan_id) return null;
 
   const resourceKey = GOVERNANCE_LIMIT_KEYS[limitKey];
-  const { data: limitRow } = await supabase
-    .from('plan_limits')
+  const { data: limitRow } = await ownedDbTable('plan_limits')
     .select('limit_value')
     .eq('plan_id', assignment.plan_id)
     .eq('resource_key', resourceKey)
@@ -70,8 +70,7 @@ async function countEnabled(
   table: string,
   companyId: string
 ): Promise<number> {
-  const { count, error } = await supabase
-    .from(table)
+  const { count, error } = await ownedDbTable(table)
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('enabled', true);
@@ -93,8 +92,7 @@ async function checkPlanLimit(
 }
 
 async function loadCompetitiveContext(companyId: string) {
-  const { data } = await supabase
-    .from('company_profiles')
+  const { data } = await ownedDbTable('company_profiles')
     .select('*')
     .eq('company_id', companyId)
     .maybeSingle();
@@ -137,8 +135,7 @@ function competitorLookupKey(value: string | null | undefined): string {
 // --- Topics ---
 
 export async function getCompanyTopics(companyId: string): Promise<TopicItem[]> {
-  const { data, error } = await supabase
-    .from('company_intelligence_topics')
+  const { data, error } = await ownedDbTable('company_intelligence_topics')
     .select('id, company_id, topic, enabled, created_at, updated_at')
     .eq('company_id', companyId)
     .order('topic');
@@ -148,8 +145,7 @@ export async function getCompanyTopics(companyId: string): Promise<TopicItem[]> 
 
 export async function createTopic(companyId: string, topic: string): Promise<TopicItem> {
   await checkPlanLimit(companyId, 'topics', 'company_intelligence_topics');
-  const { data, error } = await supabase
-    .from('company_intelligence_topics')
+  const { data, error } = await ownedDbTable('company_intelligence_topics')
     .insert({ company_id: companyId, topic: topic.trim(), enabled: true })
     .select('id, company_id, topic, enabled, created_at, updated_at')
     .single();
@@ -158,8 +154,7 @@ export async function createTopic(companyId: string, topic: string): Promise<Top
 }
 
 export async function updateTopic(id: string, topic: string): Promise<TopicItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_topics')
+  const { data, error } = await ownedDbTable('company_intelligence_topics')
     .update({ topic: topic.trim() })
     .eq('id', id)
     .select('id, company_id, topic, enabled, created_at, updated_at')
@@ -169,8 +164,7 @@ export async function updateTopic(id: string, topic: string): Promise<TopicItem>
 }
 
 export async function setTopicEnabled(id: string, enabled: boolean): Promise<TopicItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_topics')
+  const { data, error } = await ownedDbTable('company_intelligence_topics')
     .update({ enabled })
     .eq('id', id)
     .select('id, company_id, topic, enabled, created_at, updated_at')
@@ -182,8 +176,7 @@ export async function setTopicEnabled(id: string, enabled: boolean): Promise<Top
 // --- Competitors ---
 
 export async function getCompanyCompetitors(companyId: string): Promise<CompetitorItem[]> {
-  const { data, error } = await supabase
-    .from('company_intelligence_competitors')
+  const { data, error } = await ownedDbTable('company_intelligence_competitors')
     .select('id, company_id, competitor_name, enabled, created_at, updated_at')
     .eq('company_id', companyId)
     .order('competitor_name');
@@ -211,8 +204,7 @@ export async function getCompanyCompetitors(companyId: string): Promise<Competit
 export async function createCompetitor(companyId: string, competitorName: string): Promise<CompetitorItem> {
   await checkPlanLimit(companyId, 'competitors', 'company_intelligence_competitors');
   const validatedName = await requireValidatedCompetitorName(companyId, competitorName);
-  const { data, error } = await supabase
-    .from('company_intelligence_competitors')
+  const { data, error } = await ownedDbTable('company_intelligence_competitors')
     .insert({ company_id: companyId, competitor_name: validatedName, enabled: true })
     .select('id, company_id, competitor_name, enabled, created_at, updated_at')
     .single();
@@ -221,15 +213,13 @@ export async function createCompetitor(companyId: string, competitorName: string
 }
 
 export async function updateCompetitor(id: string, name: string): Promise<CompetitorItem> {
-  const { data: existing, error: lookupError } = await supabase
-    .from('company_intelligence_competitors')
+  const { data: existing, error: lookupError } = await ownedDbTable('company_intelligence_competitors')
     .select('company_id')
     .eq('id', id)
     .maybeSingle();
   if (lookupError || !existing?.company_id) throw new Error(`updateCompetitor failed: ${lookupError?.message ?? 'missing competitor row'}`);
   const validatedName = await requireValidatedCompetitorName(String(existing.company_id), name);
-  const { data, error } = await supabase
-    .from('company_intelligence_competitors')
+  const { data, error } = await ownedDbTable('company_intelligence_competitors')
     .update({ competitor_name: validatedName })
     .eq('id', id)
     .select('id, company_id, competitor_name, enabled, created_at, updated_at')
@@ -239,8 +229,7 @@ export async function updateCompetitor(id: string, name: string): Promise<Compet
 }
 
 export async function setCompetitorEnabled(id: string, enabled: boolean): Promise<CompetitorItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_competitors')
+  const { data, error } = await ownedDbTable('company_intelligence_competitors')
     .update({ enabled })
     .eq('id', id)
     .select('id, company_id, competitor_name, enabled, created_at, updated_at')
@@ -252,8 +241,7 @@ export async function setCompetitorEnabled(id: string, enabled: boolean): Promis
 // --- Products ---
 
 export async function getCompanyProducts(companyId: string): Promise<ProductItem[]> {
-  const { data, error } = await supabase
-    .from('company_intelligence_products')
+  const { data, error } = await ownedDbTable('company_intelligence_products')
     .select('id, company_id, product_name, enabled, created_at, updated_at')
     .eq('company_id', companyId)
     .order('product_name');
@@ -263,8 +251,7 @@ export async function getCompanyProducts(companyId: string): Promise<ProductItem
 
 export async function createProduct(companyId: string, productName: string): Promise<ProductItem> {
   await checkPlanLimit(companyId, 'products', 'company_intelligence_products');
-  const { data, error } = await supabase
-    .from('company_intelligence_products')
+  const { data, error } = await ownedDbTable('company_intelligence_products')
     .insert({ company_id: companyId, product_name: productName.trim(), enabled: true })
     .select('id, company_id, product_name, enabled, created_at, updated_at')
     .single();
@@ -273,8 +260,7 @@ export async function createProduct(companyId: string, productName: string): Pro
 }
 
 export async function updateProduct(id: string, name: string): Promise<ProductItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_products')
+  const { data, error } = await ownedDbTable('company_intelligence_products')
     .update({ product_name: name.trim() })
     .eq('id', id)
     .select('id, company_id, product_name, enabled, created_at, updated_at')
@@ -284,8 +270,7 @@ export async function updateProduct(id: string, name: string): Promise<ProductIt
 }
 
 export async function setProductEnabled(id: string, enabled: boolean): Promise<ProductItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_products')
+  const { data, error } = await ownedDbTable('company_intelligence_products')
     .update({ enabled })
     .eq('id', id)
     .select('id, company_id, product_name, enabled, created_at, updated_at')
@@ -297,8 +282,7 @@ export async function setProductEnabled(id: string, enabled: boolean): Promise<P
 // --- Regions ---
 
 export async function getCompanyRegions(companyId: string): Promise<RegionItem[]> {
-  const { data, error } = await supabase
-    .from('company_intelligence_regions')
+  const { data, error } = await ownedDbTable('company_intelligence_regions')
     .select('id, company_id, region, enabled, created_at, updated_at')
     .eq('company_id', companyId)
     .order('region');
@@ -308,8 +292,7 @@ export async function getCompanyRegions(companyId: string): Promise<RegionItem[]
 
 export async function createRegion(companyId: string, region: string): Promise<RegionItem> {
   await checkPlanLimit(companyId, 'regions', 'company_intelligence_regions');
-  const { data, error } = await supabase
-    .from('company_intelligence_regions')
+  const { data, error } = await ownedDbTable('company_intelligence_regions')
     .insert({ company_id: companyId, region: region.trim(), enabled: true })
     .select('id, company_id, region, enabled, created_at, updated_at')
     .single();
@@ -318,8 +301,7 @@ export async function createRegion(companyId: string, region: string): Promise<R
 }
 
 export async function updateRegion(id: string, region: string): Promise<RegionItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_regions')
+  const { data, error } = await ownedDbTable('company_intelligence_regions')
     .update({ region: region.trim() })
     .eq('id', id)
     .select('id, company_id, region, enabled, created_at, updated_at')
@@ -329,8 +311,7 @@ export async function updateRegion(id: string, region: string): Promise<RegionIt
 }
 
 export async function setRegionEnabled(id: string, enabled: boolean): Promise<RegionItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_regions')
+  const { data, error } = await ownedDbTable('company_intelligence_regions')
     .update({ enabled })
     .eq('id', id)
     .select('id, company_id, region, enabled, created_at, updated_at')
@@ -342,8 +323,7 @@ export async function setRegionEnabled(id: string, enabled: boolean): Promise<Re
 // --- Keywords ---
 
 export async function getCompanyKeywords(companyId: string): Promise<KeywordItem[]> {
-  const { data, error } = await supabase
-    .from('company_intelligence_keywords')
+  const { data, error } = await ownedDbTable('company_intelligence_keywords')
     .select('id, company_id, keyword, enabled, created_at, updated_at')
     .eq('company_id', companyId)
     .order('keyword');
@@ -353,8 +333,7 @@ export async function getCompanyKeywords(companyId: string): Promise<KeywordItem
 
 export async function createKeyword(companyId: string, keyword: string): Promise<KeywordItem> {
   await checkPlanLimit(companyId, 'keywords', 'company_intelligence_keywords');
-  const { data, error } = await supabase
-    .from('company_intelligence_keywords')
+  const { data, error } = await ownedDbTable('company_intelligence_keywords')
     .insert({ company_id: companyId, keyword: keyword.trim(), enabled: true })
     .select('id, company_id, keyword, enabled, created_at, updated_at')
     .single();
@@ -363,8 +342,7 @@ export async function createKeyword(companyId: string, keyword: string): Promise
 }
 
 export async function updateKeyword(id: string, keyword: string): Promise<KeywordItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_keywords')
+  const { data, error } = await ownedDbTable('company_intelligence_keywords')
     .update({ keyword: keyword.trim() })
     .eq('id', id)
     .select('id, company_id, keyword, enabled, created_at, updated_at')
@@ -374,8 +352,7 @@ export async function updateKeyword(id: string, keyword: string): Promise<Keywor
 }
 
 export async function setKeywordEnabled(id: string, enabled: boolean): Promise<KeywordItem> {
-  const { data, error } = await supabase
-    .from('company_intelligence_keywords')
+  const { data, error } = await ownedDbTable('company_intelligence_keywords')
     .update({ enabled })
     .eq('id', id)
     .select('id, company_id, keyword, enabled, created_at, updated_at')

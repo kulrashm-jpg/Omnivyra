@@ -1,0 +1,1717 @@
+{
+  "version": 1,
+  "generatedFrom": "architecture-migration/reports/authority-lineage-completion/remaining-runtime-lineage-gaps.md",
+  "canonicalAuthorities": {
+    "auth": {
+      "owner": "AuthAuthority",
+      "file": "backend/auth/tokenRefresh.ts",
+      "lineage": [
+        "request-auth",
+        "server-auth"
+      ],
+      "fallbackAuthorities": []
+    },
+    "session": {
+      "owner": "SessionAuthority",
+      "file": "backend/db/supabaseClient.ts",
+      "lineage": [
+        "request-session",
+        "supabase-session"
+      ],
+      "fallbackAuthorities": []
+    },
+    "company": {
+      "owner": "CompanyAuthority",
+      "file": "backend/services/companyProfileService.ts",
+      "lineage": [
+        "request-company",
+        "organization-scope"
+      ],
+      "fallbackAuthorities": []
+    },
+    "role": {
+      "owner": "RoleAuthority",
+      "file": "backend/security/CapabilityService.ts",
+      "lineage": [
+        "request-role",
+        "capability-scope"
+      ],
+      "fallbackAuthorities": []
+    },
+    "orchestration": {
+      "owner": "OrchestrationAuthority",
+      "file": "backend/services/campaignAiOrchestrator.ts",
+      "lineage": [
+        "execution-domain",
+        "orchestration-root"
+      ],
+      "fallbackAuthorities": []
+    },
+    "repository": {
+      "owner": "RepositoryAuthority",
+      "file": "backend/repositories",
+      "lineage": [
+        "repository-command",
+        "db-mutation-owner"
+      ],
+      "fallbackAuthorities": []
+    },
+    "queue": {
+      "owner": "QueueAuthority",
+      "file": "backend/queue/bullmqClient.ts",
+      "lineage": [
+        "queue-dispatch",
+        "worker-processor"
+      ],
+      "fallbackAuthorities": []
+    }
+  },
+  "dominanceRoots": {
+    "recommendations": {
+      "file": "backend/services/recommendationEngine/engine.ts",
+      "function": "generateRecommendations"
+    },
+    "contentGeneration": {
+      "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+      "function": "generateMasterContentStrict"
+    },
+    "scheduling": {
+      "file": "backend/services/structuredPlanScheduler.ts",
+      "function": "scheduleStructuredPlanRuntime"
+    },
+    "campaignExecution": {
+      "file": "backend/services/boltPipelineService.ts",
+      "function": "executeBoltPipelineRuntime"
+    },
+    "aiExecution": {
+      "file": "backend/services/aiGateway.ts",
+      "function": "executeGatewayCompletion"
+    }
+  },
+  "executionRoots": [
+    {
+      "file": "instrumentation.node.ts",
+      "function": "register",
+      "line": 51,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "lib/config/verification.ts",
+      "function": "testRedisConnectivity",
+      "line": 99,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/extension/commands.ts",
+      "function": "handler",
+      "line": 208,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/db/platformExecutionStore.ts",
+      "function": "saveSchedulerJobs",
+      "line": 42,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/db/supabaseClient.ts",
+      "function": "ensureServerEnvLoaded",
+      "line": 18,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/jobs/intelligenceEventCleanup.ts",
+      "function": "runIntelligenceEventCleanup",
+      "line": 58,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/queue/jobProcessors/campaignPlanningProcessor.ts",
+      "function": "setJobStatus",
+      "line": 69,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "queue-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/queue/jobProcessors/campaignPlanningProcessor.ts",
+      "function": "persistPlan",
+      "line": 166,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "queue-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/queue/jobProcessors/whatsappWebhookProcessor.ts",
+      "function": "handleInboundMessage",
+      "line": 88,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "queue-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/security/totp/RecoveryCodeService.ts",
+      "function": "generateRecoveryCodePlaintext",
+      "line": 73,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/analyticsNormalizationService.ts",
+      "function": "upsertGrowthSnapshot",
+      "line": 76,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/auditLoggingService.ts",
+      "function": "logAuditEvent",
+      "line": 60,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/autonomousDecisionLogger.ts",
+      "function": "logDecision",
+      "line": 31,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/batchAiProcessor.ts",
+      "function": "scheduleFlusher",
+      "line": 80,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/behaviorInsightService.ts",
+      "function": "generateBehaviorInsights",
+      "line": 117,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/behaviorInsightService.ts",
+      "function": "generateEngagementSignalInsights",
+      "line": 226,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/blogService.ts",
+      "function": "generateSlug",
+      "line": 80,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/blogService.ts",
+      "function": "createBlog",
+      "line": 169,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/campaignBlueprintService.ts",
+      "function": "getResolvedCampaignPlanContext",
+      "line": 290,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/campaignForecastService.ts",
+      "function": "generateCampaignForecast",
+      "line": 1,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/campaignOpportunityEngine.ts",
+      "function": "generateOpportunityForType",
+      "line": 77,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/campaignOpportunityEngine.ts",
+      "function": "generateCampaignOpportunities",
+      "line": 149,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/campaignRecoveryService.ts",
+      "function": "generateRecoveryCampaign",
+      "line": 39,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/commandCenterReadinessService.ts",
+      "function": "generateDynamicRequirements",
+      "line": 102,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/communityPostEngine.ts",
+      "function": "generatePostContent",
+      "line": 25,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/companyThemeStateService.ts",
+      "function": "markThemeInUse",
+      "line": 125,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/contentBlueprintCache.ts",
+      "function": "shrinkCache",
+      "line": 131,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/contentOpportunityEngine.ts",
+      "function": "generateOpportunityForType",
+      "line": 43,
+      "domain": "recommendations",
+      "owner": "recommendations:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "recommendations"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/dailyPlanAiGenerator.ts",
+      "function": "generateDailyPlanDemo",
+      "line": 361,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/deterministicContentPath.ts",
+      "function": "generateCompanyCtaForPlatform",
+      "line": 45,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/deterministicContentPath.ts",
+      "function": "generateEngagementHook",
+      "line": 62,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/deterministicContentPath.ts",
+      "function": "generateSolutionHint",
+      "line": 79,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/deterministicContentPath.ts",
+      "function": "generateDeterministicEngagementResponse",
+      "line": 100,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/domainRecordService.ts",
+      "function": "generateVerificationToken",
+      "line": 31,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/engagementInsightService.ts",
+      "function": "generateEngagementInsights",
+      "line": 139,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/executionEngines/creatorExecutionEngine.ts",
+      "function": "createCreatorExecutionEngine",
+      "line": 637,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/export/pdf/pdfRendererHelpers.ts",
+      "function": "createPdfRendererHelpers",
+      "line": 6,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/extensionSessionService.ts",
+      "function": "generateHmacNonce",
+      "line": 81,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/externalApi/dbHelpers.ts",
+      "function": "logExternalApiUsage",
+      "line": 142,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/externalApi/dbHelpers.ts",
+      "function": "addSignalsGenerated",
+      "line": 242,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/externalApi/usageLogging.ts",
+      "function": "logExternalApiUsage",
+      "line": 30,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/externalApi/usageLogging.ts",
+      "function": "addSignalsGenerated",
+      "line": 153,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/GovernanceProjectionService.ts",
+      "function": "updateGovernanceProjectionFromEvent",
+      "line": 55,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/GovernanceProjectionService.ts",
+      "function": "doRebuild",
+      "line": 192,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/ingestionRunService.ts",
+      "function": "beginIngestionRun",
+      "line": 42,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/ingestionRunService.ts",
+      "function": "setDataSourceStatus",
+      "line": 119,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/intelligenceConfigService.ts",
+      "function": "logExecutionStart",
+      "line": 392,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/intelligenceConfigService.ts",
+      "function": "logSkipped",
+      "line": 410,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/intelligenceExecutionController.ts",
+      "function": "recordExecution",
+      "line": 102,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/intelligenceSignalStore.ts",
+      "function": "runRetentionCleanup",
+      "line": 200,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/languageRefinementService.ts",
+      "function": "effectiveToneForPipeline",
+      "line": 82,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/learningEngineService.ts",
+      "function": "generateLearningInsights",
+      "line": 3,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/mediaService.ts",
+      "function": "uploadMedia",
+      "line": 221,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/narrativeEngine.ts",
+      "function": "generateNarrativeForAngle",
+      "line": 27,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/narrativeEngine.ts",
+      "function": "generateCampaignNarratives",
+      "line": 90,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/NarrativeService.ts",
+      "function": "generateNarratives",
+      "line": 37,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/opportunityGenerators.ts",
+      "function": "generateLeadOpportunities",
+      "line": 149,
+      "domain": "recommendations",
+      "owner": "recommendations:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "recommendations"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/opportunityGenerators.ts",
+      "function": "generatePulseOpportunities",
+      "line": 156,
+      "domain": "recommendations",
+      "owner": "recommendations:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "recommendations"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/opportunityGenerators.ts",
+      "function": "generateSeasonalOpportunities",
+      "line": 298,
+      "domain": "recommendations",
+      "owner": "recommendations:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "recommendations"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/opportunityGenerators.ts",
+      "function": "generateInfluencerOpportunities",
+      "line": 305,
+      "domain": "recommendations",
+      "owner": "recommendations:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "recommendations"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/opportunityGenerators.ts",
+      "function": "generateDailyFocusOpportunities",
+      "line": 312,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/outcomeTrackingService.ts",
+      "function": "measureOutcomeScore",
+      "line": 169,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/performanceInsightGenerator.ts",
+      "function": "generatePerformanceInsights",
+      "line": 45,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/plannerOpportunityAdvisor.ts",
+      "function": "generateCampaignSuggestions",
+      "line": 59,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/prioritizationService.ts",
+      "function": "pruneStaleQueueRows",
+      "line": 590,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/readinessScoreService.ts",
+      "function": "generateReadinessReport",
+      "line": 145,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/reportAutomationService.ts",
+      "function": "ensureAutomationConfig",
+      "line": 358,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/reportCardService.ts",
+      "function": "createReport",
+      "line": 284,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/reportCompetitorIntelligenceServiceHelpers.ts",
+      "function": "generateDiscoveryKeywords",
+      "line": 433,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/reportPersistenceService.ts",
+      "function": "persistOrchestratedReport",
+      "line": 42,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/repurposeGraphEngine.ts",
+      "function": "generateSlotId",
+      "line": 141,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/redditRpaHandler.ts",
+      "function": "loadPlaywright",
+      "line": 16,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/redditRpaHandler.ts",
+      "function": "executeRedditRpaTask",
+      "line": 34,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaArtifactStore.ts",
+      "function": "saveRpaArtifact",
+      "line": 49,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaEnv.ts",
+      "function": "loadPlaywright",
+      "line": 18,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaPlaywrightRunner.ts",
+      "function": "loadPlaywright",
+      "line": 51,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaPlaywrightRunner.ts",
+      "function": "runStep",
+      "line": 65,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaPlaywrightRunner.ts",
+      "function": "runRpaScript",
+      "line": 123,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaQueueState.ts",
+      "function": "cacheInvalidate",
+      "line": 58,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaQueueState.ts",
+      "function": "upsertState",
+      "line": 101,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaSessionStore.ts",
+      "function": "saveRpaSession",
+      "line": 89,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/rpaWorker/rpaSessionStore.ts",
+      "function": "deleteRpaSession",
+      "line": 153,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/scenarioModelEngine.ts",
+      "function": "persistScenarioRun",
+      "line": 95,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/strategicFeedbackService.ts",
+      "function": "generateInsights",
+      "line": 144,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/strategicFeedbackService.ts",
+      "function": "storeStrategicFeedback",
+      "line": 241,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/strategyMapper.ts",
+      "function": "generateBaseThemes",
+      "line": 141,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/strategyMapper.ts",
+      "function": "generateObjectiveForStage",
+      "line": 267,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/themeKeyService.ts",
+      "function": "generateThemeKey",
+      "line": 5,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/threadEngine.ts",
+      "function": "generateCommunityThreads",
+      "line": 94,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/TradeOffGenerator.ts",
+      "function": "generateTradeOffOptions",
+      "line": 18,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/unifiedContentValidation.ts",
+      "function": "generateDefaultHook",
+      "line": 325,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/unifiedContentValidation.ts",
+      "function": "generateDefaultCTA",
+      "line": 345,
+      "domain": "contentGeneration",
+      "owner": "contentGeneration:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "contentGeneration"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/workerRetryService.ts",
+      "function": "moveToDeadLetter",
+      "line": 35,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/services/workerRetryService.ts",
+      "function": "executeWithRetry",
+      "line": 56,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "service-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/workers/healthServer.ts",
+      "function": "startHealthServer",
+      "line": 11,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "queue-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "backend/workers/leadThreadRecomputeWorker.ts",
+      "function": "runLeadThreadRecomputeQueueCleanup",
+      "line": 98,
+      "domain": "scheduling",
+      "owner": "scheduling:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "scheduling"
+      ],
+      "runtimeScope": "queue-runtime",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/admin/railway-company-costs.ts",
+      "function": "generateInsights",
+      "line": 160,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/campaign-learnings.ts",
+      "function": "generateLearningsFromResults",
+      "line": 113,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/campaign-learnings.ts",
+      "function": "generateImprovementsFromResults",
+      "line": 139,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-comprehensive-plan.ts",
+      "function": "generateComprehensivePlan",
+      "line": 41,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-content.ts",
+      "function": "generateContentPillars",
+      "line": 87,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-content.ts",
+      "function": "generateWeeklyPlan",
+      "line": 189,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-content.ts",
+      "function": "generateDailyPlan",
+      "line": 266,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-content.ts",
+      "function": "generatePlatformStrategy",
+      "line": 295,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-content.ts",
+      "function": "generateHashtagStrategy",
+      "line": 349,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-content.ts",
+      "function": "generateWithGPT4",
+      "line": 386,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/generate-content.ts",
+      "function": "generateWithClaude",
+      "line": 391,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/ai/topic-suggestions.ts",
+      "function": "generateAITopics",
+      "line": 54,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/campaigns/create-12week-plan.ts",
+      "function": "generateWeeklyThemes",
+      "line": 258,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/campaigns/create-12week-plan.ts",
+      "function": "generateWeeklyPlans",
+      "line": 282,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/campaigns/save-ai-content.ts",
+      "function": "handler",
+      "line": 4,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/super-admin/users.ts",
+      "function": "findOrCreateUserByEmail",
+      "line": 49,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/trending/current.ts",
+      "function": "generateAISuggestions",
+      "line": 171,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/voice/transcribe.ts",
+      "function": "generateCampaignSuggestions",
+      "line": 247,
+      "domain": "campaignExecution",
+      "owner": "campaignExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "campaignExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/voice/transcribe.ts",
+      "function": "generateWeeklySuggestions",
+      "line": 295,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    },
+    {
+      "file": "pages/api/voice/transcribe.ts",
+      "function": "generateDailySuggestions",
+      "line": 327,
+      "domain": "aiExecution",
+      "owner": "aiExecution:registered-runtime-ancestry",
+      "ancestry": [
+        "canonical-authority-runtime-ancestry",
+        "aiExecution"
+      ],
+      "runtimeScope": "api-adapter",
+      "dominanceRoot": false,
+      "registrationReason": "explicit runtime ancestry declaration for previously unresolved execution root"
+    }
+  ]
+}

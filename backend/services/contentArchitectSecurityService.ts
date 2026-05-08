@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Content Architect Role: 2-Factor Approval System
  *
@@ -97,8 +98,7 @@ export async function grantContentArchitectAccess(
   const now = new Date();
   const expiresAt = new Date(now.getTime() + SESSION_DURATION_MS);
 
-  const { error: insertError } = await supabase
-    .from('content_architect_sessions')
+  const { error: insertError } = await ownedDbTable('content_architect_sessions')
     .insert([
       {
         user_id: userId,
@@ -159,8 +159,7 @@ export async function validateContentArchitectSession(
 
   // Query session by token hash
   const tokenHash = hashToken(token);
-  const { data: sessions, error } = await supabase
-    .from('content_architect_sessions')
+  const { data: sessions, error } = await ownedDbTable('content_architect_sessions')
     .select('id, user_id, ip_address, user_agent, expires_at, last_activity_at')
     .eq('token', tokenHash)
     .single();  // Expect exactly one result
@@ -203,16 +202,14 @@ export async function validateContentArchitectSession(
 
   if (timeSinceActivity > ACTIVITY_TIMEOUT_MS) {
     // Inactivity timeout
-    await supabase
-      .from('content_architect_sessions')
+    await ownedDbTable('content_architect_sessions')
       .delete()
       .eq('id', sessions.id);
     return false;
   }
 
   // Session valid — update last activity
-  await supabase
-    .from('content_architect_sessions')
+  await ownedDbTable('content_architect_sessions')
     .update({ last_activity_at: now.toISOString() })
     .eq('id', sessions.id);
 
@@ -224,8 +221,7 @@ export async function validateContentArchitectSession(
  * Called when user password changes or on explicit logout
  */
 export async function revokeContentArchitectSessions(userId: string): Promise<void> {
-  const { error } = await supabase
-    .from('content_architect_sessions')
+  const { error } = await ownedDbTable('content_architect_sessions')
     .delete()
     .eq('user_id', userId);
 

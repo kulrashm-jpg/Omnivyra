@@ -10,6 +10,7 @@ import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
 import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
 import { canExecuteAction } from './executionGuardrailService';
+import { ownedDbTable } from '../db/writeOwner';
 
 type SchedulerResult = {
   processed: number;
@@ -29,8 +30,7 @@ const loadHistoryMetrics = async (
     dayStart.setHours(0, 0, 0, 0);
     const dayStartIso = dayStart.toISOString();
 
-    const { data: replyRows } = await supabase
-      .from('community_ai_actions')
+    const { data: replyRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -39,8 +39,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'reply')
       .gte('updated_at', hourAgo);
 
-    const { data: followRows } = await supabase
-      .from('community_ai_actions')
+    const { data: followRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -49,8 +48,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'follow')
       .gte('updated_at', dayStartIso);
 
-    const { data: actionRows } = await supabase
-      .from('community_ai_actions')
+    const { data: actionRows } = await ownedDbTable('community_ai_actions')
       .select('id, intent_classification')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -86,7 +84,7 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
       reason: 'execution_enabled=false',
       source: 'scheduler',
     });
-    await supabase.from('audit_logs').insert({
+    await ownedDbTable('audit_logs').insert({
       actor_user_id: null,
       action: 'COMMUNITY_AI_PLATFORM_POLICY_BLOCK',
       metadata: {
@@ -99,8 +97,7 @@ export const runCommunityAiScheduler = async (now = new Date()): Promise<Schedul
   }
 
   const cutoff = now.toISOString();
-  const { data: actions, error } = await supabase
-    .from('community_ai_actions')
+  const { data: actions, error } = await ownedDbTable('community_ai_actions')
     .select('*')
     .eq('status', 'approved')
     .gte('scheduled_at', '1970-01-01T00:00:00.000Z')

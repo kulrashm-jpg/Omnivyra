@@ -1,0 +1,59 @@
+{
+  "ownershipLifecycleAudit": [
+    {
+      "domain": "content",
+      "conflictClass": "A. governance-only",
+      "canonicalAuthorityOwner": "components/content",
+      "compatibilityAuthorityOwner": "pages/content-creation.tsx",
+      "operationalOwner": "components/content",
+      "migrationOwner": "content runtime migration",
+      "sunsetOwner": "runtime authority governance",
+      "actualUnresolvedDependency": "none after canonical content-plan save/retry parity; bridge remains for monitored external deep-link compatibility",
+      "declaredConflict": null
+    },
+    {
+      "domain": "blogContent",
+      "conflictClass": "E. safe coexistence",
+      "canonicalAuthorityOwner": "pages/blogs/create.tsx",
+      "compatibilityAuthorityOwner": "pages/admin/blog",
+      "operationalOwner": "blog content owners by role",
+      "migrationOwner": "super-admin editorial governance",
+      "sunsetOwner": "admin workflow governance",
+      "actualUnresolvedDependency": "privileged editorial workflow remains separate from company-admin creation",
+      "declaredConflict": "company-admin blogs and super-admin blog management intentionally remain separate"
+    },
+    {
+      "domain": "campaigns",
+      "conflictClass": "B. migration-only",
+      "canonicalAuthorityOwner": "backend/services/boltPipelineService.ts",
+      "compatibilityAuthorityOwner": "pages/command-center/bolt-text-strategy.tsx",
+      "operationalOwner": "campaign runtime",
+      "migrationOwner": "BOLT route consolidation",
+      "sunsetOwner": "runtime authority governance",
+      "actualUnresolvedDependency": "bolt-text-strategy-state and external deep links",
+      "declaredConflict": "/command-center/bolt-text-strategy remains as a deprecated physical page with canonical-only redirects"
+    },
+    {
+      "domain": "adminSettings",
+      "conflictClass": "C. runtime-risking",
+      "canonicalAuthorityOwner": "backend/security/capabilityRegistry.ts",
+      "compatibilityAuthorityOwner": "backend/security/legacyCookieSuperAdminBridge.ts",
+      "operationalOwner": "admin settings/security",
+      "migrationOwner": "Wave 3B bridge retirement",
+      "sunsetOwner": "security authority governance",
+      "actualUnresolvedDependency": "super-admin routes still accept cookie-capable bridge",
+      "declaredConflict": "super-admin routes remain cookie-capable until Wave 3B bridge retirement"
+    },
+    {
+      "domain": "authSession",
+      "conflictClass": "C. runtime-risking",
+      "canonicalAuthorityOwner": "backend/security/SessionAuthorityService.ts",
+      "compatibilityAuthorityOwner": "backend/security/legacyCookieSuperAdminBridge.ts",
+      "operationalOwner": "auth/session runtime",
+      "migrationOwner": "content architect session migration",
+      "sunsetOwner": "security authority governance",
+      "actualUnresolvedDependency": "content_architect_session bridge and legacy super-admin cookie bridge",
+      "declaredConflict": "proxy.ts documents content_architect_session bridge authority"
+    }
+  ]
+}

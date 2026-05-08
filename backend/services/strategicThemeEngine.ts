@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Strategic Theme Generation Engine
  * Converts signal_intelligence records (momentum >= 0.6, UP) into strategic marketing themes.
@@ -246,8 +247,7 @@ export async function generateRichThemesForCampaignWeeks(
  * Load signal_intelligence records where momentum_score >= 0.6 and trend_direction = 'UP'.
  */
 async function loadEligibleIntelligence(): Promise<IntelligenceRow[]> {
-  const { data, error } = await supabase
-    .from('signal_intelligence')
+  const { data, error } = await ownedDbTable('signal_intelligence')
     .select('id, cluster_id, topic, momentum_score, trend_direction, companies, keywords, influencers')
     .gte('momentum_score', MOMENTUM_THRESHOLD)
     .eq('trend_direction', TREND_DIRECTION_UP)
@@ -261,8 +261,7 @@ async function loadEligibleIntelligence(): Promise<IntelligenceRow[]> {
  * Load cluster_ids that already have a strategic theme.
  */
 async function loadExistingThemeClusterIds(): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('strategic_themes')
+  const { data, error } = await ownedDbTable('strategic_themes')
     .select('cluster_id');
 
   if (error) throw new Error(`Failed to load existing themes: ${error.message}`);
@@ -298,7 +297,7 @@ export async function generateStrategicThemes(): Promise<GenerateStrategicThemes
 
     const { theme_title, theme_description } = await generateThemeFromTopic(row.topic);
 
-    const { error } = await supabase.from('strategic_themes').insert({
+    const { error } = await ownedDbTable('strategic_themes').insert({
       cluster_id: row.cluster_id,
       intelligence_id: row.id,
       theme_title,
@@ -365,8 +364,7 @@ export async function getStrategicThemesAsOpportunities(
   options?: { companyId?: string; limit?: number }
 ): Promise<OpportunityInput[]> {
   const limit = options?.limit ?? 20;
-  const { data, error } = await supabase
-    .from('strategic_themes')
+  const { data, error } = await ownedDbTable('strategic_themes')
     .select('id, theme_title, theme_description, momentum_score, trend_direction, companies, keywords, influencers')
     .order('momentum_score', { ascending: false, nullsFirst: false })
     .limit(limit);
@@ -608,8 +606,7 @@ async function loadRecentMarketSignals(
   let clusterRows: { cluster_id: string; cluster_topic: string; created_at?: string }[] | null = null;
   let clusterError: unknown = null;
   try {
-    const result = await supabase
-      .from('signal_clusters')
+    const result = await ownedDbTable('signal_clusters')
       .select('cluster_id, cluster_topic, created_at')
       .gte('created_at', sevenDaysAgo)
       .limit(20);
@@ -622,8 +619,7 @@ async function loadRecentMarketSignals(
   if (clusterError || !clusterRows?.length) {
     let siRows: { topic: string; momentum_score: number | null; created_at?: string }[] | null = null;
     try {
-      const result = await supabase
-        .from('signal_intelligence')
+      const result = await ownedDbTable('signal_intelligence')
         .select('topic, momentum_score, created_at')
         .gte('created_at', sevenDaysAgo)
         .order('momentum_score', { ascending: false, nullsFirst: false })
@@ -647,8 +643,7 @@ async function loadRecentMarketSignals(
   }
 
   const clusterIds = (clusterRows as { cluster_id: string }[]).map((r) => r.cluster_id);
-  const { data: siRows } = await supabase
-    .from('signal_intelligence')
+  const { data: siRows } = await ownedDbTable('signal_intelligence')
     .select('cluster_id, topic, momentum_score, created_at')
     .in('cluster_id', clusterIds);
 

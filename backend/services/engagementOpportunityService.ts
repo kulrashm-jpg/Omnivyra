@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Opportunity Service
  * Detects external engagement opportunities.
@@ -96,8 +97,7 @@ function detectOpportunityType(content: string | null): { type: string; confiden
 async function computeAuthorInfluenceScore(author_id: string | null): Promise<number> {
   if (!author_id) return 0;
   try {
-    const { data, error } = await supabase
-      .from('engagement_authors')
+    const { data, error } = await ownedDbTable('engagement_authors')
       .select('follower_count, engagement_score, reputation_score')
       .eq('id', author_id)
       .maybeSingle();
@@ -126,8 +126,7 @@ async function computeRecentThreadActivity(thread_id: string): Promise<number> {
     const since = new Date();
     since.setHours(since.getHours() - 24);
 
-    const { count, error } = await supabase
-      .from('engagement_messages')
+    const { count, error } = await ownedDbTable('engagement_messages')
       .select('id', { count: 'exact', head: true })
       .eq('thread_id', thread_id)
       .gte('created_at', since.toISOString());
@@ -149,8 +148,7 @@ export async function detectEngagementOpportunity(
   const detected = detectOpportunityType(message.content);
   if (!detected) return null;
 
-  const { data: existing } = await supabase
-    .from('engagement_opportunities')
+  const { data: existing } = await ownedDbTable('engagement_opportunities')
     .select('id')
     .eq('organization_id', organization_id)
     .eq('source_message_id', message.id)
@@ -166,8 +164,7 @@ export async function detectEngagementOpportunity(
   const priorityScore =
     detected.confidence * 5 + authorInfluenceScore * 2 + recentThreadActivity;
 
-  const { data: inserted, error } = await supabase
-    .from('engagement_opportunities')
+  const { data: inserted, error } = await ownedDbTable('engagement_opportunities')
     .insert({
       organization_id,
       platform: message.platform ?? 'unknown',
@@ -204,8 +201,7 @@ export async function getActiveOpportunities(
     priority_score: number;
   }>
 > {
-  const { data, error } = await supabase
-    .from('engagement_opportunities')
+  const { data, error } = await ownedDbTable('engagement_opportunities')
     .select('id, opportunity_type, opportunity_text, priority_score')
     .eq('organization_id', organization_id)
     .eq('resolved', false)

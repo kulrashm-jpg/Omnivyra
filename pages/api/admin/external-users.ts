@@ -29,7 +29,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 // ── Response shape ────────────────────────────────────────────────────────────
 
@@ -49,24 +50,21 @@ export interface ExternalUser {
   last_active:         string | null;  // ISO or null if no usage recorded
 }
 
-// ── Auth helper (cookie OR Bearer + is_super_admin) ───────────────────────────
+// ── Auth helper (canonical capability gate) ──────────────────────────────────
+// Phase 2 — replaces the cookie-OR-`profiles.is_super_admin` lookup with
+// `requireCapability(SUPER_ADMIN_DASHBOARD_VIEW)`. The `profiles` table
+// is no longer consulted (it was dead authority — see Phase 1 audit).
 
 async function assertSuperAdmin(
   req: NextApiRequest,
-  supabase: SupabaseClient,
+  res: NextApiResponse,
+  _supabase: SupabaseClient,
 ): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) return false;
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  return !!(profile as any)?.is_super_admin;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'admin external-users dashboard',
+  });
+  return guard.ok === true;
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -74,8 +72,9 @@ async function assertSuperAdmin(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).end();
 
-  if (!await assertSuperAdmin(req, supabase)) {
-    return res.status(403).json({ error: 'Super admin access required' });
+  if (!await assertSuperAdmin(req, res, supabase)) {
+    // requireCapability already wrote 401/403 to res
+    return;
   }
 
   const typeFilter = (req.query.type as string) ?? 'all';

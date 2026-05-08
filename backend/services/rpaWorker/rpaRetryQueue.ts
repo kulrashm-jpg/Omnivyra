@@ -1,5 +1,6 @@
 import { supabase } from '../../db/supabaseClient';
 import type { RpaTask, RpaResult } from './rpaWorkerService';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Durable RPA retry buffer with per-organization fairness.
@@ -29,8 +30,7 @@ export async function enqueueRpaRetry(task: RpaTask, opts?: {
   const delay = Math.max(1, opts?.delaySeconds ?? 30);
   const nextRetryAt = new Date(Date.now() + delay * 1000).toISOString();
   try {
-    const { data: existing } = await supabase
-      .from('rpa_retry_queue')
+    const { data: existing } = await ownedDbTable('rpa_retry_queue')
       .select('id, attempts, max_attempts')
       .eq('organization_id', task.organization_id)
       .eq('action_id', task.action_id)
@@ -41,8 +41,7 @@ export async function enqueueRpaRetry(task: RpaTask, opts?: {
       if (attempts >= maxAttempts) {
         return { queued: false, attempts, next_retry_at: nextRetryAt, error: 'MAX_ATTEMPTS_EXCEEDED' };
       }
-      const { error } = await supabase
-        .from('rpa_retry_queue')
+      const { error } = await ownedDbTable('rpa_retry_queue')
         .update({
           attempts,
           last_error: (opts?.error ?? null)?.toString().slice(0, 500) ?? null,
@@ -54,7 +53,7 @@ export async function enqueueRpaRetry(task: RpaTask, opts?: {
       if (error) return { queued: false, attempts, next_retry_at: nextRetryAt, error: error.message };
       return { queued: true, attempts, next_retry_at: nextRetryAt };
     }
-    const { error } = await supabase.from('rpa_retry_queue').insert({
+    const { error } = await ownedDbTable('rpa_retry_queue').insert({
       action_id: task.action_id,
       organization_id: task.organization_id,
       platform: task.platform,
@@ -89,8 +88,7 @@ async function recordTerminalFailure(rowId: string, result: HandlerResult, attem
   const backoffMinutes = Math.min(capMinutes, Math.pow(2, attempts));
   const nextRetryAt = new Date(Date.now() + backoffMinutes * 60_000).toISOString();
   const terminal = attempts >= maxAttempts;
-  await supabase
-    .from('rpa_retry_queue')
+  await ownedDbTable('rpa_retry_queue')
     .update({
       attempts,
       last_error: (result.error ?? 'unknown').toString().slice(0, 500),
@@ -116,8 +114,7 @@ export async function flushRpaRetryQueueForOrg(input: {
   let claimed = 0, succeeded = 0, failed = 0, errors = 0;
 
   try {
-    const { data: rows } = await supabase
-      .from('rpa_retry_queue')
+    const { data: rows } = await ownedDbTable('rpa_retry_queue')
       .select('id, action_id, organization_id, platform, action_type, target_url, text, attempts, max_attempts')
       .eq('organization_id', orgId)
       .lte('next_retry_at', new Date().toISOString())
@@ -139,7 +136,7 @@ export async function flushRpaRetryQueueForOrg(input: {
         const result = await handler(task);
         if (result.success) {
           succeeded += 1;
-          await supabase.from('rpa_retry_queue').delete().eq('id', row.id);
+          await ownedDbTable('rpa_retry_queue').delete().eq('id', row.id);
         } else {
           failed += 1;
           const attempts = Number(row.attempts ?? 0) + 1;
@@ -189,8 +186,7 @@ export async function flushRpaRetryQueueRoundRobin(input: {
   // we can dedupe without querying per-org separately.
   let orgIds: string[] = [];
   try {
-    const { data } = await supabase
-      .from('rpa_retry_queue')
+    const { data } = await ownedDbTable('rpa_retry_queue')
       .select('organization_id')
       .lte('next_retry_at', new Date().toISOString())
       .lt('attempts', MAX_ATTEMPTS)
@@ -225,8 +221,7 @@ export async function flushRpaRetryQueueRoundRobin(input: {
   }
 
   // Remaining backlog across all orgs (rows still eligible).
-  const { count: remaining } = await supabase
-    .from('rpa_retry_queue')
+  const { count: remaining } = await ownedDbTable('rpa_retry_queue')
     .select('id', { count: 'exact', head: true })
     .lt('attempts', MAX_ATTEMPTS);
 

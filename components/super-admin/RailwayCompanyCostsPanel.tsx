@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import {
   Building2, Activity, TrendingUp, AlertTriangle, ChevronDown, ChevronRight,
   Zap, RefreshCw, AlertCircle,
@@ -75,10 +76,9 @@ export default function RailwayCompanyCostsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/railway-company-costs?hours=${hours}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      setData(json);
+      const result = await safeFetchJson(`/api/admin/railway-company-costs?hours=${hours}`, { credentials: 'same-origin' });
+      if (result.ok !== true) throw new Error(result.message || `HTTP ${result.status}`);
+      setData(result.data as any);
     } catch (err) {
       setError(`Failed to load: ${(err as Error).message}`);
     } finally {

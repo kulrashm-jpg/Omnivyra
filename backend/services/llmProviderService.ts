@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { encryptCredential, decryptCredential } from '../auth/credentialEncryption';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface LlmProvider {
   id: string;
@@ -30,8 +31,7 @@ export interface LlmModelWithProvider extends LlmModel {
  * Returns all providers (active + inactive) for super admin display.
  */
 export async function getAllProviders(): Promise<LlmProvider[]> {
-  const { data, error } = await supabase
-    .from('llm_providers')
+  const { data, error } = await ownedDbTable('llm_providers')
     .select('*')
     .order('name');
   if (error) throw new Error(`llmProviderService.getAllProviders: ${error.message}`);
@@ -42,8 +42,7 @@ export async function getAllProviders(): Promise<LlmProvider[]> {
  * Returns only active providers.
  */
 export async function getActiveProviders(): Promise<LlmProvider[]> {
-  const { data, error } = await supabase
-    .from('llm_providers')
+  const { data, error } = await ownedDbTable('llm_providers')
     .select('*')
     .eq('is_active', true)
     .order('name');
@@ -55,8 +54,7 @@ export async function getActiveProviders(): Promise<LlmProvider[]> {
  * Returns all active models for a given provider name (e.g. "openai").
  */
 export async function getModelsByProvider(providerName: string): Promise<LlmModel[]> {
-  const { data: provider, error: provErr } = await supabase
-    .from('llm_providers')
+  const { data: provider, error: provErr } = await ownedDbTable('llm_providers')
     .select('id')
     .eq('name', providerName)
     .eq('is_active', true)
@@ -64,8 +62,7 @@ export async function getModelsByProvider(providerName: string): Promise<LlmMode
   if (provErr) throw new Error(`llmProviderService.getModelsByProvider: ${provErr.message}`);
   if (!provider) return [];
 
-  const { data, error } = await supabase
-    .from('llm_models')
+  const { data, error } = await ownedDbTable('llm_models')
     .select('*')
     .eq('provider_id', provider.id)
     .eq('is_active', true)
@@ -78,8 +75,7 @@ export async function getModelsByProvider(providerName: string): Promise<LlmMode
  * Returns all active models across all active providers, with provider name attached.
  */
 export async function getAllActiveModels(): Promise<LlmModelWithProvider[]> {
-  const { data, error } = await supabase
-    .from('llm_models')
+  const { data, error } = await ownedDbTable('llm_models')
     .select(`
       *,
       llm_providers!inner(name, display_name, is_active)
@@ -107,8 +103,7 @@ export async function getAllActiveModels(): Promise<LlmModelWithProvider[]> {
  * All models (active + inactive) across all providers — for super admin listing.
  */
 export async function getAllModels(): Promise<LlmModelWithProvider[]> {
-  const { data, error } = await supabase
-    .from('llm_models')
+  const { data, error } = await ownedDbTable('llm_models')
     .select(`
       *,
       llm_providers(name, display_name)
@@ -139,8 +134,7 @@ export async function upsertProvider(input: {
   is_active?: boolean;
 }): Promise<LlmProvider> {
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('llm_providers')
+  const { data, error } = await ownedDbTable('llm_providers')
     .upsert(
       {
         name:         input.name,
@@ -181,8 +175,7 @@ export interface CompanyLlmConfig {
  * Returns null if no config is set (means company uses platform default).
  */
 export async function getCompanyLlmConfig(companyId: string): Promise<CompanyLlmConfig | null> {
-  const { data, error } = await supabase
-    .from('company_llm_configs')
+  const { data, error } = await ownedDbTable('company_llm_configs')
     .select(`
       *,
       llm_providers(name, display_name),
@@ -247,8 +240,7 @@ export async function setCompanyLlmConfig(input: {
     upsertPayload.api_key_encrypted = api_key_encrypted;
   }
 
-  const { error } = await supabase
-    .from('company_llm_configs')
+  const { error } = await ownedDbTable('company_llm_configs')
     .upsert(upsertPayload, { onConflict: 'company_id' });
   if (error) throw new Error(`llmProviderService.setCompanyLlmConfig: ${error.message}`);
 
@@ -267,8 +259,7 @@ export async function resolveCompanyApiKey(
   companyId: string,
   providerName: string,
 ): Promise<{ key: string; source: 'company' | 'platform' }> {
-  const { data } = await supabase
-    .from('company_llm_configs')
+  const { data } = await ownedDbTable('company_llm_configs')
     .select('api_key_encrypted, is_active, llm_providers!inner(name)')
     .eq('company_id', companyId)
     .eq('is_active', true)
@@ -303,8 +294,7 @@ export async function upsertModel(input: {
   metadata?: Record<string, unknown>;
 }): Promise<LlmModel> {
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('llm_models')
+  const { data, error } = await ownedDbTable('llm_models')
     .upsert(
       {
         provider_id:  input.provider_id,

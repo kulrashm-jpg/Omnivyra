@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * SessionAuthorityService — server-authoritative login session state.
  *
@@ -141,8 +142,7 @@ export async function createSession(input: CreateSessionInput): Promise<CreatedS
   const sessionId = randomBytes(16).toString('hex'); // 32-char random id
   const signature = signSessionPayload(sessionId, now.toISOString());
 
-  const { data, error } = await db
-    .from('auth_sessions')
+  const { data, error } = await ownedDbTable('auth_sessions')
     .insert({
       id:                sessionId,
       user_id:           input.userId,
@@ -195,8 +195,7 @@ export async function resolveSessionFromRequest(req: NextApiRequest): Promise<Se
   const parsed = parseCookieValue(cookieValue);
   if (!parsed) return { ok: false, reason: 'BAD_FORMAT' };
 
-  const { data, error } = await db
-    .from('auth_sessions')
+  const { data, error } = await ownedDbTable('auth_sessions')
     .select('*')
     .eq('id', parsed.sessionId)
     .maybeSingle();
@@ -226,8 +225,7 @@ export async function resolveSessionFromRequest(req: NextApiRequest): Promise<Se
  * caller level if it becomes hot.
  */
 export async function touchSession(sessionId: string): Promise<void> {
-  await db
-    .from('auth_sessions')
+  await ownedDbTable('auth_sessions')
     .update({ last_seen_at: new Date().toISOString() })
     .eq('id', sessionId);
 }
@@ -236,8 +234,7 @@ export async function touchSession(sessionId: string): Promise<void> {
  * Revoke a session. Idempotent.
  */
 export async function revokeSession(sessionId: string, reason: string): Promise<void> {
-  await db
-    .from('auth_sessions')
+  await ownedDbTable('auth_sessions')
     .update({ revoked_at: new Date().toISOString(), revocation_reason: reason })
     .eq('id', sessionId)
     .is('revoked_at', null);
@@ -255,14 +252,35 @@ export async function revokeAllSessionsForUser(
   reason: string,
   exemptSessionId?: string,
 ): Promise<number> {
-  let q = db
-    .from('auth_sessions')
+  let q = ownedDbTable('auth_sessions')
     .update({ revoked_at: new Date().toISOString(), revocation_reason: reason })
     .eq('user_id', userId)
     .is('revoked_at', null);
   if (exemptSessionId) q = q.neq('id', exemptSessionId);
   const { data } = await q.select('id');
   return data?.length ?? 0;
+}
+
+/**
+ * Revoke every live auth_session bound to a specific trusted device id
+ * for a user. Used when the user revokes a trusted device — the live
+ * cookies on that device must die immediately, not at the natural TTL.
+ *
+ * Returns the list of revoked session ids so the caller can cascade to
+ * stepup_sessions.
+ */
+export async function revokeSessionsForDevice(
+  userId: string,
+  deviceId: string,
+  reason: string,
+): Promise<string[]> {
+  const { data } = await ownedDbTable('auth_sessions')
+    .update({ revoked_at: new Date().toISOString(), revocation_reason: reason })
+    .eq('user_id', userId)
+    .eq('device_id', deviceId)
+    .is('revoked_at', null)
+    .select('id');
+  return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
 }
 
 /**
@@ -344,8 +362,7 @@ export async function rotateSession(input: {
   sessionId: string;
   reason: string;
 }): Promise<RotatedSession | null> {
-  const { data: existingRow } = await db
-    .from('auth_sessions')
+  const { data: existingRow } = await ownedDbTable('auth_sessions')
     .select('*')
     .eq('id', input.sessionId)
     .maybeSingle();

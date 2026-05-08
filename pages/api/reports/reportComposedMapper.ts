@@ -23,7 +23,7 @@ import {
   buildUnifiedIntelligenceSummary,
 } from './reportViewSectionBuilders';
 import type { ReportViewPayload } from './reportViewPayloadTypes';
-import type { ReportViewInsight, ReportViewNextStep, ReportViewOpportunity, ReportViewTopPriority } from './reportViewTypes';
+import type { ReportViewInsight, ReportViewNextStep, ReportViewOpportunity, ReportViewTopPriority, ScoreState, SystemMaturityClass } from './reportViewTypes';
 import type { ComposedReportData } from './reportComposedTypes';
 import { hasPassedFinalCompetitorGate } from '../../../backend/services/competitorEngineService';
 
@@ -46,10 +46,15 @@ export function mapComposedReport(
   const opportunityCount = flattened.opportunities.length;
   const actionCount = flattened.actions.length;
 
-  const overallScore =
+  // Canonical Trust Foundation: no synthetic 35+ fabrication based on section/insight count.
+  // When no score is measured, overallScore is 0 and overallScoreState says 'insufficient_signal'
+  // so the UI can render "Insufficient signal" rather than a fake number.
+  const measuredOverallScore: number | null =
     typeof report.score?.value === 'number'
       ? Math.max(0, Math.min(100, report.score.value))
-      : Math.min(100, 35 + sections.length * 10 + Math.min(insightCount, 6) * 4 + Math.min(opportunityCount, 5) * 5);
+      : null;
+  const overallScore: number = measuredOverallScore ?? 0;
+  const overallScoreState: ScoreState = (report.score as any)?.state || (measuredOverallScore == null ? 'insufficient_signal' : 'measured');
 
   const insights: ReportViewInsight[] = flattened.insights.slice(0, 6).map((insight: any) => ({
     text: insight.title || insight.recommendation || 'Key insight identified',
@@ -462,6 +467,9 @@ export function mapComposedReport(
     diagnosis,
     summary,
     overallScore,
+    overallScoreState,
+    systemMaturity: ((report as any).system_maturity || 'building_baseline') as SystemMaturityClass,
+    canonical: (report as any).canonical ?? null,
     scoreExplanation: report.score ? {
       dimensions: Array.isArray(report.score.dimensions)
         ? report.score.dimensions.map((item) => ({

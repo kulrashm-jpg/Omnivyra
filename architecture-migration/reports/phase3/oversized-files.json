@@ -1,0 +1,1742 @@
+[
+  {
+    "file": "components/MarketingIntelView.tsx",
+    "lines": 3936,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "lines": 2203,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/companyProfileService.ts",
+    "lines": 2199,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/company-profile-form.tsx",
+    "lines": 1905,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/competitorEngineService.ts",
+    "lines": 1802,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useCompanyProfileState.tsx",
+    "lines": 1674,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/blogGenerationEngine.ts",
+    "lines": 1543,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/WeekCard.tsx",
+    "lines": 1527,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/export/reportHtmlSections.ts",
+    "lines": 1495,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/runTemplateBlogGeneration.ts",
+    "lines": 1472,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/BlogIntelView.tsx",
+    "lines": 1449,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useDailyPlanning.tsx",
+    "lines": 1441,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/SysHealthView.tsx",
+    "lines": 1420,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/campaign-details/WeeklyContentSection.tsx",
+    "lines": 1415,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/CampaignPlanningContent.tsx",
+    "lines": 1395,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useExternalApisState.tsx",
+    "lines": 1391,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/integrations.tsx",
+    "lines": 1382,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/communityAiActionExecutor.ts",
+    "lines": 1381,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/DailyPlanView.tsx",
+    "lines": 1372,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/ExtApisAccessView.tsx",
+    "lines": 1369,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useRecommendationsState.tsx",
+    "lines": 1369,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/blog/BlogEditorForm.tsx",
+    "lines": 1345,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useCampaignPlanningState.tsx",
+    "lines": 1339,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/scheduler/cron.ts",
+    "lines": 1338,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/cards/RecommendationBlueprintCard.tsx",
+    "lines": 1330,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/CampaignDetailsContent.tsx",
+    "lines": 1317,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/RecommendationsContent.tsx",
+    "lines": 1313,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/RedisEfficiencyPanel.tsx",
+    "lines": 1307,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/campaignIntelligenceService.ts",
+    "lines": 1300,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useCampaignDetailsHandlers.tsx",
+    "lines": 1290,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useSocialPlatforms.tsx",
+    "lines": 1247,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/reportCompetitorIntelligenceService.ts",
+    "lines": 1241,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/BoltStrategyView.tsx",
+    "lines": 1239,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/ExternalApisTabContent.tsx",
+    "lines": 1234,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "lines": 1232,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "lines": 1219,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useMarketingIntel.tsx",
+    "lines": 1206,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/shield-sre-validation.js",
+    "lines": 1196,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/growthGuidanceService.ts",
+    "lines": 1185,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/aiGateway.ts",
+    "lines": 1181,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/analytics/SystemStateDashboard.tsx",
+    "lines": 1178,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationEngine/engine.ts",
+    "lines": 1129,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/chaos-executor.ts",
+    "lines": 1125,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/IntelControlView.tsx",
+    "lines": 1124,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/reports/view/ReportPageContent.tsx",
+    "lines": 1122,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/intelligence/snapshot.ts",
+    "lines": 1109,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/solutions.tsx",
+    "lines": 1077,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/tabs/useTrendCampaignsCore.tsx",
+    "lines": 1069,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useBoltStrategy.tsx",
+    "lines": 1063,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useIntelControl.tsx",
+    "lines": 1063,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "__depth_engine_v2_validation.js",
+    "lines": 1059,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/features.tsx",
+    "lines": 1053,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/admin/intelligence-control.tsx",
+    "lines": 1052,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/ContentRenderer.tsx",
+    "lines": 1051,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/tabs/TrendCampaignsRecommendationCards.tsx",
+    "lines": 1048,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/hooks/useDashboardState.tsx",
+    "lines": 1037,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/blog/blogStructureTemplates.ts",
+    "lines": 1028,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/longFormPlanningEngine.ts",
+    "lines": 1024,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/redis/usageProtection.ts",
+    "lines": 1014,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/LeadsView.tsx",
+    "lines": 1010,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/creditExecutionService.ts",
+    "lines": 1006,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/cardToContentBridge.ts",
+    "lines": 995,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/OrgServiceDrilldown.tsx",
+    "lines": 993,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/marketing-intelligence.tsx",
+    "lines": 992,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/command-center/bolt-combined-strategy.tsx",
+    "lines": 989,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/command-center/creator-content/[type].tsx",
+    "lines": 980,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "lines": 970,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/promptAssembler.ts",
+    "lines": 967,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/activity-workspace/CreatorContentPanel.tsx",
+    "lines": 967,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/contentQualityEnhancer_v2_1.ts",
+    "lines": 962,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "__depth_engine_v2_2_validation.js",
+    "lines": 946,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/blog/BlogGenerateModal.tsx",
+    "lines": 940,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/auth/tokenRefresh.ts",
+    "lines": 939,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/IntelMixView.tsx",
+    "lines": 939,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/auth/sync-supabase-user.ts",
+    "lines": 933,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/BoltCreatorView.tsx",
+    "lines": 929,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/executionEngines/creatorExecutionEngine.ts",
+    "lines": 920,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/engagement/InboxDashboard.tsx",
+    "lines": 920,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/creative-scheduler.tsx",
+    "lines": 918,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/runBlogGenerationPureHelpers.ts",
+    "lines": 916,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/export/reportHtmlSnapshotMasterDocument.ts",
+    "lines": 911,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "lines": 909,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/engagement-inbox.tsx",
+    "lines": 896,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/analyticsIntegrationService.ts",
+    "lines": 880,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/engagement/reply.ts",
+    "lines": 878,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/unifiedContentGenerationEngine.ts",
+    "lines": 871,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/export/reportHtmlNarrativeFlows.ts",
+    "lines": 867,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runWeeklyBoardGeneration.ts",
+    "lines": 855,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/tabs/SocialPlatformsSection.tsx",
+    "lines": 853,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/companyContextBlock.ts",
+    "lines": 849,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/blog/defaultBlockTemplates.ts",
+    "lines": 840,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/campaign-daily-plan/[id].tsx",
+    "lines": 838,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "lines": 834,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/content-studio/[format].tsx",
+    "lines": 830,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/shield-validation-tests.js",
+    "lines": 830,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/users.ts",
+    "lines": 824,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runMarketMapGeneration.ts",
+    "lines": 823,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/companyProfile/businessClassification.ts",
+    "lines": 818,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/prioritizationService.ts",
+    "lines": 817,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/strategicThemeEngine.ts",
+    "lines": 813,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/community-ai/forecast.tsx",
+    "lines": 812,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/campaign-health-engine.ts",
+    "lines": 810,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/HorizonConstraintEvaluator.ts",
+    "lines": 804,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/reportCompetitorIntelligenceServiceHelpers.ts",
+    "lines": 804,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/ContentArchitectView.tsx",
+    "lines": 804,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/platformIntelligenceService.ts",
+    "lines": 802,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useCampaignDetailsCore.tsx",
+    "lines": 802,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runWeeklyRadarGeneration.ts",
+    "lines": 800,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/content/ManagedSuggestionsPage.tsx",
+    "lines": 799,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/ga4IngestionService.ts",
+    "lines": 797,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/super-admin/free-credits.tsx",
+    "lines": 793,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/planner/hooks/useDailyPlan.ts",
+    "lines": 792,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runSplitScreenInsightGeneration.ts",
+    "lines": 790,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useInboxOrchestrator.ts",
+    "lines": 778,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/onboarding/domain-verification.tsx",
+    "lines": 773,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/SocialPlatformsView.tsx",
+    "lines": 768,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/campaigns/NextStrategicDirection.tsx",
+    "lines": 766,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/scheduler.tsx",
+    "lines": 766,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useCampaignCalendar.tsx",
+    "lines": 764,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/admin/blog/content-editor.tsx",
+    "lines": 761,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/performanceHtmlRenderer.ts",
+    "lines": 760,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/intentExecutionService.ts",
+    "lines": 759,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltScheduleBlockProcessor.ts",
+    "lines": 749,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/tabs/MarketPulseTabV2.tsx",
+    "lines": 740,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useExtApisAccess.tsx",
+    "lines": 735,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runStrategyMemoGeneration.ts",
+    "lines": 732,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/tabs/ApiCatalogSection.tsx",
+    "lines": 730,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/publicDomainAuditService.ts",
+    "lines": 726,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/HierarchicalNavigation.tsx",
+    "lines": 726,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/competitorEnrichmentKnowledge.ts",
+    "lines": 723,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/extension/events/dms.ts",
+    "lines": 719,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useBoltCreator.tsx",
+    "lines": 716,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/regenerationExecutor.ts",
+    "lines": 713,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/sre-checkpoint-reporter.js",
+    "lines": 711,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/scheduler/schedulerService.ts",
+    "lines": 709,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/queue/bullmqClient.ts",
+    "lines": 708,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "lines": 704,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/externalApi/execution.ts",
+    "lines": 702,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/ContentCreationPanel.tsx",
+    "lines": 698,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useCommunityActions.tsx",
+    "lines": 695,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/blog/BlogAnalyticsPanel.tsx",
+    "lines": 693,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/chaos-runner.ts",
+    "lines": 692,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/performanceReportMapper.ts",
+    "lines": 687,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/platform-guidelines.ts",
+    "lines": 684,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "lines": 680,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/CampaignCalendarView.tsx",
+    "lines": 680,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/content-creation.tsx",
+    "lines": 680,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/jobs/dailyIntelligenceScheduler.ts",
+    "lines": 679,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/campaignEnrichmentService.test.ts",
+    "lines": 679,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/planner-finalize.ts",
+    "lines": 677,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/governance/GovernanceAnalyticsCard.tsx",
+    "lines": 676,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/reportCardService.ts",
+    "lines": 675,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/WeeklyRefinementInterface.tsx",
+    "lines": 671,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/blog/optimizationEngine.ts",
+    "lines": 671,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/layout/GlobalHeader.tsx",
+    "lines": 668,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/MultiAIChat.tsx",
+    "lines": 666,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/index.ts",
+    "lines": 665,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/tabs/AnalyticsTab.tsx",
+    "lines": 664,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runOperatorPlaybookGeneration.ts",
+    "lines": 663,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useBlogIntel.tsx",
+    "lines": 649,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/creative-dashboard.tsx",
+    "lines": 648,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/ActivityControlPanel.tsx",
+    "lines": 640,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/external-apis/index.ts",
+    "lines": 639,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "lines": 637,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/company/CompanyStrategyProfileCard.tsx",
+    "lines": 637,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/reports/performance-intelligence.tsx",
+    "lines": 635,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useContentArchitect.tsx",
+    "lines": 634,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/reports/view/reportView.types.ts",
+    "lines": 632,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/market-analysis.tsx",
+    "lines": 628,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/blogRunnerHelpers.ts",
+    "lines": 627,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/queue/jobProcessors/contentGenerationProcessor.ts",
+    "lines": 625,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/CampaignPlanDetailsSection.tsx",
+    "lines": 623,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/blog/AIBlogCardModal.tsx",
+    "lines": 622,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/engagementAiAssistantService.ts",
+    "lines": 618,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/login.tsx",
+    "lines": 616,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/multi-platform-scheduler.tsx",
+    "lines": 615,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/reportAutomationService.ts",
+    "lines": 614,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/tabs/MarketPulseTab.tsx",
+    "lines": 614,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/queue/jobProcessors/boltContentJobProcessor.ts",
+    "lines": 613,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/contentDepthAndInsightEngine.ts",
+    "lines": 612,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationEngine/engineHelpers.ts",
+    "lines": 612,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/campaigns/CampaignAssistPanel.tsx",
+    "lines": 611,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/CommunityActionsView.tsx",
+    "lines": 611,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/company/users.ts",
+    "lines": 611,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/onboarding/company.tsx",
+    "lines": 611,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/consumptionAnalyticsService.ts",
+    "lines": 609,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/planner/tabs/StrategyTab.tsx",
+    "lines": 608,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/tabs/TrendCampaignsExecutionForm.tsx",
+    "lines": 607,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "docs/archive/resilience-artifacts/CHAOS_TESTS.ts",
+    "lines": 605,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/case-studies/generate.tsx",
+    "lines": 605,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+    "lines": 604,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/PlatformContentForm.tsx",
+    "lines": 603,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/editorContentEnforcer.ts",
+    "lines": 601,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/ReportFormModal.tsx",
+    "lines": 601,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useBrowserAssist.ts",
+    "lines": 598,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/planner/plannerSessionStore.ts",
+    "lines": 597,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/community-ai/executive.tsx",
+    "lines": 596,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/campaignRecommendationService.ts",
+    "lines": 595,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/platforms/FacebookPostForm.tsx",
+    "lines": 593,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/whatsapp/broadcasts.tsx",
+    "lines": 593,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/ComprehensivePlanEditor.tsx",
+    "lines": 592,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/engagement/inbox.ts",
+    "lines": 592,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/imageService.ts",
+    "lines": 590,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runInsightLetterGeneration.ts",
+    "lines": 588,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/engagementIngestionService.ts",
+    "lines": 586,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "test-redis-monitoring.js",
+    "lines": 586,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/runEditorialBlogGeneration.ts",
+    "lines": 584,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/dashboard/DashboardCalendarTab.tsx",
+    "lines": 584,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/Header.tsx",
+    "lines": 584,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/reports/digital-authority-snapshot.tsx",
+    "lines": 583,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/guides/generate.tsx",
+    "lines": 582,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/unified_content_generation.test.ts",
+    "lines": 581,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/communityAiAutoRuleService.ts",
+    "lines": 578,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/longFormQualityEngine.ts",
+    "lines": 576,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/pricingService.ts",
+    "lines": 576,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/externalApi/dbHelpers.ts",
+    "lines": 575,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/campaign-daily-plan/CampaignDailyPlanSingleWeekView.tsx",
+    "lines": 574,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/tabs/useTrendCampaignsHandlers.tsx",
+    "lines": 572,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/stories/generate.tsx",
+    "lines": 572,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/reports/reportComposedTypes.ts",
+    "lines": 571,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/company-blog/[slug].tsx",
+    "lines": 569,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/reports/market-growth-intelligence.tsx",
+    "lines": 569,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/runStandardBlogGeneration.ts",
+    "lines": 568,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/lib/performance/performanceAnalyzer.ts",
+    "lines": 568,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/command-center/bolt-text-strategy.tsx",
+    "lines": 568,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/lib/campaigns/continuityDecisionEngine.ts",
+    "lines": 567,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/external-apis/access.ts",
+    "lines": 567,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/campaignPlanParser.ts",
+    "lines": 566,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/articles/generate.tsx",
+    "lines": 565,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/whitepapers/generate.tsx",
+    "lines": 565,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/newsletter/runSprintSheetGeneration.ts",
+    "lines": 564,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/reports/automation-activity.ts",
+    "lines": 563,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/reportInputResolver.ts",
+    "lines": 561,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/blogs/generate.tsx",
+    "lines": 559,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/executionPlannerService.ts",
+    "lines": 558,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "hooks/useLeadsPage.tsx",
+    "lines": 556,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/articles/index.tsx",
+    "lines": 556,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/redis-polling-final-validation.js",
+    "lines": 556,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/CostAccountingDashboard.tsx",
+    "lines": 555,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "docs/archive/resilience-artifacts/PRODUCTION_READINESS_FINAL_REPORT.ts",
+    "lines": 553,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/jobs/analyticsInsightJob.ts",
+    "lines": 552,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/blog/runTutorialBlogGeneration.ts",
+    "lines": 550,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/marketPulseV2Service.ts",
+    "lines": 547,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/planner/ComprehensivePlanCanvas.tsx",
+    "lines": 547,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/planner/StrategicThemeCards.tsx",
+    "lines": 547,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/configService.ts",
+    "lines": 546,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/blog/searchScoringEngine.ts",
+    "lines": 545,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/landing/MarketingLandingPage.tsx",
+    "lines": 544,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/super-admin/ActivityCostBreakdown.tsx",
+    "lines": 544,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/platforms/TwitterPostForm.tsx",
+    "lines": 541,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/chaos-executor-simple.js",
+    "lines": 540,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/export/pdf/pdfTypes.ts",
+    "lines": 538,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/platforms/YouTubePostForm.tsx",
+    "lines": 536,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/campaigns.tsx",
+    "lines": 536,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/team-management.tsx",
+    "lines": 536,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/export/pdf/pdfPayloadTypes.ts",
+    "lines": 534,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/pricing.tsx",
+    "lines": 532,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/newsletters/generate.tsx",
+    "lines": 531,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/reportHtmlTemplateRenderer.test.ts",
+    "lines": 530,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/content/ManagedTemplateSelectionPage.tsx",
+    "lines": 530,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/usageLedgerService.ts",
+    "lines": 528,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/platforms/InstagramPostForm.tsx",
+    "lines": 528,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/domainCanonicalService.ts",
+    "lines": 526,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/dashboard/PostPreviewModal.tsx",
+    "lines": 526,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/admin/blog/generate.tsx",
+    "lines": 523,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/ingestionScheduler.ts",
+    "lines": 522,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "db-utils/db-inspector.js",
+    "lines": 522,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/engagement/ConversationView.tsx",
+    "lines": 521,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/decisionObjectService.ts",
+    "lines": 520,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/reports/reportComposedMapper.ts",
+    "lines": 519,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "scripts/staged-validation-monitor.js",
+    "lines": 519,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/domainRecordService.ts",
+    "lines": 518,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/GPTAIChat.tsx",
+    "lines": 515,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/detected-opportunities.ts",
+    "lines": 514,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/queue/contentGenerationQueues.ts",
+    "lines": 513,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/competitorEngineService.test.ts",
+    "lines": 512,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/recommendations/tabs/CanonicalActiveLeadsTab.tsx",
+    "lines": 512,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/campaign-health/[id].tsx",
+    "lines": 512,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/performanceReportService.ts",
+    "lines": 511,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/planner/PlanningCanvas.tsx",
+    "lines": 511,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/signalClusterEngine.ts",
+    "lines": 508,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/export/pdf/pdfRendererHelpers.ts",
+    "lines": 506,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/redis/instrumentation.ts",
+    "lines": 506,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "features/engagement/data/engagement.api.ts",
+    "lines": 505,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/ai-content-generator.tsx",
+    "lines": 505,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/scheduling-dashboard.tsx",
+    "lines": 504,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/planner/CampaignContextBar.tsx",
+    "lines": 502,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "components/thread/ThreadContinuationView.tsx",
+    "lines": 502,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "lib/content-analyzer.ts",
+    "lines": 502,
+    "maxAllowed": 500,
+    "severity": "warn"
+  },
+  {
+    "file": "pages/whatsapp/templates.tsx",
+    "lines": 502,
+    "maxAllowed": 500,
+    "severity": "warn"
+  }
+]

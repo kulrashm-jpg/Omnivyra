@@ -1,10 +1,13 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from './supabaseAuthService';
-import { supabase } from '../db/supabaseClient';
 import { checkRateLimit, type RateLimitConfig } from '../../lib/auth/rateLimit';
 import { isPlatformSuperAdmin } from './rbacService';
 import { logger } from './logger';
 import { seedRequestContextFromRequest } from './requestContext';
+import {
+  assertTenantAccess,
+  requireTenantAccess,
+} from '../security/TenantGuard';
 
 export async function requireAdminRateLimit(
   req: NextApiRequest,
@@ -66,13 +69,15 @@ export async function requireSuperAdminUser(
 /**
  * Service-layer membership check — verify a userId belongs to an organization.
  *
- * Unlike `assertOrgAccess`, this helper has NO req/res coupling: it returns
- * a boolean so service-layer callers (credit execution wrapper, background
- * jobs, queue processors) can gate work on membership without bringing in
- * HTTP plumbing. Platform super-admins are treated as members of every org.
+ * SHIM: this is now a thin wrapper over `TenantGuard.assertTenantAccess`.
+ * It exists for source-compatibility — the canonical authority is
+ * `assertTenantAccess`, which adds soft-delete enforcement and bridge-
+ * principal rejection that this helper previously bypassed. New code
+ * should call `assertTenantAccess` directly so the failure reason is
+ * available for richer error mapping.
  *
- * Throws only on unexpected DB errors. Returns `false` for plain non-members
- * so callers can produce the right domain-level error (credit execution
+ * Returns `false` for plain non-members AND for soft-deleted orgs so
+ * callers can produce the right domain-level error (credit execution
  * returns a typed result; background jobs should log + skip).
  */
 export async function assertOrgMembership(
@@ -80,59 +85,28 @@ export async function assertOrgMembership(
   organizationId: string,
 ): Promise<boolean> {
   if (!userId || !organizationId) return false;
-
-  if (await isPlatformSuperAdmin(userId)) return true;
-
-  const { data, error } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('company_id', organizationId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    logger.error('assert_org_membership_db_error', {
-      userId,
-      organizationId,
-      message: error.message,
-    });
-    throw new Error(`[assertOrgMembership] DB error: ${error.message}`);
-  }
-
-  return !!data;
+  const result = await assertTenantAccess({ userId, organizationId });
+  return result.ok === true;
 }
 
+/**
+ * HTTP-route org access check — verify the request principal belongs to
+ * the organization. SHIM: now delegates to `TenantGuard.requireTenantAccess`,
+ * which composes principal resolution + active membership + active org +
+ * platform-super-admin bypass + bridge-principal rejection. The return
+ * shape is preserved for existing callers (`{ userId, superAdmin } | null`).
+ *
+ * On rejection, the canonical guard writes the standard 401/403/404 + an
+ * audit row before returning null — same external contract as before, with
+ * stricter centralised behaviour.
+ */
 export async function assertOrgAccess(
   req: NextApiRequest,
   res: NextApiResponse,
   organizationId: string,
 ): Promise<{ userId: string; superAdmin: boolean } | null> {
-  const user = await requireAuthenticatedInternalUser(req, res);
-  if (!user) return null;
-
-  const superAdmin = await isPlatformSuperAdmin(user.id);
-  if (superAdmin) {
-    seedRequestContextFromRequest(req, { userId: user.id, orgId: organizationId });
-    return { userId: user.id, superAdmin: true };
-  }
-
-  const { data, error } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('company_id', organizationId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (error || !data) {
-    logger.warn('org_scope_violation', { userId: user.id, organizationId });
-    res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
-    return null;
-  }
-
-  seedRequestContextFromRequest(req, { userId: user.id, orgId: organizationId });
-  return { userId: user.id, superAdmin: false };
+  const access = await requireTenantAccess(req, res, organizationId);
+  if (!access) return null;
+  // requireTenantAccess already seeded the request context with userId + orgId.
+  return { userId: access.userId, superAdmin: access.isPlatformSuperAdmin };
 }

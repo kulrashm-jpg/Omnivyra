@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Scenario Model Engine
  * Phase 7: Models optimistic, base, and pessimistic scenarios.
@@ -47,15 +48,13 @@ export async function modelScenarios(
 ): Promise<ScenarioResult[]> {
   const scenarioTypes = options?.scenarioTypes ?? ['optimistic', 'base', 'pessimistic'];
 
-  const { data: outcomes } = await supabase
-    .from('intelligence_outcomes')
+  const { data: outcomes } = await ownedDbTable('intelligence_outcomes')
     .select('success_score')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
     .limit(200);
 
-  const { data: feedback } = await supabase
-    .from('recommendation_feedback')
+  const { data: feedback } = await ownedDbTable('recommendation_feedback')
     .select('feedback_score')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
@@ -97,8 +96,7 @@ export async function persistScenarioRun(
   scenarioType: ScenarioType,
   results: ScenarioResult[]
 ): Promise<string | null> {
-  const { data } = await supabase
-    .from('intelligence_simulation_runs')
+  const { data } = await ownedDbTable('intelligence_simulation_runs')
     .insert({
       company_id: companyId,
       run_type: 'scenario_model',

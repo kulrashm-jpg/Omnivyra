@@ -29,6 +29,7 @@ import { saveDomainRecord } from '../../../backend/services/domainRecordService'
 import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
+import { issueMfaIntent, userHasVerifiedMfaFactor } from '../../../backend/security/MfaIntent';
 
 type BootstrapRejection = {
   code:
@@ -61,6 +62,15 @@ type SuccessResponse = {
     token: string;
     methods: ['dns', 'http'];
   };
+  /**
+   * Set when the user has at least one verified MFA factor enrolled.
+   * The auth_session is NOT minted in this branch — the client must
+   * complete the MFA challenge via /api/auth/mfa-verify before any
+   * authenticated request will succeed. The mfa_intent cookie carries
+   * the bridge state and is consumed by mfa-verify.
+   */
+  mfa_required?: true;
+  factors?: ReadonlyArray<'totp' | 'webauthn'>;
 };
 type ErrorResponse   = {
   error: string;
@@ -121,6 +131,52 @@ export default async function handler(
         userAgent: requestUserAgent,
       });
     }
+  };
+
+  // Single MFA gate: for any user with a verified TOTP / WebAuthn factor,
+  // we MUST NOT mint an auth_session here. Instead we issue a short-lived,
+  // HMAC-signed intent cookie and the caller (frontend) routes to
+  // /auth/mfa, completes the challenge, and exchanges the intent for a
+  // session via /api/auth/mfa-verify.
+  //
+  // Returns true when the caller should short-circuit with mfa_required.
+  const gateOnMfa = async (
+    userId: string,
+  ): Promise<{ required: false } | { required: true; factors: ReadonlyArray<'totp' | 'webauthn'> }> => {
+    let state: Awaited<ReturnType<typeof userHasVerifiedMfaFactor>>;
+    try {
+      state = await userHasVerifiedMfaFactor(userId);
+    } catch (err) {
+      // Fail-CLOSED on the MFA-detection path — if we can't determine
+      // whether MFA is enrolled, we must NOT mint a session and let an
+      // attacker who suppressed the read bypass MFA. Surface as 503 so
+      // the client retries.
+      logger.error('auth_sync_mfa_detection_failed', {
+        userId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+    if (!state.hasMfa) return { required: false };
+    issueMfaIntent(res, {
+      userId,
+      supabaseUid,
+      email: normalizedEmail,
+    });
+    void logSecurityEvent({
+      capability: 'mfa.view_factors',
+      decision: 'mfa_login_challenge_issued',
+      actorUserId: userId,
+      principalUserId: userId,
+      principalSupabaseUid: supabaseUid,
+      reason: 'sync-supabase-user',
+      ip: requestIp,
+      userAgent: requestUserAgent,
+    });
+    const factors: Array<'totp' | 'webauthn'> = [];
+    if (state.totpVerified) factors.push('totp');
+    if (state.webauthnCount > 0) factors.push('webauthn');
+    return { required: true, factors };
   };
 
   // ── 2. Work-email validation (skip for invited users — they may use any domain) ──
@@ -200,6 +256,11 @@ export default async function handler(
       .from('users')
       .update({ is_email_verified: true, last_sign_in_at: now, has_password: hasPassword })
       .eq('supabase_uid', supabaseUid);
+    // Best-effort credit-bookkeeping reconciliation. grantInitialFreeCredit
+    // self-heals: if the wallet already has the grant but the claim or stamp
+    // is missing, it repairs them without re-granting. If the org already
+    // has a clean claim row, it returns 'already_claimed' as a no-op.
+    void reconcileInitialFreeCreditForUser(existingUserId, normalizedEmail);
     try {
       const result = await bootstrapCompanyFromSignupIntent({
         userId: existingUserId,
@@ -220,6 +281,10 @@ export default async function handler(
             : {}),
         });
       }
+      const gate = await gateOnMfa(existingUserId);
+      if (gate.required) {
+        return res.status(200).json({ ok: true, mfa_required: true, factors: gate.factors });
+      }
       await projectSession(existingUserId);
       return res.status(200).json({
         ok: true,
@@ -232,6 +297,10 @@ export default async function handler(
         email: normalizedEmail,
         message: err instanceof Error ? err.message : String(err),
       });
+    }
+    const gateFallbackUid = await gateOnMfa(existingUserId);
+    if (gateFallbackUid.required) {
+      return res.status(200).json({ ok: true, mfa_required: true, factors: gateFallbackUid.factors });
     }
     await projectSession(existingUserId);
     return res.status(200).json({ ok: true });
@@ -265,6 +334,9 @@ export default async function handler(
     }
     await supabase.from('users').update(updatePayload).eq('id', (byEmail as any).id);
     const existingUserIdByEmail = (byEmail as { id: string }).id;
+    // Same reconciliation as the by-uid branch: heal any drift between the
+    // wallet, claim row, and company stamp on every login. Best-effort.
+    void reconcileInitialFreeCreditForUser(existingUserIdByEmail, normalizedEmail);
     try {
       const result = await bootstrapCompanyFromSignupIntent({
         userId: existingUserIdByEmail,
@@ -285,6 +357,10 @@ export default async function handler(
             : {}),
         });
       }
+      const gateEmail = await gateOnMfa(existingUserIdByEmail);
+      if (gateEmail.required) {
+        return res.status(200).json({ ok: true, mfa_required: true, factors: gateEmail.factors });
+      }
       await projectSession(existingUserIdByEmail);
       return res.status(200).json({
         ok: true,
@@ -297,6 +373,10 @@ export default async function handler(
         email: normalizedEmail,
         message: err instanceof Error ? err.message : String(err),
       });
+    }
+    const gateFallbackEmail = await gateOnMfa(existingUserIdByEmail);
+    if (gateFallbackEmail.required) {
+      return res.status(200).json({ ok: true, mfa_required: true, factors: gateFallbackEmail.factors });
     }
     await projectSession(existingUserIdByEmail);
     return res.status(200).json({ ok: true });
@@ -405,6 +485,52 @@ export default async function handler(
       ? { domain_verification: insertBranchVerification }
       : {}),
   });
+}
+
+/**
+ * Best-effort reconcile of the initial free-credit bookkeeping for an
+ * existing user logging in. Resolves the user's active company from
+ * user_company_roles (status='active') and re-invokes grantInitialFreeCredit,
+ * which self-heals any drift between:
+ *   1. credit_transactions ledger row
+ *   2. organization_credits wallet balances
+ *   3. free_credit_claims audit row
+ *   4. companies.free_credit_granted_at stamp
+ *
+ * Call this fire-and-forget from any login path — it never throws and never
+ * blocks the response. If the user has no active company role yet (e.g.
+ * fresh signup before bootstrap), it's a no-op.
+ */
+async function reconcileInitialFreeCreditForUser(
+  userId: string,
+  email: string,
+): Promise<void> {
+  try {
+    const { data: roleRow } = await supabase
+      .from('user_company_roles')
+      .select('company_id')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const companyId = (roleRow as { company_id?: string } | null)?.company_id;
+    if (!companyId) return;
+
+    const emailDomain = extractDomain(email) ?? null;
+    await grantInitialFreeCredit({
+      orgId:       companyId,
+      userId,
+      emailDomain,
+    });
+  } catch (err) {
+    logger.warn('auth_sync_credit_reconcile_failed', {
+      userId,
+      email,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

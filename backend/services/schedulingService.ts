@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Advanced Scheduling Service
  * 
@@ -17,8 +18,7 @@ export async function setPostPriority(
   scheduledPostId: string,
   priority: number
 ): Promise<void> {
-  const { error } = await supabase
-    .from('scheduled_posts')
+  const { error } = await ownedDbTable('scheduled_posts')
     .update({ priority })
     .eq('id', scheduledPostId);
 
@@ -40,8 +40,7 @@ export async function adjustCampaignDates(
   posts_adjusted: number;
 }> {
   // Get campaign
-  const { data: campaign } = await supabase
-    .from('campaigns')
+  const { data: campaign } = await ownedDbTable('campaigns')
     .select('start_date')
     .eq('id', campaignId)
     .single();
@@ -58,8 +57,7 @@ export async function adjustCampaignDates(
   }
 
   // Adjust weekly content refinements
-  const { data: weekly } = await supabase
-    .from('weekly_content_refinements')
+  const { data: weekly } = await ownedDbTable('weekly_content_refinements')
     .select('id, week_start_date')
     .eq('campaign_id', campaignId);
 
@@ -70,8 +68,7 @@ export async function adjustCampaignDates(
         const newWeekDate = new Date(week.week_start_date);
         newWeekDate.setDate(newWeekDate.getDate() + dateDiff);
 
-        await supabase
-          .from('weekly_content_refinements')
+        await ownedDbTable('weekly_content_refinements')
           .update({ week_start_date: newWeekDate.toISOString() })
           .eq('id', week.id);
 
@@ -81,8 +78,7 @@ export async function adjustCampaignDates(
   }
 
   // Adjust daily content plans via execution engine
-  const { data: daily } = await supabase
-    .from('daily_content_plans')
+  const { data: daily } = await ownedDbTable('daily_content_plans')
     .select('id, date')
     .eq('campaign_id', campaignId);
 
@@ -104,8 +100,7 @@ export async function adjustCampaignDates(
   }
 
   // Adjust scheduled posts
-  const { data: posts } = await supabase
-    .from('scheduled_posts')
+  const { data: posts } = await ownedDbTable('scheduled_posts')
     .select('id, scheduled_for')
     .eq('campaign_id', campaignId)
     .eq('status', 'scheduled');
@@ -117,8 +112,7 @@ export async function adjustCampaignDates(
         const newScheduledFor = new Date(post.scheduled_for);
         newScheduledFor.setDate(newScheduledFor.getDate() + dateDiff);
 
-        await supabase
-          .from('scheduled_posts')
+        await ownedDbTable('scheduled_posts')
           .update({ scheduled_for: newScheduledFor.toISOString() })
           .eq('id', post.id);
 
@@ -158,8 +152,7 @@ export async function detectCampaignConflicts(
   end_date: Date;
   overlap_days: number;
 }>> {
-  let query = supabase
-    .from('campaigns')
+  let query = ownedDbTable('campaigns')
     .select('id, name, start_date, end_date')
     .eq('user_id', userId)
     .not('status', 'eq', 'completed')
@@ -217,8 +210,7 @@ export async function suggestAvailableDateRange(
   durationDays: number,
   preferredStart?: Date
 ): Promise<{ start_date: Date; end_date: Date } | null> {
-  const { data: campaigns } = await supabase
-    .from('campaigns')
+  const { data: campaigns } = await ownedDbTable('campaigns')
     .select('start_date, end_date')
     .eq('user_id', userId)
     .not('status', 'eq', 'completed')

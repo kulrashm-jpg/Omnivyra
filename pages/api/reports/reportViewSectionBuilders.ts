@@ -54,6 +54,26 @@ export function buildSeoVisuals(report: any): any {
             content_quality_score: radar.source_tags.content_quality_score ?? null,
           }
         : undefined,
+      axis_states: radar?.axis_states
+        ? {
+            technical_seo_score: radar.axis_states.technical_seo_score || 'insufficient_signal',
+            keyword_research_score: radar.axis_states.keyword_research_score || 'insufficient_signal',
+            rank_tracking_score: radar.axis_states.rank_tracking_score || 'insufficient_signal',
+            backlinks_score: radar.axis_states.backlinks_score || 'insufficient_signal',
+            competitor_intelligence_score: radar.axis_states.competitor_intelligence_score || 'insufficient_signal',
+            content_quality_score: radar.axis_states.content_quality_score || 'insufficient_signal',
+          }
+        : undefined,
+      benchmark: radar?.benchmark
+        ? {
+            technical_seo_score: typeof radar.benchmark.technical_seo_score === 'number' ? radar.benchmark.technical_seo_score : null,
+            keyword_research_score: typeof radar.benchmark.keyword_research_score === 'number' ? radar.benchmark.keyword_research_score : null,
+            rank_tracking_score: typeof radar.benchmark.rank_tracking_score === 'number' ? radar.benchmark.rank_tracking_score : null,
+            backlinks_score: typeof radar.benchmark.backlinks_score === 'number' ? radar.benchmark.backlinks_score : null,
+            competitor_intelligence_score: typeof radar.benchmark.competitor_intelligence_score === 'number' ? radar.benchmark.competitor_intelligence_score : null,
+            content_quality_score: typeof radar.benchmark.content_quality_score === 'number' ? radar.benchmark.content_quality_score : null,
+          }
+        : undefined,
       tooltips: {
         technical_seo_score: 'Reflects crawl health, structural SEO, metadata coverage, and answer-engine readiness.',
         keyword_research_score: 'Shows how much keyword opportunity coverage is visible in the report data.',
@@ -152,7 +172,8 @@ export function buildSeoExecutiveSummary(report: any): any {
   if (!summary) return undefined;
 
   return {
-    overallHealthScore: Number(summary.overall_health_score ?? 0),
+    overallHealthScore: typeof summary.overall_health_score === 'number' ? summary.overall_health_score : null,
+    overallHealthScoreState: summary.overall_health_score_state || 'insufficient_signal',
     primaryProblem: {
       title: summary.primary_problem?.title || 'Primary SEO issue still forming',
       impactedArea: summary.primary_problem?.impacted_area || 'visibility',
@@ -206,6 +227,26 @@ export function buildGeoAeoVisuals(report: any): any {
       confidence: visuals.ai_answer_presence_radar?.confidence || 'low',
       data_source_strength: visuals.ai_answer_presence_radar?.data_source_strength || 'missing',
       source_tags: visuals.ai_answer_presence_radar?.source_tags ?? null,
+      axis_states: visuals.ai_answer_presence_radar?.axis_states
+        ? {
+            answer_coverage_score: visuals.ai_answer_presence_radar.axis_states.answer_coverage_score || 'insufficient_signal',
+            entity_clarity_score: visuals.ai_answer_presence_radar.axis_states.entity_clarity_score || 'insufficient_signal',
+            topical_authority_score: visuals.ai_answer_presence_radar.axis_states.topical_authority_score || 'insufficient_signal',
+            citation_readiness_score: visuals.ai_answer_presence_radar.axis_states.citation_readiness_score || 'insufficient_signal',
+            content_structure_score: visuals.ai_answer_presence_radar.axis_states.content_structure_score || 'insufficient_signal',
+            freshness_score: visuals.ai_answer_presence_radar.axis_states.freshness_score || 'insufficient_signal',
+          }
+        : undefined,
+      benchmark: visuals.ai_answer_presence_radar?.benchmark
+        ? {
+            answer_coverage_score: typeof visuals.ai_answer_presence_radar.benchmark.answer_coverage_score === 'number' ? visuals.ai_answer_presence_radar.benchmark.answer_coverage_score : null,
+            entity_clarity_score: typeof visuals.ai_answer_presence_radar.benchmark.entity_clarity_score === 'number' ? visuals.ai_answer_presence_radar.benchmark.entity_clarity_score : null,
+            topical_authority_score: typeof visuals.ai_answer_presence_radar.benchmark.topical_authority_score === 'number' ? visuals.ai_answer_presence_radar.benchmark.topical_authority_score : null,
+            citation_readiness_score: typeof visuals.ai_answer_presence_radar.benchmark.citation_readiness_score === 'number' ? visuals.ai_answer_presence_radar.benchmark.citation_readiness_score : null,
+            content_structure_score: typeof visuals.ai_answer_presence_radar.benchmark.content_structure_score === 'number' ? visuals.ai_answer_presence_radar.benchmark.content_structure_score : null,
+            freshness_score: typeof visuals.ai_answer_presence_radar.benchmark.freshness_score === 'number' ? visuals.ai_answer_presence_radar.benchmark.freshness_score : null,
+          }
+        : undefined,
     },
     queryAnswerCoverageMap: {
       queries: Array.isArray(visuals.query_answer_coverage_map?.queries)
@@ -246,7 +287,8 @@ export function buildGeoAeoExecutiveSummary(report: any): any {
   const summary = report.geo_aeo_executive_summary;
   if (!summary) return undefined;
   return {
-    overallAiVisibilityScore: Number(summary.overall_ai_visibility_score ?? 0),
+    overallAiVisibilityScore: typeof summary.overall_ai_visibility_score === 'number' ? summary.overall_ai_visibility_score : null,
+    overallAiVisibilityScoreState: summary.overall_ai_visibility_score_state || 'insufficient_signal',
     primaryGap: {
       title: summary.primary_gap?.title || 'Primary AI visibility gap still forming',
       type: summary.primary_gap?.type || 'answer_gap',
@@ -280,10 +322,12 @@ export function buildUnifiedIntelligenceSummary(report: any): any {
   if (!summary) return undefined;
 
   return {
-    unifiedScore: Number(summary.unified_score ?? 0),
+    unifiedScore: typeof summary.unified_score === 'number' ? summary.unified_score : null,
+    unifiedScoreState: summary.unified_score_state || 'insufficient_signal',
+    systemMaturity: summary.system_maturity || 'building_baseline',
     marketContextSummary:
       summary.market_context_summary ||
-      'Current market context is inferred from combined SEO and GEO/AEO signals, with the strongest channel carrying near-term growth leverage.',
+      'Cross-channel intelligence is currently insufficient to compute — neither SEO nor AI-answer evidence has been observed for this snapshot.',
     dominantGrowthChannel: summary.dominant_growth_channel || 'balanced',
     primaryConstraint: {
       title: summary.primary_constraint?.title || 'Primary cross-channel constraint still forming',

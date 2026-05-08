@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { X } from 'lucide-react';
 import { getAuthToken } from '../utils/getAuthToken';
 import { useCompanyContext } from '@/components/CompanyContext';
+import StepTracker, { type StepDef, type StepTrackerAccent } from '@/components/progress/StepTracker';
 
 interface ReportFormModalProps {
   isOpen: boolean;
@@ -37,6 +38,44 @@ const REPORT_LABELS = {
 };
 
 const STORAGE_KEY = 'omniware_report_form';
+
+const REPORT_GEN_PROGRESS: Record<'snapshot' | 'performance' | 'market', { stages: StepDef[]; accent: StepTrackerAccent; title: string }> = {
+  snapshot: {
+    title: 'Generating your snapshot',
+    accent: 'emerald',
+    stages: [
+      { key: 'crawl',    label: 'Crawling your domain',       etaSeconds: 30 },
+      { key: 'social',   label: 'Reading social signals',     etaSeconds: 30 },
+      { key: 'score',    label: 'Scoring digital authority',  etaSeconds: 45 },
+      { key: 'insights', label: 'Drafting insights',          etaSeconds: 30 },
+      { key: 'finalize', label: 'Finalizing report',          etaSeconds: 15 },
+    ],
+  },
+  performance: {
+    title: 'Generating performance report',
+    accent: 'sky',
+    stages: [
+      { key: 'load',       label: 'Loading performance data',         etaSeconds: 20 },
+      { key: 'analyze',    label: 'Analyzing campaigns',              etaSeconds: 45 },
+      { key: 'benchmark',  label: 'Benchmarking against industry',    etaSeconds: 45 },
+      { key: 'gaps',       label: 'Identifying gaps',                 etaSeconds: 30 },
+      { key: 'recommend',  label: 'Drafting recommendations',         etaSeconds: 30 },
+      { key: 'finalize',   label: 'Finalizing PDF',                   etaSeconds: 10 },
+    ],
+  },
+  market: {
+    title: 'Generating growth report',
+    accent: 'emerald',
+    stages: [
+      { key: 'sources',     label: 'Loading data sources',          etaSeconds: 30 },
+      { key: 'signals',     label: 'Analyzing market signals',      etaSeconds: 60 },
+      { key: 'competitors', label: 'Comparing competitors',         etaSeconds: 60 },
+      { key: 'opportunity', label: 'Identifying opportunities',     etaSeconds: 45 },
+      { key: 'draft',       label: 'Drafting strategic report',     etaSeconds: 30 },
+      { key: 'finalize',    label: 'Finalizing PDF',                etaSeconds: 15 },
+    ],
+  },
+};
 
 function normalizeDomain(value: string | null | undefined): string {
   return (value || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/.*$/, '').trim();
@@ -118,6 +157,7 @@ export default function ReportFormModal({
   const [showPreviewInsight, setShowPreviewInsight] = useState(false);
   const [submittedDomain, setSubmittedDomain] = useState<string>('');
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [generationStartedAt, setGenerationStartedAt] = useState<number | null>(null);
 
   const resolvedReportCategory: 'snapshot' | 'performance' | 'growth' =
     reportCategory ??
@@ -230,6 +270,7 @@ export default function ReportFormModal({
 
     // If FREE report, submit immediately
     if (isFreeReport) {
+      setGenerationStartedAt(Date.now());
       try {
         const token = await getAuthToken();
         const res = await fetch('/api/reports/generate', {
@@ -255,10 +296,12 @@ export default function ReportFormModal({
         }
         setSubmitError(data.error || 'Failed to generate report');
         setIsSubmitting(false);
+        setGenerationStartedAt(null);
         return;
       } catch {
         setSubmitError('Failed to generate report');
         setIsSubmitting(false);
+        setGenerationStartedAt(null);
         return;
       }
     } else {
@@ -271,6 +314,7 @@ export default function ReportFormModal({
   const handleConfirmPayment = async () => {
     setIsSubmitting(true);
     setSubmitError(null);
+    setGenerationStartedAt(Date.now());
     try {
       const token = await getAuthToken();
       const res = await fetch('/api/reports/generate', {
@@ -297,10 +341,12 @@ export default function ReportFormModal({
       }
       setSubmitError(data.error || 'Failed to generate report');
       setIsSubmitting(false);
+      setGenerationStartedAt(null);
       return;
     } catch {
       setSubmitError('Failed to generate report');
       setIsSubmitting(false);
+      setGenerationStartedAt(null);
       return;
     }
   };
@@ -328,6 +374,7 @@ export default function ReportFormModal({
     setShowPreviewInsight(false);
     setSubmittedDomain('');
     setSubmitError(null);
+    setGenerationStartedAt(null);
     onClose();
   };
 
@@ -399,8 +446,24 @@ export default function ReportFormModal({
                 : 'Paid report • Credits will be deducted on submission'}
             </div>
 
-            {/* Form or Payment Step */}
-            {!paymentStep ? (
+            {/* Generation Progress (replaces form/payment when in flight) */}
+            {generationStartedAt && reportType ? (
+              <div className="space-y-3">
+                <StepTracker
+                  stages={REPORT_GEN_PROGRESS[reportType].stages}
+                  startedAt={generationStartedAt}
+                  status={submitError ? 'failed' : 'running'}
+                  errorMessage={submitError ?? undefined}
+                  accent={REPORT_GEN_PROGRESS[reportType].accent}
+                  title={REPORT_GEN_PROGRESS[reportType].title}
+                  subLabel={`Building report for ${getSubmittedDomain()}`}
+                  variant="card"
+                />
+                <p className="text-center text-xs text-gray-500">
+                  Keep this tab open. We'll redirect you when the report is ready.
+                </p>
+              </div>
+            ) : !paymentStep ? (
               // FORM STEP
               <form onSubmit={handleSubmit} className="space-y-5">
                 {submitError && (

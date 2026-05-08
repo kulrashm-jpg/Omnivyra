@@ -2,10 +2,12 @@ import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { getBasicFunnel, getConversionSummary, getDropOffPages, getTopPages, getTrafficSources } from './behaviorAnalyticsService';
 import type {
+
   BehaviorRecommendation,
   BehaviorRecommendationReportData,
   BehaviorRecommendationType,
 } from './behaviorRecommendationService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface BehaviorRecommendationLearningStats {
   recommendation_type: BehaviorRecommendationType;
@@ -130,8 +132,7 @@ export async function recordGeneratedBehaviorRecommendations(
   }));
 
   const recommendationKeys = payload.map((item) => item.recommendationKey);
-  const { data: existingRows, error: existingError } = await supabase
-    .from('intelligence_actions')
+  const { data: existingRows, error: existingError } = await ownedDbTable('intelligence_actions')
     .select('recommendation_key')
     .eq('company_id', companyId)
     .eq('action_status', 'pending')
@@ -163,7 +164,7 @@ export async function recordGeneratedBehaviorRecommendations(
     return;
   }
 
-  const { error } = await supabase.from('intelligence_actions').insert(rowsToInsert);
+  const { error } = await ownedDbTable('intelligence_actions').insert(rowsToInsert);
   if (error) {
     throw new Error(`Failed to persist intelligence actions: ${error.message}`);
   }
@@ -281,8 +282,7 @@ export async function evaluateBehaviorActionOutcomes(
   companyId: string,
 ): Promise<{ evaluated: number }> {
   const nowIso = new Date().toISOString();
-  const { data: rows, error } = await supabase
-    .from('intelligence_actions')
+  const { data: rows, error } = await ownedDbTable('intelligence_actions')
     .select('id, company_id, recommendation_type, recommendation_message, action_status, impact_score, recommendation_context, baseline_metrics, evaluation_due_at')
     .eq('company_id', companyId)
     .neq('action_status', 'ignored')
@@ -308,8 +308,7 @@ export async function evaluateBehaviorActionOutcomes(
       outcomeMetrics,
     );
 
-    const { error: updateError } = await supabase
-      .from('intelligence_actions')
+    const { error: updateError } = await ownedDbTable('intelligence_actions')
       .update({
         impact_score: impactScore,
         outcome_metrics: outcomeMetrics,
@@ -329,8 +328,7 @@ export async function evaluateBehaviorActionOutcomes(
 export async function getBehaviorRecommendationLearningProfile(
   companyId: string,
 ): Promise<BehaviorRecommendationLearningProfile> {
-  const { data, error } = await supabase
-    .from('intelligence_actions')
+  const { data, error } = await ownedDbTable('intelligence_actions')
     .select('recommendation_type, impact_score, action_status')
     .eq('company_id', companyId)
     .not('impact_score', 'is', null)

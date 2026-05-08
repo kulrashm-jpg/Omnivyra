@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Stage 30 — Governance Disaster Recovery & Snapshot Restoration.
  * Snapshot and restore governance layer only. No evaluation, scheduler, or state machine changes.
@@ -66,21 +67,18 @@ export async function createGovernanceSnapshot(params: {
     campaignIds = await getCompanyCampaignIds(companyId);
   }
 
-  const { data: lockdownRows } = await supabase
-    .from('governance_lockdown')
+  const { data: lockdownRows } = await ownedDbTable('governance_lockdown')
     .select('*')
     .limit(10);
 
-  const { data: auditRows } = await supabase
-    .from('governance_audit_runs')
+  const { data: auditRows } = await ownedDbTable('governance_audit_runs')
     .select('*')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
 
   let events: any[] = [];
   if (campaignIds.length > 0) {
-    const { data: eventRows } = await supabase
-      .from('campaign_governance_events')
+    const { data: eventRows } = await ownedDbTable('campaign_governance_events')
       .select('*')
       .in('campaign_id', campaignIds)
       .order('created_at', { ascending: true });
@@ -101,8 +99,7 @@ export async function createGovernanceSnapshot(params: {
     },
   };
 
-  const { data: inserted, error } = await supabase
-    .from('governance_snapshots')
+  const { data: inserted, error } = await ownedDbTable('governance_snapshots')
     .insert({
       company_id: companyId,
       snapshot_type: snapshotType,
@@ -132,8 +129,7 @@ export async function createGovernanceSnapshot(params: {
  * Does NOT unlock, does NOT modify execution state, does NOT run evaluation/scheduler.
  */
 export async function restoreGovernanceSnapshot(snapshotId: string): Promise<{ restored: boolean }> {
-  const { data: snapshot, error: fetchError } = await supabase
-    .from('governance_snapshots')
+  const { data: snapshot, error: fetchError } = await ownedDbTable('governance_snapshots')
     .select('*')
     .eq('id', snapshotId)
     .single();
@@ -186,7 +182,7 @@ async function doRestore(
 
   if (lockdownRows.length > 0) {
     const row = lockdownRows[0];
-    const existing = await supabase.from('governance_lockdown').select('id').limit(1).maybeSingle();
+    const existing = await ownedDbTable('governance_lockdown').select('id').limit(1).maybeSingle();
     const payload = {
       locked: row.locked ?? false,
       reason: row.reason ?? null,
@@ -196,16 +192,16 @@ async function doRestore(
       resolved_by: row.resolved_by ?? null,
     };
     if ((existing.data as any)?.id) {
-      await supabase.from('governance_lockdown').update(payload).eq('id', (existing.data as any).id);
+      await ownedDbTable('governance_lockdown').update(payload).eq('id', (existing.data as any).id);
     } else {
-      await supabase.from('governance_lockdown').insert({
+      await ownedDbTable('governance_lockdown').insert({
         id: row.id || '00000000-0000-0000-0000-000000000001',
         ...payload,
       });
     }
   }
 
-  await supabase.from('governance_audit_runs').delete().eq('company_id', companyId);
+  await ownedDbTable('governance_audit_runs').delete().eq('company_id', companyId);
   if (auditRows.length > 0) {
     const inserts = auditRows.map((r: any) => ({
       company_id: r.company_id ?? companyId,
@@ -217,14 +213,14 @@ async function doRestore(
       audit_status: r.audit_status ?? 'OK',
       created_at: r.created_at ?? new Date().toISOString(),
     }));
-    await supabase.from('governance_audit_runs').insert(inserts);
+    await ownedDbTable('governance_audit_runs').insert(inserts);
   }
 
   const scopeCampaignIds = eventRows.length > 0
     ? [...new Set(eventRows.map((e: any) => e.campaign_id).filter(Boolean))]
     : [];
   if (scopeCampaignIds.length > 0) {
-    await supabase.from('campaign_governance_events').delete().in('campaign_id', scopeCampaignIds);
+    await ownedDbTable('campaign_governance_events').delete().in('campaign_id', scopeCampaignIds);
   }
   if (eventRows.length > 0) {
     const byCampaign = new Map<string, any[]>();
@@ -264,7 +260,7 @@ async function doRestore(
         prevHash = eventHash;
       }
     }
-    await supabase.from('campaign_governance_events').insert(inserts);
+    await ownedDbTable('campaign_governance_events').insert(inserts);
     for (const cid of scopeCampaignIds) {
       rebuildGovernanceProjection(cid).catch(() => {});
     }
@@ -292,8 +288,7 @@ export async function verifySnapshotIntegrity(snapshotId: string): Promise<{
   mismatchFields?: string[];
 }> {
   try {
-    const { data: snapshot, error } = await supabase
-      .from('governance_snapshots')
+    const { data: snapshot, error } = await ownedDbTable('governance_snapshots')
       .select('snapshot_data, policy_hash')
       .eq('id', snapshotId)
       .single();

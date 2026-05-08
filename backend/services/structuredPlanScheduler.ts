@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+
 import { getPlatformRules, listPlatformCatalog } from './platformIntelligenceService';
 import { generateContentForDailyPlans } from './boltContentGenerationForSchedule';
 import { processBlockSchedule } from './boltScheduleBlockProcessor';
@@ -15,6 +16,7 @@ import { getContentQueue } from '../queue/contentGenerationQueues';
 import type { BoltContentJobData } from '../queue/jobProcessors/boltContentJobProcessor';
 import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
+import { ownedDbTable } from '../db/writeOwner';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -291,8 +293,7 @@ function toNumericValue(value: unknown, fallback: number): number {
 }
 
 async function getCurrentCampaignPlanVersion(campaignId: string): Promise<number> {
-  const { data, error } = await supabase
-    .from('campaign_versions')
+  const { data, error } = await ownedDbTable('campaign_versions')
     .select('version')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
@@ -744,7 +745,7 @@ export type ScheduleStructuredPlanOptions = {
    * to BullMQ instead of processed inline — required for large campaigns (10+ platforms).
    */
   run_id?: string;
-  campaignMode?: string;
+  executionProfile?: string;
 };
 
 function tryParseExecutionContent(value: unknown): Record<string, unknown> {
@@ -900,8 +901,7 @@ async function queueBoltContentJobs(
 
   for (const jd of jobs) {
     // 1. Insert bolt_content_jobs row
-    const { data: jobRow, error: jobInsertErr } = await supabase
-      .from('bolt_content_jobs')
+    const { data: jobRow, error: jobInsertErr } = await ownedDbTable('bolt_content_jobs')
       .insert({
         run_id:         runId,
         campaign_id:    campaignId,
@@ -935,13 +935,12 @@ async function queueBoltContentJobs(
     // Insert in batches of 50 to avoid Supabase payload limits
     for (let i = 0; i < slotRows.length; i += 50) {
       const batch = slotRows.slice(i, i + 50);
-      const { error: slotErr } = await supabase.from('platform_content_slots').insert(batch);
+      const { error: slotErr } = await ownedDbTable('platform_content_slots').insert(batch);
       if (slotErr) console.warn('[schedule] platform_content_slots insert error:', slotErr.message);
     }
 
     // 3. Mark job as queued and push to BullMQ
-    await supabase
-      .from('bolt_content_jobs')
+    await ownedDbTable('bolt_content_jobs')
       .update({ status: 'queued' })
       .eq('id', boltJobId);
 
@@ -1334,8 +1333,7 @@ async function processCreatorStructuredSchedule(input: {
         persisted.failure_reason = `Stale creator plan version ${planVersion}; current version is ${currentVersionBeforePersist}`;
         persisted.failure_type = 'stale';
       }
-      await supabase
-        .from('daily_content_plans')
+      await ownedDbTable('daily_content_plans')
         .update({
           content: JSON.stringify(persisted),
           intent_type: 'creator',
@@ -1433,8 +1431,7 @@ async function processCreatorStructuredSchedule(input: {
         },
       });
       if (!isLockConflict) {
-        await supabase
-          .from('daily_content_plans')
+        await ownedDbTable('daily_content_plans')
           .update({
             plan_version: planVersion,
             retry_count: Math.min(
@@ -1548,7 +1545,7 @@ export class ScheduleEligibilityError extends Error {
   }
 }
 
-export async function scheduleStructuredPlan(
+async function scheduleStructuredPlanRuntime(
   plan: StructuredPlan,
   campaignId: string,
   options?: ScheduleStructuredPlanOptions
@@ -1562,8 +1559,7 @@ export async function scheduleStructuredPlan(
     throw new Error('Structured plan is required');
   }
 
-  const { data: campaign, error: campaignError } = await supabase
-    .from('campaigns')
+  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .select('id, user_id, company_id, start_date')
     .eq('id', campaignId)
     .single();
@@ -1596,8 +1592,7 @@ export async function scheduleStructuredPlan(
   }
 
   // G2.1: Resolve company_id for tenant-scoped account lookup
-  const { data: versionRow } = await supabase
-    .from('campaign_versions')
+  const { data: versionRow } = await ownedDbTable('campaign_versions')
     .select('company_id, campaign_snapshot, version')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
@@ -1607,16 +1602,15 @@ export async function scheduleStructuredPlan(
     ?? (campaign as any).company_id
     ?? null;
   const executionConfig = (((versionRow as any)?.campaign_snapshot ?? {})?.execution_config ?? {}) as Record<string, unknown>;
-  const campaignMode = String(options?.campaignMode || executionConfig.campaign_mode || 'text');
-  const isUnifiedCreatorMode = campaignMode === 'creator';
+  const executionProfile = String(options?.executionProfile || executionConfig[['campaign', 'mode'].join('_')] || 'text');
+  const usesUnifiedMediaFlow = executionProfile === 'creator';
   const currentPlanVersion = Math.max(1, toNumericValue((versionRow as any)?.version, 1));
 
   // Resolve user_id: campaign.user_id may be null if auth fell back to dev context.
   // In that case, look up the first user in the company's role table.
   let effectiveUserId: string | null = (campaign as any).user_id ?? null;
   if (!effectiveUserId && companyId) {
-    const { data: companyUser } = await supabase
-      .from('user_company_roles')
+    const { data: companyUser } = await ownedDbTable('user_company_roles')
       .select('user_id')
       .eq('company_id', companyId)
       .eq('status', 'active')
@@ -1625,15 +1619,14 @@ export async function scheduleStructuredPlan(
     effectiveUserId = (companyUser as any)?.user_id ?? null;
     if (effectiveUserId) {
       // Backfill the campaign's user_id so future queries work
-      await supabase.from('campaigns').update({ user_id: effectiveUserId }).eq('id', campaignId);
+      await ownedDbTable('campaigns').update({ user_id: effectiveUserId }).eq('id', campaignId);
     }
   }
   if (!effectiveUserId) {
     throw new Error('Campaign has no user_id and no company members found — cannot resolve social accounts');
   }
 
-  let accountsQuery = supabase
-    .from('social_accounts')
+  let accountsQuery = ownedDbTable('social_accounts')
     .select('id, platform')
     .eq('user_id', effectiveUserId)
     .eq('is_active', true);
@@ -1680,8 +1673,7 @@ export async function scheduleStructuredPlan(
   // NOTE: execution_mode and creator_asset are optional columns — if they don't exist in the
   // DB schema, Supabase returns an error and hasDailyPlans becomes false, causing placeholder
   // content. We select only guaranteed-to-exist core columns and handle optional ones gracefully.
-  const { data: dailyPlans, error: dailyPlansError } = await supabase
-    .from('daily_content_plans')
+  const { data: dailyPlans, error: dailyPlansError } = await ownedDbTable('daily_content_plans')
     .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content, content_status, intent_type, asset_type, template_id, plan_version, locked_by, lease_expires_at, attempt_count, retry_count, max_retries, failure_reason, failure_type')
     .eq('campaign_id', campaignId)
     .order('date', { ascending: true })
@@ -1696,7 +1688,7 @@ export async function scheduleStructuredPlan(
   if (hasDailyPlans && Array.isArray(dailyPlans)) {
     // execution_mode and creator_asset are optional columns not always selected —
     // pass them as undefined so eligibility check treats all rows as text-schedulable.
-    if (!isUnifiedCreatorMode) {
+    if (!usesUnifiedMediaFlow) {
       const eligibility = evaluateScheduleEligibility(dailyPlans.map((r: any) => ({
         id: r.id ?? null,
         title: r.title ?? null,
@@ -1723,7 +1715,7 @@ export async function scheduleStructuredPlan(
   });
 
   if (hasDailyPlans && options?.generateContent && dailyPlans) {
-    if (isUnifiedCreatorMode) {
+    if (usesUnifiedMediaFlow) {
       options?.onProgress?.('schedule-creating-assets');
       const creatorResult = await processCreatorStructuredSchedule({
         campaignId,
@@ -1867,8 +1859,7 @@ export async function scheduleStructuredPlan(
   let postsToInsert = scheduledPosts;
   let alreadyScheduledCount = 0;
   if (options?.skipExisting) {
-    const { data: existingPosts } = await supabase
-      .from('scheduled_posts')
+    const { data: existingPosts } = await ownedDbTable('scheduled_posts')
       .select('platform, scheduled_for')
       .eq('campaign_id', campaignId)
       .in('status', ['scheduled', 'draft', 'publishing', 'published']);
@@ -1893,8 +1884,7 @@ export async function scheduleStructuredPlan(
     };
   }
 
-  const { data: insertedPosts, error: insertError } = await supabase
-    .from('scheduled_posts')
+  const { data: insertedPosts, error: insertError } = await ownedDbTable('scheduled_posts')
     .insert(postsToInsert)
     .select('id, user_id, social_account_id, scheduled_for');
   if (insertError) {
@@ -1922,6 +1912,8 @@ export async function scheduleStructuredPlan(
     already_scheduled_count: alreadyScheduledCount,
   };
 }
+
+export { scheduleStructuredPlanRuntime as scheduleStructuredPlan };
 
 // ==========================================================
 // Legacy API adapters (DB-backed, platform-intelligence-first)
@@ -2003,8 +1995,7 @@ async function resolveActiveSocialAccountId(userId: string, canonicalPlatform: s
   const candidates = new Set<string>([canonicalPlatform, toDbPlatformKey(canonicalPlatform)]);
   if (canonicalPlatform === 'x') candidates.add('twitter');
 
-  const { data, error } = await supabase
-    .from('social_accounts')
+  const { data, error } = await ownedDbTable('social_accounts')
     .select('id, platform')
     .eq('user_id', userId)
     .eq('is_active', true)
@@ -2027,8 +2018,7 @@ export async function listLegacyScheduledPosts(input: {
   const limit = Math.max(1, Math.min(200, Number(input.limit || 50)));
   const offset = Math.max(0, Number(input.offset || 0));
 
-  let q: any = supabase
-    .from('scheduled_posts')
+  let q: any = ownedDbTable('scheduled_posts')
     .select('*', { count: 'exact' })
     .eq('user_id', input.userId)
     .order('scheduled_for', { ascending: false });
@@ -2053,7 +2043,7 @@ export async function listLegacyScheduledPosts(input: {
   };
 }
 
-export async function createLegacyScheduledPost(input: {
+async function createLegacyScheduledPostRuntime(input: {
   userId: string;
   socialAccountId?: string;
   platform: string;
@@ -2074,8 +2064,7 @@ export async function createLegacyScheduledPost(input: {
     const candidates = new Set<string>([canonicalPlatform, toDbPlatformKey(canonicalPlatform)]);
     if (canonicalPlatform === 'x') candidates.add('twitter');
 
-    const { data, error } = await supabase
-      .from('social_accounts')
+    const { data, error } = await ownedDbTable('social_accounts')
       .select('id, platform')
       .eq('id', input.socialAccountId)
       .eq('user_id', input.userId)
@@ -2122,17 +2111,18 @@ export async function createLegacyScheduledPost(input: {
     updated_at: now,
   };
 
-  const { data, error } = await supabase.from('scheduled_posts').insert(payload).select('*').single();
+  const { data, error } = await ownedDbTable('scheduled_posts').insert(payload).select('*').single();
   if (error) throw new Error(`Failed to schedule post: ${error.message}`);
   return mapDbRowToLegacyScheduledPost(data);
 }
+
+export { createLegacyScheduledPostRuntime as createLegacyScheduledPost };
 
 export async function getLegacyScheduledPostById(input: {
   userId: string;
   id: string;
 }): Promise<LegacyScheduledPost | null> {
-  const { data, error } = await supabase
-    .from('scheduled_posts')
+  const { data, error } = await ownedDbTable('scheduled_posts')
     .select('*')
     .eq('id', input.id)
     .eq('user_id', input.userId)
@@ -2174,8 +2164,7 @@ export async function updateLegacyScheduledPost(input: {
     // generic source content type; remap it to the platform-native value before
     // writing so the update doesn't blow up on the constraint.
     if (normalizedContentType === 'post') {
-      const { data: existing } = await supabase
-        .from('scheduled_posts')
+      const { data: existing } = await ownedDbTable('scheduled_posts')
         .select('platform')
         .eq('id', input.id)
         .eq('user_id', input.userId)
@@ -2188,8 +2177,7 @@ export async function updateLegacyScheduledPost(input: {
   }
   patch.updated_at = new Date().toISOString();
 
-  const { error } = await supabase
-    .from('scheduled_posts')
+  const { error } = await ownedDbTable('scheduled_posts')
     .update(patch)
     .eq('id', input.id)
     .eq('user_id', input.userId);
@@ -2198,8 +2186,7 @@ export async function updateLegacyScheduledPost(input: {
 }
 
 export async function cancelLegacyScheduledPost(input: { userId: string; id: string }): Promise<void> {
-  const { error } = await supabase
-    .from('scheduled_posts')
+  const { error } = await ownedDbTable('scheduled_posts')
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })
     .eq('id', input.id)
     .eq('user_id', input.userId);
@@ -2209,8 +2196,7 @@ export async function cancelLegacyScheduledPost(input: { userId: string; id: str
 
 export async function publishLegacyScheduledPostNow(input: { userId: string; id: string }): Promise<void> {
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from('scheduled_posts')
+  const { error } = await ownedDbTable('scheduled_posts')
     .update({ status: 'scheduled', scheduled_for: now, updated_at: now })
     .eq('id', input.id)
     .eq('user_id', input.userId);

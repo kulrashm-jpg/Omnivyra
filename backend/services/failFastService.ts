@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Fail-Fast Service
  *
@@ -52,8 +53,7 @@ async function getContentTypeStats(campaignId: string): Promise<Array<{
   avg_rate: number;
   count: number;
 }>> {
-  const { data } = await supabase
-    .from('performance_feedback')
+  const { data } = await ownedDbTable('performance_feedback')
     .select('content_type, platform, engagement_rate')
     .eq('campaign_id', campaignId)
     .not('content_type', 'is', null);
@@ -81,7 +81,7 @@ async function logFailFast(
   campaignId: string,
   decision: ContentTypeDecision,
 ): Promise<void> {
-  void supabase.from('fail_fast_log').insert({
+  void ownedDbTable('fail_fast_log').insert({
     company_id:           companyId,
     campaign_id:          campaignId,
     content_type:         decision.content_type,

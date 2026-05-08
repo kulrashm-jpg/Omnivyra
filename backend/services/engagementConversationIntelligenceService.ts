@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Conversation Intelligence Service
  *
@@ -28,16 +29,14 @@ async function detectInfluencer(
 ): Promise<boolean> {
   if (!author_id || !organization_id) return false;
 
-  const { data: author } = await supabase
-    .from('engagement_authors')
+  const { data: author } = await ownedDbTable('engagement_authors')
     .select('id, platform_user_id, username, profile_url')
     .eq('id', author_id)
     .maybeSingle();
 
   if (!author) return false;
 
-  let discoveredQuery = supabase
-    .from('community_ai_discovered_users')
+  let discoveredQuery = ownedDbTable('community_ai_discovered_users')
     .select('id, classification, metadata')
     .eq('organization_id', organization_id)
     .eq('tenant_id', organization_id)
@@ -102,8 +101,7 @@ function ruleBasedAnalysis(content: string, sentimentScore: number | null): Mess
  * Updates engagement_thread_intelligence for the thread.
  */
 export async function analyzeMessage(message_id: string): Promise<void> {
-  const { data: message, error: msgError } = await supabase
-    .from('engagement_messages')
+  const { data: message, error: msgError } = await ownedDbTable('engagement_messages')
     .select('id, thread_id, content, author_id, platform, sentiment_score')
     .eq('id', message_id)
     .maybeSingle();
@@ -113,8 +111,7 @@ export async function analyzeMessage(message_id: string): Promise<void> {
     return;
   }
 
-  const { data: thread } = await supabase
-    .from('engagement_threads')
+  const { data: thread } = await ownedDbTable('engagement_threads')
     .select('id, organization_id')
     .eq('id', message.thread_id)
     .maybeSingle();
@@ -174,8 +171,7 @@ export async function analyzeMessage(message_id: string): Promise<void> {
     }
   }
 
-  const { error: insertError } = await supabase
-    .from('engagement_message_intelligence')
+  const { error: insertError } = await ownedDbTable('engagement_message_intelligence')
     .upsert(
       {
         message_id,
@@ -219,16 +215,14 @@ export async function analyzeMessage(message_id: string): Promise<void> {
  * Aggregate message intelligence into thread intelligence.
  */
 async function updateThreadIntelligence(thread_id: string): Promise<void> {
-  const { data: messages } = await supabase
-    .from('engagement_messages')
+  const { data: messages } = await ownedDbTable('engagement_messages')
     .select('id')
     .eq('thread_id', thread_id);
 
   const messageIds = (messages ?? []).map((m: { id: string }) => m.id);
   if (messageIds.length === 0) return;
 
-  const { data: intelRows } = await supabase
-    .from('engagement_message_intelligence')
+  const { data: intelRows } = await ownedDbTable('engagement_message_intelligence')
     .select('lead_signal, question_detected, influencer_signal, intent, sentiment')
     .in('message_id', messageIds);
 
@@ -250,8 +244,7 @@ async function updateThreadIntelligence(thread_id: string): Promise<void> {
   if (customerQuestion) reasons.push('customer_question');
   if (influencerDetected) reasons.push('influencer_detected');
 
-  const { error: upsertError } = await supabase
-    .from('engagement_thread_intelligence')
+  const { error: upsertError } = await ownedDbTable('engagement_thread_intelligence')
     .upsert(
       {
         thread_id,

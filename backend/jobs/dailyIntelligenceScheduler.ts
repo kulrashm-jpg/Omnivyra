@@ -33,6 +33,7 @@ import { runDataDrivenIntelligenceForCompany } from '../services/dataDrivenIntel
 import { recomputePrioritiesForCompany } from '../services/prioritizationService';
 import { evaluateBehaviorAlerts } from '../services/behaviorAlertService';
 import { evaluateBehaviorActionOutcomes } from '../services/behaviorActionTrackingService';
+import { runJob } from '../services/jobRunner';
 
 const MAX_CAMPAIGNS_PER_RUN = 500;
 const EVALUATED_WITHIN_MS = 24 * 60 * 60 * 1000;
@@ -253,9 +254,28 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
 
     const pairs = await fetchActiveCampaigns();
     const companiesSeen = new Set<string>();
+    const dayBucket = startedAt.toISOString().slice(0, 10);
+    let tenantInvalidCampaigns = 0;
 
     for (const { campaignId, companyId } of pairs) {
-      try {
+      const outcome = await runJob(
+        {
+          jobName:        'job:daily-intelligence:campaign',
+          triggerSource:  'system',
+          tenantId:       companyId,
+          principalKind:  'system:daily-intelligence',
+          idempotencyKey: `job:daily-intelligence:campaign:${campaignId}:${dayBucket}`,
+          // Sequential per-tenant analysis. The outer job is already
+          // scheduler-locked; the inner per-campaign cap keeps a single
+          // tenant's many campaigns from racing on shared LLM context.
+          concurrency: {
+            key:                 `tenant:${companyId}:job:daily-intelligence`,
+            max:                 1,
+            maxPerSecond:        2,
+            maxRetriesPerMinute: 4,
+          },
+        },
+        async () => {
         await enforceDecisionGenerationThrottle(companyId, 'dailyIntelligenceScheduler');
 
         const skipHealth = await wasEvaluatedRecently(campaignId);
@@ -466,14 +486,38 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
         campaignsProcessed++;
         strategicInsightsGenerated += strategicReport.length;
         companiesSeen.add(companyId);
-      } catch (err) {
+        },
+      );
+      if (outcome.status === 'tenant_invalid') {
+        tenantInvalidCampaigns++;
+        errors.push(`Campaign ${campaignId}: tenant_invalid (${outcome.reason})`);
+      } else if (outcome.status === 'failed') {
         failedCampaigns++;
-        errors.push(`Campaign ${campaignId}: ${err instanceof Error ? err.message : String(err)}`);
+        const msg = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+        errors.push(`Campaign ${campaignId}: ${msg}`);
+      } else if (outcome.status === 'dead_letter_skip') {
+        errors.push(`Campaign ${campaignId}: dead_letter_skip (${outcome.reason})`);
+      } else if (outcome.status === 'pressure_rejected') {
+        errors.push(`Campaign ${campaignId}: pressure_rejected (${outcome.reason})`);
       }
     }
 
     for (const companyId of companiesSeen) {
-      try {
+      const companyOutcome = await runJob(
+        {
+          jobName:        'job:daily-intelligence:company',
+          triggerSource:  'system',
+          tenantId:       companyId,
+          principalKind:  'system:daily-intelligence',
+          idempotencyKey: `job:daily-intelligence:company:${companyId}:${dayBucket}`,
+          concurrency: {
+            key:                 `tenant:${companyId}:job:daily-intelligence`,
+            max:                 1,
+            maxPerSecond:        2,
+            maxRetriesPerMinute: 4,
+          },
+        },
+        async () => {
         const trendSnapshots = await getTrendSnapshots(companyId);
         const trendSignals = trendSnapshots.map((s: { snapshot?: unknown }) => ({ snapshot: s?.snapshot ?? {} }));
 
@@ -562,8 +606,17 @@ export async function runDailyIntelligence(): Promise<DailyIntelligenceResult> {
         alertsDeduplicated += behaviorAlertResult.deduplicated;
 
         await evaluateBehaviorActionOutcomes(companyId);
-      } catch (err) {
-        errors.push(`Opportunity company ${companyId}: ${err instanceof Error ? err.message : String(err)}`);
+        },
+      );
+      if (companyOutcome.status === 'tenant_invalid') {
+        errors.push(`Opportunity company ${companyId}: tenant_invalid (${companyOutcome.reason})`);
+      } else if (companyOutcome.status === 'failed') {
+        const msg = companyOutcome.error instanceof Error ? companyOutcome.error.message : String(companyOutcome.error);
+        errors.push(`Opportunity company ${companyId}: ${msg}`);
+      } else if (companyOutcome.status === 'dead_letter_skip') {
+        errors.push(`Opportunity company ${companyId}: dead_letter_skip (${companyOutcome.reason})`);
+      } else if (companyOutcome.status === 'pressure_rejected') {
+        errors.push(`Opportunity company ${companyId}: pressure_rejected (${companyOutcome.reason})`);
       }
     }
 

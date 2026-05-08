@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { supabase } from '../../db/supabaseClient';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * RPA session storage. Playwright's `storageState` is a JSON blob holding
@@ -44,8 +45,7 @@ async function loadFromDb(
   platform: string,
 ): Promise<PlaywrightStorageState | null> {
   try {
-    const { data, error } = await supabase
-      .from('rpa_sessions')
+    const { data, error } = await ownedDbTable('rpa_sessions')
       .select('storage_state, expires_at')
       .eq('organization_id', organizationId)
       .eq('platform', platform.toLowerCase())
@@ -97,7 +97,7 @@ export async function saveRpaSession(
 
   // DB (canonical)
   try {
-    await supabase.from('rpa_sessions').upsert(
+    await ownedDbTable('rpa_sessions').upsert(
       {
         organization_id: organizationId,
         platform: platformLc,
@@ -134,8 +134,7 @@ export async function getRpaAccountTier(
   platform: string,
 ): Promise<string | null> {
   try {
-    const { data } = await supabase
-      .from('rpa_sessions')
+    const { data } = await ownedDbTable('rpa_sessions')
       .select('account_tier')
       .eq('organization_id', organizationId)
       .eq('platform', platform.toLowerCase())
@@ -156,8 +155,7 @@ export async function deleteRpaSession(
 ): Promise<void> {
   const platformLc = platform.toLowerCase();
   try {
-    await supabase
-      .from('rpa_sessions')
+    await ownedDbTable('rpa_sessions')
       .delete()
       .eq('organization_id', organizationId)
       .eq('platform', platformLc);

@@ -1,23 +1,42 @@
 /**
  * POST /api/auth/passkeys/verify-authentication
  *
+ * Two modes — selected by whether the request already carries an
+ * authenticated principal:
+ *
+ *   • Step-up scope (principal already authenticated): bind the ceremony
+ *     to the principal, run the verifier, return the verified identity
+ *     envelope. The caller (e.g. /api/auth/step-up/verify) projects the
+ *     stepup_session. NO auth_session is minted here.
+ *
+ *   • Primary login (no principal): userless ceremony — derive the user
+ *     from the credential, run the verifier, soft-delete-check the
+ *     resolved user, mint the canonical auth_session, attach the cookie,
+ *     and return identity. This is phishing-resistant primary
+ *     authentication: no password, no MFA challenge required.
+ *
  * Body: { response: AuthenticationResponseJSON }
  *
- * Step 2 of passkey verification. Server verifies the assertion via
- * @simplewebauthn/server, atomically consumes the challenge, advances the
- * monotonic counter, and emits the audit event.
- *
- * Wave 2B-A scope is verification only. Session projection (issuing an
- * auth_session for login or a stepup_session for step-up) is owned by
- * the caller — Wave 2B-B will add the step-up consumer; Wave 2B-C the
- * login consumer. Until then, this route returns the verified userId so
- * downstream callers can branch.
+ * Auth: optional. Step-up requires authentication; primary login does not.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/types';
 import { verifyAuthentication } from '../../../../backend/security/webauthn/WebAuthnAuthenticationService';
 import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
+import { supabase } from '../../../../backend/db/supabaseClient';
+import {
+  createSession,
+  attachSessionCookie,
+} from '../../../../backend/security/SessionAuthorityService';
+import { clearMfaIntent } from '../../../../backend/security/MfaIntent';
+import {
+  check as mfaCheck,
+  recordFailure as mfaRecordFailure,
+  reset as mfaReset,
+} from '../../../../backend/security/MfaAttemptLimiter';
+import { logSecurityEvent } from '../../../../backend/security/audit/SecurityAuditService';
+import { logger } from '../../../../backend/services/logger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -31,21 +50,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Missing response body' });
   }
 
+  const ip = clientIp(req);
+  const ua = userAgent(req);
+
   // Bind to the authenticated principal when one exists (step-up scope).
   let scopedUserId: string | null = null;
   const principalResult = await resolvePrincipal(req);
-  if (principalResult.ok === true && !principalResult.principal.legacyCookieSuperAdmin) {
+  const isPrimaryLogin =
+    principalResult.ok !== true || principalResult.principal.legacyCookieSuperAdmin;
+  if (!isPrimaryLogin && principalResult.ok === true) {
     scopedUserId = principalResult.principal.userId;
+  }
+
+  // Primary-login path applies its own brute-force gate so an attacker
+  // probing arbitrary passkeys is bounded by the IP bucket.
+  if (isPrimaryLogin) {
+    const ipGate = mfaCheck({ factor: 'webauthn', userId: null, ip });
+    if (!ipGate.allowed) {
+      res.setHeader('Retry-After', String(ipGate.retryAfterSeconds ?? 60));
+      return res.status(429).json({
+        error: 'Too many attempts. Try again later.',
+        code: 'MFA_RATE_LIMITED',
+        retryAfterSeconds: ipGate.retryAfterSeconds ?? 60,
+      });
+    }
   }
 
   const verification = await verifyAuthentication({
     userId:    scopedUserId,
     response,
-    ip:        clientIp(req),
-    userAgent: userAgent(req),
+    ip,
+    userAgent: ua,
   });
 
   if (verification.ok !== true) {
+    if (isPrimaryLogin) {
+      mfaRecordFailure({ factor: 'webauthn', userId: null, ip });
+    }
     if (verification.reason === 'CHALLENGE_REJECTED') {
       return res.status(400).json({ error: 'Invalid or expired challenge', code: verification.reason, detail: verification.detail });
     }
@@ -58,12 +99,85 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Verification failed', code: verification.reason, detail: verification.detail });
   }
 
-  // Wave 2B-A: do NOT mint sessions. Return the verified identity envelope
-  // so the caller (Wave 2B-B step-up flow / Wave 2B-C login flow) can
-  // project as appropriate.
+  // ── Step-up scope: identity envelope only — caller mints stepup_session ──
+  if (!isPrimaryLogin) {
+    return res.status(200).json({
+      verified:     true,
+      userId:       verification.result.userId,
+      credentialId: verification.result.credentialId,
+      verifiedAt:   verification.result.verifiedAt.toISOString(),
+      deviceType:   verification.result.deviceType,
+      isBackedUp:   verification.result.isBackedUp,
+    });
+  }
+
+  // ── Primary login: mint canonical auth_session ──────────────────────────
+  const userId = verification.result.userId;
+
+  // Per-user gate (post-resolve) — prevents an attacker spreading attempts
+  // across IPs from grinding a single account.
+  const userGate = mfaCheck({ factor: 'webauthn', userId, ip: null });
+  if (!userGate.allowed) {
+    res.setHeader('Retry-After', String(userGate.retryAfterSeconds ?? 60));
+    return res.status(429).json({
+      error: 'Too many attempts. Try again later.',
+      code: 'MFA_RATE_LIMITED',
+      retryAfterSeconds: userGate.retryAfterSeconds ?? 60,
+    });
+  }
+
+  const { data: userRow } = await supabase
+    .from('users')
+    .select('id, supabase_uid, is_deleted')
+    .eq('id', userId)
+    .maybeSingle();
+  if (!userRow || (userRow as { is_deleted?: boolean }).is_deleted) {
+    return res.status(403).json({ error: 'Account unavailable', code: 'ACCOUNT_DELETED' });
+  }
+  const supabaseUid = (userRow as { supabase_uid: string }).supabase_uid;
+
+  mfaReset({ factor: 'webauthn', userId, ip });
+
+  // Defensively clear any stale MFA intent so a half-finished password
+  // flow does not coexist with a successful passkey login.
+  clearMfaIntent(res);
+
+  let sessionId: string | null = null;
+  try {
+    const created = await createSession({
+      userId,
+      supabaseUid,
+      ip,
+      userAgent: ua,
+    });
+    attachSessionCookie(res, created.cookieValue);
+    sessionId = created.session.id;
+  } catch (err) {
+    logger.error('passkey_login_session_mint_failed', {
+      userId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return res.status(503).json({ error: 'Could not start session', code: 'SESSION_MINT_FAILED' });
+  }
+
+  void logSecurityEvent({
+    capability: 'mfa.view_factors',
+    decision: 'passkey_primary_login',
+    actorUserId: userId,
+    actorSessionId: sessionId,
+    principalUserId: userId,
+    principalSupabaseUid: supabaseUid,
+    stepupFactor: 'webauthn',
+    mfaPhishingResistant: true,
+    reason: 'passkey-primary',
+    ip,
+    userAgent: ua,
+  });
+
   return res.status(200).json({
     verified:     true,
-    userId:       verification.result.userId,
+    primaryLogin: true,
+    userId,
     credentialId: verification.result.credentialId,
     verifiedAt:   verification.result.verifiedAt.toISOString(),
     deviceType:   verification.result.deviceType,

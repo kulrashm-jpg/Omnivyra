@@ -27,7 +27,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { supabase as sb } from '@/backend/db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '@/backend/services/requestAccessService';
+import { requireAdminRateLimit } from '@/backend/services/requestAccessService';
+import { requireCapability } from '@/backend/security/requireCapability';
+import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 import { recordAdminAudit } from '@/backend/services/adminAuditService';
 import { logger } from '@/backend/services/logger';
 import { withIdempotency } from '@/backend/middleware/withIdempotency';
@@ -40,8 +42,16 @@ type GrantCategory = typeof GRANT_CATEGORIES[number];
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
-  const user = await requireSuperAdminUser(req, res);
-  return user?.id ?? null;
+  // Phase: Platform Authority Hard Enforcement. Platform credit grants must
+  // satisfy BILLING_GRANT_FREE_CREDITS (SUPER_ADMIN-only, step-up + trusted
+  // device required) — the legacy `requireSuperAdminUser` Bearer-only check
+  // had no step-up and no audit linkage.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_GRANT_FREE_CREDITS,
+    reason: 'super-admin credits grant',
+  });
+  if (guard.ok !== true) return null;
+  return guard.principal.userId;
 }
 
 // ── Notify org admin (best-effort, non-blocking) ──────────────────────────────

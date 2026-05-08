@@ -1,0 +1,13 @@
+{
+  "canonicalContentPersistenceOwners": [
+    {
+      "route": "/content-creation",
+      "canonicalRoute": "/posts/create",
+      "runtimeOwnershipStatus": "canonical",
+      "persistenceAuthority": "/api/campaigns content-plan mutation path through canonical /posts/create",
+      "retentionReason": [
+        "D. deep-link continuity required"
+      ]
+    }
+  ]
+}

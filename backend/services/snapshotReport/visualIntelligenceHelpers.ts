@@ -2,6 +2,7 @@ import { impactScore } from '../reportDecisionUtils';
 import type { CompetitorIntelligenceResult } from '../reportCompetitorIntelligenceService';
 import type { buildPublicDomainAuditDecisions } from '../publicDomainAuditService';
 import type { buildReportScoreModel } from '../reportScoreModelService';
+import type { ScoreState } from './canonicalScoreState';
 import {
   averageNumber,
   clamp,
@@ -54,7 +55,14 @@ export function buildSnapshotVisualIntelligence(params: {
   publicAudit?: Awaited<ReturnType<typeof buildPublicDomainAuditDecisions>> | null;
   narrativeContext?: NarrativeContext;
 }): SnapshotReport['visual_intelligence'] {
-  const scoreByKey = new Map(params.score.dimensions.map((dimension) => [dimension.key, dimension.value]));
+  const scoreByKey = new Map<string, number>(
+    params.score.dimensions
+      .filter((dimension) => typeof dimension.value === 'number')
+      .map((dimension) => [dimension.key, dimension.value as number]),
+  );
+  const stateByKey = new Map<string, ScoreState>(
+    params.score.dimensions.map((dimension) => [dimension.key, dimension.state]),
+  );
   const keywordDecisions = params.decisions.filter((decision) => {
     const payload = (decision.action_payload ?? {}) as Record<string, unknown>;
     return typeof payload.keyword === 'string' || typeof payload.keyword_theme === 'string';
@@ -215,20 +223,53 @@ export function buildSnapshotVisualIntelligence(params: {
   const technicalPenalty = metadataIssues != null || structureIssues != null || internalLinkIssues != null || crawlDepthIssues != null
     ? ((metadataIssues ?? 0) * 2.5 + (structureIssues ?? 0) * 4 + (internalLinkIssues ?? 0) * 5 + (crawlDepthIssues ?? 0) * 6)
     : null;
+
+  // Canonical Trust Foundation: each axis is computed only from its own evidence — no
+  // baseline-substituted defaults, no derivation from other dimensions, no fake completeness.
   const technicalSeoScore = technicalPenalty != null
-    ? clamp(Math.round(((scoreByKey.get('coverage') ?? 65) * 0.45) + ((scoreByKey.get('aeo') ?? 60) * 0.25) + ((scoreByKey.get('content_quality') ?? 60) * 0.2) + 10 - technicalPenalty), 0, 100)
+    ? clamp(Math.round(100 - technicalPenalty), 0, 100)
     : null;
+  const technicalState: ScoreState = technicalPenalty != null ? 'measured' : 'insufficient_signal';
+
+  const measuredCoverageOpportunities = opportunityCoverage.filter((item) => item.confidence === 'high' || item.confidence === 'medium');
   const keywordResearchScore = opportunityCoverage.length > 0
-    ? clamp(Math.round(((scoreByKey.get('coverage') ?? 0) * 0.6) + ((scoreByKey.get('reach') ?? 0) * 0.4)), 0, 100)
+    ? clamp(Math.round(opportunityCoverage.reduce((sum, item) => sum + item.coverage_score, 0) / opportunityCoverage.length), 0, 100)
     : null;
+  const keywordState: ScoreState = measuredCoverageOpportunities.length > 0
+    ? 'measured'
+    : opportunityCoverage.length > 0
+      ? 'inferred'
+      : 'insufficient_signal';
+
   const rankTrackingScore = searchVisibilityFunnel.impressions != null && searchVisibilityFunnel.ctr != null
-    ? clamp(Math.round(((scoreByKey.get('reach') ?? 0) * 0.55) + (Math.min(searchVisibilityFunnel.ctr * 100 * 3, 100) * 0.45)), 0, 100)
+    ? clamp(Math.round(Math.min(searchVisibilityFunnel.ctr * 100 * 3, 100)), 0, 100)
     : null;
-  const backlinksScore = typeof scoreByKey.get('authority') === 'number' ? scoreByKey.get('authority') ?? null : null;
+  const rankState: ScoreState = rankTrackingScore != null ? 'measured' : 'insufficient_signal';
+
+  // Backlinks: only render a number if we genuinely have authority decisions backing it.
+  // Otherwise stay honest with insufficient_signal until a real backlink data source is wired.
+  const hasAuthorityDecisions = params.decisions.some((decision) => isAuthorityDecision(decision));
+  const authorityValue = scoreByKey.get('authority');
+  const authorityState = stateByKey.get('authority');
+  const backlinksScore = hasAuthorityDecisions && typeof authorityValue === 'number' && authorityState === 'measured'
+    ? authorityValue
+    : null;
+  const backlinksState: ScoreState = backlinksScore != null
+    ? 'measured'
+    : 'unavailable';
+
   const competitorIntelligenceScore = competitorStandingValues.length > 0
     ? Math.round(competitorStandingValues.reduce((sum, value) => sum + value, 0) / competitorStandingValues.length)
     : null;
-  const contentQualityScore = scoreByKey.get('content_quality') ?? null;
+  const competitorState: ScoreState = competitorIntelligenceScore != null
+    ? competitorStandingValues.length >= 2 ? 'measured' : 'inferred'
+    : 'insufficient_signal';
+
+  const contentQualityValue = scoreByKey.get('content_quality');
+  const contentState = stateByKey.get('content_quality') ?? 'insufficient_signal';
+  const contentQualityScore = contentState === 'insufficient_signal' || contentState === 'unavailable'
+    ? null
+    : contentQualityValue ?? null;
 
   const radarConfidence: 'high' | 'medium' | 'low' =
     technicalSeoScore != null && rankTrackingScore != null ? 'high' :
@@ -335,22 +376,22 @@ export function buildSnapshotVisualIntelligence(params: {
             ? 'high-intent mismatch'
             : 'high-intent',
       })
-    : 'Insights are based on limited available signals, but early patterns suggest gaps in coverage and structure.';
+    : 'Opportunity coverage is currently insufficient to compute — no keyword evidence has been observed.';
   const compactOpportunityReasoning = compactNarrative(opportunityReasoningDraft);
   const opportunityEvidence = topOpportunity
     ? `keyword ${topOpportunity.keyword} demand ${topOpportunity.opportunity_score}/100 vs coverage ${topOpportunity.coverage_score}/100`
     : typeof dropOffReasonDistribution.intent_mismatch_pct === 'number'
       ? `intent mismatch ${dropOffReasonDistribution.intent_mismatch_pct}%`
-      : 'opportunity signal coverage is limited';
+      : 'no keyword evidence observed';
   const opportunityReasoningWithEvidence = compactNarrative(
     withEvidence(
       compactOpportunityReasoning.includes('gap') ? compactOpportunityReasoning : `Opportunity gap: ${compactOpportunityReasoning}`,
       opportunityEvidence,
     ),
   );
-  const opportunityReasoning = validateNarrative(opportunityReasoningWithEvidence)
+  const opportunityReasoning = topOpportunity && validateNarrative(opportunityReasoningWithEvidence)
     ? opportunityReasoningWithEvidence
-    : 'Insights are based on limited available signals, but early patterns suggest gaps in coverage and structure.';
+    : 'Opportunity coverage is currently insufficient to compute — no keyword evidence has been observed.';
 
   return {
     seo_capability_radar: {
@@ -376,6 +417,23 @@ export function buildSnapshotVisualIntelligence(params: {
         backlinks_score: backlinksSourceTags,
         competitor_intelligence_score: competitorSourceTags,
         content_quality_score: contentSourceTags,
+      },
+      axis_states: {
+        technical_seo_score: technicalState,
+        keyword_research_score: keywordState,
+        rank_tracking_score: rankState,
+        backlinks_score: backlinksState,
+        competitor_intelligence_score: competitorState,
+        content_quality_score: contentState,
+      },
+      // Phase 1 ships the radar's benchmark slot; Phase 2 will populate vertical median data.
+      benchmark: {
+        technical_seo_score: null,
+        keyword_research_score: null,
+        rank_tracking_score: null,
+        backlinks_score: null,
+        competitor_intelligence_score: null,
+        content_quality_score: null,
       },
     },
     opportunity_coverage_matrix: {

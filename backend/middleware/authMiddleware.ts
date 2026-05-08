@@ -21,6 +21,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
 import { resolveAuthenticatedUser } from '../services/authResolver';
+import { assertTenantAccess } from '../security/TenantGuard';
 
 // ── Resolved auth identity ────────────────────────────────────────────────────
 
@@ -73,9 +74,11 @@ export async function requireAuth(
 
 /**
  * Verifies the authenticated user has an active role in the given company.
- * SUPER_ADMIN role bypasses the company membership check.
+ * Platform super-admins bypass the membership check.
  *
- * Returns true on success, sends 403 and returns false otherwise.
+ * SHIM: delegates to `TenantGuard.assertTenantAccess` so soft-deleted orgs
+ * and stale memberships are centrally rejected. The signature (and the
+ * 400/403 response shape) is preserved for existing callers.
  */
 export async function requireCompanyAccess(
   userId: string,
@@ -86,34 +89,14 @@ export async function requireCompanyAccess(
     res.status(400).json({ error: 'company_id is required' });
     return false;
   }
-
-  // SUPER_ADMIN in any company → full platform access
-  const { data: superAdminRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (superAdminRow) return true;
-
-  const { data: membership } = await supabase
-    .from('user_company_roles')
-    .select('id, role')
-    .eq('user_id', userId)
-    .eq('company_id', companyId)
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (!membership) {
-    res.status(403).json({ error: 'Access denied — you are not a member of this company' });
+  const result = await assertTenantAccess({ userId, organizationId: companyId });
+  if (result.ok === true) return true;
+  if (result.reason === 'ORG_NOT_FOUND') {
+    res.status(404).json({ error: 'Company not found' });
     return false;
   }
-
-  return true;
+  res.status(403).json({ error: 'Access denied — you are not a member of this company' });
+  return false;
 }
 
 // ── 3. requireSuperAdmin ───────────────────────────────────────────────────────

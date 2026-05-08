@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Thread Engine
  * Converts community posts into multi-part threads (LinkedIn carousel, Twitter thread, etc.).
@@ -62,8 +63,7 @@ function formatThreadPart(part: string, index: number): string {
  * Load community posts that do not yet have threads.
  */
 async function loadPostsWithoutThreads(): Promise<PostRow[]> {
-  const { data: posts, error: pErr } = await supabase
-    .from('community_posts')
+  const { data: posts, error: pErr } = await ownedDbTable('community_posts')
     .select('id, post_content, platform')
     .order('created_at', { ascending: false })
     .limit(50);
@@ -73,8 +73,7 @@ async function loadPostsWithoutThreads(): Promise<PostRow[]> {
 
   if (postList.length === 0) return [];
 
-  const { data: existing } = await supabase
-    .from('community_threads')
+  const { data: existing } = await ownedDbTable('community_threads')
     .select('post_id')
     .in('post_id', postList.map((p) => p.id));
 
@@ -105,7 +104,7 @@ export async function generateCommunityThreads(): Promise<GenerateCommunityThrea
 
     const threadContent = parts.map((p, i) => formatThreadPart(p, i)).join('\n\n');
 
-    const { error } = await supabase.from('community_threads').insert({
+    const { error } = await ownedDbTable('community_threads').insert({
       post_id: post.id,
       thread_type: threadType,
       thread_content: threadContent,

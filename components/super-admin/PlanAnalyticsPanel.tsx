@@ -9,6 +9,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import {
   RefreshCw,
   TrendingUp,
@@ -58,12 +59,9 @@ export default function PlanAnalyticsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/super-admin/plans/analytics', { credentials: 'include' });
-      if (!res.ok) {
-        const json = await res.json();
-        throw new Error(json.error || 'Failed to load plan analytics');
-      }
-      setData(await res.json());
+      const result = await safeFetchJson('/api/super-admin/plans/analytics', { credentials: 'include' });
+      if (result.ok !== true) throw new Error(result.message || 'Failed to load plan analytics');
+      setData(result.data as any);
     } catch (e: any) {
       setError(e.message);
     } finally {

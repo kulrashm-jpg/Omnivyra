@@ -1,7 +1,14 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { saveProfile } from '../../../backend/services/companyProfileService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import {
+  SUPER_ADMIN_DASHBOARD_VIEW,
+  IDENTITY_ADMIN_ASSIGN,
+  ORGANIZATION_DELETE,
+} from '../../../shared/contracts/security';
+import type { Capability } from '../../../shared/contracts/security';
 
 const normalizeWebsite = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -9,9 +16,28 @@ const normalizeWebsite = (value: string): string => {
   return withoutScheme.replace(/\/+$/, '');
 };
 
+/**
+ * Phase: Platform Authority Legacy Facade Elimination.
+ * Per-method canonical capability gate replaces the legacy
+ * `requireSuperAdminUser` Bearer-only check.
+ *   - GET    → SUPER_ADMIN_DASHBOARD_VIEW (read; bridge satisfies for compat)
+ *   - POST   → IDENTITY_ADMIN_ASSIGN      (tenant provisioning; phishing-resistant + trusted-device step-up)
+ *   - PATCH  → IDENTITY_ADMIN_ASSIGN      (tenant lifecycle mutation; same policy)
+ *   - DELETE → ORGANIZATION_DELETE        (most-destructive; same policy)
+ */
+function capabilityForMethod(method: string | undefined): Capability {
+  if (method === 'DELETE') return ORGANIZATION_DELETE;
+  if (method === 'POST' || method === 'PATCH') return IDENTITY_ADMIN_ASSIGN;
+  return SUPER_ADMIN_DASHBOARD_VIEW;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:companies', 20, 60))) return;
-  if (!(await requireSuperAdminUser(req, res))) return;
+  const guard = await requireCapability(req, res, {
+    capability: capabilityForMethod(req.method),
+    reason: `super-admin companies (${req.method})`,
+  });
+  if (guard.ok !== true) return;
 
   if (req.method === 'GET') {
     const { data, error } = await supabase

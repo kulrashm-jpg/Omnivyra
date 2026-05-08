@@ -10,19 +10,17 @@
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { CONSUMPTION_VIEW_AGGREGATE } from '../../../../shared/contracts/security';
 import { getSystemMetrics } from '../../../../lib/instrumentation/systemMetrics';
 import { estimateCost } from '../../../../lib/instrumentation/costEngine';
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  } catch { /* deny */ }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: CONSUMPTION_VIEW_AGGREGATE,
+    reason: 'consumption infra estimate',
+  });
+  return guard.ok === true;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

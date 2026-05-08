@@ -1,0 +1,115 @@
+# Execution Lineage Resolution Report
+
+Execution lineage resolution: PARTIAL
+
+## Implemented
+- Call graph lineage from execution roots to known domain calls.
+- API and queue entrypoint separation from orchestration roots.
+- Dynamic import execution root capture.
+- Orchestration-like functions receive resolvedExecutionLineage when they call a canonical execution domain.
+
+## Counts
+- execution roots: 5394
+- remaining unresolved execution roots: 805
+
+## Remaining Runtime Lineage Gaps
+- instrumentation.node.ts:51 register reason=unresolved dynamic import execution root
+- lib/config/verification.ts:99 testRedisConnectivity reason=unresolved dynamic import execution root
+- pages/api/extension/commands.ts:208 handler reason=unresolved dynamic import execution root
+- backend/adapters/engagement/responseAdapter.ts:37 generateEngagementResponse reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/adapters/engagement/responseAdapter.ts:99 generateBulkEngagementResponses reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/auth/tokenRefresh.ts:125 refreshTwitterTokenIfNeeded reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/chatGovernance/CampaignPlanningQAState.ts:68 computeCampaignPlanningQAState reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/db/platformExecutionStore.ts:42 saveSchedulerJobs reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/db/supabaseClient.ts:18 ensureServerEnvLoaded reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/lib/performance/performanceAnalyzer.ts:332 comparePerformance reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/lib/railwayComputeMiddleware.ts:94 withQueueMetrics reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/lib/simulation/scenarioSimulator.ts:270 simulateScenario reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/security/totp/TotpEnrollmentService.ts:69 beginEnrollment reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/security/webauthn/WebAuthnAuthenticationService.ts:56 beginAuthentication reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/security/webauthn/WebAuthnRegistrationService.ts:54 beginRegistration reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:144 readKey reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:157 getRateLimitAdminConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:164 getQueueAdminConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:171 getCronAdminConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:200 validateQueueConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:245 saveRateLimitAdminConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:250 saveQueueAdminConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:255 saveCronAdminConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:300 getInfraLimitsConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:310 saveInfraLimitsConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:334 shouldRunCronJob reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/adminRuntimeConfig.ts:391 getQueueMaxJobsCap reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/analyticsDataReadinessService.ts:21 getAnalyticsReadiness reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/analyticsNormalizationService.ts:76 upsertGrowthSnapshot reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/auditLoggingService.ts:60 logAuditEvent reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/automation/automationService.ts:230 runAutoExecution reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/autonomousCampaignAgent.ts:123 generateNextCampaign reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/autonomousDecisionLogger.ts:31 logDecision reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/autopilotExecutionPipeline.ts:36 emptySummary reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/autopilotExecutionPipeline.ts:137 applyAutopilotScheduling reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/autopilotExecutionPipeline.ts:219 runAutopilotForPlan reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/autoReplyService.ts:101 attemptAutoReply reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/autoScalingSignal.ts:84 deliverSignal reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/batchAiProcessor.ts:80 scheduleFlusher reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/batchAiProcessor.ts:225 flushBatchNow reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/behaviorActionTrackingService.ts:117 recordGeneratedBehaviorRecommendations reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/blogService.ts:169 createBlog reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/boltMetricsAggregator.ts:36 aggregateBoltAiMetrics reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/bulkEngagementService.ts:16 sendReply reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/businessIntelligenceService.ts:32 generateBusinessDecisionObjects reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/cacheWarmup.ts:120 runCacheWarmup reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignAuditService.ts:98 generateCampaignAuditReport reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/CampaignAutoOptimizationGuard.ts:25 evaluateAutoOptimizationEligibility reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignBlueprintService.ts:290 getResolvedCampaignPlanContext reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignHealthMonitor.ts:41 getRecentEngagementWindows reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignHealthMonitor.ts:74 getPreviousHealthStatus reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignHealthMonitor.ts:175 runCampaignHealthMonitor reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignLearningsStore.ts:114 distilCampaignLearnings reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/CampaignNegotiationService.ts:70 runDurationNegotiation reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignOpportunityEngine.ts:149 generateCampaignOpportunities reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/CampaignOptimizationIntelligenceService.ts:24 generateCampaignOptimizationInsights reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/CampaignOptimizationProposalService.ts:19 generateOptimizationProposal reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/CampaignPreemptionService.ts:298 executeCampaignPreemption reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/CampaignPrePlanningService.ts:79 runPrePlanning reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignPromptBuilder.ts:32 loadPlatformContentGuide reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignPromptBuilder.ts:275 buildCampaignPlanningPrompt reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/campaignRecoveryService.ts:39 generateRecoveryCampaign reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/commandCenterReadinessService.ts:102 generateDynamicRequirements reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/communityAiActionExecutor.ts:328 loadHistoryMetrics reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/communityAiActionExecutor.ts:808 emitWebhook reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/communityAiActionExecutor.ts:1027 executeAction reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/communityAiAutoRuleService.ts:77 loadHistoryMetrics reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/communityAiForecastInsightsService.ts:105 evaluateForecastInsights reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/communityAiOmnivyraService.ts:44 loadHistoryMetrics reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfile/problemTransformation.ts:43 buildProblemTransformationStrategicPrompt reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfile/problemTransformation.ts:244 refineProblemTransformationAnswers reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfile/strategyProfile.ts:79 fetchCompanyBlogSamples reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfile/strategyProfile.ts:106 fetchCompanyPostSamples reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfileService.ts:642 discoverRefineCompetitorCandidates reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfileService.ts:1911 buildRefinedPayload reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfileService.ts:2185 refineProfileWithAI reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyProfileService.ts:2193 refineProfileWithAIWithDetails reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/companyThemeStateService.ts:125 markThemeInUse reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/competitorEngineService.ts:1676 getFinalCompetitors reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/competitorEngineService.ts:1699 runPipeline reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/competitorEngineService.ts:1739 getFinalCompetitorsSync reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/competitorEngineService.ts:1752 runPipeline reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/competitorIntelligenceService.ts:171 generateCompetitorIntelligenceDecisionObjects reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/competitorNormalizationIntelligenceService.ts:7 generateCompetitorNormalizationDecisions reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/configService.ts:226 getDecisionConfig reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/consumptionAnalyticsService.ts:548 adjustCredits reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/contentAssetService.ts:13 createContentAsset reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/contentBlueprintCache.ts:131 shrinkCache reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/contentOpportunityService.ts:66 generateContentOpportunities reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/conversationMemoryService.ts:135 updateThreadMemory reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creatorAssetRenderer.ts:171 renderImageLikeAsset reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creatorAssetRenderer.ts:198 renderCarouselLikeAsset reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creatorAssetRenderer.ts:232 renderAsset reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creditDeductionService.ts:145 wasRecentlyRun reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creditExecutionService.ts:296 executeWithCredits reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creditExecutionService.ts:897 deductCreditsAwaited reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creditExpiryService.ts:299 runExpiryCheck reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creditGuardService.ts:84 formatCreditError reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creditGuardService.ts:128 assertCreditsAvailable reason=orchestration-like function has no canonical execution domain or resolved lineage
+- backend/services/creditGuardService.ts:166 respondIfCreditError reason=orchestration-like function has no canonical execution domain or resolved lineage

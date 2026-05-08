@@ -1,18 +1,42 @@
-
 /**
  * GET /api/super-admin/session
  *
- * Returns whether the authenticated caller is a confirmed platform super-admin.
- * Replaces the legacy cookie check (super_admin_session=1).
+ * Returns whether the caller is recognized as a super-admin operator,
+ * honoring BOTH canonical session and (for compatibility) the legacy
+ * cookie super-admin bridge.
  *
- * Auth: Bearer <supabase_access_token>
- * Response: { isSuperAdmin: boolean }
+ * Phase 1 — super-admin canonicalization:
+ *   - Resolves via canonical IdentityResolver
+ *   - Bridge principal still answers `isSuperAdmin: true` so the
+ *     /super-admin/free-credits dashboard auth check continues working
+ *     until Wave 3B migrates the page to /api/auth/capabilities
+ *   - Canonical principal answers `isSuperAdmin` based on
+ *     SUPER_ADMIN_DASHBOARD_VIEW capability
+ *
+ * Response: { isSuperAdmin: boolean, via: 'canonical' | 'bridge' | null }
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { resolvePrincipal } from '../../../backend/security/IdentityResolver';
+import { hasCapability } from '../../../backend/security/AuthorizationService';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
-  return res.status(200).json({ isSuperAdmin: !!(await requireSuperAdminUser(req, res)) });
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const result = await resolvePrincipal(req);
+  if (result.ok !== true) {
+    return res.status(200).json({ isSuperAdmin: false, via: null });
+  }
+
+  const p = result.principal;
+  if (p.legacyCookieSuperAdmin) {
+    return res.status(200).json({ isSuperAdmin: true, via: 'bridge' });
+  }
+
+  const allowed = hasCapability(p, SUPER_ADMIN_DASHBOARD_VIEW);
+  return res.status(200).json({ isSuperAdmin: allowed, via: allowed ? 'canonical' : null });
 }

@@ -29,6 +29,7 @@ export function useCampaignAiOps({
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [auditReport, setAuditReport] = useState<any>(null);
   const [isAuditLoading, setIsAuditLoading] = useState(false);
+  const [auditStartedAt, setAuditStartedAt] = useState<number | null>(null);
   const [healthReport, setHealthReport] = useState<any>(null);
   const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [optimizeWeekNumber, setOptimizeWeekNumber] = useState<number>(1);
@@ -72,6 +73,7 @@ export function useCampaignAiOps({
   const loadAuditReport = async (id: string) => {
     try {
       setIsAuditLoading(true);
+      setAuditStartedAt(Date.now());
       if (!ensureCompanyId()) return;
       const response = await fetch('/api/campaigns/audit-report', {
         method: 'POST',
@@ -91,6 +93,7 @@ export function useCampaignAiOps({
       setAuditReport(null);
     } finally {
       setIsAuditLoading(false);
+      setAuditStartedAt(null);
     }
   };
 
@@ -353,6 +356,7 @@ export function useCampaignAiOps({
     isHistoryLoading,
     auditReport,
     isAuditLoading,
+    auditStartedAt,
     healthReport,
     isHealthLoading,
     optimizeWeekNumber,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Company Theme State Service
  * Tracks strategic theme lifecycle per company.
@@ -21,8 +22,7 @@ function normalizeThemeTopic(topic: string): string {
 export async function markThemeConsumedForCampaign(campaignId: string): Promise<void> {
   if (!campaignId?.trim()) return;
   try {
-    const { data: existing, error: selectError } = await supabase
-      .from('company_theme_state')
+    const { data: existing, error: selectError } = await ownedDbTable('company_theme_state')
       .select('id, company_id, theme_topic')
       .eq('campaign_id', campaignId);
 
@@ -35,8 +35,7 @@ export async function markThemeConsumedForCampaign(campaignId: string): Promise<
     const now = new Date().toISOString();
 
     if (rows.length > 0) {
-      const { error: updateError } = await supabase
-        .from('company_theme_state')
+      const { error: updateError } = await ownedDbTable('company_theme_state')
         .update({ state: 'CONSUMED', updated_at: now })
         .eq('campaign_id', campaignId);
       if (updateError) {
@@ -45,8 +44,7 @@ export async function markThemeConsumedForCampaign(campaignId: string): Promise<
       return;
     }
 
-    const { data: cv, error: cvError } = await supabase
-      .from('campaign_versions')
+    const { data: cv, error: cvError } = await ownedDbTable('campaign_versions')
       .select('company_id, campaign_snapshot')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
@@ -71,8 +69,7 @@ export async function markThemeConsumedForCampaign(campaignId: string): Promise<
     if (!themeTopic) return;
 
     const themeKey = generateThemeKey(themeTopic);
-    const { error: upsertError } = await supabase
-      .from('company_theme_state')
+    const { error: upsertError } = await ownedDbTable('company_theme_state')
       .upsert(
         {
           company_id: companyId,
@@ -100,8 +97,7 @@ export async function markThemeConsumedForCampaign(campaignId: string): Promise<
 export async function getExcludedThemeTopicsForCompany(companyId: string): Promise<Set<string>> {
   if (!companyId?.trim()) return new Set();
   try {
-    const { data, error } = await supabase
-      .from('company_theme_state')
+    const { data, error } = await ownedDbTable('company_theme_state')
       .select('theme_key')
       .eq('company_id', companyId)
       .in('state', ['IN_USE', 'CONSUMED', 'DISMISSED']);
@@ -132,7 +128,7 @@ export async function markThemeInUse(
   if (!normalized) return;
   const themeKey = generateThemeKey(themeTopic);
   try {
-    await supabase.from('company_theme_state').upsert(
+    await ownedDbTable('company_theme_state').upsert(
       {
         company_id: companyId,
         theme_topic: normalized,
@@ -154,8 +150,7 @@ export async function markThemeInUse(
 export async function releaseThemeFromCampaign(campaignId: string): Promise<void> {
   if (!campaignId?.trim()) return;
   try {
-    const { error } = await supabase
-      .from('company_theme_state')
+    const { error } = await ownedDbTable('company_theme_state')
       .update({ campaign_id: null, state: 'AVAILABLE', updated_at: new Date().toISOString() })
       .eq('campaign_id', campaignId);
 

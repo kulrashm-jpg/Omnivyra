@@ -24,6 +24,7 @@ import {
   applyOverrides,
 } from './internalHelpers';
 import { logExternalApiUsage } from './usageLogging';
+import { ownedDbTable } from '../../db/writeOwner';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
@@ -389,8 +390,7 @@ export const recordApiHealth = async (
   input: { success: boolean; payload?: any }
 ): Promise<{ freshness_score: number; reliability_score: number } | null> => {
   try {
-    const { data, error } = await supabase
-      .from('external_api_health')
+    const { data, error } = await ownedDbTable('external_api_health')
       .select('*')
       .eq('api_source_id', source.id)
       .single();
@@ -411,8 +411,7 @@ export const recordApiHealth = async (
       ? computePayloadHash(input.payload)
       : data?.last_payload_hash ?? null;
 
-    const { error: upsertError } = await supabase
-      .from('external_api_health')
+    const { error: upsertError } = await ownedDbTable('external_api_health')
       .upsert(
         {
           api_source_id: source.id,

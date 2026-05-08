@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Capture Service
  * Captures engagement metrics from platform APIs (LinkedIn, Twitter/X, etc.).
@@ -17,8 +18,7 @@ type PostRow = {
  * Load community posts that do not yet have engagement signals.
  */
 async function loadPostsWithoutSignals(): Promise<PostRow[]> {
-  const { data: posts, error: pErr } = await supabase
-    .from('community_posts')
+  const { data: posts, error: pErr } = await ownedDbTable('community_posts')
     .select('id, platform')
     .order('created_at', { ascending: false })
     .limit(100);
@@ -28,8 +28,7 @@ async function loadPostsWithoutSignals(): Promise<PostRow[]> {
 
   if (postList.length === 0) return [];
 
-  const { data: existing } = await supabase
-    .from('engagement_signals')
+  const { data: existing } = await ownedDbTable('engagement_signals')
     .select('post_id')
     .in('post_id', postList.map((p) => p.id));
 
@@ -56,7 +55,7 @@ export async function captureEngagementSignals(): Promise<CaptureEngagementSigna
     const platform = post.platform ?? 'LinkedIn';
 
     for (const engType of ENGAGEMENT_TYPES) {
-      const { error } = await supabase.from('engagement_signals').insert({
+      const { error } = await ownedDbTable('engagement_signals').insert({
         post_id: post.id,
         platform,
         engagement_type: engType,

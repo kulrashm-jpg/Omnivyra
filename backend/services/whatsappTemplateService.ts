@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * WhatsApp Template Service
  *
@@ -59,8 +60,7 @@ export interface WhatsAppTemplate {
 
 export async function submitTemplate(input: CreateTemplateInput): Promise<string> {
   // 1. Find highest existing version for this template_name + company
-  const { data: latest } = await supabase
-    .from('whatsapp_templates')
+  const { data: latest } = await ownedDbTable('whatsapp_templates')
     .select('version')
     .eq('company_id', input.company_id)
     .eq('template_name', input.template_name)
@@ -71,8 +71,7 @@ export async function submitTemplate(input: CreateTemplateInput): Promise<string
   const newVersion = (latest?.version ?? 0) + 1;
 
   // 2. Insert new pending version
-  const { data: inserted, error } = await supabase
-    .from('whatsapp_templates')
+  const { data: inserted, error } = await ownedDbTable('whatsapp_templates')
     .insert({
       company_id:        input.company_id,
       social_account_id: input.social_account_id,
@@ -93,8 +92,7 @@ export async function submitTemplate(input: CreateTemplateInput): Promise<string
   // 3. Submit to Meta
   try {
     const accessToken = await getValidAccessToken(input.social_account_id);
-    const { data: account } = await supabase
-      .from('social_accounts')
+    const { data: account } = await ownedDbTable('social_accounts')
       .select('waba_id')
       .eq('id', input.social_account_id)
       .single();
@@ -119,14 +117,12 @@ export async function submitTemplate(input: CreateTemplateInput): Promise<string
 
     const { id: meta_template_id } = await res.json();
 
-    await supabase
-      .from('whatsapp_templates')
+    await ownedDbTable('whatsapp_templates')
       .update({ meta_template_id })
       .eq('id', inserted.id);
   } catch (err) {
     // Mark as failed without deleting — preserves version history
-    await supabase
-      .from('whatsapp_templates')
+    await ownedDbTable('whatsapp_templates')
       .update({ status: 'REJECTED', rejection_reason: err instanceof Error ? err.message : 'Submission failed' })
       .eq('id', inserted.id);
     throw err;
@@ -138,8 +134,7 @@ export async function submitTemplate(input: CreateTemplateInput): Promise<string
 // ── Activate approved template (called by webhook handler) ───────────────────
 
 export async function activateTemplate(templateId: string): Promise<void> {
-  const { data: t, error } = await supabase
-    .from('whatsapp_templates')
+  const { data: t, error } = await ownedDbTable('whatsapp_templates')
     .select('company_id, template_name')
     .eq('id', templateId)
     .single();
@@ -147,8 +142,7 @@ export async function activateTemplate(templateId: string): Promise<void> {
   if (error || !t) throw new Error(`Template not found: ${templateId}`);
 
   // Deprecate any currently active version for same name+company
-  await supabase
-    .from('whatsapp_templates')
+  await ownedDbTable('whatsapp_templates')
     .update({ is_active: false, status: 'DEPRECATED', deprecated_at: new Date().toISOString() })
     .eq('company_id', t.company_id)
     .eq('template_name', t.template_name)
@@ -156,8 +150,7 @@ export async function activateTemplate(templateId: string): Promise<void> {
     .neq('id', templateId);
 
   // Activate new version
-  await supabase
-    .from('whatsapp_templates')
+  await ownedDbTable('whatsapp_templates')
     .update({ is_active: true, status: 'APPROVED', approved_at: new Date().toISOString() })
     .eq('id', templateId);
 }
@@ -173,8 +166,7 @@ export async function getActiveTemplate(
   companyId:    string,
   templateName: string,
 ): Promise<WhatsAppTemplate> {
-  const { data, error } = await supabase
-    .from('whatsapp_templates')
+  const { data, error } = await ownedDbTable('whatsapp_templates')
     .select('*')
     .eq('company_id', companyId)
     .eq('template_name', templateName)
@@ -209,8 +201,7 @@ export async function handleTemplateStatusWebhook(event: {
   event: 'APPROVED' | 'REJECTED' | 'PAUSED' | 'DISABLED';
   reason?: string;
 }): Promise<void> {
-  const { data } = await supabase
-    .from('whatsapp_templates')
+  const { data } = await ownedDbTable('whatsapp_templates')
     .select('id')
     .eq('meta_template_id', event.message_template_id)
     .order('version', { ascending: false })
@@ -222,8 +213,7 @@ export async function handleTemplateStatusWebhook(event: {
   if (event.event === 'APPROVED') {
     await activateTemplate(data.id);
   } else {
-    await supabase
-      .from('whatsapp_templates')
+    await ownedDbTable('whatsapp_templates')
       .update({
         status:           event.event,
         rejection_reason: event.reason ?? null,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * EXECUTION ENGINE WRITE BOUNDARY
  *
@@ -45,8 +46,7 @@ export const WEEK_EXECUTION_LOCKED = 'WEEK_EXECUTION_LOCKED';
 export async function deleteActivity(activityId: string): Promise<{ deleted: boolean }> {
   log('manual', 'deleteActivity', { activityId });
 
-  const { data, error } = await supabase
-    .from('daily_content_plans')
+  const { data, error } = await ownedDbTable('daily_content_plans')
     .delete()
     .eq('id', activityId)
     .select('id')
@@ -71,8 +71,7 @@ export async function deleteWeekPlans(
   const forceOverride = options?.forceOverride ?? false;
 
   if (!forceOverride) {
-    const { data: executing } = await supabase
-      .from('daily_content_plans')
+    const { data: executing } = await ownedDbTable('daily_content_plans')
       .select('id')
       .eq('campaign_id', campaignId)
       .eq('week_number', weekNumber)
@@ -89,8 +88,7 @@ export async function deleteWeekPlans(
     }
   }
 
-  const { error } = await supabase
-    .from('daily_content_plans')
+  const { error } = await ownedDbTable('daily_content_plans')
     .delete()
     .eq('campaign_id', campaignId)
     .eq('week_number', weekNumber);
@@ -106,8 +104,7 @@ export async function deleteWeekPlans(
  * Logs warning if count not between 1 and 7.
  */
 function validateWeekConsistency(campaignId: string, weekNumber: number): void {
-  supabase
-    .from('daily_content_plans')
+  ownedDbTable('daily_content_plans')
     .select('*', { count: 'exact', head: true })
     .eq('campaign_id', campaignId)
     .eq('week_number', weekNumber)
@@ -155,7 +152,7 @@ export async function saveWeekPlans(
   const CHUNK_SIZE = 20;
   for (let i = 0; i < rowsWithSource.length; i += CHUNK_SIZE) {
     const chunk = rowsWithSource.slice(i, i + CHUNK_SIZE);
-    const { error } = await supabase.from('daily_content_plans').insert(chunk);
+    const { error } = await ownedDbTable('daily_content_plans').insert(chunk);
     if (error) {
       console.error('[EXECUTION_ENGINE] saveWeekPlans insert failed:', error);
       throw new Error(`Failed to save daily plans: ${error.message}`);
@@ -177,8 +174,7 @@ export async function insertActivity(
   log(source, 'insertActivity', { campaign_id: row.campaign_id, week_number: row.week_number });
   const sourceVal = VALID_SOURCES.includes(source) ? source : 'manual';
   const rowWithSource = { ...row, generation_source: sourceVal };
-  const { data, error } = await supabase
-    .from('daily_content_plans')
+  const { data, error } = await ownedDbTable('daily_content_plans')
     .insert(rowWithSource)
     .select('id')
     .single();
@@ -205,8 +201,7 @@ export async function updateActivity(
   delete sanitized.campaign_id;
   delete sanitized.created_at;
 
-  const { data, error } = await supabase
-    .from('daily_content_plans')
+  const { data, error } = await ownedDbTable('daily_content_plans')
     .update(sanitized)
     .eq('id', activityId)
     .select('id')

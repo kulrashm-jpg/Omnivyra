@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../backend/db/writeOwner';
 /**
  * Backfill topic_embedding for intelligence_signals
  *
@@ -31,8 +32,7 @@ async function main() {
   let totalUpdated = 0;
 
   while (true) {
-    const { data: signals, error } = await supabase
-      .from('intelligence_signals')
+    const { data: signals, error } = await ownedDbTable('intelligence_signals')
       .select('id, company_id, topic')
       .is('topic_embedding', null)
       .not('topic', 'is', null)
@@ -60,8 +60,7 @@ async function main() {
         });
         const vecStr = embeddingToPgVector(embedding);
 
-        const { error: updErr } = await supabase
-          .from('intelligence_signals')
+        const { error: updErr } = await ownedDbTable('intelligence_signals')
           .update({ topic_embedding: vecStr } as any)
           .eq('id', s.id);
 
@@ -86,8 +85,7 @@ async function main() {
   let clusterProcessed = 0;
   let clusterUpdated = 0;
 
-  const { data: clusters } = await supabase
-    .from('signal_clusters')
+  const { data: clusters } = await ownedDbTable('signal_clusters')
     .select('cluster_id, cluster_topic')
     .is('topic_embedding', null)
     .not('cluster_topic', 'is', null);
@@ -99,8 +97,7 @@ async function main() {
     // Clusters carry no company_id; attribute the embedding cost to any one
     // member signal's org (system-logged, not user-billed, so representative
     // attribution is sufficient for cost visibility).
-    const { data: member } = await supabase
-      .from('intelligence_signals')
+    const { data: member } = await ownedDbTable('intelligence_signals')
       .select('company_id')
       .eq('cluster_id', c.cluster_id)
       .not('company_id', 'is', null)
@@ -120,8 +117,7 @@ async function main() {
         metadata:  { caller: 'backfill-signal-embeddings:cluster', cluster_id: c.cluster_id },
       });
       const vecStr = embeddingToPgVector(embedding);
-      const { error: updErr } = await supabase
-        .from('signal_clusters')
+      const { error: updErr } = await ownedDbTable('signal_clusters')
         .update({ topic_embedding: vecStr } as any)
         .eq('cluster_id', c.cluster_id);
 

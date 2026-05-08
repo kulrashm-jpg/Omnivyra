@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 
 type UserRow = {
   user_id: string;
@@ -39,18 +40,16 @@ export default function AdminUsersPage() {
 
   const loadUsers = async () => {
     if (!selectedCompanyId) return;
-    try {
-      setErrorMessage(null);
-      const response = await fetch(`/api/users?companyId=${encodeURIComponent(selectedCompanyId)}`);
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data?.error || 'Failed to load users');
-      }
-      const data = await response.json();
-      setUsers(data.users || []);
-    } catch (error: any) {
-      setErrorMessage(error?.message || 'Failed to load users');
+    setErrorMessage(null);
+    const result = await safeFetchJson<{ users: unknown[] }>(
+      `/api/users?companyId=${encodeURIComponent(selectedCompanyId)}`,
+      { credentials: 'same-origin' },
+    );
+    if (result.ok === true) {
+      setUsers((result.data.users as typeof users) || []);
+      return;
     }
+    setErrorMessage(result.message);
   };
 
   useEffect(() => {
@@ -60,66 +59,56 @@ export default function AdminUsersPage() {
 
   const handleInvite = async () => {
     if (!inviteEmail || !selectedCompanyId) return;
-    try {
-      setIsSaving(true);
-      setErrorMessage(null);
-      setSuccessMessage(null);
-      const response = await fetch('/api/users/invite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: inviteEmail,
-          companyId: selectedCompanyId,
-          role: inviteRole,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Invite failed');
-      }
+    setIsSaving(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    const result = await safeFetchJson('/api/users/invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        email: inviteEmail,
+        companyId: selectedCompanyId,
+        role: inviteRole,
+      }),
+    });
+    if (result.ok === true) {
       setInviteEmail('');
       setSuccessMessage('User invited');
       await loadUsers();
-    } catch (error: any) {
-      setErrorMessage(error?.message || 'Invite failed');
-    } finally {
-      setIsSaving(false);
+    } else {
+      setErrorMessage(result.message);
     }
+    setIsSaving(false);
   };
 
   const updateRole = async (userId: string, role: string) => {
     if (!selectedCompanyId) return;
-    try {
-      setErrorMessage(null);
-      const response = await fetch(`/api/users/${userId}/role`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role, companyId: selectedCompanyId }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Failed to update role');
-      }
+    setErrorMessage(null);
+    const result = await safeFetchJson(`/api/users/${userId}/role`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ role, companyId: selectedCompanyId }),
+    });
+    if (result.ok === true) {
       await loadUsers();
-    } catch (error: any) {
-      setErrorMessage(error?.message || 'Failed to update role');
+    } else {
+      setErrorMessage(result.message);
     }
   };
 
   const removeUser = async (userId: string) => {
     if (!selectedCompanyId) return;
-    try {
-      setErrorMessage(null);
-      const response = await fetch(`/api/users/${userId}?companyId=${selectedCompanyId}`, {
-        method: 'DELETE',
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || 'Failed to remove user');
-      }
+    setErrorMessage(null);
+    const result = await safeFetchJson(`/api/users/${userId}?companyId=${selectedCompanyId}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+    });
+    if (result.ok === true) {
       await loadUsers();
-    } catch (error: any) {
-      setErrorMessage(error?.message || 'Failed to remove user');
+    } else {
+      setErrorMessage(result.message);
     }
   };
 

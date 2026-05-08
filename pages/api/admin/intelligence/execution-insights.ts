@@ -14,10 +14,8 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
 interface LogRow {
   job_type:    string;
@@ -30,10 +28,12 @@ interface LogRow {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'intelligence execution insights',
+  });
+  if (guard.ok !== true) return;
 
   const days      = Math.min(30, Math.max(1, Number(req.query.days) || 7));
   const companyId = typeof req.query.company_id === 'string' ? req.query.company_id.trim() : null;

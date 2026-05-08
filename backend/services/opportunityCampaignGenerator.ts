@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Launch From Opportunity
  * Converts a campaign_opportunities row into a campaign with blueprint (content pillars).
@@ -57,8 +58,7 @@ function log(event: 'campaign_created_from_opportunity', data: Record<string, un
  * Load opportunity from campaign_opportunities by id.
  */
 async function loadOpportunity(opportunityId: string): Promise<CampaignOpportunityRow | null> {
-  const { data, error } = await supabase
-    .from('campaign_opportunities')
+  const { data, error } = await ownedDbTable('campaign_opportunities')
     .select('id, theme_id, cluster_id, opportunity_title, opportunity_description, opportunity_type, momentum_score, keywords')
     .eq('id', opportunityId)
     .maybeSingle();
@@ -149,8 +149,7 @@ export async function generateCampaignFromOpportunity(
     blueprint_status: null,
   };
 
-  const { data: campaign, error: campaignError } = await supabase
-    .from('campaigns')
+  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .insert(campaignInsert)
     .select('id')
     .single();
@@ -178,7 +177,7 @@ export async function generateCampaignFromOpportunity(
   const campaign_types = normalizeCampaignTypes(['brand_awareness']);
   const campaign_weights = normalizeCampaignWeights(campaign_types, null);
 
-  const { error: versionError } = await supabase.from('campaign_versions').insert({
+  const { error: versionError } = await ownedDbTable('campaign_versions').insert({
     company_id: companyId,
     campaign_id: campaignId,
     campaign_snapshot: {

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * RecoveryCodeService — argon2id-hashed one-shot recovery codes.
  *
@@ -22,6 +23,11 @@ import * as argon2 from 'argon2';
 import { supabase as db } from '../../db/supabaseClient';
 import { logger } from '../../services/logger';
 import { logSecurityEvent } from '../audit/SecurityAuditService';
+import {
+  check as mfaCheck,
+  recordFailure as mfaRecordFailure,
+  reset as mfaReset,
+} from '../MfaAttemptLimiter';
 import type {
   RecoveryCodeVerifyFailure,
   RecoveryCodeVerifyResult,
@@ -117,8 +123,7 @@ export async function regenerate(
   input: RegenerateRecoveryCodesInput,
 ): Promise<RegeneratedRecoveryCodes> {
   // 1. Revoke unused codes from any prior batch.
-  await db
-    .from('recovery_codes')
+  await ownedDbTable('recovery_codes')
     .update({ used_at: new Date().toISOString(), used_ip: null })
     .eq('user_id', input.userId)
     .is('used_at', null);
@@ -139,7 +144,7 @@ export async function regenerate(
     });
   }
 
-  const { error } = await db.from('recovery_codes').insert(rows);
+  const { error } = await ownedDbTable('recovery_codes').insert(rows);
   if (error) {
     logger.error('recovery_codes_insert_failed', { userId: input.userId, message: error.message });
     throw new Error(`recovery_codes_insert_failed: ${error.message}`);
@@ -177,20 +182,30 @@ export interface VerifyRecoveryCodeInput {
 export async function verifyAndConsume(
   input: VerifyRecoveryCodeInput,
 ): Promise<RecoveryCodeVerifyResult> {
-  const candidate = reformatForCompare(input.code);
-  if (candidate.length !== RECOVERY_CODE_DASHED_LENGTH) {
+  // Per-user + per-IP brute-force gate. argon2.verify is intentionally
+  // expensive; the gate ensures the cost is bounded under a guessing
+  // attack and prevents enumeration via timing differences.
+  const gate = mfaCheck({ factor: 'recovery_code', userId: input.userId, ip: input.ip ?? null });
+  if (!gate.allowed) {
     await audit(input, 'NOT_MATCHED', null);
     return { ok: false, reason: 'NOT_MATCHED' };
   }
 
-  const { data: rows } = await db
-    .from('recovery_codes')
+  const candidate = reformatForCompare(input.code);
+  if (candidate.length !== RECOVERY_CODE_DASHED_LENGTH) {
+    mfaRecordFailure({ factor: 'recovery_code', userId: input.userId, ip: input.ip ?? null });
+    await audit(input, 'NOT_MATCHED', null);
+    return { ok: false, reason: 'NOT_MATCHED' };
+  }
+
+  const { data: rows } = await ownedDbTable('recovery_codes')
     .select('*')
     .eq('user_id', input.userId)
     .is('used_at', null);
 
   const list = (rows ?? []) as RecoveryCodeRow[];
   if (list.length === 0) {
+    mfaRecordFailure({ factor: 'recovery_code', userId: input.userId, ip: input.ip ?? null });
     await audit(input, 'NO_ACTIVE_CODES', null);
     return { ok: false, reason: 'NO_ACTIVE_CODES' };
   }
@@ -211,8 +226,7 @@ export async function verifyAndConsume(
 
     // Atomic single-flight consume.
     const now = new Date().toISOString();
-    const { data: claimed } = await db
-      .from('recovery_codes')
+    const { data: claimed } = await ownedDbTable('recovery_codes')
       .update({ used_at: now, used_ip: input.ip ?? null })
       .eq('id', row.id)
       .is('used_at', null)
@@ -236,6 +250,9 @@ export async function verifyAndConsume(
       userAgent: input.userAgent,
     });
 
+    // Reset rate-limit buckets on success.
+    mfaReset({ factor: 'recovery_code', userId: input.userId, ip: input.ip ?? null });
+
     return { ok: true, codeId: row.id, consumedAt: new Date(now) };
   }
 
@@ -245,6 +262,7 @@ export async function verifyAndConsume(
   const dummy = Buffer.alloc(8);
   timingSafeEqual(dummy, dummy);
 
+  mfaRecordFailure({ factor: 'recovery_code', userId: input.userId, ip: input.ip ?? null });
   await audit(input, 'NOT_MATCHED', null);
   return { ok: false, reason: 'NOT_MATCHED' };
 }

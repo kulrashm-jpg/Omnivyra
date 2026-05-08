@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * Persistence for `trusted_devices`.
  *
@@ -50,8 +51,7 @@ export async function findActiveByFingerprint(
   userId: string,
   fingerprint: string,
 ): Promise<StoredTrustedDevice | null> {
-  const { data } = await db
-    .from('trusted_devices')
+  const { data } = await ownedDbTable('trusted_devices')
     .select('*')
     .eq('user_id', userId)
     .eq('fingerprint', fingerprint)
@@ -65,8 +65,7 @@ export async function findActiveByFingerprint(
 }
 
 export async function listForUser(userId: string): Promise<ReadonlyArray<StoredTrustedDevice>> {
-  const { data } = await db
-    .from('trusted_devices')
+  const { data } = await ownedDbTable('trusted_devices')
     .select('*')
     .eq('user_id', userId)
     .is('revoked_at', null)
@@ -80,8 +79,7 @@ export async function findByIdForUser(
   id: string,
   userId: string,
 ): Promise<StoredTrustedDevice | null> {
-  const { data } = await db
-    .from('trusted_devices')
+  const { data } = await ownedDbTable('trusted_devices')
     .select('*')
     .eq('id', id)
     .eq('user_id', userId)
@@ -102,8 +100,7 @@ export async function insertTrustedDevice(
 ): Promise<StoredTrustedDevice> {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + input.ttlSeconds * 1000);
-  const { data, error } = await db
-    .from('trusted_devices')
+  const { data, error } = await ownedDbTable('trusted_devices')
     .insert({
       user_id:       input.userId,
       fingerprint:   input.fingerprint,
@@ -122,8 +119,7 @@ export async function insertTrustedDevice(
 }
 
 export async function touchLastSeen(id: string): Promise<void> {
-  await db
-    .from('trusted_devices')
+  await ownedDbTable('trusted_devices')
     .update({ last_seen_at: new Date().toISOString() })
     .eq('id', id);
 }
@@ -133,8 +129,7 @@ export async function revokeDevice(
   userId: string,
   reason: string,
 ): Promise<boolean> {
-  const { data } = await db
-    .from('trusted_devices')
+  const { data } = await ownedDbTable('trusted_devices')
     .update({ revoked_at: new Date().toISOString(), revocation_reason: reason })
     .eq('id', id)
     .eq('user_id', userId)

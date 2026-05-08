@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Execution State Service
  * Manages campaign execution progress for resume after server restart, deployment, or worker crash.
@@ -129,8 +130,7 @@ export async function startCampaign(
   const dur = clampDuration(duration);
   if (!DURATION_VALUES.includes(dur)) return null;
 
-  const { data: existing } = await supabase
-    .from('campaign_execution_state')
+  const { data: existing } = await ownedDbTable('campaign_execution_state')
     .select('*')
     .eq('campaign_id', campaignId)
     .maybeSingle();
@@ -140,8 +140,7 @@ export async function startCampaign(
   }
 
   const momentumSnapshot = buildMomentumSnapshot(dur, 1);
-  const { data: inserted, error } = await supabase
-    .from('campaign_execution_state')
+  const { data: inserted, error } = await ownedDbTable('campaign_execution_state')
     .insert({
       campaign_id: campaignId,
       duration_weeks: dur,
@@ -170,8 +169,7 @@ export async function markDayComplete(
   day: number,
   lastGeneratedContentId?: string | null
 ): Promise<CampaignExecutionState | null> {
-  const { data: row, error: fetchError } = await supabase
-    .from('campaign_execution_state')
+  const { data: row, error: fetchError } = await ownedDbTable('campaign_execution_state')
     .select('*')
     .eq('campaign_id', campaignId)
     .maybeSingle();
@@ -227,8 +225,7 @@ export async function markDayComplete(
     updatePayload.last_generated_content_id = lastGeneratedContentId;
   }
 
-  const { data: updated, error } = await supabase
-    .from('campaign_execution_state')
+  const { data: updated, error } = await ownedDbTable('campaign_execution_state')
     .update(updatePayload)
     .eq('campaign_id', campaignId)
     .select()
@@ -245,8 +242,7 @@ export async function markWeekComplete(
   campaignId: string,
   week: number
 ): Promise<CampaignExecutionState | null> {
-  const { data: row, error: fetchError } = await supabase
-    .from('campaign_execution_state')
+  const { data: row, error: fetchError } = await ownedDbTable('campaign_execution_state')
     .select('*')
     .eq('campaign_id', campaignId)
     .maybeSingle();
@@ -265,8 +261,7 @@ export async function markWeekComplete(
     ? state.momentum_snapshot
     : buildMomentumSnapshot(state.duration_weeks as DurationWeeks, nextWeek);
 
-  const { data: updated, error } = await supabase
-    .from('campaign_execution_state')
+  const { data: updated, error } = await ownedDbTable('campaign_execution_state')
     .update({
       current_week: nextWeek,
       current_day: 1,
@@ -287,8 +282,7 @@ export async function markWeekComplete(
  * Get campaign execution state. Returns null if not found.
  */
 export async function getCampaignState(campaignId: string): Promise<CampaignExecutionState | null> {
-  const { data, error } = await supabase
-    .from('campaign_execution_state')
+  const { data, error } = await ownedDbTable('campaign_execution_state')
     .select('*')
     .eq('campaign_id', campaignId)
     .maybeSingle();
@@ -320,8 +314,7 @@ export async function resumeCampaign(campaignId: string): Promise<ResumeResult |
   }
 
   if (state.current_week > state.duration_weeks) {
-    await supabase
-      .from('campaign_execution_state')
+    await ownedDbTable('campaign_execution_state')
       .update({
         status: 'completed',
         updated_at: new Date().toISOString(),

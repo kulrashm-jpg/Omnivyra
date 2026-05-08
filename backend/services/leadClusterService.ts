@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Emerging Intent Clusters - read-only intelligence derived from qualified signals.
  *
@@ -90,8 +91,7 @@ export async function generateIntentClusters(companyId: string): Promise<void> {
   const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
   const twentyOneDaysAgo = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: signals } = await supabase
-    .from('lead_signals')
+  const { data: signals } = await ownedDbTable('lead_signals')
     .select('id, platform, total_score, icp_score, urgency_score, intent_score, detected_at, metadata')
     .eq('organization_id', companyId)
     .eq('source_type', 'listening')
@@ -153,14 +153,13 @@ export async function generateIntentClusters(companyId: string): Promise<void> {
       updated_at: new Date().toISOString(),
     };
 
-    await supabase.from('lead_intent_clusters_v1').upsert(payload, {
+    await ownedDbTable('lead_intent_clusters_v1').upsert(payload, {
       onConflict: 'cluster_hash',
       ignoreDuplicates: false,
     });
   }
 
-  const { data: recentSignals } = await supabase
-    .from('lead_signals')
+  const { data: recentSignals } = await ownedDbTable('lead_signals')
     .select('metadata')
     .eq('organization_id', companyId)
     .eq('source_type', 'listening')
@@ -176,15 +175,14 @@ export async function generateIntentClusters(companyId: string): Promise<void> {
       .filter(Boolean)
   );
 
-  const { data: allClusters } = await supabase
-    .from('lead_intent_clusters_v1')
+  const { data: allClusters } = await ownedDbTable('lead_intent_clusters_v1')
     .select('id, problem_domain')
     .eq('company_id', companyId);
 
   for (const c of allClusters ?? []) {
     const domain = ((c as { problem_domain: string }).problem_domain ?? 'General').trim().toLowerCase();
     if (!domainsWithSignals.has(domain)) {
-      await supabase.from('lead_intent_clusters_v1').delete().eq('id', (c as { id: string }).id);
+      await ownedDbTable('lead_intent_clusters_v1').delete().eq('id', (c as { id: string }).id);
     }
   }
 }
@@ -192,8 +190,7 @@ export async function generateIntentClusters(companyId: string): Promise<void> {
 export async function getTopClusters(companyId: string): Promise<LeadCluster[]> {
   const twentyOneDaysAgo = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data } = await supabase
-    .from('lead_intent_clusters_v1')
+  const { data } = await ownedDbTable('lead_intent_clusters_v1')
     .select('id, problem_domain, signal_count, regions, platforms, priority_score, avg_intent_score, avg_urgency_score, avg_trend_velocity, created_at, latest_post_at')
     .eq('company_id', companyId)
     .gte('created_at', twentyOneDaysAgo)

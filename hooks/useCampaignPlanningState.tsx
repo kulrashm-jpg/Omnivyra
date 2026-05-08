@@ -51,6 +51,8 @@ export function useCampaignPlanningState() {
 
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [planGenerationStartedAt, setPlanGenerationStartedAt] = useState<number | null>(null);
+  const [planGenerationError, setPlanGenerationError] = useState<string | null>(null);
   const [campaignId, setCampaignId] = useState<string | null>(null);
   const [aiProgram, setAiProgram] = useState<any>(null);
   const [showProgramCapture, setShowProgramCapture] = useState(false);
@@ -347,9 +349,11 @@ export function useCampaignPlanningState() {
     }
 
     setIsLoading(true);
+    setPlanGenerationStartedAt(Date.now());
+    setPlanGenerationError(null);
     try {
       console.log('Generating campaign plan for campaign:', campaignId);
-      
+
       const response = await fetch('/api/campaigns/create-12week-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -375,9 +379,12 @@ export function useCampaignPlanningState() {
       }
     } catch (error) {
       console.error('Error generating campaign plan:', error);
+      const msg = error instanceof Error ? error.message : 'Error generating campaign plan. Please try again.';
+      setPlanGenerationError(msg);
       notify('error', 'Error generating campaign plan. Please try again.');
     } finally {
       setIsLoading(false);
+      setPlanGenerationStartedAt(null);
     }
   };
 
@@ -1244,6 +1251,8 @@ export function useCampaignPlanningState() {
     optimizationError,
     organizeProgramIntoGoals,
     planDescription,
+    planGenerationError,
+    planGenerationStartedAt,
     platformAccuracyEntries,
     platformAdvice,
     platformAdviceEntries,

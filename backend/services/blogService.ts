@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Blog Publishing Service
  * Publish to WordPress, custom blog API, or host internally as fallback.
@@ -94,8 +95,7 @@ async function resolveUniqueSlug(companyId: string, base: string): Promise<strin
 
   while (true) {
     const slug = suffix === 0 ? candidate : `${candidate}-${suffix}`;
-    const { data } = await supabase
-      .from('blogs')
+    const { data } = await ownedDbTable('blogs')
       .select('id')
       .eq('company_id', companyId)
       .eq('slug', slug)
@@ -176,8 +176,7 @@ export async function createBlog(
     : generateSlug(input.title);
   const slug = await resolveUniqueSlug(companyId, baseSlug);
 
-  const { data, error } = await supabase
-    .from('blogs')
+  const { data, error } = await ownedDbTable('blogs')
     .insert({
       company_id:           companyId,
       created_by:           userId,
@@ -203,15 +202,13 @@ export async function createBlog(
 }
 
 export async function getBlog(id: string, companyId: string): Promise<Blog | null> {
-  const { data, error } = await supabase
-    .from('blogs').select('*').eq('id', id).eq('company_id', companyId).single();
+  const { data, error } = await ownedDbTable('blogs').select('*').eq('id', id).eq('company_id', companyId).single();
   if (error) return null;
   return data as Blog;
 }
 
 export async function getBlogs(companyId: string, status?: BlogStatus): Promise<Blog[]> {
-  let q = supabase
-    .from('blogs').select('*').eq('company_id', companyId)
+  let q = ownedDbTable('blogs').select('*').eq('company_id', companyId)
     .order('updated_at', { ascending: false });
   if (status) q = q.eq('status', status);
   const { data, error } = await q;
@@ -231,8 +228,7 @@ export async function updateBlog(
     let suffix    = 0;
     while (true) {
       const slug = suffix === 0 ? candidate : `${candidate}-${suffix}`;
-      const { data } = await supabase
-        .from('blogs')
+      const { data } = await ownedDbTable('blogs')
         .select('id')
         .eq('company_id', companyId)
         .eq('slug', slug)
@@ -243,8 +239,7 @@ export async function updateBlog(
     }
   }
 
-  const { data, error } = await supabase
-    .from('blogs')
+  const { data, error } = await ownedDbTable('blogs')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id).eq('company_id', companyId)
     .select('*').single();
@@ -253,8 +248,7 @@ export async function updateBlog(
 }
 
 export async function deleteBlog(id: string, companyId: string): Promise<void> {
-  const { error } = await supabase
-    .from('blogs').delete().eq('id', id).eq('company_id', companyId);
+  const { error } = await ownedDbTable('blogs').delete().eq('id', id).eq('company_id', companyId);
   if (error) throw new Error(error.message);
 }
 
@@ -318,7 +312,7 @@ export async function publishBlogPost(
     };
   }
 
-  await supabase.from('blogs').update({
+  await ownedDbTable('blogs').update({
     status:         result.success ? 'published' : 'failed',
     published_at:   result.success ? new Date().toISOString() : null,
     external_id:    result.external_id ?? null,

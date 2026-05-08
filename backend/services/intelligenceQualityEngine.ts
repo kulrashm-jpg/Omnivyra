@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Intelligence Quality Metrics Engine
  * Phase 6: Tracks signal_accuracy, opportunity_accuracy, recommendation_success_rate, theme_success_rate.
@@ -24,26 +25,22 @@ export async function computeAndPersistQualityMetrics(
   const now = new Date().toISOString();
 
   const [outcomes, feedback, recs, themes] = await Promise.all([
-    supabase
-      .from('intelligence_outcomes')
+    ownedDbTable('intelligence_outcomes')
       .select('success_score')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(500),
-    supabase
-      .from('recommendation_feedback')
+    ownedDbTable('recommendation_feedback')
       .select('feedback_score, feedback_type')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(500),
-    supabase
-      .from('intelligence_recommendations')
+    ownedDbTable('intelligence_recommendations')
       .select('confidence_score')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(500),
-    supabase
-      .from('company_strategic_themes')
+    ownedDbTable('company_strategic_themes')
       .select('theme_strength')
       .eq('company_id', companyId)
       .is('archived_at', null),
@@ -87,7 +84,7 @@ export async function computeAndPersistQualityMetrics(
   ];
 
   for (const m of toUpsert) {
-    await supabase.from('intelligence_optimization_metrics').upsert(
+    await ownedDbTable('intelligence_optimization_metrics').upsert(
       {
         company_id: companyId,
         metric_type: m.metric_type,
@@ -108,8 +105,7 @@ export async function getQualityMetrics(
   companyId: string,
   options?: { limit?: number }
 ): Promise<Array<{ metric_type: string; metric_value: number; created_at: string }>> {
-  const { data, error } = await supabase
-    .from('intelligence_optimization_metrics')
+  const { data, error } = await ownedDbTable('intelligence_optimization_metrics')
     .select('metric_type, metric_value, created_at')
     .eq('company_id', companyId)
     .in('metric_type', ['signal_accuracy', 'opportunity_accuracy', 'recommendation_success_rate', 'theme_success_rate'])

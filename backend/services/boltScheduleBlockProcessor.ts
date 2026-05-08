@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * BOLT Schedule Block Processor
  *
@@ -26,6 +27,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+
 import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 import {
   generateMasterContentFromIntent,
@@ -248,7 +250,7 @@ async function createBlogEntry(
     ? new Date(`${String(date).slice(0, 10)}T09:00:00Z`).toISOString()
     : new Date().toISOString();
   const category = contentType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  const { error } = await supabase.from('blogs').insert({
+  const { error } = await ownedDbTable('blogs').insert({
     company_id:       companyId,
     title:            topic,
     slug:             buildBlogSlug(topic),
@@ -304,7 +306,7 @@ function buildRepurposeIndex(plans: BlockDailyPlanRow[]): Map<string, { index: n
  * repurposes across platforms. Every platform post is inserted to scheduled_posts
  * immediately after generation — no end-of-run batch flush.
  */
-export async function processBlockSchedule(
+async function executeBlockScheduleRuntime(
   campaignId: string,
   dailyPlans: BlockDailyPlanRow[],
   campaign: { start_date: string; user_id: string; company_id?: string | null },
@@ -320,8 +322,7 @@ export async function processBlockSchedule(
   let companyId: string | null = campaign.company_id ?? null;
   if (!companyId) {
     try {
-      const { data: camp } = await supabase
-        .from('campaigns')
+      const { data: camp } = await ownedDbTable('campaigns')
         .select('company_id')
         .eq('id', campaignId)
         .maybeSingle();
@@ -636,7 +637,7 @@ export async function processBlockSchedule(
         }
 
         // ── Insert scheduled_post immediately ───────────────────────────────
-        const { data: inserted, error: insertError } = await supabase.from('scheduled_posts').insert({
+        const { data: inserted, error: insertError } = await ownedDbTable('scheduled_posts').insert({
           user_id:           campaign.user_id,
           social_account_id: socialAccountId,
           campaign_id:       campaignId,
@@ -701,8 +702,7 @@ export async function processBlockSchedule(
       if (rowUpdates.length > 0) {
         await Promise.all(
           rowUpdates.map(({ id, content: updatedContent }) =>
-            supabase
-              .from('daily_content_plans')
+            ownedDbTable('daily_content_plans')
               .update({ content: updatedContent, updated_at: new Date().toISOString() })
               .eq('id', id)
               .then(({ error }) => {
@@ -761,3 +761,5 @@ export async function processBlockSchedule(
     activity_results:  activityResults,
   } as BlockScheduleResult & { activity_results: ActivityResult[] };
 }
+
+export { executeBlockScheduleRuntime as processBlockSchedule };

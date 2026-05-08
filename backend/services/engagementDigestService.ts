@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Digest Service
  * Generates daily digest: new threads, high priority, leads, opportunities, recommended threads.
@@ -29,21 +30,18 @@ export async function generateDailyDigest(organizationId: string): Promise<Daily
     opportunitySignalsResult,
     threads,
   ] = await Promise.all([
-    supabase
-      .from('engagement_threads')
+    ownedDbTable('engagement_threads')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', organizationId)
       .eq('ignored', false)
       .gte('created_at', since24h),
     getHighPriorityCount(organizationId),
-    supabase
-      .from('lead_signals')
+    ownedDbTable('lead_signals')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', organizationId)
       .eq('source_type', 'engagement')
       .gte('detected_at', since24h),
-    supabase
-      .from('engagement_opportunities')
+    ownedDbTable('engagement_opportunities')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', organizationId)
       .eq('resolved', false)
@@ -85,7 +83,7 @@ export async function generateDailyDigest(organizationId: string): Promise<Daily
     generated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from('engagement_daily_digest').upsert(
+  const { error } = await ownedDbTable('engagement_daily_digest').upsert(
     {
       organization_id: organizationId,
       digest_date: digestDate,
@@ -109,16 +107,14 @@ export async function generateDailyDigest(organizationId: string): Promise<Daily
 }
 
 async function getHighPriorityCount(organizationId: string): Promise<number> {
-  const { data: threads } = await supabase
-    .from('engagement_threads')
+  const { data: threads } = await ownedDbTable('engagement_threads')
     .select('id')
     .eq('organization_id', organizationId)
     .eq('ignored', false);
   const threadIds = (threads ?? []).map((t: { id: string }) => t.id);
   if (threadIds.length === 0) return 0;
 
-  const { data: classifications } = await supabase
-    .from('engagement_thread_classification')
+  const { data: classifications } = await ownedDbTable('engagement_thread_classification')
     .select('thread_id, triage_priority')
     .in('thread_id', threadIds)
     .eq('organization_id', organizationId);
@@ -127,8 +123,7 @@ async function getHighPriorityCount(organizationId: string): Promise<number> {
     triageByThread.set(r.thread_id, r.triage_priority ?? 0);
   });
 
-  const { data: threadRows } = await supabase
-    .from('engagement_threads')
+  const { data: threadRows } = await ownedDbTable('engagement_threads')
     .select('id, priority_score')
     .in('id', threadIds)
     .eq('organization_id', organizationId);
@@ -150,8 +145,7 @@ export async function getDigest(
 
   const digestDate = date ?? new Date().toISOString().slice(0, 10);
 
-  const { data, error } = await supabase
-    .from('engagement_daily_digest')
+  const { data, error } = await ownedDbTable('engagement_daily_digest')
     .select('*')
     .eq('organization_id', organizationId)
     .eq('digest_date', digestDate)

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Credit Efficiency Engine
  *
@@ -51,20 +52,18 @@ export type EfficiencyReport = {
 };
 
 async function getContentTypeROI(companyId: string): Promise<ContentTypeROI[]> {
-  const { data } = await supabase
-    .from('content_type_efficiency')
+  const { data } = await ownedDbTable('content_type_efficiency')
     .select('content_type, avg_outcome_score, avg_credits_per_outcome, sample_count, recommendation')
     .eq('company_id', companyId)
     .order('avg_credits_per_outcome', { ascending: true });
 
   if (data?.length) return data as ContentTypeROI[];
 
-  await supabase
-    .from('performance_feedback')
+  await ownedDbTable('performance_feedback')
     .select('content_type, engagement_rate')
     .eq(
       'campaign_id',
-      supabase.from('campaigns').select('id').eq('company_id', companyId).limit(5) as any,
+      ownedDbTable('campaigns').select('id').eq('company_id', companyId).limit(5) as any,
     );
 
   return [];
@@ -78,7 +77,7 @@ async function upsertEfficiencyTier(
   totalOutcomes: number,
   creditsSaved: number,
 ): Promise<void> {
-  await supabase.from('credit_efficiency_scores').upsert(
+  await ownedDbTable('credit_efficiency_scores').upsert(
     {
       organization_id: orgId,
       efficiency_tier: tier,
@@ -153,8 +152,7 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
     creditsSavedEstimate += predictionCost * 2;
   }
 
-  void supabase
-    .from('credit_efficiency_scores')
+  void ownedDbTable('credit_efficiency_scores')
     .update({ credits_saved_total: creditsSavedEstimate, computed_at: computedAt })
     .eq('organization_id', companyId);
 
@@ -172,8 +170,7 @@ export async function optimizeCreditEfficiency(companyId: string): Promise<Effic
 }
 
 export async function getEfficiencyDiscount(orgId: string): Promise<number> {
-  const { data } = await supabase
-    .from('credit_efficiency_scores')
+  const { data } = await ownedDbTable('credit_efficiency_scores')
     .select('discount_multiplier')
     .eq('organization_id', orgId)
     .maybeSingle();
@@ -181,8 +178,7 @@ export async function getEfficiencyDiscount(orgId: string): Promise<number> {
 }
 
 export async function getEfficiencyTier(orgId: string): Promise<string> {
-  const { data } = await supabase
-    .from('credit_efficiency_scores')
+  const { data } = await ownedDbTable('credit_efficiency_scores')
     .select('efficiency_tier')
     .eq('organization_id', orgId)
     .maybeSingle();

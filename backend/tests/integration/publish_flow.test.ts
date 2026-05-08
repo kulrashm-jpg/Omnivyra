@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * Integration Test: Publish Flow
  *
@@ -186,8 +187,7 @@ async function runIntegrationTest() {
     }
 
     // Step 3: Get the created queue job
-    const { data: queueJobs } = await supabase
-      .from('queue_jobs')
+    const { data: queueJobs } = await ownedDbTable('queue_jobs')
       .select('*')
       .eq('scheduled_post_id', TEST_SCHEDULED_POST_ID)
       .eq('status', 'pending')
@@ -221,8 +221,7 @@ async function runIntegrationTest() {
     }
 
     // Step 6: Verify queue job completed
-    const { data: completedJob } = await supabase
-      .from('queue_jobs')
+    const { data: completedJob } = await ownedDbTable('queue_jobs')
       .select('*')
       .eq('id', queueJob.id)
       .single();
@@ -235,8 +234,7 @@ async function runIntegrationTest() {
     }
 
     // Step 7: Verify queue job logs were created
-    const { data: logs } = await supabase
-      .from('queue_job_logs')
+    const { data: logs } = await ownedDbTable('queue_job_logs')
       .select('*')
       .eq('job_id', queueJob.id);
 
@@ -277,7 +275,7 @@ async function seedTestData() {
   console.log('📦 Seeding test data...');
 
   // Create test social account (with encrypted mock token)
-  const { error: accountError } = await supabase.from('social_accounts').insert({
+  const { error: accountError } = await ownedDbTable('social_accounts').insert({
     id: TEST_SOCIAL_ACCOUNT_ID,
     user_id: TEST_USER_ID,
     platform: 'linkedin',
@@ -295,7 +293,7 @@ async function seedTestData() {
   }
 
   // Create test scheduled post (due now)
-  const { error: postError } = await supabase.from('scheduled_posts').insert({
+  const { error: postError } = await ownedDbTable('scheduled_posts').insert({
     id: TEST_SCHEDULED_POST_ID,
     user_id: TEST_USER_ID,
     social_account_id: TEST_SOCIAL_ACCOUNT_ID,
@@ -322,14 +320,13 @@ async function seedTestData() {
 async function cleanupTestData() {
   console.log('🧹 Cleaning up test data...');
 
-  await supabase
-    .from('queue_job_logs')
+  await ownedDbTable('queue_job_logs')
     .delete()
-    .eq('job_id', (await supabase.from('queue_jobs').select('id').eq('scheduled_post_id', TEST_SCHEDULED_POST_ID).single()).data?.id);
+    .eq('job_id', (await ownedDbTable('queue_jobs').select('id').eq('scheduled_post_id', TEST_SCHEDULED_POST_ID).single()).data?.id);
 
-  await supabase.from('queue_jobs').delete().eq('scheduled_post_id', TEST_SCHEDULED_POST_ID);
-  await supabase.from('scheduled_posts').delete().eq('id', TEST_SCHEDULED_POST_ID);
-  await supabase.from('social_accounts').delete().eq('id', TEST_SOCIAL_ACCOUNT_ID);
+  await ownedDbTable('queue_jobs').delete().eq('scheduled_post_id', TEST_SCHEDULED_POST_ID);
+  await ownedDbTable('scheduled_posts').delete().eq('id', TEST_SCHEDULED_POST_ID);
+  await ownedDbTable('social_accounts').delete().eq('id', TEST_SOCIAL_ACCOUNT_ID);
 
   console.log('✅ Test data cleaned up');
 }

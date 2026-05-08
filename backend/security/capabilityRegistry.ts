@@ -45,6 +45,19 @@ import {
   MFA_ENROLL,
   MFA_REVOKE,
   MFA_VIEW_FACTORS,
+  // Phase 1 — super-admin canonicalization
+  SUPER_ADMIN_DASHBOARD_VIEW,
+  INTEGRATION_PLATFORM_OAUTH_MANAGE,
+  BLOG_PUBLISH_MANAGE,
+  CONSUMPTION_VIEW_AGGREGATE,
+  INTELLIGENCE_OVERRIDE_MANAGE,
+  CRON_CONFIG_MANAGE,
+  CONTENT_ARCHITECT_READ,
+  CONTENT_ARCHITECT_WRITE,
+  // Phase: Platform Authority Isolation — platform-tier billing
+  BILLING_PLATFORM_MANAGE,
+  BILLING_PLAN_MANAGE,
+  BILLING_GRANT_FREE_CREDITS,
   // Bridge
   SUPER_ADMIN_LEGACY_BRIDGE,
 } from '../../shared/contracts/security';
@@ -57,6 +70,7 @@ import {
 export type CanonicalRole =
   | 'SUPER_ADMIN'
   | 'COMPANY_ADMIN'
+  | 'CONTENT_ARCHITECT'
   | 'CONTENT_CREATOR'
   | 'CONTENT_REVIEWER'
   | 'CONTENT_PUBLISHER'
@@ -79,7 +93,7 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     IDENTITY_ADMIN,             // expansion: assign / revoke / delete
     ORGANIZATION_MANAGE,
     ORGANIZATION_DELETE,
-    BILLING_MANAGE,             // expansion: view + purchase
+    BILLING_MANAGE,             // expansion: view + purchase + audit.view
     INTEGRATION_MANAGE,         // expansion: secrets.read
     API_KEY_MANAGE,             // expansion: generate
     AUTOMATION_EXECUTE_PROD,    // expansion: execute
@@ -90,11 +104,26 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     CAMPAIGN_DELETE,
     CONTENT_PUBLISH,            // expansion: review + create
     CONTENT_DELETE,
+    // Phase 1 — platform-admin surfaces formerly granted by bridge cookie.
+    SUPER_ADMIN_DASHBOARD_VIEW,
+    INTEGRATION_PLATFORM_OAUTH_MANAGE,  // step-up required (see STEP_UP_REQUIRED_CAPABILITIES)
+    BLOG_PUBLISH_MANAGE,
+    CONSUMPTION_VIEW_AGGREGATE,
+    INTELLIGENCE_OVERRIDE_MANAGE,
+    CRON_CONFIG_MANAGE,
+    // Phase: Platform Authority Isolation — platform-tier billing.
+    // These are NOT inherited from BILLING_MANAGE because BILLING_MANAGE is
+    // a per-tenant capability granted to COMPANY_ADMIN. Without an explicit
+    // platform-tier capability, COMPANY_ADMINs would satisfy platform billing
+    // routes whenever the route omits an `organizationId` binding.
+    BILLING_PLATFORM_MANAGE,
+    BILLING_PLAN_MANAGE,
+    BILLING_GRANT_FREE_CREDITS,
   ],
   COMPANY_ADMIN: [
     ORGANIZATION_MANAGE,        // org settings, member management (NOT delete)
-    BILLING_MANAGE,             // expansion: view + purchase
-    INTEGRATION_MANAGE,         // expansion: secrets.read
+    BILLING_MANAGE,             // expansion: view + purchase + audit.view
+    INTEGRATION_MANAGE,         // expansion: secrets.read (NOT platform-oauth — that's SUPER_ADMIN-only)
     API_KEY_MANAGE,             // expansion: generate
     AUTOMATION_EXECUTE,         // production execution requires step-up + role escalation
     MFA_ENROLL,
@@ -103,6 +132,15 @@ export const ROLE_CAPABILITIES: Readonly<Record<CanonicalRole, ReadonlyArray<Cap
     CAMPAIGN_DELETE,
     CONTENT_PUBLISH,            // expansion: review + create
     CONTENT_DELETE,
+  ],
+  CONTENT_ARCHITECT: [
+    // Platform-level role: read+author across all companies.
+    CONTENT_ARCHITECT_WRITE,    // expansion: read
+    CAMPAIGN_VIEW,
+    CONTENT_CREATE,
+    CONTENT_REVIEW,
+    MFA_ENROLL,
+    MFA_VIEW_FACTORS,
   ],
   CONTENT_PUBLISHER: [
     CAMPAIGN_VIEW,
@@ -145,6 +183,16 @@ export const LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES: ReadonlyArray<Capability> =
   CAMPAIGN_VIEW,
   BILLING_VIEW,
   MFA_VIEW_FACTORS,
+  // Phase 2 — bridge compatibility expansion. These read capabilities are
+  // granted to bridge principals so admin routes migrated to
+  // `requireCapability(...)` continue to work for cookie-only operators
+  // until Wave 3 deletes the bridge.
+  // Mutation/elevated capabilities (INTEGRATION_PLATFORM_OAUTH_MANAGE,
+  // BLOG_PUBLISH_MANAGE write paths, INTELLIGENCE_OVERRIDE_MANAGE,
+  // CRON_CONFIG_MANAGE) are intentionally NOT in this list — bridge
+  // principals must upgrade to canonical session for those.
+  SUPER_ADMIN_DASHBOARD_VIEW,
+  CONSUMPTION_VIEW_AGGREGATE,
 ];
 
 /**

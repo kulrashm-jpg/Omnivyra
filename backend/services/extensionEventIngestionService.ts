@@ -1,4 +1,5 @@
 import { resolveAuthor, resolveSource, resolveThread, insertMessage } from './engagementNormalizationService';
+import { ownedDbTable } from '../db/writeOwner';
 
 type ExtensionEventInput = {
   platform: string;
@@ -184,8 +185,7 @@ export async function ingestExtensionEvent(input: ExtensionEventInput) {
 
 async function resolveThreadRow(threadId: string) {
   const { supabase } = await import('../db/supabaseClient');
-  return supabase
-    .from('engagement_threads')
+  return ownedDbTable('engagement_threads')
     .select('id, unread_count')
     .eq('id', threadId)
     .maybeSingle();
@@ -193,8 +193,7 @@ async function resolveThreadRow(threadId: string) {
 
 async function updateThreadUnread(threadId: string, unreadCount: number, updatedAt: string) {
   const { supabase } = await import('../db/supabaseClient');
-  const { error } = await supabase
-    .from('engagement_threads')
+  const { error } = await ownedDbTable('engagement_threads')
     .update({
       unread_count: unreadCount,
       updated_at: updatedAt,

@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -12,6 +13,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!campaignId) {
       return res.status(400).json({ error: 'Campaign ID is required' });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     // Update campaign with summary information
     const { error: campaignError } = await supabase

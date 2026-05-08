@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Alert Service — operator-facing fan-out from anomalies + job detections.
  *
@@ -41,8 +42,7 @@ export interface CreateAlertOpts {
 export async function createAlert(opts: CreateAlertOpts): Promise<void> {
   try {
     if (opts.dedupKey) {
-      const { data: existing } = await supabase
-        .from('alerts')
+      const { data: existing } = await ownedDbTable('alerts')
         .select('id')
         .eq('type', opts.type)
         .eq('acknowledged', false)
@@ -56,7 +56,7 @@ export async function createAlert(opts: CreateAlertOpts): Promise<void> {
       ? { ...(opts.metadata ?? {}), dedup_key: opts.dedupKey }
       : opts.metadata ?? {};
 
-    const { error } = await supabase.from('alerts').insert({
+    const { error } = await ownedDbTable('alerts').insert({
       type:            opts.type,
       organization_id: opts.organizationId ?? null,
       severity:        opts.severity ?? 'warn',

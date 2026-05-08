@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import { ownedDbTable } from '../backend/db/writeOwner';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 dotenv.config();
@@ -32,8 +33,7 @@ function isMissingColumn(error: { message?: string; code?: string } | null | und
 }
 
 async function main() {
-  const { data, error } = await supabase
-    .from('lead_signals')
+  const { data, error } = await ownedDbTable('lead_signals')
     .select('id, organization_id, thread_id, platform, platform_user_id, contact_id, metadata')
     .not('platform_user_id', 'is', null)
     .order('created_at', { ascending: true });
@@ -95,8 +95,7 @@ async function main() {
     }
 
     const metadata = row.metadata ?? {};
-    const { data: contact, error: upsertError } = await supabase
-      .from('contacts')
+    const { data: contact, error: upsertError } = await ownedDbTable('contacts')
       .upsert(
         {
           organization_id: row.organization_id,
@@ -146,8 +145,7 @@ async function main() {
     contactUpserts++;
 
     if (!row.contact_id) {
-      const { error: signalUpdateError } = await supabase
-        .from('lead_signals')
+      const { error: signalUpdateError } = await ownedDbTable('lead_signals')
         .update({ contact_id: contactId })
         .eq('id', row.id);
       if (signalUpdateError) {
@@ -157,8 +155,7 @@ async function main() {
     }
 
     if (row.thread_id) {
-      const { error: threadUpdateError } = await supabase
-        .from('engagement_threads')
+      const { error: threadUpdateError } = await ownedDbTable('engagement_threads')
         .update({ contact_id: contactId })
         .eq('id', row.thread_id)
         .is('contact_id', null);

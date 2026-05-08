@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * SecurityAuditService — immutable audit trail for security decisions.
  *
@@ -79,11 +80,23 @@ export type AuditDecision =
   | 'recovery_regeneration_denied'
   | 'response_shaping_authorization_denied'
   | 'capability_projection_refreshed'
+  | 'super_admin_bootstrap_started'
+  | 'super_admin_bootstrap_completed'
+  | 'super_admin_bootstrap_denied'
+  | 'bridge_authority_used'
+  | 'bridge_authority_rejected'
+  | 'trust_authority_conflict_detected'
   | 'suspicious_login'
   | 'privilege_escalated'
   | 'capability_granted'
   | 'capability_revoked'
-  | 'step_up_verified';
+  | 'step_up_verified'
+  | 'mfa_login_challenge_issued'
+  | 'mfa_login_succeeded'
+  | 'mfa_login_failed'
+  | 'mfa_login_rate_limited'
+  | 'passkey_primary_login'
+  | 'recovery_code_primary_login';
 
 export interface SecurityAuditEvent {
   /** When the event occurred. Defaults to now() if omitted. */
@@ -128,7 +141,7 @@ export interface SecurityAuditEvent {
 export async function logSecurityEvent(event: SecurityAuditEvent): Promise<void> {
   try {
     const occurredAt = (event.occurredAt ?? new Date()).toISOString();
-    const { error } = await db.from('capability_audit_log').insert({
+    const { error } = await ownedDbTable('capability_audit_log').insert({
       occurred_at:             occurredAt,
       actor_user_id:           event.actorUserId ?? null,
       actor_session_id:        event.actorSessionId ?? null,

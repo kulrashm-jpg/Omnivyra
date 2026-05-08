@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Credit Alert Service — Step 8
  *
@@ -43,8 +44,7 @@ const DEDUP_HOURS = 24;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getBalance(orgId: string): Promise<number | null> {
-  const { data } = await supabase
-    .from('organization_credits')
+  const { data } = await ownedDbTable('organization_credits')
     .select('free_balance, paid_balance, incentive_balance')
     .eq('organization_id', orgId)
     .maybeSingle();
@@ -55,8 +55,7 @@ async function getBalance(orgId: string): Promise<number | null> {
 
 async function wasAlertRecentlySent(orgId: string, alertType: AlertType): Promise<boolean> {
   const since = new Date(Date.now() - DEDUP_HOURS * 3600_000).toISOString();
-  const { data } = await supabase
-    .from('credit_alert_log')
+  const { data } = await ownedDbTable('credit_alert_log')
     .select('id')
     .eq('organization_id', orgId)
     .eq('alert_type', alertType)
@@ -67,7 +66,7 @@ async function wasAlertRecentlySent(orgId: string, alertType: AlertType): Promis
 }
 
 async function recordAlert(orgId: string, alertType: AlertType, balance: number): Promise<void> {
-  await supabase.from('credit_alert_log').insert({
+  await ownedDbTable('credit_alert_log').insert({
     organization_id: orgId,
     alert_type:      alertType,
     balance_at_alert: balance,
@@ -78,7 +77,7 @@ async function recordAlert(orgId: string, alertType: AlertType, balance: number)
 /** Send an in-app notification for a credit alert. */
 async function sendAlert(orgId: string, alertType: AlertType, message: string): Promise<void> {
   try {
-    await supabase.from('notifications').insert({
+    await ownedDbTable('notifications').insert({
       organization_id: orgId,
       type:            'credit_alert',
       category:        alertType,

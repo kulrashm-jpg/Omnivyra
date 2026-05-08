@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
+
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
 import { getCompanyLlmConfig, resolveCompanyApiKey, getActiveProviders, getModelsByProvider } from './llmProviderService';
 import { incrementUsageMeter } from './usageMeterService';
@@ -10,6 +11,7 @@ import { resolveEffectiveModel } from './aiModelRouter';
 import { recordGptCall, recordGptLatency, recordGptFailure } from './metricsCollector';
 import { evaluateJobCost } from './jobCostEstimator';
 import { trackLlmTokens } from '../../lib/redis/usageProtection';
+import { ownedDbTable } from '../db/writeOwner';
 
 const UNKNOWN_ORG = '00000000-0000-0000-0000-000000000000';
 
@@ -109,8 +111,8 @@ type GatewayRequest = {
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   /** Maximum output tokens. If unset, uses model default. */
   max_tokens?: number;
-  /** For bolt pipeline observability: correlate AI calls to bolt_execution_runs. */
-  bolt_run_id?: string | null;
+  /** Variant-scoped observability metadata supplied by adapters. */
+  variantMetadata?: Record<string, unknown>;
   /** For prompt change tracking and token debugging. */
   prompt_template_name?: string | null;
   prompt_template_version?: string | null;
@@ -285,7 +287,7 @@ async function callAnthropic(params: {
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    const err: any = new Error(`Anthropic API error ${response.status}: ${body}`);
+    const err = new Error(`Anthropic API error ${response.status}: ${body}`) as Error & { status?: number };
     err.status = response.status;
     throw err;
   }
@@ -307,23 +309,32 @@ async function callAnthropic(params: {
 
 // ── Retry helpers ─────────────────────────────────────────────────────────────
 
-function isRateLimitError(err: any): boolean {
-  const status = err?.status ?? err?.response?.status ?? err?.statusCode;
+type GatewayErrorLike = Error & { status?: number; statusCode?: number; code?: string; response?: { status?: number }; __retry_attempt?: number };
+
+function asGatewayError(err: unknown): Partial<GatewayErrorLike> {
+  return err && typeof err === 'object' ? err as Partial<GatewayErrorLike> : {};
+}
+
+function isRateLimitError(err: unknown): boolean {
+  const record = asGatewayError(err);
+  const status = record.status ?? record.response?.status ?? record.statusCode;
   // 429 = rate limit (OpenAI + Anthropic), 529 = Anthropic overloaded
   return status === 429 || status === 529;
 }
 
-function isNetworkError(err: any): boolean {
+function isNetworkError(err: unknown): boolean {
+  const record = asGatewayError(err);
+  const message = err instanceof Error ? err.message : '';
   return (
-    err?.code === 'ECONNREFUSED' ||
-    err?.code === 'ENOTFOUND' ||
-    err?.code === 'ETIMEDOUT' ||
-    err?.message?.includes('fetch failed') ||
-    err?.message?.includes('network')
+    record.code === 'ECONNREFUSED' ||
+    record.code === 'ENOTFOUND' ||
+    record.code === 'ETIMEDOUT' ||
+    message.includes('fetch failed') ||
+    message.includes('network')
   );
 }
 
-function isFallbackEligible(err: any): boolean {
+function isFallbackEligible(err: unknown): boolean {
   return isRateLimitError(err) || isNetworkError(err);
 }
 
@@ -383,7 +394,7 @@ function logIntermediateAttempt(
   attempt: number,
   provider: 'openai' | 'anthropic',
   model: string,
-  err: any,
+  err: unknown,
 ): void {
   if (!ctx) return;
   void logUsageEvent({
@@ -397,7 +408,7 @@ function logIntermediateAttempt(
     feature_area:    ctx.featureArea,
     latency_ms:      Date.now() - ctx.startedAt,
     error_flag:      true,
-    error_type:      err?.status?.toString() ?? err?.code ?? err?.message?.slice(0, 200) ?? 'unknown',
+    error_type:      asGatewayError(err).status?.toString() ?? asGatewayError(err).code ?? (err instanceof Error ? err.message.slice(0, 200) : 'unknown'),
     retry_attempt:   attempt,
     final_attempt:   false,
   });
@@ -439,7 +450,7 @@ async function callProviderWithRetry(
   let attempt = 1;
 
   // ── Step 1: primary attempt ────────────────────────────────────────────────
-  let primaryErr: any;
+  let primaryErr: unknown;
   try {
     const result = await dispatch(provider, params);
     return { ...result, usedFallback: false, retry_attempt: attempt };
@@ -453,7 +464,7 @@ async function callProviderWithRetry(
     attempt += 1;
     console.warn('[ai-gateway] rate-limit, retrying same provider after 2s', {
       provider,
-      status: primaryErr?.status,
+      status: asGatewayError(primaryErr).status,
     });
     try {
       await sleep(2000);
@@ -475,7 +486,7 @@ async function callProviderWithRetry(
         fallbackProvider: fallback.provider,
         primaryModel:     params.model,
         fallbackModel:    fallback.model,
-        reason:           primaryErr?.status ?? primaryErr?.code ?? primaryErr?.message,
+        reason:           asGatewayError(primaryErr).status ?? asGatewayError(primaryErr).code ?? (primaryErr instanceof Error ? primaryErr.message : undefined),
       });
       try {
         const fallbackParams = { ...params, model: fallback.model, apiKey: fallback.apiKey };
@@ -491,21 +502,21 @@ async function callProviderWithRetry(
           fallbackModel:    fallback.model,
           retry_attempt:    attempt,
         };
-      } catch (fallbackErr: any) {
+      } catch (fallbackErr: unknown) {
         console.error('[ai-gateway] fallback also failed', {
           fallbackProvider: fallback.provider,
           fallbackModel:    fallback.model,
-          error: fallbackErr?.status ?? fallbackErr?.message,
+          error: asGatewayError(fallbackErr).status ?? (fallbackErr instanceof Error ? fallbackErr.message : undefined),
         });
         // Attach attempt counter to the primary error so the outer log can
         // report which attempt was the last; then throw the primary.
-        (primaryErr as any).__retry_attempt = attempt;
+        asGatewayError(primaryErr).__retry_attempt = attempt;
         throw primaryErr;
       }
     }
   }
 
-  (primaryErr as any).__retry_attempt = attempt;
+  asGatewayError(primaryErr).__retry_attempt = attempt;
   throw primaryErr;
 
   } finally {
@@ -532,7 +543,7 @@ const buildMetadata = (
   reasoning_trace_id: randomUUID(),
 });
 
-const runCompletion = async (
+const executeGatewayCompletion = async (
   request: GatewayRequest & { operation: string }
 ): Promise<GatewayResponse<string>> => {
   // ── GAP 6: Resolve effective model based on plan tier + usage budget ────────
@@ -825,7 +836,7 @@ const runCompletion = async (
   void setCachedCompletion(request.operation, effectiveModel, request.messages, content, request.cache_version);
 
   try {
-    await supabase.from('audit_logs').insert({
+    await ownedDbTable('audit_logs').insert({
       action: 'AI_GATEWAY_CALL',
       actor_user_id: null,
       company_id: request.companyId ?? null,
@@ -846,7 +857,7 @@ const runCompletion = async (
           fallback_provider: normalized.fallbackProvider,
           fallback_model:    normalized.fallbackModel,
         } : {}),
-        ...(request.bolt_run_id ? { bolt_run_id: request.bolt_run_id } : {}),
+        ...(request.variantMetadata ?? {}),
         ...(request.prompt_template_name ? { prompt_template_name: request.prompt_template_name } : {}),
         ...(request.prompt_template_version ? { prompt_template_version: request.prompt_template_version } : {}),
         ...(request.prompt_template_hash ? { prompt_template_hash: request.prompt_template_hash } : {}),
@@ -868,10 +879,12 @@ const runCompletion = async (
   return promise;
 };
 
+export { executeGatewayCompletion as runCompletion };
+
 export const generateRecommendation = async (
   request: GatewayRequest
-): Promise<GatewayResponse<any>> => {
-  const result = await runCompletion({ ...request, operation: 'generateRecommendation' });
+): Promise<GatewayResponse<Record<string, unknown>>> => {
+  const result = await executeGatewayCompletion({ ...request, operation: 'generateRecommendation' });
   const parsed = result.output ? JSON.parse(result.output) : {};
   return {
     output: parsed,
@@ -881,8 +894,8 @@ export const generateRecommendation = async (
 
 export const previewStrategy = async (
   request: GatewayRequest
-): Promise<GatewayResponse<any>> => {
-  const result = await runCompletion({ ...request, operation: 'previewStrategy' });
+): Promise<GatewayResponse<Record<string, unknown>>> => {
+  const result = await executeGatewayCompletion({ ...request, operation: 'previewStrategy' });
   const parsed = result.output ? JSON.parse(result.output) : {};
   return {
     output: parsed,
@@ -893,7 +906,7 @@ export const previewStrategy = async (
 export const generateCampaignPlan = async (
   request: GatewayRequest
 ): Promise<GatewayResponse<string>> => {
-  return runCompletion({ ...request, operation: 'generateCampaignPlan' });
+  return executeGatewayCompletion({ ...request, operation: 'generateCampaignPlan' });
 };
 
 /**
@@ -903,7 +916,7 @@ export const generateCampaignPlan = async (
 export const runCompletionWithOperation = async (
   request: GatewayRequest & { operation: string }
 ): Promise<GatewayResponse<string>> => {
-  return runCompletion(request);
+  return executeGatewayCompletion(request);
 };
 
 /**
@@ -912,8 +925,8 @@ export const runCompletionWithOperation = async (
  */
 export const generateDailyPlan = async (
   request: GatewayRequest
-): Promise<GatewayResponse<any>> => {
-  const result = await runCompletion({ ...request, operation: 'generateDailyPlan' });
+): Promise<GatewayResponse<Record<string, unknown>>> => {
+  const result = await executeGatewayCompletion({ ...request, operation: 'generateDailyPlan' });
   const parsed = result.output ? JSON.parse(result.output) : {};
   return {
     output: parsed,
@@ -927,8 +940,8 @@ export const generateDailyPlan = async (
  */
 export const generateDailyDistributionPlan = async (
   request: GatewayRequest
-): Promise<GatewayResponse<any>> => {
-  const result = await runCompletion({ ...request, operation: 'generateDailyDistributionPlan' });
+): Promise<GatewayResponse<Record<string, unknown>>> => {
+  const result = await executeGatewayCompletion({ ...request, operation: 'generateDailyDistributionPlan' });
   let toParse = (typeof result.output === 'string' ? result.output : '') || '';
   toParse = toParse.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
   const parsed = toParse ? JSON.parse(toParse) : {};
@@ -938,8 +951,8 @@ export const generateDailyDistributionPlan = async (
   };
 };
 
-export const optimizeWeek = async (request: GatewayRequest): Promise<GatewayResponse<any>> => {
-  const result = await runCompletion({ ...request, operation: 'optimizeWeek' });
+export const optimizeWeek = async (request: GatewayRequest): Promise<GatewayResponse<Record<string, unknown>>> => {
+  const result = await executeGatewayCompletion({ ...request, operation: 'optimizeWeek' });
   const parsed = result.output ? JSON.parse(result.output) : {};
   return {
     output: parsed,
@@ -961,7 +974,7 @@ export const generatePrePlanningExplanation = async (
   }
 ): Promise<string> => {
   try {
-    const result = await runCompletion({
+    const result = await executeGatewayCompletion({
       companyId,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.3,
@@ -1005,7 +1018,7 @@ export const suggestDurationForOpportunity = async (input: {
       .filter(Boolean)
       .join('\n');
 
-    const result = await runCompletion({
+    const result = await executeGatewayCompletion({
       companyId: input.companyId,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.4,
@@ -1076,7 +1089,7 @@ export const suggestDurationFromQuestionnaire = async (input: {
       .filter(Boolean)
       .join('\n');
 
-    const result = await runCompletion({
+    const result = await executeGatewayCompletion({
       companyId: input.companyId,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.3,
@@ -1124,7 +1137,7 @@ export const moderateChatMessage = async (input: {
 }): Promise<{ allowed: boolean; reason?: string; code?: string }> => {
   try {
     const ctx = input.chatContext || 'general';
-    const result = await runCompletion({
+    const result = await executeGatewayCompletion({
       companyId: null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0,

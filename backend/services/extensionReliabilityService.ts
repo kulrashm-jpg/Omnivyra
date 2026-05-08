@@ -61,7 +61,7 @@ export function recordOutcome(platform: string, action: string, outcome: Outcome
     if (rate < MIN_CONFIRM_RATE && (!s.disabledUntil || s.disabledUntil < Date.now())) {
       s.disabledUntil = Date.now() + COOLOFF_MS;
       s.disabledReason = `Auto-disabled: confirmation rate ${(rate * 100).toFixed(0)}% < ${Math.round(MIN_CONFIRM_RATE * 100)}% over last ${s.ring.length} dispatches.`;
-      // eslint-disable-next-line no-console
+       
       console.warn('[extensionReliability]', keyOf(platform, action), s.disabledReason);
     }
   }

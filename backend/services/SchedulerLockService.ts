@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Stage 19 — Idempotent Execution & Concurrency Guard.
  * Prevents concurrent schedule-structured-plan executions per campaign.
@@ -27,8 +28,7 @@ export class SchedulerLockError extends Error {
  * @returns lockId to pass to releaseSchedulerLock
  */
 export async function acquireSchedulerLock(campaignId: string): Promise<string> {
-  const { data: campaign, error: fetchError } = await supabase
-    .from('campaigns')
+  const { data: campaign, error: fetchError } = await ownedDbTable('campaigns')
     .select('scheduler_lock_id, scheduler_locked_at')
     .eq('id', campaignId)
     .maybeSingle();
@@ -52,8 +52,7 @@ export async function acquireSchedulerLock(campaignId: string): Promise<string> 
   const newLockId = randomUUID();
   const now = new Date().toISOString();
 
-  const { error: updateError } = await supabase
-    .from('campaigns')
+  const { error: updateError } = await ownedDbTable('campaigns')
     .update({
       scheduler_lock_id: newLockId,
       scheduler_locked_at: now,
@@ -75,8 +74,7 @@ export async function releaseSchedulerLock(
   campaignId: string,
   lockId: string
 ): Promise<void> {
-  const { data: campaign, error: fetchError } = await supabase
-    .from('campaigns')
+  const { data: campaign, error: fetchError } = await ownedDbTable('campaigns')
     .select('scheduler_lock_id')
     .eq('id', campaignId)
     .maybeSingle();
@@ -86,8 +84,7 @@ export async function releaseSchedulerLock(
   const currentLockId = (campaign as any).scheduler_lock_id;
   if (currentLockId !== lockId) return;
 
-  await supabase
-    .from('campaigns')
+  await ownedDbTable('campaigns')
     .update({
       scheduler_lock_id: null,
       scheduler_locked_at: null,

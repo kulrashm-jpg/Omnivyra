@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 type ApiHealthRuntime = {
   avg_latency_ms: number;
@@ -74,8 +75,7 @@ export const updateApiHealth = async (input: {
   accountId?: string | null;
 }): Promise<ApiHealthSnapshot | null> => {
   try {
-    const { data, error } = await supabase
-      .from('external_api_health')
+    const { data, error } = await ownedDbTable('external_api_health')
       .select('*')
       .eq('api_source_id', input.apiId)
       .single();
@@ -116,8 +116,7 @@ export const updateApiHealth = async (input: {
       ...(input.accountId !== undefined ? { account_id: input.accountId ?? null } : {}),
     };
 
-    let upsertError = (await supabase
-      .from('external_api_health')
+    let upsertError = (await ownedDbTable('external_api_health')
       .upsert(payloadWithLastTest, { onConflict: 'api_source_id' })).error;
 
     if (upsertError && (upsertError.message?.includes('last_test') || upsertError.message?.includes('column'))) {
@@ -131,8 +130,7 @@ export const updateApiHealth = async (input: {
         reliability_score: reliabilityScore,
         ...(input.accountId !== undefined ? { account_id: input.accountId ?? null } : {}),
       };
-      upsertError = (await supabase
-        .from('external_api_health')
+      upsertError = (await ownedDbTable('external_api_health')
         .upsert(payloadWithoutLastTest, { onConflict: 'api_source_id' })).error;
     }
 
@@ -180,8 +178,7 @@ export const updateApiHealth = async (input: {
 
 export const getHealthSnapshot = async (apiIds: string[]): Promise<ApiHealthSnapshot[]> => {
   if (!apiIds.length) return [];
-  const { data, error } = await supabase
-    .from('external_api_health')
+  const { data, error } = await ownedDbTable('external_api_health')
     .select('*')
     .in('api_source_id', apiIds);
   if (error || !data) return [];

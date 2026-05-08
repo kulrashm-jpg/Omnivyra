@@ -31,7 +31,6 @@ import {
   TrendSignalNormalized,
 } from '../trendProcessingService';
 import { normalizeTrends } from '../trendNormalizationService';
-import { supabase } from '../../db/supabaseClient';
 import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
 import { polishRecommendations } from '../recommendationPolishService';
@@ -62,6 +61,13 @@ import {
   hasOverlapWithTokens,
   scoreByAlignmentThenPopularity,
 } from './scoringHelpers';
+import {
+  campaignCompanyLinkExists,
+  loadIntelligenceSignalLookupRows,
+  loadLatestCampaignLearning,
+  loadLatestEnhancementLog,
+  loadTrackingClickRows,
+} from '../../repositories/recommendationEngineReadRepository';
 import type {
   PersonaSummary,
   RecommendationEngineInput,
@@ -81,13 +87,8 @@ export async function attachIntelligenceSignalIds(
   const topicSet = new Set(signals.map((s) => (s.topic ?? '').trim().toLowerCase()).filter(Boolean));
   if (topicSet.size === 0) return signals;
   try {
-    const { data: rows } = await supabase
-      .from('intelligence_signals')
-      .select('id, topic, signal_type')
-      .or(`company_id.eq.${companyId},company_id.is.null`)
-      .order('detected_at', { ascending: false })
-      .limit(200);
-    if (!rows?.length) return signals;
+    const rows = await loadIntelligenceSignalLookupRows(companyId, [...topicSet]);
+    if (!rows.length) return signals;
     const byTopic = new Map<string, { id: string; signal_type: string }>();
     for (const r of rows) {
       const key = (r.topic ?? '').trim().toLowerCase();
@@ -227,29 +228,13 @@ const extractContentType = (utmContent?: string | null) => {
 };
 
 export const loadLearningSignals = async (companyId: string, campaignId: string) => {
-  const { data: learningRow } = await supabase
-    .from('campaign_learnings')
-    .select('performance, metrics, created_at')
-    .eq('campaign_id', campaignId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const { data: enhancementRow } = await supabase
-    .from('ai_enhancement_logs')
-    .select('confidence_score, created_at')
-    .eq('campaign_id', campaignId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const [learningRow, enhancementRow] = await Promise.all([
+    loadLatestCampaignLearning(campaignId),
+    loadLatestEnhancementLog(campaignId),
+  ]);
 
   const lookbackWindow = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-  const { data: clickRows } = await supabase
-    .from('audit_logs')
-    .select('metadata, created_at')
-    .eq('action', 'TRACKING_LINK_CLICK')
-    .gte('created_at', lookbackWindow)
-    .filter('metadata->>campaign_id', 'eq', campaignId);
+  const clickRows = await loadTrackingClickRows(campaignId, lookbackWindow);
 
   const performance = normalizeObject(learningRow?.performance);
   const metrics = normalizeObject(learningRow?.metrics);
@@ -304,21 +289,10 @@ export const loadLearningSignals = async (companyId: string, campaignId: string)
 };
 
 export const loadViralTopicMemory = async (campaignId: string) => {
-  const { data: learningRow } = await supabase
-    .from('campaign_learnings')
-    .select('performance, metrics, created_at')
-    .eq('campaign_id', campaignId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const { data: enhancementRow } = await supabase
-    .from('ai_enhancement_logs')
-    .select('confidence_score, created_at')
-    .eq('campaign_id', campaignId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const [learningRow, enhancementRow] = await Promise.all([
+    loadLatestCampaignLearning(campaignId),
+    loadLatestEnhancementLog(campaignId),
+  ]);
 
   const performance = normalizeObject(learningRow?.performance);
   const metrics = normalizeObject(learningRow?.metrics);
@@ -371,21 +345,10 @@ export const loadViralTopicMemory = async (campaignId: string) => {
 };
 
 export const loadLeadConversionIntelligence = async (campaignId: string) => {
-  const { data: learningRow } = await supabase
-    .from('campaign_learnings')
-    .select('performance, metrics, created_at')
-    .eq('campaign_id', campaignId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const { data: enhancementRow } = await supabase
-    .from('ai_enhancement_logs')
-    .select('confidence_score, created_at')
-    .eq('campaign_id', campaignId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const [learningRow, enhancementRow] = await Promise.all([
+    loadLatestCampaignLearning(campaignId),
+    loadLatestEnhancementLog(campaignId),
+  ]);
 
   const performance = normalizeObject(learningRow?.performance);
   const metrics = normalizeObject(learningRow?.metrics);
@@ -591,15 +554,8 @@ export const toProposalPlan = (weeklyPlan: any[], dailyPlan: any[]) => ({
 
 export const ensureCampaignCompanyLink = async (companyId: string, campaignId?: string | null) => {
   if (!campaignId) return;
-  const { data, error } = await supabase
-    .from('campaign_versions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('campaign_id', campaignId);
-  if (error) {
-    throw new Error(`Failed to verify campaign link: ${error.message}`);
-  }
-  if (!data || data.length === 0) {
+  const exists = await campaignCompanyLinkExists(companyId, campaignId);
+  if (!exists) {
     const linkError: any = new Error('CAMPAIGN_NOT_IN_COMPANY');
     linkError.code = 'CAMPAIGN_NOT_IN_COMPANY';
     throw linkError;

@@ -1,23 +1,19 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../../backend/services/rbacService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { requireCapability } from '../../../../../backend/security/requireCapability';
+import { BLOG_PUBLISH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../../shared/contracts/security';
 
 function slugify(text: string): string {
   return text.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').slice(0, 80);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const ok = await requireSuperAdmin(req, res);
-  if (!ok) return;
+  const cap = req.method === 'GET' ? SUPER_ADMIN_DASHBOARD_VIEW : BLOG_PUBLISH_MANAGE;
+  const guard = await requireCapability(req, res, {
+    capability: cap,
+    reason: `blog series (${req.method})`,
+  });
+  if (guard.ok !== true) return;
 
   // ── GET — list all series with post counts ─────────────────────────────────
   if (req.method === 'GET') {

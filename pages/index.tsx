@@ -26,27 +26,58 @@ export default function Home() {
       done = true;
       setSessionFound(true);
 
-      try {
-        const res = await fetch('/api/auth/post-login-route', {
+      // Retry up to 3 times on transient errors (404 / 5xx). The 404 case
+      // is common in `next dev` when the API route hasn't been compiled
+      // yet on the first hit; cascading to a fallback route under those
+      // conditions previously triggered the "Failed to load client build
+      // manifest" hot-reload error. Linear backoff (0.4s, 0.8s) gives dev
+      // enough time to compile.
+      const fetchRoute = async (): Promise<Response> => {
+        return fetch('/api/auth/post-login-route', {
           headers: { Authorization: `Bearer ${session.access_token}` },
         });
-        if (res.status === 401 || res.status === 403) {
+      };
+
+      const pinnedHome = (): string => {
+        try {
+          return localStorage.getItem('pin_home') === 'true' ? '/home' : '/command-center';
+        } catch {
+          return '/command-center';
+        }
+      };
+
+      try {
+        let res: Response | null = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          res = await fetchRoute();
+          if (res.status !== 404 && res.status < 500) break;
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        }
+
+        if (!res || res.status === 401 || res.status === 403) {
           await supabase.auth.signOut();
           setSessionFound(false);
           setLoading(false);
           return;
         }
+
         if (!res.ok) {
-          router.replace('/dashboard');
+          // Persistent transient failure after retries. The user IS
+          // authenticated — do NOT fall back to the marketing landing
+          // page (which would be confusing). Route to the default home;
+          // by now the dev server has had ~1.2s to compile.
+          router.replace(pinnedHome());
           return;
         }
+
         const { route: dest } = (await res.json()) as { route?: string };
-        const pinned = localStorage.getItem('pin_home') === 'true';
         const target = dest ?? '/command-center';
+        const pinned = pinnedHome() === '/home';
         router.replace(target === '/command-center' && pinned ? '/home' : target);
       } catch {
-        const pinned = localStorage.getItem('pin_home') === 'true';
-        router.replace(pinned ? '/home' : '/command-center');
+        // Network-layer error after retries — still authenticated, so
+        // route to default home rather than the landing page.
+        router.replace(pinnedHome());
       }
     }
 
@@ -72,10 +103,10 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Marketing Performance Analytics and Action System | Omnivyra</title>
+        <title>Active Intelligence for AI-Era Marketing Operations | Omnivyra</title>
         <meta
           name="description"
-          content="Omnivyra helps teams analyze marketing performance, identify trends and drop-offs, prioritize next best actions, and execute from one system."
+          content="Omnivyra generates Active Intelligence from digital authority signals, visibility reporting, campaigns, content, market context, recommendations, and connected marketing operations."
         />
         <script
           type="application/ld+json"

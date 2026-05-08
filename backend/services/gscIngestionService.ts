@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
 import { ensureCanonicalDomain, hashKey, normalizeUrl, resolveCompanyWebsite, safeNumber, slugifyKeyword, todayIsoDate } from './ingestionUtils';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface GscKeywordRow {
   date?: string | null;
@@ -71,8 +72,7 @@ async function fetchGscRows(input: GscIngestionInput): Promise<GscKeywordRow[]> 
 
 async function ensureKeyword(companyId: string, keyword: string, pageUrl: string | null): Promise<string> {
   const landingPageUrl = pageUrl ? normalizeUrl(pageUrl) : '';
-  const { data, error } = await supabase
-    .from('canonical_keywords')
+  const { data, error } = await ownedDbTable('canonical_keywords')
     .upsert(
       {
         company_id: companyId,
@@ -108,8 +108,7 @@ export async function ingestGscData(input: GscIngestionInput): Promise<GscIngest
 
     const keywordId = await ensureKeyword(input.companyId, row.keyword.trim(), row.pageUrl ?? null);
     const pageUrl = row.pageUrl ? normalizeUrl(row.pageUrl) : '';
-    const { error } = await supabase
-      .from('keyword_metrics')
+    const { error } = await ownedDbTable('keyword_metrics')
       .upsert(
         {
           company_id: input.companyId,

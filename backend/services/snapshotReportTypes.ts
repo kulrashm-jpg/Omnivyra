@@ -6,8 +6,17 @@ import type { CompetitiveSnapshotReport } from './reportCompetitorStrategyServic
 import type { buildPublicDomainAuditDecisions } from './publicDomainAuditService';
 import type { PriorityType } from './actionPriorityService';
 import type { buildReportScoreModel } from './reportScoreModelService';
+import type { ScoreState, SystemMaturityClass } from './snapshotReport/canonicalScoreState';
+import type { CanonicalReport } from './canonicalReport/canonicalReportTypes';
 
+export type { ScoreState, SystemMaturityClass } from './snapshotReport/canonicalScoreState';
+
+/** @deprecated Phase 2 removes signal_availability from the public report shape.
+ *  Internal narrative helpers now consume `weakSignalChannels: string[]` derived
+ *  inline. The legacy enum survives only to preserve `signalAvailabilityFromDecisions`'s
+ *  return type so the helper does not need a parallel rewrite in this phase. */
 export type SignalAvailabilityLevel = 'NO_DATA' | 'LOW_DATA' | 'NORMAL';
+/** @deprecated Phase 2: see above. */
 export type SnapshotSignalKey =
   | 'content_coverage'
   | 'seo_structure'
@@ -99,10 +108,24 @@ export interface SnapshotReport {
   score: ReturnType<typeof buildReportScoreModel>;
   diagnosis: string;
   summary: string;
+  /** @deprecated Phase 7. Read `canonical.authority_overview.headline.text` or
+   *  `canonical.executive_insights.primary_constraint.text` instead. Retained
+   *  until automation-activity + PDF export migrate. */
   primary_problem: string;
+  /** @deprecated Phase 7. Read `canonical.executive_insights.authority_risk.text` instead. */
   secondary_problems: string[];
+  system_maturity: SystemMaturityClass;
+  /**
+   * Canonical Architecture (final). The single authoritative report contract.
+   * Every Phase 7 API surface, export renderer, and UI section reads from here.
+   * Legacy fields below are vestigial — tracked for elimination as their last
+   * remaining consumers migrate.
+   */
+  canonical: CanonicalReport;
+  /** @deprecated Phase 7. Read `canonical.executive_insights` + `canonical.action_playbook`. */
   seo_executive_summary: {
-    overall_health_score: number;
+    overall_health_score: number | null;
+    overall_health_score_state: ScoreState;
     primary_problem: {
       title: string;
       impacted_area: 'technical_seo' | 'content' | 'keywords' | 'backlinks' | 'visibility';
@@ -146,6 +169,22 @@ export interface SnapshotReport {
       confidence: 'high' | 'medium' | 'low';
       data_source_strength: 'strong' | 'inferred' | 'weak' | 'missing';
       source_tags: string[] | null;
+      axis_states: {
+        answer_coverage_score: ScoreState;
+        entity_clarity_score: ScoreState;
+        topical_authority_score: ScoreState;
+        citation_readiness_score: ScoreState;
+        content_structure_score: ScoreState;
+        freshness_score: ScoreState;
+      };
+      benchmark: {
+        answer_coverage_score: number | null;
+        entity_clarity_score: number | null;
+        topical_authority_score: number | null;
+        citation_readiness_score: number | null;
+        content_structure_score: number | null;
+        freshness_score: number | null;
+      };
     };
     query_answer_coverage_map: {
       queries: Array<{
@@ -176,8 +215,10 @@ export interface SnapshotReport {
       confidence: 'high' | 'medium' | 'low';
     };
   };
+  /** @deprecated Phase 7. Read `canonical.ai_surface_presence` + `canonical.executive_insights`. */
   geo_aeo_executive_summary: {
-    overall_ai_visibility_score: number;
+    overall_ai_visibility_score: number | null;
+    overall_ai_visibility_score_state: ScoreState;
     primary_gap: {
       title: string;
       type: 'answer_gap' | 'entity_gap' | 'structure_gap';
@@ -200,8 +241,11 @@ export interface SnapshotReport {
     } | null;
     confidence: 'high' | 'medium' | 'low';
   };
+  /** @deprecated Phase 7. Read `canonical.authority_overview.overall_score` + `canonical.executive_insights`. */
   unified_intelligence_summary: {
-    unified_score: number;
+    unified_score: number | null;
+    unified_score_state: ScoreState;
+    system_maturity: SystemMaturityClass;
     market_context_summary: string;
     dominant_growth_channel: 'seo' | 'geo_aeo' | 'balanced';
     primary_constraint: {
@@ -304,6 +348,22 @@ export interface SnapshotReport {
         competitor_intelligence_score: string[] | null;
         content_quality_score: string[] | null;
       };
+      axis_states: {
+        technical_seo_score: ScoreState;
+        keyword_research_score: ScoreState;
+        rank_tracking_score: ScoreState;
+        backlinks_score: ScoreState;
+        competitor_intelligence_score: ScoreState;
+        content_quality_score: ScoreState;
+      };
+      benchmark: {
+        technical_seo_score: number | null;
+        keyword_research_score: number | null;
+        rank_tracking_score: number | null;
+        backlinks_score: number | null;
+        competitor_intelligence_score: number | null;
+        content_quality_score: number | null;
+      };
     };
     opportunity_coverage_matrix: {
       opportunities: Array<{
@@ -343,7 +403,7 @@ export interface SnapshotReport {
       };
     };
   };
-  signal_availability: Record<SnapshotSignalKey, SignalAvailabilityLevel>;
+  // signal_availability removed in Phase 2 — replaced by canonical pillar/dimension states.
   company_context: {
     company_name: string | null;
     domain: string | null;
@@ -367,6 +427,7 @@ export interface SnapshotReport {
     resilience_guidance: string;
   };
   competitor_intelligence: CompetitorIntelligenceResult;
+  /** @deprecated Phase 7. Read `canonical.executive_insights` + `canonical.action_playbook` instead. */
   decision_snapshot: {
     primary_focus_area: string;
     whats_broken: string;
@@ -385,6 +446,7 @@ export interface SnapshotReport {
     expected_state: string;
     outcome_confidence: 'high' | 'medium' | 'low';
   };
+  /** @deprecated Phase 7. Read `canonical.action_playbook.actions` + `canonical.strategic_playbook.actions`. */
   top_priorities: SnapshotTopPriority[];
   pipeline_audit: {
     resolver_inputs_present: number;

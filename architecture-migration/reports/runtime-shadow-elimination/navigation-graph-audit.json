@@ -1,0 +1,309 @@
+{
+  "staleNavigationTargets": [],
+  "deprecatedRefs": [
+    {
+      "file": "components/layout/GlobalHeader.tsx",
+      "line": 87,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "components/layout/navigationConfig.tsx",
+      "line": 53,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "components/layout/navigationConfig.tsx",
+      "line": 53,
+      "route": "/content-studio",
+      "canonical": "/posts/create",
+      "text": "'/content-studio'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "components/layout/navigationConfig.tsx",
+      "line": 53,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "components/layout/navigationConfig.tsx",
+      "line": 80,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "components/layout/navigationConfig.tsx",
+      "line": 216,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "hooks/useAssistant.ts",
+      "line": 120,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "hooks/useNextActionPrompt.ts",
+      "line": 75,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "lib/routes/canonicalRegistry.ts",
+      "line": 80,
+      "route": "/content-studio/post",
+      "canonical": "/posts/create",
+      "text": "'/content-studio/post'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "lib/routes/canonicalRegistry.ts",
+      "line": 81,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "lib/routes/canonicalRegistry.ts",
+      "line": 97,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "lib/routes/canonicalRegistry.ts",
+      "line": 120,
+      "route": "/threads/generate",
+      "canonical": "/threads/intelligence",
+      "text": "'/threads/generate'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "lib/routes/canonicalRegistry.ts",
+      "line": 121,
+      "route": "/threads/template",
+      "canonical": "/threads/intelligence",
+      "text": "'/threads/template'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "lib/routes/canonicalRegistry.ts",
+      "line": 122,
+      "route": "/threads/suggestions",
+      "canonical": "/threads/intelligence",
+      "text": "'/threads/suggestions'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "lib/routes/canonicalRegistry.ts",
+      "line": 123,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 40,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 44,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 48,
+      "route": "/content-studio/post",
+      "canonical": "/posts/create",
+      "text": "'/content-studio/post'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 56,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 61,
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "text": "'/blogs'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 62,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 63,
+      "route": "/content-studio/post",
+      "canonical": "/posts/create",
+      "text": "'/content-studio/post'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 64,
+      "route": "/threads/generate",
+      "canonical": "/threads/intelligence",
+      "text": "'/threads/generate'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 65,
+      "route": "/threads/template",
+      "canonical": "/threads/intelligence",
+      "text": "'/threads/template'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 66,
+      "route": "/threads/suggestions",
+      "canonical": "/threads/intelligence",
+      "text": "'/threads/suggestions'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "next.config.js",
+      "line": 67,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "pages/command-center/bolt-text-strategy.tsx",
+      "line": 20,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "pages/content-creation.tsx",
+      "line": 31,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 30,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 30,
+      "route": "/content-studio",
+      "canonical": "/posts/create",
+      "text": "'/content-studio'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 30,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 38,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 44,
+      "route": "/content-studio",
+      "canonical": "/posts/create",
+      "text": "'/content-studio'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 50,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 69,
+      "route": "/content-studio",
+      "canonical": "/posts/create",
+      "text": "'/content-studio'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 223,
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "text": "'/content-creation'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 224,
+      "route": "/content-studio",
+      "canonical": "/posts/create",
+      "text": "'/content-studio'",
+      "category": "navigation-or-runtime-reference"
+    },
+    {
+      "file": "proxy.ts",
+      "line": 226,
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "text": "'/command-center/bolt-text-strategy'",
+      "category": "navigation-or-runtime-reference"
+    }
+  ]
+}

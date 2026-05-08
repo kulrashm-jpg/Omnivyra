@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * domainRecordService.ts
  *
@@ -92,8 +93,7 @@ interface ExistingDomainRow {
  */
 async function findExistingByDomain(domain: string): Promise<ExistingDomainRow | null> {
   if (!domain) return null;
-  const { data, error } = await supabase
-    .from('company_domains')
+  const { data, error } = await ownedDbTable('company_domains')
     .select('id, company_id')
     .eq('final_domain', domain)
     .order('id', { ascending: true })
@@ -125,8 +125,7 @@ async function probeCanonicalConflict(
 
   // Read final_domain only — legacy `domain` column is deprecated. The
   // canonical-foundation migration backfilled final_domain for every row.
-  const { data, error } = await supabase
-    .from('company_domains')
+  const { data, error } = await ownedDbTable('company_domains')
     .select('id, company_id, final_domain')
     .eq('final_domain', finalDomain);
 
@@ -297,8 +296,7 @@ export async function saveDomainRecord(
   };
 
   if (existing && existing.company_id === input.company_id) {
-    const { data, error } = await supabase
-      .from('company_domains')
+    const { data, error } = await ownedDbTable('company_domains')
       .update(payload)
       .eq('id', existing.id)
       .select('id')
@@ -327,8 +325,7 @@ export async function saveDomainRecord(
     });
   }
 
-  const { data, error } = await supabase
-    .from('company_domains')
+  const { data, error } = await ownedDbTable('company_domains')
     .insert({ ...payload, ...insertOnly })
     .select('id')
     .maybeSingle();
@@ -458,8 +455,7 @@ export async function reassignDomain(
     return { ok: false, error: 'FROM_COMPANY_MISMATCH' };
   }
 
-  const { data, error } = await supabase
-    .from('company_domains')
+  const { data, error } = await ownedDbTable('company_domains')
     .update({
       company_id:          input.to_company_id,
       verification_status: 'admin_override',

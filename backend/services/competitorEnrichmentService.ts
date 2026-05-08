@@ -11,6 +11,7 @@ import {
   type EnrichmentCandidateLike,
 } from './competitorEnrichmentKnowledge';
 import { normalizeCompetitorCategory, normalizeCompetitorTags } from './competitorTaxonomy';
+import { ownedDbTable } from '../db/writeOwner';
 
 const memoryCache = new Map<string, CompetitorEnrichmentProfile>();
 const STORED_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -146,8 +147,7 @@ async function readCache(name: string, domain?: string | null): Promise<Competit
 
   try {
     const normalizedDomain = normalizeDomain(domain);
-    let query = supabase
-      .from('competitor_enrichment_cache')
+    let query = ownedDbTable('competitor_enrichment_cache')
       .select('name, domain, category, tags, description, icp, business_model, geography, product_type, scale_signals, confidence_score, sources, updated_at')
       .eq('cache_key', key)
       .maybeSingle();
@@ -186,8 +186,7 @@ async function writeCache(profileValue: CompetitorEnrichmentProfile): Promise<vo
   const key = cacheKey(profileValue.name, profileValue.domain);
   memoryCache.set(key, profileValue);
   try {
-    await supabase
-      .from('competitor_enrichment_cache')
+    await ownedDbTable('competitor_enrichment_cache')
       .upsert({
         cache_key: key,
         name: profileValue.name,

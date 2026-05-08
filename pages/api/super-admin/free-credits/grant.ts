@@ -12,7 +12,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_MANAGE } from '@/shared/contracts/security';
+import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 
 const VALID_CATEGORIES = [
   'manual','recommendation','first_campaign','referral',
@@ -38,16 +38,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!reason) return res.status(400).json({ error: 'reason is required' });
   if (!VALID_CATEGORIES.includes(category as any)) return res.status(400).json({ error: 'Invalid category' });
 
-  // Wave 2C-A: capability-based gate with phishing-resistant step-up.
-  // billing.manage is policy-marked in StepUpPolicyRegistry. Bridge
-  // principals cannot satisfy step-up — they get a structured 401 with
-  // STEP_UP_REQUIRED and granted_by attribution will only be set if the
-  // call clears the gate (which a cookie principal cannot).
+  // Phase: Platform Authority Isolation. billing.grant_free_credits is a
+  // SUPER_ADMIN-only platform-tier capability; replaces the previous
+  // BILLING_MANAGE gate which is per-tenant (any COMPANY_ADMIN of the
+  // target org would have satisfied it — including granting themselves
+  // free credits). The capability is policy-marked for phishing-resistant
+  // step-up (see STEP_UP_REQUIRED_CAPABILITIES). organizationId is recorded
+  // for audit linkage (target org), NOT used as the actor's membership
+  // binding — this is a platform action targeting an org.
   const guard = await requireCapability(req, res, {
-    capability: BILLING_MANAGE,
+    capability: BILLING_GRANT_FREE_CREDITS,
     reason: `super-admin grants ${creditsAmount} ${category} credits to org`,
     resourceId: organizationId,
-    organizationId,
   });
   if (guard.ok !== true) return;
 

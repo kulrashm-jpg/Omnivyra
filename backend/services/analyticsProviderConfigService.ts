@@ -1,5 +1,6 @@
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type AnalyticsProviderKey = 'google_analytics';
 
@@ -64,8 +65,7 @@ export function getDefaultAnalyticsRedirectUri(provider: AnalyticsProviderKey): 
 export async function getAnalyticsProviderConfig(
   provider: AnalyticsProviderKey,
 ): Promise<AnalyticsProviderConfig | null> {
-  const { data, error } = await supabase
-    .from('analytics_provider_config')
+  const { data, error } = await ownedDbTable('analytics_provider_config')
     .select('provider, enabled, oauth_client_id_encrypted, oauth_client_secret_encrypted, scopes, redirect_uri, status, updated_at')
     .eq('provider', provider)
     .maybeSingle();
@@ -136,8 +136,7 @@ export async function upsertAnalyticsProviderConfig(input: {
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase
-    .from('analytics_provider_config')
+  const { error } = await ownedDbTable('analytics_provider_config')
     .upsert(payload, { onConflict: 'provider' });
 
   if (error) {

@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import { getAuthToken } from '../utils/getAuthToken';
+import { parseJsonResponse } from '../lib/utils/safeFetchJson';
 import CostAccountingDashboard from '../components/super-admin/CostAccountingDashboard';
 import ActivityCostBreakdown from '../components/super-admin/ActivityCostBreakdown';
 import {
@@ -199,10 +200,10 @@ export default function SuperAdminPanel() {
           require_human_approval: pendingPolicy.require_human_approval,
         }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result?.error || 'Failed to update policy');
-      setCommunityPolicy(result?.policy || null);
-      setCommunityPolicyUpdatedBy(result?.updated_by_email || null);
+      const parsed = await parseJsonResponse<{ policy?: any; updated_by_email?: string }>(response, '/api/super-admin/community-ai-policy');
+      if (parsed.ok !== true) throw new Error(parsed.message || 'Failed to update policy');
+      setCommunityPolicy(parsed.data?.policy || null);
+      setCommunityPolicyUpdatedBy(parsed.data?.updated_by_email || null);
       alert('Community-AI platform policy updated.');
     } catch (error: unknown) {
       console.error('Error updating platform policy:', error);
@@ -238,8 +239,8 @@ export default function SuperAdminPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan_key: plan.plan_key, name: plan.name, description: plan.description ?? null, monthly_price: plan.monthly_price ?? null, limits }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result?.error || 'Failed to update plan');
+      const parsed = await parseJsonResponse(response, '/api/super-admin/plans/create');
+      if (parsed.ok !== true) throw new Error(parsed.message || 'Failed to update plan');
       setPlansSaveSuccess(`${plan.name} limits updated.`);
       setPlansLimits((prev) => ({ ...prev, [plan.id]: limits }));
     } catch (error: unknown) {

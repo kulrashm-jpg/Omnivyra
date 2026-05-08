@@ -25,7 +25,7 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import { FormattedAIMessage } from './campaign-ai/FormattedAIMessage';
-import { getPlatformLimits } from '../backend/utils/contentFormatter';
+import { getPlatformLimits } from '../lib/shared/contentFormatter';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -1048,3 +1048,4 @@ export default function ContentRenderer({
     </div>
   );
 }
+

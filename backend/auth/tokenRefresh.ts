@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Token Refresh Service
  * 
@@ -160,8 +161,7 @@ async function recordTwitterRefreshOutcome(
   error: string | null,
 ): Promise<void> {
   try {
-    await supabase
-      .from('social_accounts')
+    await ownedDbTable('social_accounts')
       .update({
         refresh_status: status,
         last_refresh_attempt_at: new Date().toISOString(),
@@ -832,8 +832,7 @@ export async function refreshExpiringSocialAccountsForCompany(
 ): Promise<{ checked: number; refreshed: number; skipped: number; errors: number }> {
   const summary = { checked: 0, refreshed: 0, skipped: 0, errors: 0 };
 
-  const { data: roleRows } = await supabase
-    .from('user_company_roles')
+  const { data: roleRows } = await ownedDbTable('user_company_roles')
     .select('user_id')
     .eq('company_id', companyId)
     .eq('status', 'active');
@@ -841,8 +840,7 @@ export async function refreshExpiringSocialAccountsForCompany(
   if (userIds.length === 0) return summary;
 
   const cutoffIso = new Date(Date.now() + bufferMs).toISOString();
-  const { data: rows } = await supabase
-    .from('social_accounts')
+  const { data: rows } = await ownedDbTable('social_accounts')
     .select('id, platform, token_expires_at, refresh_token')
     .in('user_id', userIds)
     .eq('is_active', true)
@@ -913,8 +911,7 @@ export async function refreshAllExpiringSocialAccounts(
 ): Promise<{ companies: number; checked: number; refreshed: number; skipped: number; errors: number }> {
   const totals = { companies: 0, checked: 0, refreshed: 0, skipped: 0, errors: 0 };
 
-  const { data: companyRows } = await supabase
-    .from('companies')
+  const { data: companyRows } = await ownedDbTable('companies')
     .select('id')
     .eq('status', 'active');
 

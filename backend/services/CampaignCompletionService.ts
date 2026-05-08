@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Auto Completion Trigger.
  * When all scheduled posts for a campaign are published and no future posts exist,
@@ -20,8 +21,7 @@ import { markThemeConsumedForCampaign } from './companyThemeStateService';
 export async function checkAndCompleteCampaignIfEligible(campaignId: string | null | undefined): Promise<void> {
   if (!campaignId) return;
   try {
-    const { data: campaign, error: campError } = await supabase
-      .from('campaigns')
+    const { data: campaign, error: campError } = await ownedDbTable('campaigns')
       .select('id, execution_status')
       .eq('id', campaignId)
       .maybeSingle();
@@ -32,8 +32,7 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
 
     const nowIso = new Date().toISOString();
 
-    const { data: posts, error: postsError } = await supabase
-      .from('scheduled_posts')
+    const { data: posts, error: postsError } = await ownedDbTable('scheduled_posts')
       .select('id, status, scheduled_for')
       .eq('campaign_id', campaignId);
 
@@ -60,8 +59,7 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
       return;
     }
 
-    const { error: updateError } = await supabase
-      .from('campaigns')
+    const { error: updateError } = await ownedDbTable('campaigns')
       .update({
         execution_status: 'COMPLETED',
         updated_at: nowIso,
@@ -73,8 +71,7 @@ export async function checkAndCompleteCampaignIfEligible(campaignId: string | nu
       return;
     }
 
-    const { data: cv } = await supabase
-      .from('campaign_versions')
+    const { data: cv } = await ownedDbTable('campaign_versions')
       .select('company_id')
       .eq('campaign_id', campaignId)
       .limit(1)

@@ -14,7 +14,7 @@ import {
   formatStyleInstructions,
   type WritingStyleProfile,
 } from '../../../lib/content/writingStyleEngine';
-import type { CompanyProfile } from '../../../backend/services/companyProfileService';
+import type { CompanyProfile } from '../../../lib/shared/companyProfileTypes';
 import type { BriefInsight, EnrichedGap } from '../../../pages/blogs.types';
 
 export interface PostMeta extends ExistingPostMeta {
@@ -327,3 +327,4 @@ export function useBlogIntelligence(input: UseBlogIntelligenceInput) {
     allMetrics: viewModel.allMetrics,
   };
 }
+

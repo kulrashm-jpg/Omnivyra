@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Opportunity Resolution Service
  * Tracks when opportunities are acted upon.
@@ -10,16 +11,14 @@ export async function resolveOpportunityByReply(
   reply_message_id: string | null,
   user_id: string | null
 ): Promise<number> {
-  const { data: opportunities, error: selectError } = await supabase
-    .from('engagement_opportunities')
+  const { data: opportunities, error: selectError } = await ownedDbTable('engagement_opportunities')
     .select('id')
     .eq('source_thread_id', thread_id)
     .eq('resolved', false);
 
   if (selectError || !opportunities?.length) return 0;
 
-  const { error: updateError } = await supabase
-    .from('engagement_opportunities')
+  const { error: updateError } = await ownedDbTable('engagement_opportunities')
     .update({
       resolved: true,
       resolved_at: new Date().toISOString(),
@@ -42,8 +41,7 @@ export async function resolveOpportunityManually(
   opportunity_id: string,
   user_id: string | null
 ): Promise<boolean> {
-  const { error } = await supabase
-    .from('engagement_opportunities')
+  const { error } = await ownedDbTable('engagement_opportunities')
     .update({
       resolved: true,
       resolved_at: new Date().toISOString(),

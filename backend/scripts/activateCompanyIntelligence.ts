@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Activate Company-Level Intelligence Distribution
  * Run: npx ts-node backend/scripts/activateCompanyIntelligence.ts
@@ -23,8 +24,7 @@ async function main() {
   report.push('');
 
   // PART 1 — Companies
-  const { data: companies, error: companiesError } = await supabase
-    .from('companies')
+  const { data: companies, error: companiesError } = await ownedDbTable('companies')
     .select('id, name')
     .limit(10);
 
@@ -59,14 +59,13 @@ async function main() {
   let topicsInserted = 0;
   for (const company of companyList) {
     for (const topic of DEFAULT_TOPICS) {
-      const { data: existing } = await supabase
-        .from('company_intelligence_topics')
+      const { data: existing } = await ownedDbTable('company_intelligence_topics')
         .select('id')
         .eq('company_id', company.id)
         .eq('topic', topic)
         .maybeSingle();
       if (!existing) {
-        const { error } = await supabase.from('company_intelligence_topics').insert({
+        const { error } = await ownedDbTable('company_intelligence_topics').insert({
           company_id: company.id,
           topic,
           enabled: true,
@@ -84,14 +83,13 @@ async function main() {
   let keywordsInserted = 0;
   for (const company of companyList) {
     for (const keyword of DEFAULT_KEYWORDS) {
-      const { data: existing } = await supabase
-        .from('company_intelligence_keywords')
+      const { data: existing } = await ownedDbTable('company_intelligence_keywords')
         .select('id')
         .eq('company_id', company.id)
         .eq('keyword', keyword)
         .maybeSingle();
       if (!existing) {
-        const { error } = await supabase.from('company_intelligence_keywords').insert({
+        const { error } = await ownedDbTable('company_intelligence_keywords').insert({
           company_id: company.id,
           keyword,
           enabled: true,
@@ -109,14 +107,13 @@ async function main() {
   let competitorsInserted = 0;
   for (const company of companyList) {
     for (const competitor of DEFAULT_COMPETITORS) {
-      const { data: existing } = await supabase
-        .from('company_intelligence_competitors')
+      const { data: existing } = await ownedDbTable('company_intelligence_competitors')
         .select('id')
         .eq('company_id', company.id)
         .eq('competitor_name', competitor)
         .maybeSingle();
       if (!existing) {
-        const { error } = await supabase.from('company_intelligence_competitors').insert({
+        const { error } = await ownedDbTable('company_intelligence_competitors').insert({
           company_id: company.id,
           competitor_name: competitor,
           enabled: true,
@@ -131,8 +128,7 @@ async function main() {
   report.push('');
 
   // PART 5 — Trigger distribution
-  const { data: signals } = await supabase
-    .from('intelligence_signals')
+  const { data: signals } = await ownedDbTable('intelligence_signals')
     .select('id');
   const signalIds = (signals ?? []).map((s) => s.id);
 
@@ -146,12 +142,10 @@ async function main() {
   report.push('');
 
   // PART 6 — Verify company signals
-  const { count: cisCount } = await supabase
-    .from('company_intelligence_signals')
+  const { count: cisCount } = await ownedDbTable('company_intelligence_signals')
     .select('id', { count: 'exact', head: true });
 
-  const { data: cisSample } = await supabase
-    .from('company_intelligence_signals')
+  const { data: cisSample } = await ownedDbTable('company_intelligence_signals')
     .select('company_id, signal_id, relevance_score, created_at')
     .order('created_at', { ascending: false })
     .limit(10);

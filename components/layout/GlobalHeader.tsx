@@ -18,6 +18,7 @@ import {
   MessageSquare,
   Moon,
   Settings,
+  Shield,
   Sun,
   Users,
   X,
@@ -29,6 +30,10 @@ import { useCredits } from '@/hooks/useCredits';
 import { useTour } from '../tour/TourContext';
 import { TourOverlay } from '../tour/TourOverlay';
 import { NotificationBell } from '../NotificationBell';
+import {
+  SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS,
+  SETTINGS_ROUTE_SECURITY,
+} from '../../lib/settings/canonicalRegistry';
 
 type HeaderChildItem = {
   label: string;
@@ -79,13 +84,12 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       '/command-center/content',
       '/command-center/writer-content',
       '/command-center/creator-content',
-      '/content-studio',
       '/blogs',
       '/stories',
       '/articles',
       '/whitepapers',
       '/case-studies',
-      '/content-creation',
+      '/posts',
       '/guides',
       '/newsletters',
       '/posts',
@@ -107,13 +111,13 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       '/campaign-planning',
       '/campaign-details',
       '/command-center/campaigns',
-      '/command-center/bolt-text-strategy',
+      '/command-center/bolt-text',
       '/command-center/bolt-creator-strategy',
       '/command-center/intelligent-mix-strategy',
       '/command-center/bolt-combined-strategy',
     ],
     children: [
-      { label: 'BOLT Text', href: '/command-center/bolt-text-strategy', description: 'Fast text-first campaign path.' },
+      { label: 'BOLT Text', href: '/command-center/bolt-text', description: 'Fast text-first campaign path.' },
       { label: 'BOLT Creator', href: '/command-center/bolt-creator-strategy', description: 'Creator-led strategy flow.' },
       {
         label: 'Intelligent Mix',
@@ -497,11 +501,16 @@ function UserMenu({
               Integrations
             </Link>
             {isCompanyAdmin ? (
-              <Link href="/settings/company-admin-access" className={itemClassName}>
+              <Link href={SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS} className={itemClassName}>
                 <Settings className="h-4 w-4 text-slate-400" />
                 Settings
               </Link>
             ) : null}
+            {/* Per-user security settings (passkeys/TOTP/sessions). Visible to every authenticated user. */}
+            <Link href={SETTINGS_ROUTE_SECURITY} className={itemClassName}>
+              <Shield className="h-4 w-4 text-slate-400" />
+              Security
+            </Link>
           </div>
 
           <div className="border-t border-slate-100 p-1.5">
@@ -537,7 +546,12 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
 
   const displayName = userName?.trim() || 'User';
   const roleLabel = getRoleLabel(userRole);
-  const isCompanyAdmin = (userRole || '').toUpperCase() === 'COMPANY_ADMIN';
+  // Settings visibility: COMPANY_ADMIN OR SUPER_ADMIN OR ADMIN.
+  // Was previously a literal equality check that hid Settings from SUPER_ADMINs.
+  const isCompanyAdmin = (() => {
+    const r = (userRole || '').toUpperCase();
+    return r === 'COMPANY_ADMIN' || r === 'SUPER_ADMIN' || r === 'ADMIN';
+  })();
   const activeNav = useMemo(
     () =>
       HEADER_NAV_ITEMS.find((item) =>

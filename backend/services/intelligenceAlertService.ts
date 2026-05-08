@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Intelligence Alert Service
  * Notifies users when critical intelligence events occur.
@@ -102,16 +103,14 @@ async function isRateLimited(companyId: string): Promise<boolean> {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-  const { count: hourCount } = await supabase
-    .from('intelligence_alerts')
+  const { count: hourCount } = await ownedDbTable('intelligence_alerts')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .gte('created_at', oneHourAgo);
 
   if ((hourCount ?? 0) >= ALERTS_PER_HOUR) return true;
 
-  const { count: dayCount } = await supabase
-    .from('intelligence_alerts')
+  const { count: dayCount } = await ownedDbTable('intelligence_alerts')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .gte('created_at', oneDayAgo);
@@ -135,8 +134,7 @@ async function wasAlertTriggeredRecently(
   cooldownHours: number = ALERT_DEDUP_HOURS,
 ): Promise<boolean> {
   const cutoff = new Date(Date.now() - cooldownHours * 60 * 60 * 1000).toISOString();
-  const { data } = await supabase
-    .from('intelligence_alerts')
+  const { data } = await ownedDbTable('intelligence_alerts')
     .select('id')
     .eq('company_id', companyId)
     .eq('alert_rule_key', alertRuleKey)
@@ -177,7 +175,7 @@ async function sendInApp(
     fired.map((f) => f.message).join('; ') ??
     'Intelligence alert';
 
-  const { error } = await supabase.from('intelligence_alerts').insert({
+  const { error } = await ownedDbTable('intelligence_alerts').insert({
     company_id: event.company_id,
     event_type: event.event_type,
     rule_types: fired.map((f) => f.rule),
@@ -354,7 +352,7 @@ export async function sendDeterministicIntelligenceAlert(
   };
 
   if (channels.includes('in_app')) {
-    const { error } = await supabase.from('intelligence_alerts').insert(baseInsert);
+    const { error } = await ownedDbTable('intelligence_alerts').insert(baseInsert);
     if (error) {
       console.warn('[intelligenceAlertService] deterministic in_app insert failed:', error.message);
     } else {

@@ -7,7 +7,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { getUserRole } from '@/backend/services/rbacService';
+import { getUserRole, isPlatformSuperAdmin } from '@/backend/services/rbacService';
 import { refreshExpiringSocialAccountsForCompany } from '@/backend/auth/tokenRefresh';
 import { getOAuthCredentialsForPlatform } from '@/backend/auth/oauthCredentialResolver';
 
@@ -49,11 +49,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { role } = await getUserRole(userId, companyId).catch(() => ({ role: null, error: '' }));
       userRole = role ?? null;
     } else {
-      // No company scope — check if platform super admin
+      // No company scope — check the canonical SUPER_ADMIN authority
+      // (user_company_roles.role='SUPER_ADMIN'). The legacy `super_admins`
+      // table that previously backed this check does not exist in the DB
+      // and is removed in Phase 1 — see super-admin-unification-audit.
       try {
-        const { data: sa } = await supabase
-          .from('super_admins').select('id').eq('user_id', userId).limit(1).maybeSingle();
-        if (sa) userRole = 'SUPER_ADMIN';
+        if (await isPlatformSuperAdmin(userId)) userRole = 'SUPER_ADMIN';
       } catch (_) {}
     }
   }

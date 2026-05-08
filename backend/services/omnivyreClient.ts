@@ -1,5 +1,5 @@
 import { ViralitySnapshot } from './viralitySnapshotBuilder';
-import { DiagnosticsByType, DiagnosticComparisons } from './viralityAdvisorService';
+import type { DiagnosticsByType, DiagnosticComparisons } from './viralityAdvisorService';
 
 export interface DecideRequest {
   campaign_id: string;

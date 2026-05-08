@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import type { StrategicPayload } from './opportunityGenerators';
+import { ownedDbTable } from '../db/writeOwner';
 
 export const MAX_SLOTS_PER_TYPE = 10;
 
@@ -44,8 +45,7 @@ export async function listActiveOpportunities(
   companyId: string,
   type: string
 ): Promise<OpportunityItem[]> {
-  const { data, error } = await supabase
-    .from('opportunity_items')
+  const { data, error } = await ownedDbTable('opportunity_items')
     .select('*')
     .eq('company_id', companyId)
     .eq('type', type)
@@ -74,8 +74,7 @@ export async function listActiveOpportunities(
  * Count active opportunity items for a company and type.
  */
 export async function countActive(companyId: string, type: string): Promise<number> {
-  const { count, error } = await supabase
-    .from('opportunity_items')
+  const { count, error } = await ownedDbTable('opportunity_items')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('type', type)
@@ -115,8 +114,7 @@ export async function upsertOpportunities(
 
     const problemDomain = (item.problem_domain ?? '').trim();
 
-    const { data: existing } = await supabase
-      .from('opportunity_items')
+    const { data: existing } = await ownedDbTable('opportunity_items')
       .select('id, last_seen_at, payload')
       .eq('company_id', companyId)
       .eq('type', type)
@@ -128,8 +126,7 @@ export async function upsertOpportunities(
       .maybeSingle();
 
     if (existing) {
-      const { error: updateError } = await supabase
-        .from('opportunity_items')
+      const { error: updateError } = await ownedDbTable('opportunity_items')
         .update({
           last_seen_at: now,
           payload: item.payload ?? existing.payload,
@@ -141,7 +138,7 @@ export async function upsertOpportunities(
         throw new Error(`Failed to update opportunity: ${updateError.message}`);
       }
     } else {
-      const { error: insertError } = await supabase.from('opportunity_items').insert({
+      const { error: insertError } = await ownedDbTable('opportunity_items').insert({
         company_id: companyId,
         type,
         title,
@@ -222,8 +219,7 @@ export async function takeAction(
     updates.scheduled_for = opts.scheduled_for;
   }
 
-  const { error } = await supabase
-    .from('opportunity_items')
+  const { error } = await ownedDbTable('opportunity_items')
     .update(updates)
     .eq('id', opportunityId);
 
@@ -242,8 +238,7 @@ export async function promoteToCampaign(
   companyId: string,
   userId: string
 ): Promise<string> {
-  const { data: opportunity, error: fetchError } = await supabase
-    .from('opportunity_items')
+  const { data: opportunity, error: fetchError } = await ownedDbTable('opportunity_items')
     .select('id, title, summary, region_tags, payload')
     .eq('id', opportunityId)
     .eq('company_id', companyId)
@@ -269,8 +264,7 @@ export async function promoteToCampaign(
     blueprint_status: null,
   };
 
-  const { data: campaign, error: campaignError } = await supabase
-    .from('campaigns')
+  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .insert(campaignInsert)
     .select('id')
     .single();
@@ -302,7 +296,7 @@ export async function promoteToCampaign(
   const market_scope = (opportunity.payload as any)?.market_scope ?? 'niche';
   const company_stage = (opportunity.payload as any)?.company_stage ?? 'early_stage';
 
-  const { error: linkError } = await supabase.from('campaign_versions').insert({
+  const { error: linkError } = await ownedDbTable('campaign_versions').insert({
     company_id: companyId,
     campaign_id: campaignId,
     campaign_snapshot: {
@@ -332,7 +326,7 @@ export async function promoteToCampaign(
     throw new Error(`Failed to link campaign to company: ${linkError.message}`);
   }
 
-  const { error: otcError } = await supabase.from('opportunity_to_campaign').insert({
+  const { error: otcError } = await ownedDbTable('opportunity_to_campaign').insert({
     opportunity_id: opportunityId,
     campaign_id: campaignId,
     promoted_at: now,
@@ -352,8 +346,7 @@ export async function promoteToCampaign(
  * Mark an opportunity as REVIEWED without closing the slot (slot_state stays ACTIVE).
  */
 export async function setOpportunityReviewed(opportunityId: string): Promise<void> {
-  const { error } = await supabase
-    .from('opportunity_items')
+  const { error } = await ownedDbTable('opportunity_items')
     .update({ status: 'REVIEWED', updated_at: new Date().toISOString() })
     .eq('id', opportunityId);
 
@@ -368,8 +361,7 @@ export async function setOpportunityReviewed(opportunityId: string): Promise<voi
  */
 export async function reopenScheduledOpportunitiesDue(): Promise<number> {
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('opportunity_items')
+  const { data, error } = await ownedDbTable('opportunity_items')
     .update({
       status: 'NEW',
       slot_state: 'ACTIVE',

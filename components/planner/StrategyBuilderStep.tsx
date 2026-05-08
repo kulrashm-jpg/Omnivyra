@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { usePlannerSession, type StrategyContext } from './plannerSessionStore';
-import { CANONICAL_PLATFORMS, PLATFORM_OPTIONS, type CanonicalPlatform } from '../../backend/constants/platforms';
+import { CANONICAL_PLATFORMS, PLATFORM_OPTIONS, type CanonicalPlatform } from '../../lib/shared/platforms';
 
 const CANONICAL_VALUES = new Set<string>(CANONICAL_PLATFORMS);
 
@@ -172,3 +172,4 @@ export function StrategyBuilderStep({ onComplete }: StrategyBuilderStepProps) {
     </div>
   );
 }
+

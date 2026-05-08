@@ -12,9 +12,12 @@ import {
 import type {
   NarrativeContext,
   NarrativeSignal,
+  ScoreState,
   SnapshotReport,
+  SystemMaturityClass,
 } from '../snapshotReportTypes';
 import { NARRATIVE_INTENT } from '../snapshotReportTypes';
+import { maturityNarrativeAdjective } from './canonicalScoreState';
 import { normalizeCoreProblem } from './summaryDecisionHelpers';
 
 const UNIFIED_TEMPLATES = [
@@ -60,24 +63,33 @@ export function buildUnifiedIntelligenceSummary(params: {
   coreProblem: string;
   seoSummary: SnapshotReport['seo_executive_summary'];
   geoAeoSummary: SnapshotReport['geo_aeo_executive_summary'];
+  systemMaturity: SystemMaturityClass;
   narrativeContext?: NarrativeContext;
 }): SnapshotReport['unified_intelligence_summary'] {
-  const seoScore = Number(params.seoSummary.overall_health_score ?? 0);
-  const geoScore = Number(params.geoAeoSummary.overall_ai_visibility_score ?? 0);
-  const seoAvailable = seoScore > 0;
-  const geoAvailable = geoScore > 0;
-  const weightedScore =
+  const seoScore = typeof params.seoSummary.overall_health_score === 'number' ? params.seoSummary.overall_health_score : null;
+  const geoScore = typeof params.geoAeoSummary.overall_ai_visibility_score === 'number' ? params.geoAeoSummary.overall_ai_visibility_score : null;
+  const seoAvailable = seoScore != null;
+  const geoAvailable = geoScore != null;
+  // Canonical Trust Foundation: when neither channel has a measured score, unified is null.
+  const weightedScore: number | null =
     seoAvailable && geoAvailable
       ? Math.round(seoScore * 0.5 + geoScore * 0.5)
       : seoAvailable
         ? seoScore
         : geoAvailable
           ? geoScore
-          : 0;
+          : null;
+  const unifiedScoreState: ScoreState = !seoAvailable && !geoAvailable
+    ? 'insufficient_signal'
+    : seoAvailable && geoAvailable
+      ? 'measured'
+      : 'inferred';
 
-  const channelDiff = seoScore - geoScore;
+  const channelDiff = (seoScore ?? 0) - (geoScore ?? 0);
   const dominantGrowthChannel: 'seo' | 'geo_aeo' | 'balanced' =
-    channelDiff >= 12 ? 'seo' : channelDiff <= -12 ? 'geo_aeo' : 'balanced';
+    !seoAvailable && !geoAvailable
+      ? 'balanced'
+      : channelDiff >= 12 ? 'seo' : channelDiff <= -12 ? 'geo_aeo' : 'balanced';
 
   const seoConstraint = params.seoSummary.primary_problem;
   const geoConstraint = params.geoAeoSummary.primary_gap;
@@ -172,10 +184,12 @@ export function buildUnifiedIntelligenceSummary(params: {
   if (weakChannelCount >= 2) confidence = 'low';
 
   const unifiedSignals: NarrativeSignal[] = [];
-  if (seoScore <= 65 || dominantGrowthChannel === 'seo') {
+  if (seoAvailable && (seoScore as number) <= 65 || dominantGrowthChannel === 'seo') {
     unifiedSignals.push({
       key: 'visibility_loss',
-      text: `visibility loss with SEO health at ${seoScore}/100`,
+      text: seoAvailable
+        ? `visibility loss with SEO health at ${seoScore}/100`
+        : 'visibility cannot be confirmed — no measured SEO signal yet',
     });
   }
   if (
@@ -196,7 +210,7 @@ export function buildUnifiedIntelligenceSummary(params: {
       text: `content coverage pressure linked to ${params.seoSummary.primary_problem.title.toLowerCase()}`,
     });
   }
-  if (unifiedSignals.length === 0) {
+  if (unifiedSignals.length === 0 && seoAvailable && geoAvailable) {
     unifiedSignals.push({
       key: 'visibility_loss',
       text: `channel spread of ${Math.abs(channelDiff)} points between SEO (${seoScore}) and AI visibility (${geoScore})`,
@@ -216,26 +230,38 @@ export function buildUnifiedIntelligenceSummary(params: {
     context: unifiedContext,
     seed: `${selectedUnifiedSignals.primary?.key ?? 'fallback'}|${selectedUnifiedSignals.secondary?.key ?? 'none'}|${NARRATIVE_INTENT.unified}`,
   });
-  const marketContextSummaryDraft = selectedUnifiedSignals.primary
-    ? renderTemplate(unifiedTemplate, {
-        impact: toneImpactWord(tone),
-        primary_signal: selectedUnifiedSignals.primary.text,
-        secondary_signal: selectedUnifiedSignals.secondary?.text ?? 'secondary signal pressure',
-      })
-    : 'Insights are based on limited available signals, but early patterns suggest gaps in coverage and structure.';
+  // Canonical Trust Foundation: narratives never invent confidence. When the system has
+  // structurally weak or insufficient signal, the summary states that plainly.
+  const insufficientSignal = !seoAvailable && !geoAvailable;
+  const maturityLine = `This brand currently reads as ${maturityNarrativeAdjective(params.systemMaturity)} on the authority maturity curve.`;
+  const marketContextSummaryDraft = insufficientSignal
+    ? `Cross-channel intelligence is currently insufficient to compute — neither SEO nor AI-answer evidence has been observed for this snapshot. ${maturityLine}`
+    : selectedUnifiedSignals.primary
+      ? renderTemplate(unifiedTemplate, {
+          impact: toneImpactWord(tone),
+          primary_signal: selectedUnifiedSignals.primary.text,
+          secondary_signal: selectedUnifiedSignals.secondary?.text ?? 'no secondary signal observed',
+        })
+      : `Available cross-channel signal is too thin to identify a primary constraint yet. ${maturityLine}`;
   const compactMarketContextSummary = compactNarrative(marketContextSummaryDraft);
+  const evidenceLabel = !seoAvailable && !geoAvailable
+    ? 'no measured channel signal'
+    : !seoAvailable
+      ? `GEO/AEO ${geoScore}/100, no measured SEO signal`
+      : !geoAvailable
+        ? `SEO ${seoScore}/100, no measured GEO/AEO signal`
+        : `SEO ${seoScore}/100, GEO/AEO ${geoScore}/100, channel delta ${Math.abs(channelDiff)}`;
   const marketContextSummaryWithEvidence = compactNarrative(
-    withEvidence(
-      compactMarketContextSummary,
-      `SEO ${seoScore}/100, GEO/AEO ${geoScore}/100, channel delta ${Math.abs(channelDiff)}`,
-    ),
+    withEvidence(compactMarketContextSummary, evidenceLabel),
   );
   const marketContextSummary = validateNarrative(marketContextSummaryWithEvidence)
-    ? clampNarrativeLength(dedupeSentences(marketContextSummaryWithEvidence), 195)
-    : 'Insights are based on limited available signals, but early patterns suggest gaps in coverage and structure.';
+    ? clampNarrativeLength(dedupeSentences(marketContextSummaryWithEvidence), 220)
+    : compactNarrative(marketContextSummaryDraft);
 
   return {
     unified_score: weightedScore,
+    unified_score_state: unifiedScoreState,
+    system_maturity: params.systemMaturity,
     market_context_summary: marketContextSummary,
     dominant_growth_channel: dominantGrowthChannel,
     primary_constraint: primaryConstraint,

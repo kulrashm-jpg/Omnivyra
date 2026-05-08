@@ -21,6 +21,7 @@ import {
   updateToEditedCommitted,
 } from '../../../backend/db/campaignPlanStore';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -35,6 +36,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         error: 'campaignId and weekNumber are required',
       });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     const weekNum = Math.floor(Number(weekNumber));
     if (!Number.isFinite(weekNum) || weekNum < 1) {

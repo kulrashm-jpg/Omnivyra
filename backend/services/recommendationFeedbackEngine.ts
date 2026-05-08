@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Recommendation Feedback Engine
  * Phase 5: Feedback with spam protection (1 per recommendation per user per hour)
@@ -35,8 +36,7 @@ export async function recordFeedback(
   since.setHours(since.getHours() - THROTTLE_HOURS);
   const sinceStr = since.toISOString();
 
-  const { data: recent } = await supabase
-    .from('recommendation_feedback')
+  const { data: recent } = await ownedDbTable('recommendation_feedback')
     .select('id')
     .eq('recommendation_id', input.recommendation_id)
     .eq('user_id', input.user_id)
@@ -49,8 +49,7 @@ export async function recordFeedback(
 
   const feedbackScore = input.feedback_score ?? FEEDBACK_SCORE[input.feedback_type as FeedbackType];
 
-  const { data, error } = await supabase
-    .from('recommendation_feedback')
+  const { data, error } = await ownedDbTable('recommendation_feedback')
     .insert({
       company_id: input.company_id,
       recommendation_id: input.recommendation_id,
@@ -79,8 +78,7 @@ export async function getFeedbackForCompany(
   feedback_score: number | null;
   created_at: string;
 }>> {
-  const { data, error } = await supabase
-    .from('recommendation_feedback')
+  const { data, error } = await ownedDbTable('recommendation_feedback')
     .select('id, recommendation_id, user_id, feedback_type, feedback_score, created_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Global Pattern Service — Step 1
  *
@@ -71,8 +72,7 @@ export async function getGlobalPatterns(
   contentType?: string,
   options: { pattern_type?: PatternType; limit?: number } = {}
 ): Promise<GlobalPattern[]> {
-  let query = supabase
-    .from('global_campaign_patterns')
+  let query = ownedDbTable('global_campaign_patterns')
     .select('*')
     .eq('platform', platform.toLowerCase())
     .gte('confidence', 0.5)
@@ -102,8 +102,7 @@ export async function contributePattern(pattern: Omit<GlobalPattern, 'id'>): Pro
   if (pattern.avg_engagement_rate < CONTRIBUTION_THRESHOLD) return;
 
   try {
-    const { data: existing } = await supabase
-      .from('global_campaign_patterns')
+    const { data: existing } = await ownedDbTable('global_campaign_patterns')
       .select('id, avg_engagement_rate, sample_count, confidence')
       .eq('platform', pattern.platform)
       .eq('content_type', pattern.content_type)
@@ -116,14 +115,14 @@ export async function contributePattern(pattern: Omit<GlobalPattern, 'id'>): Pro
       const newRate = ((existing as any).avg_engagement_rate * (existing as any).sample_count + pattern.avg_engagement_rate * pattern.sample_count) / n;
       const newConf = Math.min(1, ((existing as any).confidence * (existing as any).sample_count + pattern.confidence * pattern.sample_count) / n);
 
-      await supabase.from('global_campaign_patterns').update({
+      await ownedDbTable('global_campaign_patterns').update({
         avg_engagement_rate: parseFloat(newRate.toFixed(4)),
         confidence:          parseFloat(newConf.toFixed(3)),
         sample_count:        n,
         last_seen_at:        new Date().toISOString(),
       }).eq('id', (existing as any).id);
     } else {
-      await supabase.from('global_campaign_patterns').insert({
+      await ownedDbTable('global_campaign_patterns').insert({
         ...pattern,
         platform:     pattern.platform.toLowerCase(),
         content_type: pattern.content_type.toLowerCase(),
@@ -140,8 +139,7 @@ export async function contributePattern(pattern: Omit<GlobalPattern, 'id'>): Pro
 export async function seedGlobalPatterns(): Promise<number> {
   let seeded = 0;
   for (const p of SEEDED_HOOK_PATTERNS) {
-    const { data: existing } = await supabase
-      .from('global_campaign_patterns')
+    const { data: existing } = await ownedDbTable('global_campaign_patterns')
       .select('id')
       .eq('platform', p.platform)
       .eq('pattern', p.pattern)

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Signal Intelligence Engine
  * Converts signal clusters into actionable intelligence (momentum, direction, entities).
@@ -36,8 +37,7 @@ function log(
  */
 async function loadClustersUpdatedLast24h(): Promise<ClusterRow[]> {
   const since = new Date(Date.now() - WINDOW_24H_MS).toISOString();
-  const { data, error } = await supabase
-    .from('signal_clusters')
+  const { data, error } = await ownedDbTable('signal_clusters')
     .select('cluster_id, cluster_topic, signal_count, last_updated')
     .gte('last_updated', since)
     .order('last_updated', { ascending: false });
@@ -50,8 +50,7 @@ async function loadClustersUpdatedLast24h(): Promise<ClusterRow[]> {
  * Load signals for a cluster with detected_at.
  */
 async function loadSignalsForCluster(clusterId: string): Promise<SignalRow[]> {
-  const { data, error } = await supabase
-    .from('intelligence_signals')
+  const { data, error } = await ownedDbTable('intelligence_signals')
     .select('id, detected_at')
     .eq('cluster_id', clusterId);
 
@@ -139,9 +138,9 @@ async function extractEntitiesForCluster(signalIds: string[]): Promise<{
   }
 
   const [companiesRes, keywordsRes, influencersRes] = await Promise.all([
-    supabase.from('signal_companies').select('value').in('signal_id', signalIds),
-    supabase.from('signal_keywords').select('value').in('signal_id', signalIds),
-    supabase.from('signal_influencers').select('value').in('signal_id', signalIds),
+    ownedDbTable('signal_companies').select('value').in('signal_id', signalIds),
+    ownedDbTable('signal_keywords').select('value').in('signal_id', signalIds),
+    ownedDbTable('signal_influencers').select('value').in('signal_id', signalIds),
   ]);
 
   const unique = (rows: { value: string }[] | null): string[] =>
@@ -239,7 +238,7 @@ export async function generateSignalIntelligence(): Promise<GenerateSignalIntell
       influencers: influencers,
     };
 
-    const { error } = await supabase.from('signal_intelligence').upsert(row, {
+    const { error } = await ownedDbTable('signal_intelligence').upsert(row, {
       onConflict: 'cluster_id',
       ignoreDuplicates: false,
     });
@@ -381,8 +380,7 @@ export async function recordSignal(signal: SchedulingSignalInput): Promise<Sched
     metadata: signal.metadata ?? {},
   };
 
-  const { data, error } = await supabase
-    .from('scheduling_intelligence_signals')
+  const { data, error } = await ownedDbTable('scheduling_intelligence_signals')
     .insert(row)
     .select('*')
     .single();
@@ -402,8 +400,7 @@ export async function getSignalsForWeek(
   const startStr = typeof weekStart === 'string' ? weekStart : weekStart.toISOString();
   const endStr = typeof weekEnd === 'string' ? weekEnd : weekEnd.toISOString();
 
-  const { data, error } = await supabase
-    .from('scheduling_intelligence_signals')
+  const { data, error } = await ownedDbTable('scheduling_intelligence_signals')
     .select('*')
     .eq('company_id', companyId)
     .gte('signal_timestamp', startStr)

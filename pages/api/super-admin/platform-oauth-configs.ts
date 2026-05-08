@@ -1,82 +1,28 @@
 
 /**
- * GET  /api/super-admin/platform-oauth-configs  — list all platforms with config status
- * POST /api/super-admin/platform-oauth-configs  — upsert OAuth credentials for a platform
+ * GET    /api/super-admin/platform-oauth-configs  — list all platforms with config status
+ * POST   /api/super-admin/platform-oauth-configs  — upsert OAuth credentials for a platform
  * DELETE /api/super-admin/platform-oauth-configs?platform=xxx — remove config
- * Super admin or company admin only.
+ *
+ * Phase 1 — super-admin canonicalization:
+ *   - Authority: capability `INTEGRATION_PLATFORM_OAUTH_MANAGE` ONLY (SUPER_ADMIN role).
+ *   - Step-up required (capability is in STEP_UP_REQUIRED_CAPABILITIES).
+ *   - Removes the previous 5 parallel auth surfaces:
+ *       - direct super_admin_session cookie short-circuit
+ *       - direct content_architect_session cookie short-circuit
+ *       - Bearer + role-string allowlist (incl. lowercase variants)
+ *       - SSR Supabase cookies via @supabase/ssr
+ *       - super_admins table lookup (table absent in DB; dead authority)
+ *
+ * Bridge principals (legacy cookie super-admin) reach `requireCapability`
+ * but cannot satisfy step-up — they receive STEP_UP_REQUIRED, NOT silent
+ * grant. This closes the P0-3 finding from the unification audit.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createServerClient } from '@supabase/ssr';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { encryptCredential, decryptCredential } from '../../../backend/auth/credentialEncryption';
-
-/** Resolve user from Supabase SSR cookies (no Bearer token needed). */
-async function getUserFromCookies(req: NextApiRequest) {
-  try {
-    const ssrClient = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll: () => Object.entries(req.cookies).map(([name, value]) => ({ name, value: value ?? '' })),
-          setAll: () => {},
-        },
-      }
-    );
-    const { data: { user } } = await ssrClient.auth.getUser();
-    if (!user) return null;
-    // Resolve public.users row
-    const { data: row } = await supabase
-      .from('users')
-      .select('id')
-      .eq('supabase_uid', user.id)
-      .maybeSingle();
-    return row ? { id: row.id as string } : null;
-  } catch {
-    return null;
-  }
-}
-
-async function requireAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  // 1. Cookie-based super-admin sessions
-  if (req.cookies?.super_admin_session === '1') return true;
-  if (req.cookies?.content_architect_session === '1') return true;
-
-  // 2. Bearer token (Authorization header)
-  let user: { id: string } | null = null;
-  const { user: bearerUser, error } = await getSupabaseUserFromRequest(req);
-  if (!error && bearerUser?.id) user = bearerUser;
-
-  // 3. Supabase SSR cookies (set by @supabase/ssr createBrowserClient on login)
-  if (!user) user = await getUserFromCookies(req);
-
-  if (!user?.id) {
-    res.status(403).json({ error: 'Not authenticated — please log in and try again.' });
-    return false;
-  }
-
-  // Check super_admins table
-  const { data: sa } = await supabase
-    .from('super_admins')
-    .select('id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle();
-  if (sa) return true;
-
-  // Check admin role in user_company_roles
-  const { data: roleRows } = await supabase
-    .from('user_company_roles')
-    .select('role')
-    .eq('user_id', user.id)
-    .limit(5);
-  const adminRoles = ['COMPANY_ADMIN', 'SUPER_ADMIN', 'ADMIN', 'company_admin', 'super_admin', 'admin'];
-  if ((roleRows || []).some((r: any) => adminRoles.includes(r.role))) return true;
-
-  res.status(403).json({ error: 'Admin role required to manage OAuth credentials.' });
-  return false;
-}
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenUrl: string; scopes: string[] }> = {
   ga4:       { label: 'Google Analytics 4', authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', scopes: ['openid','email','profile','https://www.googleapis.com/auth/analytics.readonly'] },
@@ -98,8 +44,11 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const allowed = await requireAdminAccess(req, res);
-  if (!allowed) return;
+  const guard = await requireCapability(req, res, {
+    capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
+    reason: 'platform OAuth credential admin',
+  });
+  if (guard.ok !== true) return;
 
   if (req.method === 'GET') {
     const { data: configs } = await supabase

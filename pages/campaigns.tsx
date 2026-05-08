@@ -3,7 +3,7 @@ import { useRouter } from 'next/router';
 import { Plus, Calendar, Target, BarChart3, Clock, ArrowRight, Trash2 } from 'lucide-react';
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
-import { getStageLabelWithDuration } from '../backend/types/CampaignStage';
+import { getStageLabelWithDuration } from '../lib/shared/CampaignStage';
 import { navigateToCampaign } from '../lib/campaignResumeStore';
 import EmptyState from '../components/shared/EmptyState';
 import ExamplePreview from '../components/shared/ExamplePreview';
@@ -533,3 +533,4 @@ export default function CampaignsList() {
     </div>
   );
 }
+

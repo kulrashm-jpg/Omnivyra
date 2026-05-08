@@ -1,0 +1,530 @@
+{
+  "duplicateAuthorityDependencyAnalysis": [
+    {
+      "domain": "blogContent",
+      "surfaces": [
+        {
+          "file": "pages/admin/blog/content-editor.tsx",
+          "route": "/admin/blog/content-editor"
+        },
+        {
+          "file": "pages/admin/blog/content-refine.tsx",
+          "route": "/admin/blog/content-refine"
+        },
+        {
+          "file": "pages/admin/blog/edit/[id].tsx",
+          "route": "/admin/blog/edit/:id"
+        },
+        {
+          "file": "pages/admin/blog/generate.tsx",
+          "route": "/admin/blog/generate"
+        },
+        {
+          "file": "pages/admin/blog/index.tsx",
+          "route": "/admin/blog"
+        },
+        {
+          "file": "pages/admin/blog/intelligence.tsx",
+          "route": "/admin/blog/intelligence"
+        },
+        {
+          "file": "pages/admin/blog/new.tsx",
+          "route": "/admin/blog/new"
+        },
+        {
+          "file": "pages/articles/create.tsx",
+          "route": "/articles/create"
+        },
+        {
+          "file": "pages/articles/generate.tsx",
+          "route": "/articles/generate"
+        },
+        {
+          "file": "pages/articles/index.tsx",
+          "route": "/articles"
+        },
+        {
+          "file": "pages/articles/intelligence.tsx",
+          "route": "/articles/intelligence"
+        },
+        {
+          "file": "pages/articles/new.tsx",
+          "route": "/articles/new"
+        },
+        {
+          "file": "pages/articles/suggestions.tsx",
+          "route": "/articles/suggestions"
+        },
+        {
+          "file": "pages/articles/template.tsx",
+          "route": "/articles/template"
+        },
+        {
+          "file": "pages/blogs/create.tsx",
+          "route": "/blogs/create"
+        },
+        {
+          "file": "pages/blogs/generate.tsx",
+          "route": "/blogs/generate"
+        },
+        {
+          "file": "pages/blogs/intelligence.tsx",
+          "route": "/blogs/intelligence"
+        },
+        {
+          "file": "pages/blogs/manage.tsx",
+          "route": "/blogs/manage"
+        },
+        {
+          "file": "pages/blogs/new.tsx",
+          "route": "/blogs/new"
+        },
+        {
+          "file": "pages/blogs/suggestions.tsx",
+          "route": "/blogs/suggestions"
+        },
+        {
+          "file": "pages/blogs/template.tsx",
+          "route": "/blogs/template"
+        },
+        {
+          "file": "pages/blogs.helpers.tsx",
+          "route": "/blogs.helpers"
+        },
+        {
+          "file": "pages/blogs.types.ts",
+          "route": "/blogs.types"
+        },
+        {
+          "file": "pages/case-studies/create.tsx",
+          "route": "/case-studies/create"
+        },
+        {
+          "file": "pages/case-studies/generate.tsx",
+          "route": "/case-studies/generate"
+        },
+        {
+          "file": "pages/case-studies/intelligence.tsx",
+          "route": "/case-studies/intelligence"
+        },
+        {
+          "file": "pages/case-studies/new.tsx",
+          "route": "/case-studies/new"
+        },
+        {
+          "file": "pages/case-studies/suggestions.tsx",
+          "route": "/case-studies/suggestions"
+        },
+        {
+          "file": "pages/case-studies/template.tsx",
+          "route": "/case-studies/template"
+        },
+        {
+          "file": "pages/guides/create.tsx",
+          "route": "/guides/create"
+        },
+        {
+          "file": "pages/guides/generate.tsx",
+          "route": "/guides/generate"
+        },
+        {
+          "file": "pages/guides/intelligence.tsx",
+          "route": "/guides/intelligence"
+        },
+        {
+          "file": "pages/guides/new.tsx",
+          "route": "/guides/new"
+        },
+        {
+          "file": "pages/guides/suggestions.tsx",
+          "route": "/guides/suggestions"
+        },
+        {
+          "file": "pages/guides/template.tsx",
+          "route": "/guides/template"
+        },
+        {
+          "file": "pages/newsletters/create.tsx",
+          "route": "/newsletters/create"
+        },
+        {
+          "file": "pages/newsletters/generate.tsx",
+          "route": "/newsletters/generate"
+        },
+        {
+          "file": "pages/newsletters/intelligence.tsx",
+          "route": "/newsletters/intelligence"
+        },
+        {
+          "file": "pages/newsletters/new.tsx",
+          "route": "/newsletters/new"
+        },
+        {
+          "file": "pages/newsletters/suggestions.tsx",
+          "route": "/newsletters/suggestions"
+        },
+        {
+          "file": "pages/newsletters/template.tsx",
+          "route": "/newsletters/template"
+        },
+        {
+          "file": "pages/stories/create.tsx",
+          "route": "/stories/create"
+        },
+        {
+          "file": "pages/stories/generate.tsx",
+          "route": "/stories/generate"
+        },
+        {
+          "file": "pages/stories/intelligence.tsx",
+          "route": "/stories/intelligence"
+        },
+        {
+          "file": "pages/stories/new.tsx",
+          "route": "/stories/new"
+        },
+        {
+          "file": "pages/stories/suggestions.tsx",
+          "route": "/stories/suggestions"
+        },
+        {
+          "file": "pages/stories/template.tsx",
+          "route": "/stories/template"
+        },
+        {
+          "file": "pages/whitepapers/create.tsx",
+          "route": "/whitepapers/create"
+        },
+        {
+          "file": "pages/whitepapers/generate.tsx",
+          "route": "/whitepapers/generate"
+        },
+        {
+          "file": "pages/whitepapers/intelligence.tsx",
+          "route": "/whitepapers/intelligence"
+        },
+        {
+          "file": "pages/whitepapers/new.tsx",
+          "route": "/whitepapers/new"
+        },
+        {
+          "file": "pages/whitepapers/suggestions.tsx",
+          "route": "/whitepapers/suggestions"
+        },
+        {
+          "file": "pages/whitepapers/template.tsx",
+          "route": "/whitepapers/template"
+        }
+      ],
+      "classification": "A. safely isolatable",
+      "count": 53,
+      "reason": "company-admin blog generation and super-admin editorial workflow have separate role boundaries",
+      "dualWriteBehavior": "not detected",
+      "mutationOverlap": "isolated by API and role",
+      "sessionOverlap": "none detected",
+      "rollbackDependence": "medium",
+      "authorityBoundary": "company-admin uses /api/blogs/generate; super-admin uses /api/admin/blog/*",
+      "dependencyReason": "role-isolated admin/editorial workflow; no company-admin mutation overlap detected",
+      "rollbackCriticality": "medium",
+      "parityStatus": "canonical company-admin flow has parity for company generation; super-admin workflow remains operationally separate",
+      "futureConsolidationViability": "candidate after privileged editorial workflow is intentionally retained or moved behind explicit admin tooling"
+    },
+    {
+      "domain": "campaigns",
+      "surfaces": [
+        {
+          "file": "pages/campaign-calendar/[id].tsx",
+          "route": "/campaign-calendar/:id"
+        },
+        {
+          "file": "pages/campaign-daily-plan/[id].tsx",
+          "route": "/campaign-daily-plan/:id"
+        },
+        {
+          "file": "pages/campaign-details/helpers.ts",
+          "route": "/campaign-details/helpers"
+        },
+        {
+          "file": "pages/campaign-details/types.ts",
+          "route": "/campaign-details/types"
+        },
+        {
+          "file": "pages/campaign-details/[id].tsx",
+          "route": "/campaign-details/:id"
+        },
+        {
+          "file": "pages/campaign-health/[id].tsx",
+          "route": "/campaign-health/:id"
+        },
+        {
+          "file": "pages/campaign-intelligence/[id].tsx",
+          "route": "/campaign-intelligence/:id"
+        },
+        {
+          "file": "pages/campaign-planner.tsx",
+          "route": "/campaign-planner"
+        },
+        {
+          "file": "pages/campaign-planning/hierarchical.tsx",
+          "route": "/campaign-planning/hierarchical"
+        },
+        {
+          "file": "pages/campaign-planning.tsx",
+          "route": "/campaign-planning"
+        },
+        {
+          "file": "pages/campaign-proposals.tsx",
+          "route": "/campaign-proposals"
+        },
+        {
+          "file": "pages/campaigns/[id]/recommendations.tsx",
+          "route": "/campaigns/:id/recommendations"
+        },
+        {
+          "file": "pages/campaigns/[id]/vet-chat.tsx",
+          "route": "/campaigns/:id/vet-chat"
+        },
+        {
+          "file": "pages/campaigns.tsx",
+          "route": "/campaigns"
+        },
+        {
+          "file": "pages/command-center/bolt-combined-strategy.tsx",
+          "route": "/command-center/bolt-combined-strategy"
+        },
+        {
+          "file": "pages/command-center/bolt-creator-strategy.tsx",
+          "route": "/command-center/bolt-creator-strategy"
+        },
+        {
+          "file": "pages/command-center/bolt-text-strategy.tsx",
+          "route": "/command-center/bolt-text-strategy"
+        },
+        {
+          "file": "pages/command-center/bolt-text.tsx",
+          "route": "/command-center/bolt-text"
+        },
+        {
+          "file": "pages/command-center/campaigns.tsx",
+          "route": "/command-center/campaigns"
+        }
+      ],
+      "classification": "E. candidate for future consolidation",
+      "count": 19,
+      "reason": "BOLT strategy physical page remains redirect-contained while state restoration key still exists",
+      "dualWriteBehavior": "not detected",
+      "mutationOverlap": "canonical backend/services/boltPipelineService.ts owns mutations",
+      "sessionOverlap": "none detected",
+      "rollbackDependence": "medium",
+      "authorityBoundary": "deprecated page cannot own primary navigation or mutation authority",
+      "dependencyReason": "BOLT route/state ownership is canonicalized; compatibility route remains redirect-only",
+      "rollbackCriticality": "medium",
+      "parityStatus": "canonical route owns full strategy-state parity",
+      "futureConsolidationViability": "candidate after external/deep-link confidence is sufficient"
+    },
+    {
+      "domain": "adminSettings",
+      "surfaces": [
+        {
+          "file": "pages/admin/access-requests.tsx",
+          "route": "/admin/access-requests"
+        },
+        {
+          "file": "pages/admin/blog/content-editor.tsx",
+          "route": "/admin/blog/content-editor"
+        },
+        {
+          "file": "pages/admin/blog/content-refine.tsx",
+          "route": "/admin/blog/content-refine"
+        },
+        {
+          "file": "pages/admin/blog/edit/[id].tsx",
+          "route": "/admin/blog/edit/:id"
+        },
+        {
+          "file": "pages/admin/blog/generate.tsx",
+          "route": "/admin/blog/generate"
+        },
+        {
+          "file": "pages/admin/blog/index.tsx",
+          "route": "/admin/blog"
+        },
+        {
+          "file": "pages/admin/blog/intelligence.tsx",
+          "route": "/admin/blog/intelligence"
+        },
+        {
+          "file": "pages/admin/blog/new.tsx",
+          "route": "/admin/blog/new"
+        },
+        {
+          "file": "pages/admin/engagement-health.tsx",
+          "route": "/admin/engagement-health"
+        },
+        {
+          "file": "pages/admin/intelligence-control.tsx",
+          "route": "/admin/intelligence-control"
+        },
+        {
+          "file": "pages/admin/users.tsx",
+          "route": "/admin/users"
+        },
+        {
+          "file": "pages/settings/company-admin-access.tsx",
+          "route": "/settings/company-admin-access"
+        },
+        {
+          "file": "pages/settings/integrations.tsx",
+          "route": "/settings/integrations"
+        },
+        {
+          "file": "pages/settings/security.tsx",
+          "route": "/settings/security"
+        },
+        {
+          "file": "pages/super-admin/consumption.tsx",
+          "route": "/super-admin/consumption"
+        },
+        {
+          "file": "pages/super-admin/dashboard.tsx",
+          "route": "/super-admin/dashboard"
+        },
+        {
+          "file": "pages/super-admin/free-credits.tsx",
+          "route": "/super-admin/free-credits"
+        },
+        {
+          "file": "pages/super-admin/login.tsx",
+          "route": "/super-admin/login"
+        },
+        {
+          "file": "pages/super-admin/system-health.tsx",
+          "route": "/super-admin/system-health"
+        },
+        {
+          "file": "pages/super-admin.tsx",
+          "route": "/super-admin"
+        },
+        {
+          "file": "pages/super-admin.types.ts",
+          "route": "/super-admin.types"
+        }
+      ],
+      "classification": "C. rollback-critical",
+      "count": 21,
+      "reason": "super-admin cookie bridge remains until Wave 3B capability-only session retirement",
+      "dualWriteBehavior": "not detected by route audit",
+      "mutationOverlap": "admin pages remain capability-scoped or bridge-scoped",
+      "sessionOverlap": "legacy cookie bridge intentionally overlaps with session authority until Wave 3B",
+      "rollbackDependence": "high",
+      "authorityBoundary": "backend/security/capabilityRegistry.ts remains canonical; legacyCookieSuperAdminBridge is compatibility-only",
+      "dependencyReason": "legacy super-admin cookie bridge remains until Wave 3B retirement",
+      "rollbackCriticality": "high",
+      "parityStatus": "capability authority exists but legacy session bridge remains operational",
+      "futureConsolidationViability": "blocked until capability-only session authority is complete"
+    }
+  ],
+  "runtimeDependencyRisks": [
+    {
+      "domain": "adminSettings",
+      "surfaces": [
+        {
+          "file": "pages/admin/access-requests.tsx",
+          "route": "/admin/access-requests"
+        },
+        {
+          "file": "pages/admin/blog/content-editor.tsx",
+          "route": "/admin/blog/content-editor"
+        },
+        {
+          "file": "pages/admin/blog/content-refine.tsx",
+          "route": "/admin/blog/content-refine"
+        },
+        {
+          "file": "pages/admin/blog/edit/[id].tsx",
+          "route": "/admin/blog/edit/:id"
+        },
+        {
+          "file": "pages/admin/blog/generate.tsx",
+          "route": "/admin/blog/generate"
+        },
+        {
+          "file": "pages/admin/blog/index.tsx",
+          "route": "/admin/blog"
+        },
+        {
+          "file": "pages/admin/blog/intelligence.tsx",
+          "route": "/admin/blog/intelligence"
+        },
+        {
+          "file": "pages/admin/blog/new.tsx",
+          "route": "/admin/blog/new"
+        },
+        {
+          "file": "pages/admin/engagement-health.tsx",
+          "route": "/admin/engagement-health"
+        },
+        {
+          "file": "pages/admin/intelligence-control.tsx",
+          "route": "/admin/intelligence-control"
+        },
+        {
+          "file": "pages/admin/users.tsx",
+          "route": "/admin/users"
+        },
+        {
+          "file": "pages/settings/company-admin-access.tsx",
+          "route": "/settings/company-admin-access"
+        },
+        {
+          "file": "pages/settings/integrations.tsx",
+          "route": "/settings/integrations"
+        },
+        {
+          "file": "pages/settings/security.tsx",
+          "route": "/settings/security"
+        },
+        {
+          "file": "pages/super-admin/consumption.tsx",
+          "route": "/super-admin/consumption"
+        },
+        {
+          "file": "pages/super-admin/dashboard.tsx",
+          "route": "/super-admin/dashboard"
+        },
+        {
+          "file": "pages/super-admin/free-credits.tsx",
+          "route": "/super-admin/free-credits"
+        },
+        {
+          "file": "pages/super-admin/login.tsx",
+          "route": "/super-admin/login"
+        },
+        {
+          "file": "pages/super-admin/system-health.tsx",
+          "route": "/super-admin/system-health"
+        },
+        {
+          "file": "pages/super-admin.tsx",
+          "route": "/super-admin"
+        },
+        {
+          "file": "pages/super-admin.types.ts",
+          "route": "/super-admin.types"
+        }
+      ],
+      "classification": "C. rollback-critical",
+      "count": 21,
+      "reason": "super-admin cookie bridge remains until Wave 3B capability-only session retirement",
+      "dualWriteBehavior": "not detected by route audit",
+      "mutationOverlap": "admin pages remain capability-scoped or bridge-scoped",
+      "sessionOverlap": "legacy cookie bridge intentionally overlaps with session authority until Wave 3B",
+      "rollbackDependence": "high",
+      "authorityBoundary": "backend/security/capabilityRegistry.ts remains canonical; legacyCookieSuperAdminBridge is compatibility-only",
+      "dependencyReason": "legacy super-admin cookie bridge remains until Wave 3B retirement",
+      "rollbackCriticality": "high",
+      "parityStatus": "capability authority exists but legacy session bridge remains operational",
+      "futureConsolidationViability": "blocked until capability-only session authority is complete"
+    }
+  ]
+}

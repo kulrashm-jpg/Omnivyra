@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Template Service
  * 
@@ -58,8 +59,7 @@ export async function createTemplate(
     is_public?: boolean;
   }
 ): Promise<ContentTemplate> {
-  const { data, error } = await supabase
-    .from('content_templates')
+  const { data, error } = await ownedDbTable('content_templates')
     .insert({
       user_id: userId,
       campaign_id: template.campaign_id || null,
@@ -89,8 +89,7 @@ export async function createTemplate(
  * Get template by ID
  */
 export async function getTemplate(templateId: string): Promise<ContentTemplate | null> {
-  const { data, error } = await supabase
-    .from('content_templates')
+  const { data, error } = await ownedDbTable('content_templates')
     .select('*')
     .eq('id', templateId)
     .single();
@@ -114,8 +113,7 @@ export async function listTemplates(
     tags?: string[];
   } = {}
 ): Promise<ContentTemplate[]> {
-  let query = supabase
-    .from('content_templates')
+  let query = ownedDbTable('content_templates')
     .select('*')
     .or(`user_id.eq.${userId},is_public.eq.true`);
 
@@ -156,8 +154,7 @@ export async function updateTemplate(
     is_public?: boolean;
   }
 ): Promise<ContentTemplate> {
-  const { data, error } = await supabase
-    .from('content_templates')
+  const { data, error } = await ownedDbTable('content_templates')
     .update({
       ...updates,
       updated_at: new Date().toISOString(),
@@ -177,8 +174,7 @@ export async function updateTemplate(
  * Delete template
  */
 export async function deleteTemplate(templateId: string): Promise<void> {
-  const { error } = await supabase
-    .from('content_templates')
+  const { error } = await ownedDbTable('content_templates')
     .delete()
     .eq('id', templateId);
 
@@ -265,8 +261,7 @@ export async function incrementTemplateUsage(templateId: string): Promise<void> 
   if (error) {
     const template = await getTemplate(templateId);
     if (template) {
-      await supabase
-        .from('content_templates')
+      await ownedDbTable('content_templates')
         .update({ usage_count: template.usage_count + 1 })
         .eq('id', templateId);
     }

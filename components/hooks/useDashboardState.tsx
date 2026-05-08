@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
-import { getStageLabelWithDuration } from '../../backend/types/CampaignStage';
+import { getStageLabelWithDuration } from '../../lib/shared/CampaignStage';
 import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../../lib/campaignResumeStore';
 import type { CollaborationMessage } from '../collaboration/FloatingChatPanel';
 import type { ActivityEvent } from '../dashboard/PostPreviewModal';
@@ -26,12 +26,20 @@ function isActivityEvent(item: CalendarDayItem): item is ActivityEvent {
 
 export function useDashboardState() {
   const router = useRouter();
-  const { selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, hasPermission, userRole, user } = useCompanyContext();
+  const { selectedCompanyId, isAdmin, isLoading, authChecked, isAuthenticated, companies, companiesResolved, hasPermission, userRole, user } = useCompanyContext();
 
   // ── Redirect to onboarding when authenticated but not yet assigned to a company ──
+  // Phase: Tenant Onboarding Stabilization. Gate the redirect on
+  // `companiesResolved` to prevent the race where `isLoading` flips back to
+  // false on auth-flow page transitions before `refreshCompanies` has actually
+  // queried the server. Without this gate, a tenant user navigating from
+  // (e.g.) /onboarding/company → /dashboard could be ping-ponged back to
+  // /onboarding/company because `companies=[]` is the initial state, not the
+  // resolved state.
   const onboardingRedirectRef = useRef(false);
   useEffect(() => {
     if (isLoading || !authChecked || !isAuthenticated) return;
+    if (!companiesResolved) return; // wait for the server-confirmed result
     if (companies.length > 0) return; // has company — nothing to do
     if (onboardingRedirectRef.current) return;
     onboardingRedirectRef.current = true;
@@ -53,7 +61,7 @@ export function useDashboardState() {
         router.replace('/onboarding/company');
       }
     });
-  }, [isLoading, authChecked, isAuthenticated, companies.length, router]);
+  }, [isLoading, authChecked, isAuthenticated, companiesResolved, companies.length, router]);
   const canCreateCampaign = hasPermission('CREATE_CAMPAIGN');
   const canScheduleContent = hasPermission('SCHEDULE_CONTENT');
   const [activeTab, setActiveTab] = useState(() => {
@@ -1034,3 +1042,4 @@ export function useDashboardState() {
     isActivityEvent,
   };
 }
+

@@ -107,11 +107,11 @@ export function getRequirementStatus(
     else if (lowerLabel.includes('optional')) {
       status = 'done';
     }
-    // Editor access - done for creators and admins
+    // Editor access - done for publishing roles and admins
     else if (lowerLabel.includes('editor') || lowerLabel.includes('content editor')) {
-      const isCreator = context.role?.includes('CREATOR') || context.role?.includes('PUBLISHER');
+      const canPublishContent = context.role?.includes('CREATOR') || context.role?.includes('PUBLISHER');
       const isAdmin = context.role?.includes('ADMIN');
-      status = isCreator || isAdmin ? 'done' : 'missing';
+      status = canPublishContent || isAdmin ? 'done' : 'missing';
     }
     // API configuration - assume missing by default (user must configure explicitly)
     else if (lowerLabel.includes('api')) {

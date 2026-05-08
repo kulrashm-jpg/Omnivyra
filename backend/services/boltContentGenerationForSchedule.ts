@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * BOLT Content Generation for Schedule
  *
@@ -7,6 +8,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+
 import { updateActivity } from './executionPlannerPersistence';
 import { generateMasterContentFromIntent } from './contentGenerationPipeline';
 import { buildPlatformVariantsFromMaster } from './contentGenerationPipeline';
@@ -193,7 +195,7 @@ export async function generateContentForDailyPlans(
   let campaignCompanyId: string | null = null;
   let campaignUserId: string | null = null;
   try {
-    const { data: campaign } = await supabase.from('campaigns').select('company_id, user_id').eq('id', campaignId).maybeSingle();
+    const { data: campaign } = await ownedDbTable('campaigns').select('company_id, user_id').eq('id', campaignId).maybeSingle();
     campaignCompanyId = campaign?.company_id ?? null;
     campaignUserId = (campaign as any)?.user_id ?? null;
   } catch { /* non-fatal; generation continues without company_id */ }
@@ -280,7 +282,7 @@ export async function generateContentForDailyPlans(
         const category = contentTypeSample.replace(/_/g, ' ')
           .replace(/\b\w/g, (c) => c.toUpperCase());
 
-        const { error: blogInsertError } = await supabase.from('blogs').insert({
+        const { error: blogInsertError } = await ownedDbTable('blogs').insert({
           company_id: campaignCompanyId,
           title: blogTitle,
           slug: blogSlug,

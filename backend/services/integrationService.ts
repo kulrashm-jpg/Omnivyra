@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Integration Service — company_integrations table
  * Supports: lead_webhook | wordpress | custom_blog_api
@@ -45,8 +46,7 @@ export async function createIntegration(
   name: string,
   config: Record<string, string>
 ): Promise<Integration> {
-  const { data, error } = await supabase
-    .from('company_integrations')
+  const { data, error } = await ownedDbTable('company_integrations')
     .insert({
       company_id: companyId,
       created_by: userId,
@@ -66,8 +66,7 @@ export async function updateIntegration(
   companyId: string,
   updates: { name?: string; config?: Record<string, string> }
 ): Promise<Integration> {
-  const { data, error } = await supabase
-    .from('company_integrations')
+  const { data, error } = await ownedDbTable('company_integrations')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('company_id', companyId)
@@ -78,8 +77,7 @@ export async function updateIntegration(
 }
 
 export async function deleteIntegration(id: string, companyId: string): Promise<void> {
-  const { error } = await supabase
-    .from('company_integrations')
+  const { error } = await ownedDbTable('company_integrations')
     .delete()
     .eq('id', id)
     .eq('company_id', companyId);
@@ -87,8 +85,7 @@ export async function deleteIntegration(id: string, companyId: string): Promise<
 }
 
 export async function getIntegration(id: string, companyId: string): Promise<Integration | null> {
-  const { data, error } = await supabase
-    .from('company_integrations')
+  const { data, error } = await ownedDbTable('company_integrations')
     .select('*')
     .eq('id', id)
     .eq('company_id', companyId)
@@ -98,8 +95,7 @@ export async function getIntegration(id: string, companyId: string): Promise<Int
 }
 
 export async function getIntegrations(companyId: string, type?: IntegrationType): Promise<Integration[]> {
-  let query = supabase
-    .from('company_integrations')
+  let query = ownedDbTable('company_integrations')
     .select('*')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
@@ -114,8 +110,7 @@ export async function getActiveIntegration(
   companyId: string,
   type: IntegrationType
 ): Promise<Integration | null> {
-  const { data, error } = await supabase
-    .from('company_integrations')
+  const { data, error } = await ownedDbTable('company_integrations')
     .select('*')
     .eq('company_id', companyId)
     .eq('type', type)
@@ -146,8 +141,7 @@ export async function validateIntegration(id: string, companyId: string): Promis
   }
 
   // Persist result
-  await supabase
-    .from('company_integrations')
+  await ownedDbTable('company_integrations')
     .update({
       status: result.success ? 'connected' : 'failed',
       last_tested_at: new Date().toISOString(),

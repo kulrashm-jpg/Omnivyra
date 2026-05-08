@@ -1,0 +1,92 @@
+{
+  "deprecatedRoutes": [
+    {
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "permanence": "permanent compatibility",
+      "classification": "C. operationally permanent alias",
+      "migrationCompleteness": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "medium",
+      "authorityIsolationLevel": "redirect-only, non-primary-navigation",
+      "sunsetConfidence": "low"
+    },
+    {
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "permanence": "temporary compatibility",
+      "classification": "B. long-tail compatibility bridge",
+      "migrationCompleteness": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "page-local redirect + noindex + non-primary-navigation",
+      "sunsetConfidence": "high"
+    },
+    {
+      "route": "/content-studio",
+      "canonical": "/posts/create",
+      "permanence": "temporary compatibility",
+      "classification": "B. long-tail compatibility bridge",
+      "migrationCompleteness": "complete",
+      "rollbackCriticality": "medium",
+      "operationalDependencyLevel": "medium",
+      "authorityIsolationLevel": "matcher-only compatibility",
+      "sunsetConfidence": "high"
+    },
+    {
+      "route": "/content-studio/post",
+      "canonical": "/posts/create",
+      "permanence": "temporary compatibility",
+      "classification": "B. long-tail compatibility bridge",
+      "migrationCompleteness": "mostly complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "sunsetConfidence": "medium"
+    },
+    {
+      "route": "/threads/generate",
+      "canonical": "/threads/intelligence",
+      "permanence": "temporary compatibility",
+      "classification": "B. long-tail compatibility bridge",
+      "migrationCompleteness": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "sunsetConfidence": "medium"
+    },
+    {
+      "route": "/threads/template",
+      "canonical": "/threads/intelligence",
+      "permanence": "temporary compatibility",
+      "classification": "B. long-tail compatibility bridge",
+      "migrationCompleteness": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "sunsetConfidence": "medium"
+    },
+    {
+      "route": "/threads/suggestions",
+      "canonical": "/threads/intelligence",
+      "permanence": "temporary compatibility",
+      "classification": "B. long-tail compatibility bridge",
+      "migrationCompleteness": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "sunsetConfidence": "medium"
+    },
+    {
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "permanence": "temporary compatibility",
+      "classification": "B. long-tail compatibility bridge",
+      "migrationCompleteness": "complete",
+      "rollbackCriticality": "medium",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "page-local redirect + noindex + non-primary-navigation",
+      "sunsetConfidence": "high"
+    }
+  ]
+}

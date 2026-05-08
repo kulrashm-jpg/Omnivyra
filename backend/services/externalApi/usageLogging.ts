@@ -1,4 +1,5 @@
 import { supabase } from '../../db/supabaseClient';
+import { ownedDbTable } from '../../db/writeOwner';
 
 // ── Module-level state ────────────────────────────────────────────────────────
 export let lastSignalConfidenceSummary: { average: number; min: number; max: number } | null = null;
@@ -45,8 +46,7 @@ export async function logExternalApiUsage(input: {
   try {
     const usageDate = resolveUsageDate();
     const nowIso = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('external_api_usage')
+    const { data, error } = await ownedDbTable('external_api_usage')
       .select('*')
       .eq('api_source_id', input.apiSourceId)
       .eq('user_id', input.userId)
@@ -72,8 +72,7 @@ export async function logExternalApiUsage(input: {
     const lastErrorAt = input.success ? data?.last_error_at ?? null : nowIso;
     const lastSuccessAt = input.success ? nowIso : data?.last_success_at ?? null;
 
-    const { error: upsertError } = await supabase
-      .from('external_api_usage')
+    const { error: upsertError } = await ownedDbTable('external_api_usage')
       .upsert(
         {
           api_source_id: input.apiSourceId,
@@ -119,7 +118,7 @@ export async function logExternalApiUsage(input: {
 
     if (input.feature && input.companyId) {
       const featureUserId = buildFeatureUsageUserId(input.feature, input.companyId);
-      await supabase.from('external_api_usage').upsert(
+      await ownedDbTable('external_api_usage').upsert(
         {
           api_source_id: input.apiSourceId,
           user_id: featureUserId,
@@ -161,8 +160,7 @@ export async function addSignalsGenerated(input: {
   try {
     const usageDate = resolveUsageDate();
     const nowIso = new Date().toISOString();
-    const { data, error: selectError } = await supabase
-      .from('external_api_usage')
+    const { data, error: selectError } = await ownedDbTable('external_api_usage')
       .select('signals_generated, request_count, success_count, failure_count, last_used_at')
       .eq('api_source_id', input.apiSourceId)
       .eq('user_id', input.userId)
@@ -184,7 +182,7 @@ export async function addSignalsGenerated(input: {
     }
 
     const current = (data?.signals_generated ?? 0) + input.count;
-    const { error: upsertError } = await supabase.from('external_api_usage').upsert(
+    const { error: upsertError } = await ownedDbTable('external_api_usage').upsert(
       {
         api_source_id: input.apiSourceId,
         user_id: input.userId,
@@ -225,15 +223,14 @@ export async function addSignalsGenerated(input: {
 
     if (input.feature && input.companyId) {
       const featureUserId = buildFeatureUsageUserId(input.feature, input.companyId);
-      const { data: featureData } = await supabase
-        .from('external_api_usage')
+      const { data: featureData } = await ownedDbTable('external_api_usage')
         .select('signals_generated, request_count, success_count, failure_count, last_used_at')
         .eq('api_source_id', input.apiSourceId)
         .eq('user_id', featureUserId)
         .eq('usage_date', usageDate)
         .maybeSingle();
       const featureCurrent = (featureData?.signals_generated ?? 0) + input.count;
-      await supabase.from('external_api_usage').upsert(
+      await ownedDbTable('external_api_usage').upsert(
         {
           api_source_id: input.apiSourceId,
           user_id: featureUserId,

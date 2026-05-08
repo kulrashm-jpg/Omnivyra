@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Response Performance Service
  * Tracks performance of AI-generated replies for the Response Learning Engine.
@@ -19,8 +20,7 @@ export async function recordReplyPerformance(input: RecordReplyInput): Promise<s
     return null;
   }
 
-  const { data, error } = await supabase
-    .from('response_performance_metrics')
+  const { data, error } = await ownedDbTable('response_performance_metrics')
     .insert({
       organization_id: input.organization_id,
       thread_id: input.thread_id,
@@ -74,8 +74,7 @@ export async function incrementReplyFollowup(
 export async function markLeadConversion(thread_id: string): Promise<void> {
   if (!thread_id) return;
 
-  const { error } = await supabase
-    .from('response_performance_metrics')
+  const { error } = await ownedDbTable('response_performance_metrics')
     .update({
       lead_conversion: true,
     })

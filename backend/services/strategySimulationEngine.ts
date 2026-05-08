@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Strategy Simulation Engine
  * Phase 7: Simulates recommendation impact using historical outcomes.
@@ -39,24 +40,20 @@ export async function simulateRecommendationImpact(
   const sinceStr = since.toISOString();
 
   const [outcomes, feedback, recs] = await Promise.all([
-    supabase
-      .from('intelligence_outcomes')
+    ownedDbTable('intelligence_outcomes')
       .select('recommendation_id, success_score')
       .eq('company_id', companyId)
       .gte('created_at', sinceStr),
-    supabase
-      .from('recommendation_feedback')
+    ownedDbTable('recommendation_feedback')
       .select('recommendation_id, feedback_score')
       .eq('company_id', companyId)
       .gte('created_at', sinceStr),
     options?.recommendationIds?.length
-      ? supabase
-          .from('intelligence_recommendations')
+      ? ownedDbTable('intelligence_recommendations')
           .select('id, recommendation_type, action_summary, supporting_signals, confidence_score')
           .eq('company_id', companyId)
           .in('id', options.recommendationIds)
-      : supabase
-          .from('intelligence_recommendations')
+      : ownedDbTable('intelligence_recommendations')
           .select('id, recommendation_type, action_summary, supporting_signals, confidence_score')
           .eq('company_id', companyId)
           .gte('created_at', sinceStr)
@@ -123,8 +120,7 @@ export async function simulateRecommendationImpact(
 
   let runId: string | null = null;
   if (options?.persistRun) {
-    const { data } = await supabase
-      .from('intelligence_simulation_runs')
+    const { data } = await ownedDbTable('intelligence_simulation_runs')
       .insert({
         company_id: companyId,
         run_type: 'impact_simulation',

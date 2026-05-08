@@ -1,0 +1,2060 @@
+[
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 80,
+    "text": "dailyPlan: unknown[];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 81,
+    "text": "topicDayMap: unknown[];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 82,
+    "text": "validation: unknown;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 83,
+    "text": "planning_feedback: unknown;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 84,
+    "text": "execution_feedback: unknown;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 85,
+    "text": "publishing_optimization: unknown;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 113,
+    "text": "? eligiblePlatformsBody.map((p: unknown) => String(p).toLowerCase().replace(/^twitter$/i, 'x'))",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 137,
+    "text": ".map((w: unknown) => Number(w))",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 184,
+    "text": "const cid = (campaign as any)?.company_id ?? companyId;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 191,
+    "text": "let baseInsightsForCtx: { company_high_performing_platforms: any[]; company_high_performing_content_types: any[] } | null = null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 211,
+    "text": "(Array.isArray((w as any).topics) ? (w as any).topics : [])",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 212,
+    "text": ".map((t) => (t as any)?.topicTitle ?? (t as any)?.title ?? '')",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 215,
+    "text": "const topic = (campaign as any)?.name ?? blueprint.weeks[0]?.primary_objective ?? 'Campaign';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 219,
+    "text": "const execConfig = (versionRow?.campaign_snapshot as Record<string, unknown>)?.execution_config as Record<string, unknown> | undefined;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 242,
+    "text": "const allFinalItems: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 243,
+    "text": "const allRowsToInsert: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 251,
+    "text": "const currentPlanVersion = Math.max(1, Number((latestCampaignVersion as any)?.version || 1));",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 253,
+    "text": "let lastValidation: any = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 254,
+    "text": "let lastExecutionFeedback: any = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 255,
+    "text": "let lastPublishingOptimization: any = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 262,
+    "text": "const distributionStrategy = (weekBlueprint as any).distribution_strategy as string | undefined;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 277,
+    "text": "? weekBlueprint.topics.map((t) => String((t as any)?.topicTitle ?? '').trim()).filter(Boolean)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 288,
+    "text": "const title = String((brief as any)?.topicTitle ?? '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 289,
+    "text": "if (title) briefByKey.set(normalizeTopicKey(title), brief as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 314,
+    "text": "intent: any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 318,
+    "text": "const rawExecutionItems: any[] | null =",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 319,
+    "text": "Array.isArray((weekBlueprint as any)?.execution_items) ? ((weekBlueprint as any).execution_items as any[]) : null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 330,
+    "text": ".map((p: any) => normalizePlatformKey(String(p)))",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 335,
+    "text": "? (it.topic_slots as any[]).map((slot: any) => {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 338,
+    "text": "const global_progression_index = Number((slot as any)?.global_progression_index);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 341,
+    "text": "const objective = (intentRaw as any).objective;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 342,
+    "text": "const cta_type = (intentRaw as any).cta_type;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 343,
+    "text": "const target_audience = (intentRaw as any).target_audience;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 344,
+    "text": "const brief_summary = (intentRaw as any).brief_summary;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 355,
+    "text": "}).filter(Boolean) as any",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 364,
+    "text": "executionItemsPreview: executionItems.slice(0, 3).map((it: any) => ({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 400,
+    "text": "Object.values(weekBlueprint.platform_allocation || {}).reduce((sum: number, n: unknown) => sum + Number(n), 0) || 3",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 403,
+    "text": "const rawTopics: string[] = Array.isArray(weekBlueprint.topics_to_cover) && (weekBlueprint.topics_to_cover as unknown[]).length > 0",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 404,
+    "text": "? (weekBlueprint.topics_to_cover as unknown[]).map((t) => String(t ?? '').trim()).filter(Boolean)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 405,
+    "text": ": Array.isArray(weekBlueprint.topics) && (weekBlueprint.topics as any[]).length > 0",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 406,
+    "text": "? (weekBlueprint.topics as any[]).map((t: any) => String(t?.topicTitle ?? t ?? '').trim()).filter(Boolean)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 415,
+    "text": "for (const items of Object.values(weekBlueprint.platform_content_breakdown as Record<string, any[]>)) {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 461,
+    "text": "const topic_slots: Array<{ topic: string | null; global_progression_index: number; intent: any }> = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 520,
+    "text": "const ct = String((exec as any).content_type || 'post').toLowerCase();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 521,
+    "text": "const slots = Array.isArray((exec as any).topic_slots) ? (exec as any).topic_slots : [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 573,
+    "text": "const baseDayIndex = Math.min(7, Math.max(1, Number((slot as any)?.day_index) || ((k % 7) + 1)));",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 588,
+    "text": "(briefForSlot as any)?.narrativeStyle",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 589,
+    "text": "?? (weekBlueprint as any)?.weeklyContextCapsule?.toneGuidance",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 597,
+    "text": "const globalProgressionIndex = Number((slot as any)?.global_progression_index);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 606,
+    "text": "const slotMasterContentId = (slot as any)?.master_content_id;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 630,
+    "text": "kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 680,
+    "text": "kpiTarget: String((weekBlueprint as any)?.weekly_kpi_focus ?? 'Reach growth'),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 721,
+    "text": "const rowsWithContent: Array<{ row: any; contentObj: any }> = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 722,
+    "text": "let executionValidationItems: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 742,
+    "text": ": getDefaultPlatformTargets(weekBlueprint as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 748,
+    "text": "// research-backed best_days list (falls back to Tue/Wed/Thu when unknown).",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 762,
+    "text": "// fall back to item.dayIndex on any lookup failure",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 774,
+    "text": "brief_summary: (item as any).briefSummary,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 779,
+    "text": "writer_brief: (item as any).writerBrief ?? null,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 792,
+    "text": "sourceIntent: (item as any).writerBrief,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 802,
+    "text": "} as any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 816,
+    "text": "sourceIntent: (item as any).writerBrief,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 826,
+    "text": ".map((r: any) => String(r?.content_type || '').toLowerCase().trim())",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 840,
+    "text": "(validated.dailyItem as any).validation_notes = [",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 841,
+    "text": "...(validated.dailyItem as any).validation_notes || [],",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 844,
+    "text": "(validated.dailyItem as any).validation_status =",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 858,
+    "text": "const enriched = await enrichDailyItemWithPlatformRequirements(validated.dailyItem as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 859,
+    "text": "if ((item as any).masterContentId != null) {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 860,
+    "text": "(enriched as any).master_content_id = (item as any).masterContentId;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 862,
+    "text": "const creator_card = buildCreatorCard(weekBlueprint as any, item, enriched);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 864,
+    "text": "(enriched as any).creator_card = creator_card;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 877,
+    "text": "sourceIntent: (item as any).writerBrief,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 900,
+    "text": "const creatorCardForRow: Record<string, unknown> | null =",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 901,
+    "text": "(enriched as any)?.creator_card && typeof (enriched as any).creator_card === 'object'",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 903,
+    "text": "...((enriched as any).creator_card as Record<string, unknown>),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 908,
+    "text": "(enriched as any).creator_card = creatorCardForRow;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 969,
+    "text": "let history: Array<{ week_number: number; summary: any }> = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 980,
+    "text": ".map((row: any) => {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 987,
+    "text": ".filter(Boolean) as any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 997,
+    "text": "let optimizationSummary = analyzeExecutionFeedback(feedbackHistory as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1000,
+    "text": "platform_allocation: (weekBlueprint as any)?.platform_allocation ?? {},",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1017,
+    "text": "const optimizedRowsWithContent: Array<{ row: any; contentObj: any }> = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1018,
+    "text": "const optimizedValidationItems: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1032,
+    "text": "contentType: String((entry.contentObj as any)?.contentType || entry.row.content_type || 'post'),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1033,
+    "text": "} as any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1041,
+    "text": ".map((r: any) => String(r?.content_type || '').toLowerCase().trim())",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1054,
+    "text": "(validated.dailyItem as any).validation_notes = [",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1055,
+    "text": "...(validated.dailyItem as any).validation_notes || [],",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1058,
+    "text": "(validated.dailyItem as any).validation_status =",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1072,
+    "text": "const enriched = await enrichDailyItemWithPlatformRequirements(validated.dailyItem as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1073,
+    "text": "(enriched as any).validation_notes = [",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1074,
+    "text": "...((enriched as any).validation_notes || []),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1077,
+    "text": "(enriched as any).validation_status = (enriched as any).validation_status === 'invalid' ? 'invalid' : 'adjusted';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1078,
+    "text": "if ((entry.contentObj as any)?.creator_card != null) {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1079,
+    "text": "(enriched as any).creator_card = (entry.contentObj as any).creator_card;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1098,
+    "text": "optimizationSummary = analyzeExecutionFeedback(feedbackHistory as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1113,
+    "text": "const stability = stable.has(platform) ? 'stable' : unstable.has(platform) ? 'unstable' : 'unknown';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1122,
+    "text": "const waveSchedule = generatePlatformWaveSchedule(waveItems as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1135,
+    "text": "(contentObj as any).wave_info = {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1171,
+    "text": "if (!refinementError && refinement?.id && (refinement as any).content_plan != null) {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1172,
+    "text": "const existing = (refinement as any).content_plan && typeof (refinement as any).content_plan === 'object'",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1173,
+    "text": "? (refinement as any).content_plan",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1176,
+    "text": "await campaignRepository.updateWeeklyRefinement(refinement.id, { content_plan: updated, updated_at: new Date().toISOString() } as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 1192,
+    "text": "await saveWeekPlans(campaignId, wn, rows as any, 'blueprint');",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 49,
+    "text": "writerBrief?: any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 552,
+    "text": "intent?: Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 573,
+    "text": "week: any,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 575,
+    "text": "enrichedItem: any",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 577,
+    "text": "const capsule = (week?.weeklyContextCapsule ?? week?.weekly_context_capsule) as any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 585,
+    "text": "const intent = (enrichedItem?.intent ?? item?.writerBrief) as Record<string, unknown> | undefined;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 611,
+    "text": "? (enrichedItem.keywords as unknown[]).filter((k): k is string => typeof k === 'string').slice(0, 10)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 616,
+    "text": "? enrichedItem.hashtags.filter((h: unknown) => typeof h === 'string').slice(0, 10)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 617,
+    "text": ": Array.isArray((week?.week_extras as any)?.hashtag_suggestions)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 618,
+    "text": "? ((week.week_extras as any).hashtag_suggestions as string[]).filter(Boolean).slice(0, 10)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 621,
+    "text": "const intentShape: Record<string, unknown> = intent && typeof intent === 'object'",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 642,
+    "text": "? (typeof (intent as any)?.hook === 'string' && (intent as any).hook.trim()",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 643,
+    "text": "? String((intent as any).hook).trim()",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 647,
+    "text": "? (Array.isArray((intent as any)?.key_points) && (intent as any).key_points.length > 0",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 648,
+    "text": "? ((intent as any).key_points as unknown[]).filter((k): k is string => typeof k === 'string')",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 652,
+    "text": "? (typeof (intent as any)?.seo_focus === 'string' && (intent as any).seo_focus.trim()",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 653,
+    "text": "? String((intent as any).seo_focus).trim()",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 788,
+    "text": "if (orphans.length > 0) errors.push(`Found ${orphans.length} orphan daily item(s) with unknown topicTitle`);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 829,
+    "text": "const g = (brief as any)?.contentTypeGuidance;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 832,
+    "text": "primaryFormat: String((g as any).primaryFormat ?? 'long-form social post'),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 833,
+    "text": "maxWordTarget: Number((g as any).maxWordTarget ?? 800) || 800,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 834,
+    "text": "platformWithHighestLimit: String((g as any).platformWithHighestLimit ?? 'linkedin'),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 843,
+    "text": "weeklyContextCapsule?: Record<string, unknown> | null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 847,
+    "text": "// Keep this function as a no-op to preserve architecture, but do not allow any rewrite.",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 851,
+    "text": "export function stableStringify(value: any): string {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 853,
+    "text": "const walk = (v: any): any => {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 859,
+    "text": "const out: Record<string, any> = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 867,
+    "text": "sourceIntent: any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 869,
+    "text": "candidate: any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 903,
+    "text": "candidate: any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 929,
+    "text": "candidate: any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 958,
+    "text": "variantMetadata?: Record<string, unknown> | null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 959,
+    "text": "adaptive_performance_insights?: Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 92,
+    "text": "function isLegacyPlan(weeks: any[]): boolean {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 150,
+    "text": "function extractTypeMapFromPlatformRules(bundle: any): Record<string, string> | null {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 230,
+    "text": "export function extractSchedulableJobsFromWeeks(weeks: any[]): SchedulableExecutionJob[] {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 235,
+    "text": "const items = Array.isArray((week as any)?.daily_execution_items) ? (week as any).daily_execution_items : [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 293,
+    "text": "function toNumericValue(value: unknown, fallback: number): number {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 309,
+    "text": "return Math.max(1, toNumericValue((data as any)?.version, 1));",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 312,
+    "text": "function classifyCreatorFailure(error: unknown): 'transient' | 'permanent' {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 353,
+    "text": "function tryParseDailyPlanContent(value: unknown): Record<string, unknown> | null {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 357,
+    "text": "return JSON.parse(value) as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 362,
+    "text": "return typeof value === 'object' ? (value as Record<string, unknown>) : null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 389,
+    "text": "String((variant as any)?.platform || '').trim().toLowerCase() === String(row.platform || '').trim().toLowerCase() &&",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 390,
+    "text": "String((variant as any)?.content_type || '').trim().toLowerCase() === String(row.content_type || 'post').trim().toLowerCase()",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 392,
+    "text": "const variantContent = String((match as any)?.generated_content || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 396,
+    "text": "? String((parsed.master_content as any).content || '').trim()",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 437,
+    "text": "): { scheduledPosts: any[]; skippedPlatforms: string[] } {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 438,
+    "text": "const scheduledPosts: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 559,
+    "text": "): { scheduledPosts: any[]; skippedPlatforms: string[] } {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 560,
+    "text": "const scheduledPosts: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 565,
+    "text": "const items = Array.isArray((week as any)?.daily_execution_items) ? (week as any).daily_execution_items : [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 626,
+    "text": "): { scheduledPosts: any[]; skippedPlatforms: string[] } {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 627,
+    "text": "const scheduledPosts: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 690,
+    "text": "): { scheduledPosts: any[]; skippedPlatforms: string[] } {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 691,
+    "text": "const scheduledPosts: any[] = [];",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 755,
+    "text": "function tryParseExecutionContent(value: unknown): Record<string, unknown> {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 759,
+    "text": "return JSON.parse(value) as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 764,
+    "text": "return typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 778,
+    "text": "let parsed: Record<string, unknown> = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 780,
+    "text": "try { parsed = JSON.parse(row.content); } catch { /* ok */ }",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 782,
+    "text": "parsed = row.content as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 784,
+    "text": "const src  = String((parsed as any).source_execution_id ?? '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 785,
+    "text": "const mid  = String((parsed as any).master_content_id    ?? '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 786,
+    "text": "const eid  = String((parsed as any).execution_id         ?? '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 787,
+    "text": "const topic = String(row.topic || row.title || (parsed as any).topicTitle || '').trim() || 'untitled';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 834,
+    "text": "enriched: Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 841,
+    "text": "let parsed: Record<string, unknown> = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 843,
+    "text": "try { parsed = JSON.parse(first.content); } catch { /* ok */ }",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 845,
+    "text": "parsed = first.content as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 848,
+    "text": "first.topic || first.title || (parsed as any).topicTitle || ''",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 927,
+    "text": "const boltJobId = (jobRow as any).id as string;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1037,
+    "text": "? parsed.creator_card as Record<string, unknown>",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1102,
+    "text": "const generated = await (engine as any).generateFromIntent({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1119,
+    "text": "? parsed.asset_payload as Record<string, unknown>",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1121,
+    "text": "? parsed.creator_asset as Record<string, unknown>",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1151,
+    "text": "const adapted = await (engine as any).adaptForPlatform(generated, platform) as CanonicalCreatorOutput;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1209,
+    "text": "const scheduled = await (engine as any).schedule(adapted, {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1604,
+    "text": "?? (campaign as any).company_id",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1606,
+    "text": "const executionConfig = (((versionRow as any)?.campaign_snapshot ?? {})?.execution_config ?? {}) as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1609,
+    "text": "const currentPlanVersion = Math.max(1, toNumericValue((versionRow as any)?.version, 1));",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1613,
+    "text": "let effectiveUserId: string | null = (campaign as any).user_id ?? null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1622,
+    "text": "effectiveUserId = (companyUser as any)?.user_id ?? null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1651,
+    "text": ".map((p) => String((p as any).canonical_key || '').toLowerCase().trim())",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1658,
+    "text": "accounts.forEach((account: any) => {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1697,
+    "text": "const eligibility = evaluateScheduleEligibility(dailyPlans.map((r: any) => ({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1719,
+    "text": "firstPlanPlatform: Array.isArray(dailyPlans) && dailyPlans.length > 0 ? (dailyPlans[0] as any)?.platform : null,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1767,
+    "text": "} as any;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1818,
+    "text": "// No-generate path: try to use any already-finalized content stored in daily plans",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1823,
+    "text": "const schedulableJobs = extractSchedulableJobsFromWeeks(plan.weeks as any[]);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1874,
+    "text": "existingPosts.map((p: any) => `${String(p.platform).toLowerCase()}_${String(p.scheduled_for || '').slice(0, 10)}`)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1876,
+    "text": "postsToInsert = scheduledPosts.filter((p: any) => {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1908,
+    "text": "} catch (enqueueError: any) {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1944,
+    "text": "function mapDbRowToLegacyScheduledPost(row: any): LegacyScheduledPost {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1953,
+    "text": "status: String(row.status || 'draft') as any,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1983,
+    "text": ".map((r: any) => String(r.content_type || '').toLowerCase().trim())",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2025,
+    "text": "let q: any = supabase",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2084,
+    "text": "const acctPlatform = String((data as any).platform || '').toLowerCase().trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2097,
+    "text": "const scheduledFor = new Date(input.scheduledFor as any);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2103,
+    "text": "const payload: any = {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2154,
+    "text": "const patch: any = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2178,
+    "text": "const existingPlatform = String((existing as any)?.platform || '').toLowerCase().trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 23,
+    "text": "function asObject(value: unknown): Record<string, unknown> | null {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 25,
+    "text": "? (value as Record<string, unknown>)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 29,
+    "text": "async function loadActivityContentEnvelope(activityId: string): Promise<Record<string, unknown> | null> {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 39,
+    "text": "return typeof row.content === 'string' ? JSON.parse(row.content) : (row.content ?? {});",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 51,
+    "text": "transform: (existing: Record<string, unknown>) => Record<string, unknown>",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 70,
+    "text": "variants: Array<Record<string, unknown>>,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 71,
+    "text": "master: Record<string, unknown> | null | undefined",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 74,
+    "text": "const previous = Array.isArray(existing.platform_variants) ? (existing.platform_variants as Array<Record<string, unknown>>) : [];",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 75,
+    "text": "const merged = new Map<string, Record<string, unknown>>();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 78,
+    "text": "const key = `${String((variant as any)?.platform || '').trim().toLowerCase()}::${String((variant as any)?.content_type || '').trim().toLowerCase()}`;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 82,
+    "text": "const key = `${String((variant as any)?.platform || '').trim().toLowerCase()}::${String((variant as any)?.content_type || '').trim().toLowerCase()}`;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 88,
+    "text": "const content = String((variant as any)?.generated_content || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 96,
+    "text": "...(primaryGenerated ? { generated_content: String((primaryGenerated as any).generated_content || '').trim() } : {}),",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 111,
+    "text": "function isFailedVariant(v: unknown): boolean {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 112,
+    "text": "const content = String((v as any)?.generated_content ?? '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 129,
+    "text": "const body = parseActivityWorkspaceContentBody(req.body);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 136,
+    "text": "let companyId: string | null = String((req.body as any)?.companyId || '').trim() || null;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 138,
+    "text": "const activityId = String((req.body as any)?.activity?.id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 139,
+    "text": "const campaignId = String((req.body as any)?.campaignId || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 160,
+    "text": "const improvementType = String((req.body as any)?.improvementType || '').trim() as ImprovementType;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 161,
+    "text": "const variantRaw = asObject((req.body as any)?.variant);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 162,
+    "text": "const platform = String((req.body as any)?.platform || (variantRaw as any)?.platform || '').trim().toLowerCase();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 163,
+    "text": "const executionId = String((req.body as any)?.executionId || (req.body as any)?.execution_id || (dailyExecutionItemRaw as any)?.execution_id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 167,
+    "text": "const variant = { ...variantRaw } as any;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 183,
+    "text": "const activityDbId = String((req.body as any)?.activity?.id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 184,
+    "text": "await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 206,
+    "text": "'2. Do NOT touch any line after the first.',",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 269,
+    "text": "const activityDbId = String((req.body as any)?.activity?.id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 270,
+    "text": "await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 276,
+    "text": "const rawTypes = Array.isArray((req.body as any)?.improvementTypes)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 277,
+    "text": "? (req.body as any).improvementTypes",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 279,
+    "text": "const improvementTypes = rawTypes.filter((t: unknown) =>",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 282,
+    "text": "const variantRaw = asObject((req.body as any)?.variant);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 283,
+    "text": "const platform = String((req.body as any)?.platform || (variantRaw as any)?.platform || '').trim().toLowerCase();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 287,
+    "text": "const variant = { ...variantRaw } as any;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 295,
+    "text": "let discoverabilityMeta: Record<string, unknown> | undefined;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 324,
+    "text": "'2. Do NOT append any new lines at the end — every change must replace the relevant part in-place.',",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 325,
+    "text": "'3. Do NOT touch any part of the content that is not being improved.',",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 378,
+    "text": "const activityDbId = String((req.body as any)?.activity?.id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 379,
+    "text": "await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 385,
+    "text": ".map((s: any) => {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 396,
+    "text": "const item: any = {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 397,
+    "text": "execution_id: String((dailyExecutionItemRaw as any)?.execution_id || activity.id || '').trim() || `workspace-${Date.now()}`,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 398,
+    "text": "platform: String((dailyExecutionItemRaw as any)?.platform || activity.platform || '').trim().toLowerCase() || 'linkedin',",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 399,
+    "text": "content_type: String((dailyExecutionItemRaw as any)?.content_type || activity.contentType || '').trim().toLowerCase() || 'post',",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 400,
+    "text": "topic: String((dailyExecutionItemRaw as any)?.topic || activity.topic || activity.title || '').trim(),",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 401,
+    "text": "title: String((dailyExecutionItemRaw as any)?.title || activity.title || '').trim(),",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 402,
+    "text": "content: String((dailyExecutionItemRaw as any)?.content || activity.description || '').trim(),",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 403,
+    "text": "intent: asObject((dailyExecutionItemRaw as any)?.intent) || undefined,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 404,
+    "text": "writer_content_brief: asObject((dailyExecutionItemRaw as any)?.writer_content_brief) || undefined,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 405,
+    "text": "narrative_role: String((dailyExecutionItemRaw as any)?.narrative_role || '').trim() || undefined,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 406,
+    "text": "progression_step: Number.isFinite(Number((dailyExecutionItemRaw as any)?.progression_step))",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 407,
+    "text": "? Number((dailyExecutionItemRaw as any).progression_step)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 409,
+    "text": "global_progression_index: Number.isFinite(Number((dailyExecutionItemRaw as any)?.global_progression_index))",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 410,
+    "text": "? Number((dailyExecutionItemRaw as any).global_progression_index)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 412,
+    "text": "master_content: asObject((dailyExecutionItemRaw as any)?.master_content) || undefined,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 413,
+    "text": "platform_variants: Array.isArray((dailyExecutionItemRaw as any)?.platform_variants)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 414,
+    "text": "? (dailyExecutionItemRaw as any).platform_variants",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 417,
+    "text": "media_assets: Array.isArray((dailyExecutionItemRaw as any)?.media_assets) ? (dailyExecutionItemRaw as any).media_assets : undefined,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 419,
+    "text": "(dailyExecutionItemRaw as any)?.media_status === 'ready' || (dailyExecutionItemRaw as any)?.media_status === 'missing'",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 420,
+    "text": "? (dailyExecutionItemRaw as any).media_status",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 430,
+    "text": "//   2. Tenant membership is verified BEFORE any credit work.",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 446,
+    "text": "const activityDbId = String((req.body as any)?.activity?.id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 556,
+    "text": "const schedule = asObject((req.body as any)?.schedule) || {};",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 559,
+    "text": "const prompt = String((req.body as any)?.refinement_prompt || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 560,
+    "text": "const currentContent = String((req.body as any)?.current_content || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 610,
+    "text": "const activityDbId = String((req.body as any)?.activity?.id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 618,
+    "text": "}], asObject((dailyExecutionItemRaw as any)?.master_content));",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 626,
+    "text": "const activityDbId = String((req.body as any)?.activity?.id || '').trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 628,
+    "text": "const creatorAsset = asObject((dailyExecutionItemRaw as any)?.creator_asset);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 636,
+    "text": "// If no master yet: auto-generate it now (first repurpose button press on any platform).",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 673,
+    "text": "master_content: (itemWithMaster as any).master_content,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 679,
+    "text": "successfulVariants as Array<Record<string, unknown>>,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 680,
+    "text": "((itemWithMaster as any).master_content ?? null) as Record<string, unknown> | null",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 695,
+    "text": "master_content: (itemWithMaster as any).master_content ?? null,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 54,
+    "text": "const body = parseCampaignAiPlanBody(req.body);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 114,
+    "text": "const spine = effectiveIdeaSpine as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 130,
+    "text": "const lastUser = [...conversationHistory].reverse().find((m: any) => m?.type === 'user' || m?.role === 'user');",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 131,
+    "text": "const lastUserText = lastUser && (typeof (lastUser as any).message === 'string' ? (lastUser as any).message : typeof (lastUser as any).content === 'string' ? (lastUser as any).content : null);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 152,
+    "text": "const spineObj = spine && typeof spine === 'object' && !Array.isArray(spine) ? (spine as Record<string, unknown>) : null;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 166,
+    "text": "const strat = effectiveStrategyContext as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 209,
+    "text": "const spineObj = spine && typeof spine === 'object' && !Array.isArray(spine) ? (spine as Record<string, unknown>) : null;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 261,
+    "text": "const strat = (effectiveStrategyContext ?? {}) as Record<string, unknown>;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 348,
+    "text": "const deterministicPlanningContext: Record<string, unknown> = {};",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 353,
+    "text": "if (typeof (planningInputs as any).audience_professional_segment === 'string' && (planningInputs as any).audience_professional_segment.trim()) {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 354,
+    "text": "deterministicPlanningContext.audience_professional_segment = (planningInputs as any).audience_professional_segment.trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 356,
+    "text": "if (typeof (planningInputs as any).communication_style === 'string' && (planningInputs as any).communication_style.trim()) {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 357,
+    "text": "deterministicPlanningContext.communication_style = (planningInputs as any).communication_style.trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 359,
+    "text": "if (typeof (planningInputs as any).action_expectation === 'string' && (planningInputs as any).action_expectation.trim()) {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 360,
+    "text": "deterministicPlanningContext.action_expectation = (planningInputs as any).action_expectation.trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 362,
+    "text": "if (typeof (planningInputs as any).content_depth === 'string' && (planningInputs as any).content_depth.trim()) {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 363,
+    "text": "deterministicPlanningContext.content_depth = (planningInputs as any).content_depth.trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 365,
+    "text": "if (typeof (planningInputs as any).topic_continuity === 'string' && (planningInputs as any).topic_continuity.trim()) {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 366,
+    "text": "deterministicPlanningContext.topic_continuity = (planningInputs as any).topic_continuity.trim();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 379,
+    "text": "? (collectedPlanningContext as Record<string, unknown>)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 389,
+    "text": "(typeof (existingCollectedPlanningContext as any)?.campaign_direction === 'string'",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 390,
+    "text": "? (existingCollectedPlanningContext as any).campaign_direction.trim()",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 394,
+    "text": "let finalCollectedPlanningContext: Record<string, unknown> = {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 413,
+    "text": "if (n.includes('existing content') || n.includes('do you have any existing content')) return 'available_content';",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 444,
+    "text": "const curr: any = history[i];",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 445,
+    "text": "const next: any = history[i + 1];",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 459,
+    "text": "(existingCollectedPlanningContext as any)?.target_audience ?? extractLatestAnswer('target_audience');",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 462,
+    "text": "const lastAiEntry = history.filter((m: any) => m?.type === 'ai').pop();",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 466,
+    "text": "(existingCollectedPlanningContext as any)?.tentative_start",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 477,
+    "text": "(existingCollectedPlanningContext as any)?.available_content ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 480,
+    "text": "(existingCollectedPlanningContext as any)?.weekly_capacity ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 481,
+    "text": "(existingCollectedPlanningContext as any)?.content_capacity ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 485,
+    "text": "(existingCollectedPlanningContext as any)?.audience_professional_segment ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 488,
+    "text": "(existingCollectedPlanningContext as any)?.communication_style ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 491,
+    "text": "(existingCollectedPlanningContext as any)?.action_expectation ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 494,
+    "text": "(existingCollectedPlanningContext as any)?.content_depth ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 497,
+    "text": "(existingCollectedPlanningContext as any)?.topic_continuity ??",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 499,
+    "text": "let platformContentRequests = (existingCollectedPlanningContext as any)?.platform_content_requests;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 503,
+    "text": "for (const [p, byType] of Object.entries(platformContentRequests as Record<string, Record<string, unknown>>)) {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 514,
+    "text": "const exclusiveCampaigns = (existingCollectedPlanningContext as any)?.exclusive_campaigns;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 519,
+    "text": "? Object.keys(platformContentRequests as any)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 526,
+    "text": ".map((it: any) => String(it?.platform ?? '').trim().toLowerCase())",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 531,
+    "text": "const raw = (existingCollectedPlanningContext as any)?.platforms ?? extractLatestAnswer('platforms');",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 532,
+    "text": "if (Array.isArray(raw)) return raw.map((p: any) => String(p).trim().toLowerCase()).filter(Boolean);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 558,
+    "text": "const raw = platformContentRequests as Record<string, Record<string, unknown>>;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 574,
+    "text": "...(existingCollectedPlanningContext && typeof (existingCollectedPlanningContext as any).cross_platform_sharing !== 'undefined'",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 575,
+    "text": "? { cross_platform_sharing: (existingCollectedPlanningContext as any).cross_platform_sharing }",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 583,
+    "text": "const hasMeaningfulValue = (v: unknown): boolean => {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 587,
+    "text": "if (typeof v === 'object' && !Array.isArray(v)) return Object.keys(v as Record<string, unknown>).length > 0;",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 602,
+    "text": "? ((recommendationContext as any).context_payload ?? recommendationContext)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 616,
+    "text": "existingCollectedPlanningContext && typeof (existingCollectedPlanningContext as any).cross_platform_sharing === 'object'",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 617,
+    "text": "? ((existingCollectedPlanningContext as any).cross_platform_sharing?.enabled !== false)",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 623,
+    "text": "console.warn('[plan] saveCampaignPlanningInputs failed (continuing):', (err as any)?.message ?? err);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 659,
+    "text": "typeof (effectiveStrategyContext as Record<string, unknown>).duration_weeks === 'number'",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 693,
+    "text": "? (optimizationContext as { headlines?: unknown; roiScore?: unknown })",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 697,
+    "text": "? (currentPlan as { weeks?: unknown })",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 701,
+    "text": "? (vetScope as { selectedWeeks?: unknown; areasByWeek?: Record<number, string[]> })",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 745,
+    "text": "const w1: any = result.plan.weeks.find((w: any) => Number(w?.week) === 1) ?? result.plan.weeks[0];",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 804,
+    "text": "console.warn('[plan] Start date conflict check failed (non-blocking):', (err as any)?.message ?? err);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 818,
+    "text": "console.warn('[plan] Failed to persist AI plan (continuing):', (err as any)?.message ?? err);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 827,
+    "text": "console.warn('[plan] Failed to persist draft blueprint (continuing):', (err as any)?.message ?? err);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 844,
+    "text": "} catch (error: any) {",
+    "severity": "warn"
+  }
+]

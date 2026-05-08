@@ -27,24 +27,22 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest }   from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin }         from '../../../backend/services/rbacService';
+import { requireCapability }              from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW }     from '../../../shared/contracts/security';
 import { querySnapshots, type SlimSnapshot } from '../../../lib/instrumentation/metricsPersistence';
-import { computeBaselines }             from '../../../lib/instrumentation/baselineEngine';
-import { projectCost }                  from '../../../lib/instrumentation/costProjection';
-import { getSharedRedisClient }         from '../../../backend/queue/bullmqClient';
-import { RUNTIME_ENV }                  from '../../../lib/instrumentation/systemMetrics';
+import { computeBaselines }               from '../../../lib/instrumentation/baselineEngine';
+import { projectCost }                    from '../../../lib/instrumentation/costProjection';
+import { getSharedRedisClient }           from '../../../backend/queue/bullmqClient';
+import { RUNTIME_ENV }                    from '../../../lib/instrumentation/systemMetrics';
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  try {
-    const { user, error } = await getSupabaseUserFromRequest(req);
-    if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  } catch { /* deny */ }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'system trends dashboard',
+  });
+  return guard.ok === true;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Opportunity Learning Service
  * Learn from user actions: approved, ignored, sent_to_campaign, completed.
@@ -22,8 +23,7 @@ export type LearningMetrics = {
 export async function aggregateOpportunityLearning(
   organizationId: string
 ): Promise<void> {
-  const { data: rows } = await supabase
-    .from('engagement_content_opportunities')
+  const { data: rows } = await ownedDbTable('engagement_content_opportunities')
     .select('opportunity_type, status, confidence_score, created_at, updated_at')
     .eq('organization_id', organizationId);
 
@@ -112,8 +112,7 @@ export async function aggregateOpportunityLearning(
     if (avgTimeToCompletion != null)
       payload.average_time_to_completion_hours = Math.round(avgTimeToCompletion * 100) / 100;
 
-    await supabase
-      .from('opportunity_learning_metrics')
+    await ownedDbTable('opportunity_learning_metrics')
       .upsert(payload as Record<string, unknown>, {
         onConflict: 'organization_id,opportunity_type',
         ignoreDuplicates: false,
@@ -136,8 +135,7 @@ export async function getLearningMetrics(
     }
   >
 > {
-  const { data } = await supabase
-    .from('opportunity_learning_metrics')
+  const { data } = await ownedDbTable('opportunity_learning_metrics')
     .select(
       'opportunity_type, approvals, ignores, campaigns_created, completions, average_confidence_score, average_time_to_campaign_hours, average_time_to_completion_hours'
     )

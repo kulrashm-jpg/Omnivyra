@@ -31,6 +31,7 @@ export default function PostCreatePage() {
       generatePath="/posts/intelligence"
       accentColor="blue"
       pageTitle="Create Post"
+      enableCanonicalHandoffs
     />
   );
 }

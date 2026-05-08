@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Opportunity Engine
  * Converts strategic themes into actionable campaign opportunities for
@@ -111,8 +112,7 @@ function generateOpportunityForType(
  * Load all strategic themes (we will skip those already converted).
  */
 async function loadStrategicThemes(): Promise<StrategicThemeRow[]> {
-  const { data, error } = await supabase
-    .from('strategic_themes')
+  const { data, error } = await ownedDbTable('strategic_themes')
     .select('id, cluster_id, theme_title, theme_description, momentum_score, keywords')
     .order('momentum_score', { ascending: false, nullsFirst: false });
 
@@ -124,8 +124,7 @@ async function loadStrategicThemes(): Promise<StrategicThemeRow[]> {
  * Load theme_ids that already have at least one campaign_opportunity.
  */
 async function loadThemesWithOpportunities(): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('campaign_opportunities')
+  const { data, error } = await ownedDbTable('campaign_opportunities')
     .select('theme_id');
 
   if (error) throw new Error(`Failed to load campaign_opportunities: ${error.message}`);
@@ -173,7 +172,7 @@ export async function generateCampaignOpportunities(): Promise<GenerateCampaignO
         keywords: keywords,
       };
 
-      const { error } = await supabase.from('campaign_opportunities').insert(row);
+      const { error } = await ownedDbTable('campaign_opportunities').insert(row);
 
       if (error) {
         if (error.code === '23505') {

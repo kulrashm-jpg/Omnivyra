@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
+import type { GetServerSideProps } from 'next';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
@@ -15,6 +16,16 @@ import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
 import { saveCampaignResume } from '../../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
+
+export const DEPRECATED_RUNTIME_ROUTE = '/command-center/bolt-text-strategy';
+export const CANONICAL_RUNTIME_ROUTE = '/command-center/bolt-text';
+
+export const getServerSideProps: GetServerSideProps = async () => ({
+  redirect: {
+    destination: CANONICAL_RUNTIME_ROUTE,
+    permanent: false,
+  },
+});
 
 type ContentFormat = 'post' | 'tweet' | 'short_story' | 'article' | 'poll';
 type ThemeSource = 'hybrid' | 'api' | 'ai';

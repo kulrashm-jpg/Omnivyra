@@ -21,19 +21,19 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { CONSUMPTION_VIEW_AGGREGATE } from '../../../shared/contracts/security';
 import { getComputeMetricsReport } from '../../../lib/instrumentation/railwayComputeInstrumentation';
 
 const requireSuperAdmin = async (
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: CONSUMPTION_VIEW_AGGREGATE,
+    reason: 'railway efficiency dashboard',
+  });
+  return guard.ok === true;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

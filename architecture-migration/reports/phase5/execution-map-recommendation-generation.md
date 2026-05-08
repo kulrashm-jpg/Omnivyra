@@ -1,0 +1,131 @@
+# Recommendation Generation Execution Map
+
+## Entrypoints
+- pages/api/recommendations/generate.ts
+- pages/api/recommendations/detected-opportunities.ts
+- backend/services/recommendationScheduler.ts
+- backend/services/intelligence/intelligenceOrchestrator.ts
+
+## Orchestration Owners
+- backend/services/recommendationEngine.ts
+- backend/services/recommendationEngine/engine.ts
+- backend/services/recommendationEngineService.ts
+- backend/services/intelligence/recommendations/generateRecommendations.ts
+
+## DB Mutation Points
+- backend/jobs/analyticsInsightJob.ts:540 upsert analytics_recommendations
+- backend/jobs/analyticsRecommendationEvaluationJob.ts:95 update analytics_recommendations
+- backend/services/campaignRecommendationExtensionService.ts:112 delete campaign_recommendation_weeks
+- backend/services/campaignRecommendationExtensionService.ts:118 insert campaign_recommendation_weeks
+- backend/services/campaignRecommendationExtensionService.ts:161 update campaign_recommendation_weeks
+- backend/services/campaignRecommendationExtensionService.ts:256 update campaign_recommendation_weeks
+- backend/services/intelligence/intelligenceRecommendationService.ts:73 insert intelligence_recommendations
+- backend/services/intelligence/intelligenceRecommendationService.ts:131 update intelligence_recommendations
+- backend/services/recommendationAuditService.ts:21 insert recommendation_audit_logs
+- backend/services/recommendationCampaignBuilder.ts:124 update recommendation_snapshots
+- backend/services/recommendationConsolidator.ts:185 upsert recommendation_analysis
+- backend/services/recommendationConsolidator.ts:198 update recommendation_jobs
+- backend/services/recommendationExecutionService.ts:101 update recommendation_jobs
+- backend/services/recommendationExecutionService.ts:138 insert recommendation_raw_signals
+- backend/services/recommendationExecutionService.ts:155 update recommendation_jobs
+- backend/services/recommendationExecutionService.ts:163 update recommendation_jobs
+- backend/services/recommendationFeedbackEngine.ts:53 insert recommendation_feedback
+- backend/services/recommendationJobProcessor.ts:47 update recommendation_jobs_v2
+- backend/services/recommendationJobProcessor.ts:71 update recommendation_jobs_v2
+- backend/services/recommendationJobProcessor.ts:94 update recommendation_jobs_v2
+- backend/services/recommendationJobProcessor.ts:122 update recommendation_jobs_v2
+- backend/services/recommendationJobProcessor.ts:129 update recommendation_jobs_v2
+- backend/services/recommendationJobProcessor.ts:141 update recommendation_jobs_v2
+- backend/services/recommendationPersistenceService.ts:33 insert intelligence_recommendations
+- backend/services/recommendationPolicyService.ts:79 update recommendation_policies
+- backend/services/recommendationScheduler.ts:32 insert recommendation_snapshots
+- pages/api/recommendation-policy.ts:35 insert recommendation_policies
+- pages/api/recommendations/create-campaign-from-group.ts:165 update recommendation_snapshots
+- pages/api/recommendations/generate.ts:308 insert recommendation_snapshots
+- pages/api/recommendations/generate.ts:322 insert recommendation_snapshots
+- pages/api/recommendations/generate.ts:337 insert recommendation_snapshots
+- pages/api/recommendations/generate.ts:349 insert recommendation_snapshots
+- pages/api/recommendations/generate.ts:363 insert recommendation_snapshots
+- pages/api/recommendations/[id]/archive.ts:36 update recommendation_snapshots
+- pages/api/recommendations/[id]/archive.ts:45 upsert recommendation_user_state
+- pages/api/recommendations/[id]/create-campaign.ts:276 update recommendation_snapshots
+- pages/api/recommendations/[id]/long-term.ts:37 upsert recommendation_user_state
+
+## Queue Boundaries
+- backend/services/recommendationJobProcessor.ts
+- backend/services/recommendationScheduler.ts
+
+## API Boundaries
+- pages/api/recommendations/**
+
+## Duplicate Ownership Points
+- backend/services/intelligence/intelligenceOrchestrator.ts:32 generateRecommendations
+- backend/services/intelligence/types.ts:5 generateRecommendations
+- backend/services/intelligence/types.ts:93 generateRecommendations
+- backend/services/recommendationEngine/engine.ts:128 generateRecommendations
+- backend/services/recommendationEngine.ts:249 generateRecommendations
+- backend/services/recommendationScheduler.ts:3 generateRecommendations
+- backend/services/recommendationScheduler.ts:64 generateRecommendations
+- backend/services/recommendationScheduler.ts:91 generateRecommendations
+- backend/services/recommendationSimulationService.ts:4 generateRecommendations
+- backend/services/recommendationSimulationService.ts:24 generateRecommendations
+- backend/services/recommendationSimulationService.ts:35 generateRecommendations
+- backend/tests/integration/company_context_contract.test.ts:7 generateRecommendations
+- backend/tests/integration/company_context_contract.test.ts:132 generateRecommendations
+- backend/tests/integration/external_api_alignment.test.ts:201 generateRecommendations
+- backend/tests/integration/external_api_alignment.test.ts:202 generateRecommendations
+- backend/tests/integration/external_api_company_scope.test.ts:227 generateRecommendations
+- backend/tests/integration/external_api_company_scope.test.ts:228 generateRecommendations
+- backend/tests/integration/omnivyra_fallback_reasons.test.ts:1 generateRecommendations
+- backend/tests/integration/omnivyra_fallback_reasons.test.ts:110 generateRecommendations
+- backend/tests/integration/omnivyra_learning_bridge.test.ts:2 generateRecommendations
+- backend/tests/integration/omnivyra_learning_bridge.test.ts:291 generateRecommendations
+- backend/tests/integration/platform_strategy_filtering.test.ts:1 generateRecommendations
+- backend/tests/integration/platform_strategy_filtering.test.ts:75 generateRecommendations
+- backend/tests/integration/platform_strategy_filtering.test.ts:101 generateRecommendations
+- backend/tests/integration/recommendation_audit.test.ts:2 generateRecommendations
+- backend/tests/integration/recommendation_audit.test.ts:50 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:3 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:156 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:168 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:185 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:195 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:205 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:223 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:263 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:286 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:307 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:327 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:347 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:369 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:391 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:412 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:430 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:463 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:487 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:509 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:532 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:558 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:576 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:605 generateRecommendations
+- backend/tests/integration/recommendation_engine.test.ts:629 generateRecommendations
+- backend/tests/integration/recommendation_fusion_scoring.test.ts:1 generateRecommendations
+- backend/tests/integration/recommendation_fusion_scoring.test.ts:37 generateRecommendations
+- backend/tests/integration/recommendation_fusion_scoring.test.ts:53 generateRecommendations
+- backend/tests/integration/recommendation_fusion_scoring.test.ts:62 generateRecommendations
+- backend/tests/integration/recommendation_policy.test.ts:2 generateRecommendations
+- backend/tests/integration/recommendation_policy.test.ts:99 generateRecommendations
+- backend/tests/integration/recommendation_scheduler.test.ts:4 generateRecommendations
+- backend/tests/integration/recommendation_scheduler.test.ts:15 generateRecommendations
+- backend/tests/integration/recommendation_scheduler.test.ts:47 generateRecommendations
+- backend/tests/integration/recommendation_scheduler.test.ts:78 generateRecommendations
+- backend/tests/integration/recommendation_scheduler.test.ts:84 generateRecommendations
+- backend/tests/unit/recommendationFallbackSignal.test.ts:2 generateRecommendations
+- backend/tests/unit/recommendationFallbackSignal.test.ts:94 generateRecommendations
+- backend/tests/unit/recommendationFallbackSignal.test.ts:157 generateRecommendations
+- backend/tests/unit/recommendationFallbackSignal.test.ts:169 generateRecommendations
+- lib/shared/accountContext.ts:70 generateRecommendations
+- pages/api/recommendations/detected-opportunities.ts:3 generateRecommendations
+- pages/api/recommendations/detected-opportunities.ts:229 generateRecommendations
+- pages/api/recommendations/generate.ts:3 generateRecommendations
+- pages/api/recommendations/generate.ts:110 generateRecommendations

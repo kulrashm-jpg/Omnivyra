@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Autonomous Scheduler — Step 3
  *
@@ -33,8 +34,7 @@ const ENDING_SOON_DAYS = 7;
 async function hasActiveCampaign(companyId: string): Promise<boolean> {
   const threshold = new Date(Date.now() + ENDING_SOON_DAYS * 86400_000).toISOString();
 
-  const { data } = await supabase
-    .from('campaigns')
+  const { data } = await ownedDbTable('campaigns')
     .select('id, end_date, status')
     .eq('company_id', companyId)
     .in('status', ['active', 'scheduled', 'execution_ready', 'campaign_week_plan'])
@@ -49,7 +49,7 @@ async function storePendingCampaign(
   companyId: string,
   plan: Awaited<ReturnType<typeof generateNextCampaign>>,
 ): Promise<string> {
-  const { data, error } = await supabase.from('pending_campaigns').insert({
+  const { data, error } = await ownedDbTable('pending_campaigns').insert({
     company_id:      companyId,
     campaign_plan:   plan,
     generation_meta: plan.generation_meta,
@@ -67,7 +67,7 @@ async function autoActivateCampaign(
   companyId: string,
   plan: Awaited<ReturnType<typeof generateNextCampaign>>,
 ): Promise<string> {
-  const { data, error } = await supabase.from('campaigns').insert({
+  const { data, error } = await ownedDbTable('campaigns').insert({
     company_id:        companyId,
     name:              plan.name,
     description:       plan.description,
@@ -89,7 +89,7 @@ async function autoActivateCampaign(
 /** Notify user of pending campaign awaiting approval. */
 async function notifyPendingApproval(companyId: string, pendingId: string, planName: string): Promise<void> {
   try {
-    await supabase.from('notifications').insert({
+    await ownedDbTable('notifications').insert({
       company_id: companyId,
       type:       'campaign_pending_approval',
       title:      'New campaign ready for approval',
@@ -103,8 +103,7 @@ async function notifyPendingApproval(companyId: string, pendingId: string, planN
 
 /** Expire pending campaigns past their expiry date. */
 async function expireOldPending(): Promise<number> {
-  const { data } = await supabase
-    .from('pending_campaigns')
+  const { data } = await ownedDbTable('pending_campaigns')
     .update({ status: 'expired' })
     .eq('status', 'pending')
     .lt('expires_at', new Date().toISOString())
@@ -115,8 +114,7 @@ async function expireOldPending(): Promise<number> {
 /** Find campaigns that just ended (for learning distillation). */
 async function getRecentlyCompletedCampaigns(): Promise<Array<{ id: string; company_id: string }>> {
   const since = new Date(Date.now() - 25 * 3600_000).toISOString(); // last 25h
-  const { data } = await supabase
-    .from('campaigns')
+  const { data } = await ownedDbTable('campaigns')
     .select('id, company_id')
     .in('status', ['completed', 'ended'])
     .gte('updated_at', since);
@@ -150,8 +148,7 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
     }
 
     // ── 3. Load all companies with autonomous_mode = true ─────────────────
-    const { data: settingsRows } = await supabase
-      .from('company_settings')
+    const { data: settingsRows } = await ownedDbTable('company_settings')
       .select('company_id, autonomous_mode, approval_required, risk_tolerance')
       .eq('autonomous_mode', true);
 

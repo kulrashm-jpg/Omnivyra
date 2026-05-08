@@ -31,7 +31,6 @@ import {
   TrendSignalNormalized,
 } from '../trendProcessingService';
 import { normalizeTrends } from '../trendNormalizationService';
-import { supabase } from '../../db/supabaseClient';
 import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
 import { polishRecommendations } from '../recommendationPolishService';
@@ -53,6 +52,7 @@ import {
 } from '../blueprintExecutionResolver';
 import { enrichRecommendationCards } from '../recommendationCardEnrichmentService';
 import { buildFallbackRecommendationSignals } from '../recommendationFallbackSignalService';
+import { loadRecommendedTopicSnapshotRows } from '../../repositories/recommendationEngineReadRepository';
 
 import {
   buildCoreProblemTokens,
@@ -102,17 +102,12 @@ export async function getRecommendedTopicsForCompany(
   const since = new Date(
     Date.now() - RECOMMENDED_TOPICS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
   ).toISOString();
-  const { data, error } = await supabase
-    .from('recommendation_snapshots')
-    .select('trend_topic, final_score')
-    .eq('company_id', companyId)
-    .gte('created_at', since)
-    .not('trend_topic', 'is', null);
+  const data = await loadRecommendedTopicSnapshotRows(companyId, since);
 
-  if (error || !data?.length) return [];
+  if (!data.length) return [];
 
   const byTopic = new Map<string, number>();
-  for (const row of data as { trend_topic: string; final_score?: number }[]) {
+  for (const row of data) {
     const topic = String(row?.trend_topic || '').trim();
     if (!topic) continue;
     const score = typeof row.final_score === 'number' ? row.final_score : 0;

@@ -1,5 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useCompanyContext } from '@/components/CompanyContext';
+import StepTracker, { type StepDef } from '@/components/progress/StepTracker';
+
+const ANALYTICS_LOAD_STAGES: StepDef[] = [
+  { key: 'performance', label: 'Loading performance metrics', etaSeconds: 3 },
+  { key: 'engagement',  label: 'Reading engagement signals',  etaSeconds: 3 },
+  { key: 'benchmark',   label: 'Computing benchmarks',         etaSeconds: 2 },
+  { key: 'render',      label: 'Rendering dashboard',          etaSeconds: 2 },
+];
 
 type DashboardResponse =
   | {
@@ -98,6 +106,7 @@ export default function AnalyticsDashboard() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [engagementSignals, setEngagementSignals] = useState<EngagementSignalsResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const loadStartedAtRef = useRef<number>(0);
 
   useEffect(() => {
     if (!selectedCompanyId) {
@@ -109,6 +118,7 @@ export default function AnalyticsDashboard() {
 
     const load = async () => {
       setLoading(true);
+      loadStartedAtRef.current = Date.now();
       try {
         const params = new URLSearchParams({ company_id: selectedCompanyId });
         const [response, engagementResponse] = await Promise.all([
@@ -159,8 +169,16 @@ export default function AnalyticsDashboard() {
 
   if (loading && !data) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-lg text-gray-500">Loading analytics...</div>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+        <div className="w-full max-w-md">
+          <StepTracker
+            stages={ANALYTICS_LOAD_STAGES}
+            startedAt={loadStartedAtRef.current || Date.now()}
+            accent="indigo"
+            title="Loading analytics dashboard"
+            variant="card"
+          />
+        </div>
       </div>
     );
   }

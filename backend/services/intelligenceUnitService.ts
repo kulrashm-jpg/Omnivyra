@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import type { DecisionReportTier, PersistedDecisionObject } from './decisionObjectService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface IntelligenceUnit {
   id: string;
@@ -162,8 +163,7 @@ export const DEFAULT_INTELLIGENCE_UNITS: IntelligenceUnit[] = [
 ];
 
 async function listIntelligenceUnits(): Promise<IntelligenceUnit[]> {
-  const { data, error } = await supabase
-    .from('intelligence_units')
+  const { data, error } = await ownedDbTable('intelligence_units')
     .select('id, name, category, decision_types, required_entities, cost_weight, report_tiers')
     .order('id');
 
@@ -178,8 +178,7 @@ async function listIntelligenceUnits(): Promise<IntelligenceUnit[]> {
 }
 
 async function listCompanyConfig(companyId: string): Promise<CompanyIntelligenceUnitConfig[]> {
-  const { data, error } = await supabase
-    .from('company_intelligence_config')
+  const { data, error } = await ownedDbTable('company_intelligence_config')
     .select('company_id, iu_id, enabled, priority_override')
     .eq('company_id', companyId);
 
@@ -224,8 +223,7 @@ export async function setCompanyIntelligenceUnitConfig(input: {
     priority_override: input.priorityOverride ?? null,
   };
 
-  const { data, error } = await supabase
-    .from('company_intelligence_config')
+  const { data, error } = await ownedDbTable('company_intelligence_config')
     .upsert(payload, { onConflict: 'company_id,iu_id' })
     .select('company_id, iu_id, enabled, priority_override')
     .single();

@@ -1,0 +1,538 @@
+[
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/linkedinadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/linkedinadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/xadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/xadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/instagramadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/instagramadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/facebookadapter.ts",
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/facebookadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/facebookadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/youtubeadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/youtubeadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/tiktokadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/tiktokadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/spotifyadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/spotifyadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/starmakeradapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/starmakeradapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/sunoadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/sunoadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/pinterestadapter.ts",
+      "backend/adapters/platformadapter.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/adapters/platformadapter.ts",
+      "backend/adapters/pinterestadapter.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/omnivyreclient.ts",
+      "backend/services/viralityadvisorservice.ts",
+      "backend/services/omnivyreclient.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/omnivyreclient.ts",
+      "backend/services/viralityadvisorservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/companyprofile/normalization.ts",
+      "backend/services/companyprofile/extractionschema.ts",
+      "backend/services/companyprofile/normalization.ts"
+    ],
+    "cycleClass": "barrel/export-cycle",
+    "runtimeSeverity": "medium",
+    "blockingIsolationCycle": false,
+    "ownershipDomainsInvolved": [
+      "backend/services/companyprofile"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/companyprofileservice.ts",
+      "backend/services/companyprofile/businessclassification.ts",
+      "backend/services/competitorengineservice.ts",
+      "backend/services/reportinputresolver.ts",
+      "backend/services/companyprofileservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/companyprofileservice.ts",
+      "backend/services/companyprofile",
+      "backend/services/competitorengineservice.ts",
+      "backend/services/reportinputresolver.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/competitorengineservice.ts",
+      "backend/services/reportinputresolver.ts",
+      "backend/services/competitorengineservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/competitorengineservice.ts",
+      "backend/services/reportinputresolver.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/competitorengineservice.ts",
+      "backend/services/competitorfeedbackservice.ts",
+      "backend/services/competitorengineservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/competitorengineservice.ts",
+      "backend/services/competitorfeedbackservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/decisionobjectservice.ts",
+      "backend/services/decisionscoringservice.ts",
+      "backend/services/decisionobjectservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/decisionobjectservice.ts",
+      "backend/services/decisionscoringservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/behavioractiontrackingservice.ts",
+      "backend/services/behaviorrecommendationservice.ts",
+      "backend/services/behavioractiontrackingservice.ts"
+    ],
+    "cycleClass": "type-only-cycle",
+    "runtimeSeverity": "low",
+    "blockingIsolationCycle": false,
+    "ownershipDomainsInvolved": [
+      "backend/services/behavioractiontrackingservice.ts",
+      "backend/services/behaviorrecommendationservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/rbacservice.ts",
+      "backend/services/usercontextservice.ts",
+      "backend/services/contentarchitectservice.ts",
+      "backend/services/rbacservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/rbacservice.ts",
+      "backend/services/usercontextservice.ts",
+      "backend/services/contentarchitectservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/prompts/contentgenerationpromptsv3.ts",
+      "backend/services/unifiedcontentgenerationengine.ts",
+      "backend/prompts/index.ts",
+      "backend/prompts/contentgenerationpromptsv3.ts"
+    ],
+    "cycleClass": "barrel/export-cycle",
+    "runtimeSeverity": "medium",
+    "blockingIsolationCycle": false,
+    "ownershipDomainsInvolved": [
+      "backend/prompts/contentgenerationpromptsv3.ts",
+      "backend/services/unifiedcontentgenerationengine.ts",
+      "backend/prompts/index.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/opportunityservice.ts",
+      "backend/services/opportunitygenerators.ts",
+      "backend/services/opportunityservice.ts"
+    ],
+    "cycleClass": "type-only-cycle",
+    "runtimeSeverity": "low",
+    "blockingIsolationCycle": false,
+    "ownershipDomainsInvolved": [
+      "backend/services/opportunityservice.ts",
+      "backend/services/opportunitygenerators.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/strategicthemeengine.ts",
+      "backend/services/opportunityservice.ts",
+      "backend/services/opportunitygenerators.ts",
+      "backend/services/strategicthemeengine.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/strategicthemeengine.ts",
+      "backend/services/opportunityservice.ts",
+      "backend/services/opportunitygenerators.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/campaignaiorchestrator.ts",
+      "backend/services/campaignaiorchestrator/runwithcontextguards.ts",
+      "backend/services/campaignaiorchestrator.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/campaignaiorchestrator.ts",
+      "backend/services/campaignaiorchestrator"
+    ]
+  },
+  {
+    "chain": [
+      "lib/content/longformplanningengine.ts",
+      "lib/content/longformseointelligence.ts",
+      "lib/content/longformplanningengine.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "lib/content/longformplanningengine.ts",
+      "lib/content/longformseointelligence.ts"
+    ]
+  },
+  {
+    "chain": [
+      "lib/content/longformplanningengine.ts",
+      "lib/content/longformseointelligence.ts",
+      "lib/content/longformperformancelearning.ts",
+      "lib/content/longformplanningengine.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "lib/content/longformplanningengine.ts",
+      "lib/content/longformseointelligence.ts",
+      "lib/content/longformperformancelearning.ts"
+    ]
+  },
+  {
+    "chain": [
+      "lib/content/longformplanningengine.ts",
+      "lib/content/longformseointelligence.ts",
+      "lib/content/longformperformancelearning.ts",
+      "lib/content/longformdifferentiationintelligence.ts",
+      "lib/content/longformplanningengine.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "lib/content/longformplanningengine.ts",
+      "lib/content/longformseointelligence.ts",
+      "lib/content/longformperformancelearning.ts",
+      "lib/content/longformdifferentiationintelligence.ts"
+    ]
+  },
+  {
+    "chain": [
+      "lib/content/longformseointelligence.ts",
+      "lib/content/longformperformancelearning.ts",
+      "lib/content/longformdifferentiationintelligence.ts",
+      "lib/content/longformseointelligence.ts"
+    ],
+    "cycleClass": "type-only-cycle",
+    "runtimeSeverity": "low",
+    "blockingIsolationCycle": false,
+    "ownershipDomainsInvolved": [
+      "lib/content/longformseointelligence.ts",
+      "lib/content/longformperformancelearning.ts",
+      "lib/content/longformdifferentiationintelligence.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/rpaworker/rpaworkerservice.ts",
+      "backend/services/rpaworker/rpataskqueue.ts",
+      "backend/services/rpaworker/rpaworkerservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/rpaworker"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/rpaworker/rpaworkerservice.ts",
+      "backend/services/rpaworker/rpaplatformscripts.ts",
+      "backend/services/rpaworker/rpaplaywrightrunner.ts",
+      "backend/services/rpaworker/rpaworkerservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/rpaworker"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/rpaworker/rpaworkerservice.ts",
+      "backend/services/rpaworker/rpaplatformscripts.ts",
+      "backend/services/rpaworker/rpaworkerservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/rpaworker"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/rpaworker/rpaworkerservice.ts",
+      "backend/services/rpaworker/rparetryqueue.ts",
+      "backend/services/rpaworker/rpaworkerservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/rpaworker"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/trends/trendalignmentservice.ts",
+      "backend/services/campaignrecommendationservice.ts",
+      "backend/services/trends/trendalignmentservice.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/trends",
+      "backend/services/campaignrecommendationservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/export/pdf/pdfrenderer.ts",
+      "backend/services/export/reporthtmltemplaterenderer.ts",
+      "backend/services/export/reportpdfrenderer.ts",
+      "backend/services/export/pdf/pdfrenderer.ts"
+    ],
+    "cycleClass": "barrel/export-cycle",
+    "runtimeSeverity": "medium",
+    "blockingIsolationCycle": false,
+    "ownershipDomainsInvolved": [
+      "backend/services/export"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/performancehtmlrenderer.ts",
+      "backend/services/performancereportmapper.ts",
+      "backend/services/performancereportservice.ts",
+      "backend/services/performancehtmlrenderer.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/performancehtmlrenderer.ts",
+      "backend/services/performancereportmapper.ts",
+      "backend/services/performancereportservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/performancereportmapper.ts",
+      "backend/services/performancereportservice.ts",
+      "backend/services/performancereportmapper.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "backend/services/performancereportmapper.ts",
+      "backend/services/performancereportservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "components/planner/plannersessionstore.ts",
+      "lib/plannerstrategiccard.ts",
+      "components/planner/plannersessionstore.ts"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "components/planner/plannersessionstore.ts",
+      "lib/plannerstrategiccard.ts"
+    ]
+  },
+  {
+    "chain": [
+      "backend/services/recommendationengine/engine.ts",
+      "backend/services/recommendationpolishservice.ts",
+      "backend/services/recommendationengineservice.ts",
+      "backend/services/recommendationengine/engine.ts"
+    ],
+    "cycleClass": "barrel/export-cycle",
+    "runtimeSeverity": "medium",
+    "blockingIsolationCycle": false,
+    "ownershipDomainsInvolved": [
+      "backend/services/recommendationengine",
+      "backend/services/recommendationpolishservice.ts",
+      "backend/services/recommendationengineservice.ts"
+    ]
+  },
+  {
+    "chain": [
+      "components/engagement/contentopportunitiespanel.tsx",
+      "components/engagement/contentopportunityreviewmodal.tsx",
+      "components/engagement/contentopportunitiespanel.tsx"
+    ],
+    "cycleClass": "runtime-cycle",
+    "runtimeSeverity": "critical",
+    "blockingIsolationCycle": true,
+    "ownershipDomainsInvolved": [
+      "components/engagement/contentopportunitiespanel.tsx",
+      "components/engagement/contentopportunityreviewmodal.tsx"
+    ]
+  }
+]

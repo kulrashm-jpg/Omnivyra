@@ -15,6 +15,7 @@ import {
   type CompanyContextModeInput,
 } from '../../../backend/services/campaignIntelligenceService';
 import { getProfile } from '../../../backend/services/companyProfileService';
+import { requireTenantAccess } from '../../../backend/security/TenantGuard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -35,6 +36,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       company_context_mode === 'full_company_context' &&
       companyId
     ) {
+      // Tenant guard: verify the caller belongs to the org they're asking
+      // for the company profile of. Without this, any authenticated user
+      // can pass an arbitrary companyId and read another tenant's profile.
+      const access = await requireTenantAccess(req, res, companyId);
+      if (!access) return;
       const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false });
       if (profile) company_profile = profile as unknown as Record<string, unknown>;
     }

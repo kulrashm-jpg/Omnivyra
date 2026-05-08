@@ -12,7 +12,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../../config/featureFlags';
 import { hydrateWizardFromPlannerSession } from '../../lib/wizard/campaignWizardAdapter';
 import { createCampaignWizardStore } from '../../store/campaignWizardStore';
-import { AccountContext } from '../../backend/types/accountContext';
+import { AccountContext } from '../../lib/shared/accountContext';
 import { type PlannerStrategicCard, syncPlannerStrategicCardThemes } from '../../lib/plannerStrategicCard';
 
 const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
@@ -592,3 +592,4 @@ export function usePlannerSession() {
   }
   return ctx;
 }
+

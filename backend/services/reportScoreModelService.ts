@@ -2,6 +2,8 @@ import type { PersistedDecisionObject } from './decisionObjectService';
 import { classifyDecisionType } from './decisionTypeRegistry';
 import type { ResolvedReportInput } from './reportInputResolver';
 import type { CompetitorIntelligenceResult } from './reportCompetitorIntelligenceService';
+import type { ConfidenceBand, ScoreState } from './snapshotReport/canonicalScoreState';
+import { bandFromEvidence } from './snapshotReport/canonicalScoreState';
 
 export type ScoreDimensionKey =
   | 'content_quality'
@@ -17,13 +19,19 @@ export type ScoreDimensionKey =
 export type ScoreDimension = {
   key: ScoreDimensionKey;
   label: string;
-  value: number;
+  value: number | null;
+  state: ScoreState;
+  confidence: ConfidenceBand;
+  evidence_count: number;
+  evidence_sources: string[];
   explanation: string;
 };
 
 export type ReportScoreModel = {
   available: true;
-  value: number;
+  value: number | null;
+  state: ScoreState;
+  confidence: ConfidenceBand;
   label: string;
   dimensions: ScoreDimension[];
   weakest_dimensions: Array<{ key: ScoreDimensionKey; label: string; value: number }>;
@@ -61,19 +69,24 @@ function severity(decision: PersistedDecisionObject): number {
 }
 
 function geometricMean(values: number[]): number {
+  if (values.length === 0) return 0;
   const normalized = values.map((value) => Math.max(1, value));
   const logSum = normalized.reduce((sum, value) => sum + Math.log(value), 0);
   return Math.exp(logSum / normalized.length);
 }
 
-function levelLabel(score: number): string {
+function levelLabel(score: number | null): string {
+  if (score == null) return 'Insufficient signal';
   if (score >= 75) return 'Strong market position';
   if (score >= 60) return 'Competitive but uneven';
   if (score >= 45) return 'Developing baseline';
-  return 'Foundational work required';
+  if (score >= 25) return 'Foundational work required';
+  return 'Critical structural gap';
 }
 
-function nextLevel(currentScore: number): string | null {
+function nextLevel(currentScore: number | null): string | null {
+  if (currentScore == null) return 'Developing baseline';
+  if (currentScore < 25) return 'Foundational work required';
   if (currentScore < 45) return 'Developing baseline';
   if (currentScore < 60) return 'Competitive but uneven';
   if (currentScore < 75) return 'Strong market position';
@@ -85,22 +98,79 @@ function byCategory(decisions: PersistedDecisionObject[], category: string): Per
 }
 
 function byIssueMatch(decisions: PersistedDecisionObject[], pattern: RegExp): PersistedDecisionObject[] {
-  return decisions.filter((decision) => pattern.test(`${decision.issue_type} ${decision.title} ${decision.description}`.toLowerCase()));
-}
-
-function dimensionValue(params: {
-  baseline: number;
-  decisions: PersistedDecisionObject[];
-  multiplier?: number;
-  floor?: number;
-  ceiling?: number;
-}): number {
-  const penalty = average(params.decisions.map((decision) => severity(decision))) * (params.multiplier ?? 0.6);
-  return Math.round(clamp(params.baseline - penalty, params.floor ?? 18, params.ceiling ?? 92));
+  return decisions.filter((decision) =>
+    pattern.test(`${decision.issue_type} ${decision.title} ${decision.description}`.toLowerCase()),
+  );
 }
 
 function dimensionLabel(key: ScoreDimensionKey): string {
   return key.replace(/_/g, ' ');
+}
+
+function uniqSources(...lists: Array<string[] | undefined | null>): string[] {
+  const out = new Set<string>();
+  for (const list of lists) {
+    if (!list) continue;
+    for (const item of list) if (item) out.add(item);
+  }
+  return [...out];
+}
+
+type DimensionInput = {
+  key: ScoreDimensionKey;
+  label: string;
+  explanation: string;
+  decisions: PersistedDecisionObject[];
+  supportingSignal?: number | null;
+  supportingSources?: string[];
+  hasStrongSource?: boolean;
+};
+
+function dimensionFromDecisions(input: DimensionInput): ScoreDimension {
+  const decisionCount = input.decisions.length;
+  const evidenceCount = decisionCount + (input.supportingSignal != null && input.supportingSignal > 0 ? 1 : 0);
+
+  if (decisionCount === 0 && (input.supportingSignal == null || input.supportingSignal === 0)) {
+    return {
+      key: input.key,
+      label: input.label,
+      value: null,
+      state: 'insufficient_signal',
+      confidence: 'low',
+      evidence_count: 0,
+      evidence_sources: [],
+      explanation: input.explanation,
+    };
+  }
+
+  if (decisionCount > 0) {
+    const meanSeverity = average(input.decisions.map((decision) => severity(decision)));
+    const value = Math.round(clamp(100 - meanSeverity, 0, 100));
+    const sources = uniqSources(['decisions'], input.supportingSources);
+    return {
+      key: input.key,
+      label: input.label,
+      value,
+      state: 'measured',
+      confidence: bandFromEvidence(decisionCount, input.hasStrongSource ?? true),
+      evidence_count: decisionCount,
+      evidence_sources: sources,
+      explanation: input.explanation,
+    };
+  }
+
+  // No decisions but we have a supporting signal — inferred score.
+  const inferredValue = Math.round(clamp((input.supportingSignal ?? 0) * 100, 0, 100));
+  return {
+    key: input.key,
+    label: input.label,
+    value: inferredValue,
+    state: 'inferred',
+    confidence: bandFromEvidence(evidenceCount, false),
+    evidence_count: evidenceCount,
+    evidence_sources: uniqSources(input.supportingSources),
+    explanation: input.explanation,
+  };
 }
 
 export function buildReportScoreModel(params: {
@@ -109,6 +179,7 @@ export function buildReportScoreModel(params: {
   competitorIntelligence?: CompetitorIntelligenceResult | null;
 }): ReportScoreModel {
   const decisions = params.decisions;
+
   const contentDecisions = [
     ...byCategory(decisions, 'content_strategy'),
     ...byIssueMatch(decisions, /(seo_gap|ranking_gap|topic_gap|coverage|content gap|weak_content_depth)/),
@@ -136,102 +207,126 @@ export function buildReportScoreModel(params: {
   const socialCount = params.resolvedInput?.resolved.socialLinks.length ?? 0;
 
   const dimensions: ScoreDimension[] = [
-    {
+    dimensionFromDecisions({
       key: 'content_quality',
       label: 'Content Quality',
-      value: dimensionValue({ baseline: 74, decisions: contentDecisions, multiplier: 0.62 }),
       explanation: 'Measures how well pages answer buyer questions with depth and clarity.',
-    },
-    {
+      decisions: contentDecisions,
+    }),
+    dimensionFromDecisions({
       key: 'frequency',
       label: 'Publishing Frequency',
-      value: Math.round(clamp(42 + socialCount * 8 - average(contentDecisions.map(severity)) * 0.24, 20, 84)),
       explanation: 'Reflects whether the brand appears active enough to sustain momentum.',
-    },
-    {
+      decisions: contentDecisions.length > 0 ? contentDecisions : [],
+      supportingSignal: socialCount > 0 ? Math.min(socialCount / 6, 1) : null,
+      supportingSources: socialCount > 0 ? ['social_links'] : [],
+    }),
+    dimensionFromDecisions({
       key: 'reach',
       label: 'Reach',
-      value: dimensionValue({ baseline: 72, decisions: reachDecisions, multiplier: 0.68 }),
       explanation: 'Captures discoverability across search and distribution channels.',
-    },
-    {
+      decisions: reachDecisions,
+    }),
+    dimensionFromDecisions({
       key: 'engagement',
       label: 'Engagement',
-      value: dimensionValue({ baseline: 68, decisions: [...conversionDecisions, ...trustDecisions], multiplier: 0.5 }),
       explanation: 'Shows whether the message is resonating enough to hold buyer attention.',
-    },
-    {
+      decisions: [...conversionDecisions, ...trustDecisions],
+    }),
+    dimensionFromDecisions({
       key: 'authority',
       label: 'Authority',
-      value: dimensionValue({ baseline: 70, decisions: authorityDecisions, multiplier: 0.7 }),
       explanation: 'Indicates how credible and established the brand appears in-market.',
-    },
-    {
+      decisions: authorityDecisions,
+    }),
+    dimensionFromDecisions({
       key: 'conversion',
       label: 'Conversion',
-      value: dimensionValue({ baseline: 73, decisions: conversionDecisions, multiplier: 0.75 }),
       explanation: 'Measures how cleanly interest turns into action on high-intent pages.',
-    },
-    {
+      decisions: conversionDecisions,
+    }),
+    dimensionFromDecisions({
       key: 'coverage',
       label: 'Coverage',
-      value: Math.round(clamp(70 - average(contentDecisions.map(severity)) * 0.58 - competitorGapCount * 3, 18, 90)),
       explanation: 'Represents how well the business covers demand across topics and buyer stages.',
-    },
-    {
+      decisions: contentDecisions,
+      supportingSignal: competitorGapCount > 0 ? Math.max(0, 1 - competitorGapCount * 0.12) : null,
+      supportingSources: competitorGapCount > 0 ? ['competitor_intelligence'] : [],
+    }),
+    dimensionFromDecisions({
       key: 'platforms',
       label: 'Platforms',
-      value: Math.round(clamp(38 + socialCount * 14 - average(platformDecisions.map(severity)) * 0.35, 20, 86)),
       explanation: 'Tracks whether the business is present on enough credible channels to support growth.',
-    },
-    {
+      decisions: platformDecisions,
+      supportingSignal: socialCount > 0 ? Math.min(socialCount / 6, 1) : null,
+      supportingSources: socialCount > 0 ? ['social_links'] : [],
+      hasStrongSource: false,
+    }),
+    dimensionFromDecisions({
       key: 'aeo',
       label: 'AEO Readiness',
-      value: Math.round(clamp(64 - average(aeoDecisions.map(severity)) * 0.7 - competitorGapCount * 2, 18, 88)),
       explanation: 'Reflects how reusable the site is in answer engines and zero-click discovery.',
-    },
+      decisions: aeoDecisions,
+    }),
   ];
 
-  const values = dimensions.map((dimension) => dimension.value);
-  const finalScore = Math.round(clamp(geometricMean(values), 18, 92));
-  const weakestDimensions = [...dimensions]
-    .sort((left, right) => left.value - right.value)
+  const measuredValues = dimensions
+    .filter((dimension) => dimension.value != null && dimension.state !== 'insufficient_signal')
+    .map((dimension) => dimension.value as number);
+
+  const value = measuredValues.length === 0 ? null : Math.round(clamp(geometricMean(measuredValues), 0, 100));
+  const overallState: ScoreState = measuredValues.length === 0
+    ? 'insufficient_signal'
+    : measuredValues.length < dimensions.length / 2
+      ? 'inferred'
+      : 'measured';
+  const overallConfidence: ConfidenceBand = measuredValues.length >= 6
+    ? 'high'
+    : measuredValues.length >= 3
+      ? 'medium'
+      : 'low';
+
+  const weakestMeasuredDimensions = dimensions
+    .filter((dimension) => dimension.value != null)
+    .sort((left, right) => (left.value as number) - (right.value as number))
     .slice(0, 3)
     .map((dimension) => ({
       key: dimension.key,
       label: dimension.label,
-      value: dimension.value,
+      value: dimension.value as number,
     }));
 
-  const limitingFactors = weakestDimensions.map((dimension) =>
-    `${dimension.label} is limiting the score because it is currently at ${dimension.value}/100, which drags down stronger areas in the geometric mean.`,
+  const limitingFactors = weakestMeasuredDimensions.map((dimension) =>
+    `${dimension.label} is at ${dimension.value}/100 — currently the strongest drag on total score.`,
   );
 
-  const projectedScoreImprovements = weakestDimensions.map((dimension) => {
-    const projectedValue = Math.min(100, Math.max(dimension.value + 12, 55));
-    const projectedDimensions = dimensions.map((item) =>
-      item.key === dimension.key ? projectedValue : item.value,
-    );
+  const projectedScoreImprovements = weakestMeasuredDimensions.map((dimension) => {
+    const projectedValue = Math.min(100, Math.max(dimension.value + 15, 50));
+    const projectedDimensions = dimensions
+      .map((item) => (item.key === dimension.key ? projectedValue : item.value))
+      .filter((entry): entry is number => entry != null);
     return {
       dimension: dimension.key,
       current_value: dimension.value,
       projected_value: projectedValue,
-      projected_total_score: Math.round(geometricMean(projectedDimensions)),
+      projected_total_score: projectedDimensions.length === 0 ? 0 : Math.round(geometricMean(projectedDimensions)),
     };
   });
 
   return {
     available: true,
-    value: finalScore,
-    label: levelLabel(finalScore),
+    value,
+    state: overallState,
+    confidence: overallConfidence,
+    label: levelLabel(value),
     dimensions,
-    weakest_dimensions: weakestDimensions,
+    weakest_dimensions: weakestMeasuredDimensions,
     limiting_factors: limitingFactors,
     growth_path: {
-      current_level: levelLabel(finalScore),
-      next_level: nextLevel(finalScore),
-      focus: weakestDimensions.map((dimension) =>
-        `Improve ${dimensionLabel(dimension.key)} to remove the main drag on total score.`,
+      current_level: levelLabel(value),
+      next_level: nextLevel(value),
+      focus: weakestMeasuredDimensions.map((dimension) =>
+        `Improve ${dimensionLabel(dimension.key)} to remove the largest drag on total score.`,
       ),
       projected_score_improvements: projectedScoreImprovements,
     },

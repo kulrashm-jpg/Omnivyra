@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
 import { type RbacPermissions, roleOptions } from '@/pages/super-admin.types';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 
 export default function RbacTab() {
 
@@ -22,31 +23,27 @@ export default function RbacTab() {
   }, [rbacPermissions]);
 
   useEffect(() => {
-    fetchWithAuth('/api/super-admin/rbac')
-      .then(async (res) => {
-        if (res.ok) {
-          const data = await res.json();
-          setRbacRoles(data?.roles || []);
-          setRbacPermissions(data?.permissions || {});
+    (async () => {
+      try {
+        const res = await fetchWithAuth('/api/super-admin/rbac');
+        const result = await parseJsonResponse<{ roles?: string[]; permissions?: RbacPermissions; error?: string; message?: string }>(res, '/api/super-admin/rbac');
+        if (result.ok === true) {
+          setRbacRoles(result.data?.roles || []);
+          setRbacPermissions(result.data?.permissions || {});
           setRbacError(null);
-        } else {
-          let message = 'Failed to load RBAC configuration';
-          try {
-            const body = await res.json();
-            if (body?.error === 'NOT_AUTHORIZED' || body?.error === 'FORBIDDEN_ROLE') {
-              message = 'Access denied. Please log in again from the Super Admin login page.';
-            } else if (body?.message) {
-              message = body.message;
-            } else if (body?.error) {
-              message = String(body.error);
-            }
-          } catch {
-            if (res.status === 403) message = 'Access denied. Please log in again from the Super Admin login page.';
-          }
-          setRbacError(message);
+          return;
         }
-      })
-      .catch(() => setRbacError('Failed to load RBAC configuration'));
+        // Map auth errors to a user-friendly message; surface other failures verbatim.
+        const errBody = (typeof result.data === 'object' && result.data !== null) ? (result.data as { error?: string }) : null;
+        if (errBody?.error === 'NOT_AUTHORIZED' || errBody?.error === 'FORBIDDEN_ROLE' || result.status === 403) {
+          setRbacError('Access denied. Please log in again from the Super Admin login page.');
+        } else {
+          setRbacError(result.message || 'Failed to load RBAC configuration');
+        }
+      } catch {
+        setRbacError('Failed to load RBAC configuration');
+      }
+    })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -119,10 +116,13 @@ export default function RbacTab() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roles: displayRoles, permissions: rbacDraftPermissions }),
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result?.error || 'Failed to update RBAC configuration');
-      setRbacRoles(result?.roles || displayRoles);
-      setRbacPermissions(result?.permissions || rbacDraftPermissions);
+      const result = await parseJsonResponse<{ roles?: string[]; permissions?: RbacPermissions }>(response, '/api/super-admin/rbac');
+      if (result.ok !== true) {
+        setRbacSaveError(result.message || 'Failed to update RBAC configuration');
+        return;
+      }
+      setRbacRoles(result.data?.roles || displayRoles);
+      setRbacPermissions(result.data?.permissions || rbacDraftPermissions);
       setRbacSaveSuccess('RBAC permissions updated.');
       setRbacDirty(false);
     } catch (error: unknown) {

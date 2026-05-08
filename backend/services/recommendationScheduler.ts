@@ -2,6 +2,7 @@ import { supabase } from '../db/supabaseClient';
 import { fetchTrendsFromApis, getCompanyDefaultApiIds } from './externalApiService';
 import { generateRecommendations } from './recommendationEngine';
 import { getProfile } from './companyProfileService';
+import { ownedDbTable } from '../db/writeOwner';
 
 type RefreshSource = 'manual' | 'auto_weekly' | 'profile_update';
 
@@ -29,15 +30,14 @@ const persistRecommendations = async (companyId: string, recommendations: any[],
     created_at: new Date().toISOString(),
   }));
 
-  const { error } = await supabase.from('recommendation_snapshots').insert(records);
+  const { error } = await ownedDbTable('recommendation_snapshots').insert(records);
   if (error) {
     console.warn('Failed to persist recommendations', error.message);
   }
 };
 
 const getActiveCompanyIds = async (): Promise<string[]> => {
-  const { data, error } = await supabase
-    .from('company_profiles')
+  const { data, error } = await ownedDbTable('company_profiles')
     .select('company_id');
   if (error) {
     console.warn('Failed to load company profiles', error.message);

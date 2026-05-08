@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * WhatsApp Broadcast Service
  *
@@ -15,6 +16,7 @@
 
 import crypto from 'crypto';
 import { supabase } from '../db/supabaseClient';
+
 import { getActiveTemplate } from './whatsappTemplateService';
 import { checkAndConsume, getBroadcastChunkStrategy } from './whatsappRateLimiter';
 import { getValidAccessToken } from '../auth/metaAuthService';
@@ -79,8 +81,7 @@ export function decryptPhone(encrypted: string): string {
 // ── Create broadcast ──────────────────────────────────────────────────────────
 
 export async function createBroadcast(input: CreateBroadcastInput): Promise<string> {
-  const { data, error } = await supabase
-    .from('whatsapp_broadcasts')
+  const { data, error } = await ownedDbTable('whatsapp_broadcasts')
     .insert({
       ...input,
       status:     'draft',
@@ -122,8 +123,7 @@ export async function expandRecipients(
 
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK);
-    const { data, error } = await supabase
-      .from('whatsapp_broadcast_recipients')
+    const { data, error } = await ownedDbTable('whatsapp_broadcast_recipients')
       .upsert(chunk, { onConflict: 'broadcast_id,hashed_phone', ignoreDuplicates: true })
       .select('id');
 
@@ -133,8 +133,7 @@ export async function expandRecipients(
   }
 
   // Update total_recipients count on broadcast
-  await supabase
-    .from('whatsapp_broadcasts')
+  await ownedDbTable('whatsapp_broadcasts')
     .update({ total_recipients: inserted, updated_at: new Date().toISOString() })
     .eq('id', broadcastId);
 
@@ -151,8 +150,7 @@ export async function enqueueBroadcast(
   broadcastId: string,
   plan:        string,
 ): Promise<void> {
-  const { data: broadcast, error } = await supabase
-    .from('whatsapp_broadcasts')
+  const { data: broadcast, error } = await ownedDbTable('whatsapp_broadcasts')
     .select('*')
     .eq('id', broadcastId)
     .single();
@@ -169,8 +167,7 @@ export async function enqueueBroadcast(
   }
 
   // Count pending recipients
-  const { count } = await supabase
-    .from('whatsapp_broadcast_recipients')
+  const { count } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('*', { count: 'exact', head: true })
     .eq('broadcast_id', broadcastId)
     .eq('status', 'pending');
@@ -188,8 +185,7 @@ export async function enqueueBroadcast(
   });
 
   if (!rateCheck.allowed) {
-    await supabase
-      .from('whatsapp_broadcasts')
+    await ownedDbTable('whatsapp_broadcasts')
       .update({ status: 'paused', updated_at: new Date().toISOString() })
       .eq('id', broadcastId);
     throw new Error(
@@ -209,8 +205,7 @@ export async function enqueueBroadcast(
   let batchIndex = 0;
 
   while (offset < totalCount) {
-    const { data: recipients } = await supabase
-      .from('whatsapp_broadcast_recipients')
+    const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
       .select('id')
       .eq('broadcast_id', broadcastId)
       .eq('status', 'pending')
@@ -236,8 +231,7 @@ export async function enqueueBroadcast(
     batchIndex += 1;
   }
 
-  await supabase
-    .from('whatsapp_broadcasts')
+  await ownedDbTable('whatsapp_broadcasts')
     .update({ status: 'running', started_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('id', broadcastId);
 }
@@ -248,8 +242,7 @@ export async function processBatch(
   broadcastId:  string,
   recipientIds: string[],
 ): Promise<void> {
-  const { data: broadcast } = await supabase
-    .from('whatsapp_broadcasts')
+  const { data: broadcast } = await ownedDbTable('whatsapp_broadcasts')
     .select('*')
     .eq('id', broadcastId)
     .single();
@@ -258,16 +251,14 @@ export async function processBatch(
 
   const accessToken = await getValidAccessToken(broadcast.social_account_id);
 
-  const { data: account } = await supabase
-    .from('social_accounts')
+  const { data: account } = await ownedDbTable('social_accounts')
     .select('phone_number_id')
     .eq('id', broadcast.social_account_id)
     .single();
 
   if (!account?.phone_number_id) throw new Error('phone_number_id not set on social account');
 
-  const { data: recipients } = await supabase
-    .from('whatsapp_broadcast_recipients')
+  const { data: recipients } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id, encrypted_phone, contact_name')
     .in('id', recipientIds);
 
@@ -291,8 +282,7 @@ export async function processBatch(
       const result = await res.json().catch(() => ({}));
 
       if (res.ok && result?.messages?.[0]?.id) {
-        await supabase
-          .from('whatsapp_broadcast_recipients')
+        await ownedDbTable('whatsapp_broadcast_recipients')
           .update({ status: 'sent', wa_message_id: result.messages[0].id, sent_at: new Date().toISOString() })
           .eq('id', recipient.id);
         sentCount++;
@@ -300,20 +290,17 @@ export async function processBatch(
         const errCode    = result?.error?.code ?? res.status;
         const errMessage = result?.error?.message ?? 'Unknown error';
         // Fetch current retry_count then increment (supabase.rpc can't be used inline as a value)
-        const { data: cur } = await supabase
-          .from('whatsapp_broadcast_recipients')
+        const { data: cur } = await ownedDbTable('whatsapp_broadcast_recipients')
           .select('retry_count')
           .eq('id', recipient.id)
           .single();
-        await supabase
-          .from('whatsapp_broadcast_recipients')
+        await ownedDbTable('whatsapp_broadcast_recipients')
           .update({ status: 'failed', error_code: errCode, error_message: errMessage, retry_count: (cur?.retry_count ?? 0) + 1 })
           .eq('id', recipient.id);
         failedCount++;
       }
     } catch (err) {
-      await supabase
-        .from('whatsapp_broadcast_recipients')
+      await ownedDbTable('whatsapp_broadcast_recipients')
         .update({ status: 'failed', error_message: err instanceof Error ? err.message : 'Exception', retry_count: 1 })
         .eq('id', recipient.id);
       failedCount++;
@@ -353,8 +340,7 @@ function buildMessageBody(broadcast: any, toPhone: string): Record<string, unkno
 // ── Retry failed recipients ───────────────────────────────────────────────────
 
 export async function retryFailed(broadcastId: string): Promise<void> {
-  const { data: failed } = await supabase
-    .from('whatsapp_broadcast_recipients')
+  const { data: failed } = await ownedDbTable('whatsapp_broadcast_recipients')
     .select('id')
     .eq('broadcast_id', broadcastId)
     .eq('status', 'failed')
@@ -363,8 +349,7 @@ export async function retryFailed(broadcastId: string): Promise<void> {
   if (!failed?.length) return;
 
   // Reset to pending for re-enqueue
-  await supabase
-    .from('whatsapp_broadcast_recipients')
+  await ownedDbTable('whatsapp_broadcast_recipients')
     .update({ status: 'pending', next_retry_at: null })
     .in('id', failed.map((r) => r.id));
 
@@ -395,8 +380,7 @@ export async function updateRecipientDelivery(update: RecipientDeliveryUpdate): 
   if (update.error_code)             updateData.error_code   = update.error_code;
   if (update.error_message)          updateData.error_message = update.error_message;
 
-  const { data: recipient } = await supabase
-    .from('whatsapp_broadcast_recipients')
+  const { data: recipient } = await ownedDbTable('whatsapp_broadcast_recipients')
     .update(updateData)
     .eq('wa_message_id', update.wa_message_id)
     .select('broadcast_id')

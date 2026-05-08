@@ -77,10 +77,17 @@ export async function decideCapability(
 
   // Capability not held.
   if (!principal.capabilities.includes(requirement.capability)) {
+    // Bridge-vs-platform telemetry: when a bridge principal attempts a
+    // platform-tier capability that's outside its allowlist, enrich the
+    // audit reason so operators can monitor bridge → platform attempts.
+    // Phase: Platform Authority Hard Enforcement.
+    const enrichedReason = principal.legacyCookieSuperAdmin
+      ? `${requirement.reason} [bridge attempted platform capability]`
+      : requirement.reason;
     await logSecurityEvent({
       capability: requirement.capability,
       decision: 'denied',
-      reason: requirement.reason,
+      reason: enrichedReason,
       actorUserId: principal.userId,
       actorSessionId: principal.sessionId,
       principalUserId: principal.userId,

@@ -10,6 +10,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
 import { revoke } from '../../../../backend/security/devices/TrustedDeviceService';
+import { revokeSessionsForDevice } from '../../../../backend/security/SessionAuthorityService';
+import { revokeForAuthSession } from '../../../../backend/security/stepup/StepUpSessionService';
+import { logSecurityEvent } from '../../../../backend/security/audit/SecurityAuditService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -45,7 +48,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (result.reason === 'ALREADY_REVOKED') return res.status(409).json({ error: 'Already revoked', code: result.reason });
   }
 
-  return res.status(200).json({ revoked: true });
+  // ── Cascade: revoke any live auth_sessions bound to this trusted
+  //    device, plus the stepup_sessions chained off them. Without this
+  //    cascade, the live cookie on the revoked device continues to
+  //    authenticate until natural session TTL.
+  // Fail-soft — the device revoke already succeeded; cascade failure is
+  // logged but not surfaced as an error to the client.
+  let revokedSessionIds: string[] = [];
+  let revokedStepUpCount = 0;
+  try {
+    revokedSessionIds = await revokeSessionsForDevice(p.userId, id, `device_revoked:${reason}`);
+    for (const sid of revokedSessionIds) {
+      revokedStepUpCount += await revokeForAuthSession(sid, `device_revoked:${reason}`);
+    }
+  } catch {
+    /* non-fatal */
+  }
+
+  void logSecurityEvent({
+    capability: 'mfa.revoke',
+    decision: 'auth_session_revoked',
+    actorUserId: p.userId,
+    principalUserId: p.userId,
+    resourceId: id,
+    reason: `device_revoke_cascade auth=${revokedSessionIds.length} stepup=${revokedStepUpCount}`,
+    ip: clientIp(req),
+    userAgent: userAgent(req),
+  });
+
+  return res.status(200).json({
+    revoked: true,
+    cascade: {
+      authSessionsRevoked: revokedSessionIds.length,
+      stepUpSessionsRevoked: revokedStepUpCount,
+    },
+  });
 }
 
 function parseBody(req: NextApiRequest): Record<string, unknown> {

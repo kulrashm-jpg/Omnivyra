@@ -1,0 +1,132 @@
+[
+  {
+    "domain": "aiExecution",
+    "file": "backend/services/aiGateway.ts",
+    "line": 538,
+    "symbol": "runCompletion",
+    "ownershipClass": "duplicate-orchestration-owner",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": true,
+    "runtimeRiskScore": 9
+  },
+  {
+    "domain": "campaignExecution",
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 838,
+    "symbol": "executeBoltPipeline",
+    "ownershipClass": "duplicate-orchestration-owner",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": true,
+    "runtimeRiskScore": 9
+  },
+  {
+    "domain": "scheduling",
+    "file": "backend/services/boltScheduleBlockProcessor.ts",
+    "line": 289,
+    "symbol": "processBlockSchedule",
+    "ownershipClass": "duplicate-orchestration-owner",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": true,
+    "runtimeRiskScore": 9
+  },
+  {
+    "domain": "campaignExecution",
+    "file": "backend/services/campaignAiOrchestrator.ts",
+    "line": 477,
+    "symbol": "runCampaignAiPlan",
+    "ownershipClass": "adapter/delegator",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": false,
+    "runtimeRiskScore": 0
+  },
+  {
+    "domain": "contentGeneration",
+    "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+    "line": 372,
+    "symbol": "generateMasterContentFromIntent",
+    "ownershipClass": "duplicate-orchestration-owner",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": true,
+    "runtimeRiskScore": 9
+  },
+  {
+    "domain": "contentGeneration",
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "line": 574,
+    "symbol": "buildPlatformVariantsFromMaster",
+    "ownershipClass": "duplicate-orchestration-owner",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": true,
+    "runtimeRiskScore": 9
+  },
+  {
+    "domain": "recommendations",
+    "file": "backend/services/recommendationEngine/engine.ts",
+    "line": 128,
+    "symbol": "generateRecommendations",
+    "ownershipClass": "canonical-owner",
+    "canonicalOwner": true,
+    "duplicateOrchestrationViolation": false,
+    "runtimeRiskScore": 0
+  },
+  {
+    "domain": "recommendations",
+    "file": "backend/services/recommendationEngine.ts",
+    "line": 249,
+    "symbol": "generateRecommendations",
+    "ownershipClass": "canonical-owner",
+    "canonicalOwner": true,
+    "duplicateOrchestrationViolation": false,
+    "runtimeRiskScore": 0
+  },
+  {
+    "domain": "scheduling",
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1543,
+    "symbol": "scheduleStructuredPlan",
+    "ownershipClass": "duplicate-orchestration-owner",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": true,
+    "runtimeRiskScore": 9
+  },
+  {
+    "domain": "scheduling",
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2047,
+    "symbol": "createLegacyScheduledPost",
+    "ownershipClass": "duplicate-orchestration-owner",
+    "canonicalOwner": false,
+    "duplicateOrchestrationViolation": true,
+    "runtimeRiskScore": 9
+  },
+  {
+    "domain": "recommendations",
+    "file": "database/schema-analyzer.js",
+    "line": 111,
+    "symbol": "generateRecommendations",
+    "ownershipClass": "canonical-owner",
+    "canonicalOwner": true,
+    "duplicateOrchestrationViolation": false,
+    "runtimeRiskScore": 0
+  },
+  {
+    "domain": "recommendations",
+    "file": "hooks/useRecommendationsState.tsx",
+    "line": 410,
+    "symbol": "generateRecommendations",
+    "ownershipClass": "canonical-owner",
+    "canonicalOwner": true,
+    "duplicateOrchestrationViolation": false,
+    "runtimeRiskScore": 0
+  },
+  {
+    "domain": "recommendations",
+    "file": "lib/shared/accountContext.ts",
+    "line": 70,
+    "symbol": "generateRecommendations",
+    "ownershipClass": "canonical-owner",
+    "canonicalOwner": true,
+    "duplicateOrchestrationViolation": false,
+    "runtimeRiskScore": 0
+  }
+]

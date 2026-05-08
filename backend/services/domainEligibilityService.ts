@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * domainEligibilityService.ts
  *
@@ -67,8 +68,7 @@ async function checkMxRecords(domain: string): Promise<{ has_mx: boolean; mx_hos
 }
 
 async function getCachedResult(domain: string): Promise<EligibilityResult | null> {
-  const { data } = await supabase
-    .from('domain_eligibility_cache')
+  const { data } = await ownedDbTable('domain_eligibility_cache')
     .select('*')
     .eq('domain', domain)
     .gt('expires_at', new Date().toISOString())
@@ -89,7 +89,7 @@ async function getCachedResult(domain: string): Promise<EligibilityResult | null
 
 async function setCachedResult(result: Omit<EligibilityResult, 'cached'>): Promise<void> {
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  await supabase.from('domain_eligibility_cache').upsert({
+  await ownedDbTable('domain_eligibility_cache').upsert({
     domain: result.domain,
     status: result.status,
     reason: result.reason,
@@ -124,8 +124,7 @@ export async function checkDomainEligibility(
 
   // 1. User override
   if (userId) {
-    const { data: override } = await supabase
-      .from('user_override')
+    const { data: override } = await ownedDbTable('user_override')
       .select('is_eligible')
       .eq('user_id', userId)
       .maybeSingle();
@@ -144,8 +143,7 @@ export async function checkDomainEligibility(
   }
 
   // 2. Domain whitelist
-  const { data: whitelisted } = await supabase
-    .from('domain_whitelist')
+  const { data: whitelisted } = await ownedDbTable('domain_whitelist')
     .select('domain')
     .eq('domain', domain)
     .maybeSingle();
@@ -159,8 +157,7 @@ export async function checkDomainEligibility(
   if (cached) return cached;
 
   // 3. Blocked domains (exact)
-  const { data: blocked } = await supabase
-    .from('blocked_domains')
+  const { data: blocked } = await ownedDbTable('blocked_domains')
     .select('domain')
     .eq('domain', domain)
     .maybeSingle();
@@ -172,8 +169,7 @@ export async function checkDomainEligibility(
   }
 
   // 4. Blocked domain patterns
-  const { data: patterns } = await supabase
-    .from('blocked_domain_patterns')
+  const { data: patterns } = await ownedDbTable('blocked_domain_patterns')
     .select('pattern');
 
   if (patterns?.length) {
@@ -190,8 +186,7 @@ export async function checkDomainEligibility(
   }
 
   // 5. Public email providers
-  const { data: publicProvider } = await supabase
-    .from('public_email_providers')
+  const { data: publicProvider } = await ownedDbTable('public_email_providers')
     .select('domain')
     .eq('domain', domain)
     .maybeSingle();
@@ -203,8 +198,7 @@ export async function checkDomainEligibility(
   }
 
   // 6. Disposable domains
-  const { data: disposable } = await supabase
-    .from('disposable_domains')
+  const { data: disposable } = await ownedDbTable('disposable_domains')
     .select('domain')
     .eq('domain', domain)
     .maybeSingle();
@@ -240,5 +234,5 @@ export async function checkDomainEligibility(
  * Invalidate cache for a domain (call after admin approves/rejects/whitelists).
  */
 export async function invalidateDomainCache(domain: string): Promise<void> {
-  await supabase.from('domain_eligibility_cache').delete().eq('domain', domain);
+  await ownedDbTable('domain_eligibility_cache').delete().eq('domain', domain);
 }

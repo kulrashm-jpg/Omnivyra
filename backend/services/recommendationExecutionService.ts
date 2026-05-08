@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Multi-region recommendation job execution.
  * Reuses existing external API layer only; no duplicate API execution paths.
@@ -82,8 +83,7 @@ async function runInBatches<T, R>(
  * Idempotent: if job is already RUNNING/COMPLETED/FAILED, no-op or return early as appropriate.
  */
 export async function executeRecommendationJob(jobId: string): Promise<void> {
-  const { data: job, error: jobError } = await supabase
-    .from('recommendation_jobs')
+  const { data: job, error: jobError } = await ownedDbTable('recommendation_jobs')
     .select('*')
     .eq('id', jobId)
     .single();
@@ -97,8 +97,7 @@ export async function executeRecommendationJob(jobId: string): Promise<void> {
     return;
   }
 
-  await supabase
-    .from('recommendation_jobs')
+  await ownedDbTable('recommendation_jobs')
     .update({ status: 'RUNNING', updated_at: new Date().toISOString() })
     .eq('id', jobId);
 
@@ -135,7 +134,7 @@ export async function executeRecommendationJob(jobId: string): Promise<void> {
       });
       const signalStatus = result.payload != null ? 'SUCCESS' : 'FAILED';
       if (signalStatus === 'SUCCESS') anySuccess = true;
-      await supabase.from('recommendation_raw_signals').insert({
+      await ownedDbTable('recommendation_raw_signals').insert({
         job_id: jobId,
         region_code: regionCode,
         api_id: result.source.id,
@@ -151,16 +150,14 @@ export async function executeRecommendationJob(jobId: string): Promise<void> {
     await runInBatches(regions, CONCURRENCY, runRegion);
   } catch (err) {
     console.error('RECOMMENDATION_JOB_EXECUTION_ERROR', { jobId, error: err });
-    await supabase
-      .from('recommendation_jobs')
+    await ownedDbTable('recommendation_jobs')
       .update({ status: 'FAILED', updated_at: new Date().toISOString() })
       .eq('id', jobId);
     throw err;
   }
 
   const nextStatus = anySuccess ? 'READY_FOR_ANALYSIS' : 'FAILED';
-  await supabase
-    .from('recommendation_jobs')
+  await ownedDbTable('recommendation_jobs')
     .update({ status: nextStatus, updated_at: new Date().toISOString() })
     .eq('id', jobId);
 

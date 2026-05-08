@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Market Pulse job processor v1.
  * Routes by insight_source: api (DB aggregation only), llm (per-region LLM), hybrid (both).
@@ -67,8 +68,7 @@ function aggregatedToConsolidated(signals: AggregatedPulseSignal[]): Consolidate
 export async function processMarketPulseJobV1(jobId: string): Promise<void> {
   const now = new Date().toISOString();
 
-  const { data: job, error: fetchError } = await supabase
-    .from('market_pulse_jobs_v1')
+  const { data: job, error: fetchError } = await ownedDbTable('market_pulse_jobs_v1')
     .select('id, company_id, status, regions, context_payload')
     .eq('id', jobId)
     .single();
@@ -85,8 +85,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
   const CANCELLED_ERROR = 'Cancelled by user';
 
   async function isCancelled(): Promise<boolean> {
-    const { data: recheck } = await supabase
-      .from('market_pulse_jobs_v1')
+    const { data: recheck } = await ownedDbTable('market_pulse_jobs_v1')
       .select('error')
       .eq('id', jobId)
       .single();
@@ -95,8 +94,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
 
   if (await isCancelled()) return;
 
-  await supabase
-    .from('market_pulse_jobs_v1')
+  await ownedDbTable('market_pulse_jobs_v1')
     .update({ status: 'RUNNING', progress_stage: 'INITIALIZING' })
     .eq('id', jobId);
 
@@ -106,12 +104,11 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
   const insightSource = (contextPayload as { insight_source?: 'api' | 'llm' | 'hybrid' }).insight_source ?? 'hybrid';
 
   if (insightSource === 'api') {
-    await supabase.from('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
+    await ownedDbTable('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
     const signals = await aggregateMarketPulseFromDb(companyId, regions);
     const consolidated = aggregatedToConsolidated(signals);
     const confidenceIndex = computeConfidenceIndex(consolidated, 0);
-    await supabase
-      .from('market_pulse_jobs_v1')
+    await ownedDbTable('market_pulse_jobs_v1')
       .update({
         progress_stage: 'FINISHED',
         status: 'COMPLETED',
@@ -131,13 +128,13 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
 
   for (const region of regions) {
     if (await isCancelled()) return;
-    await supabase.from('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
+    await ownedDbTable('market_pulse_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
     try {
       const result = await generateMarketPulseForRegion(companyId, region, contextPayload);
       regionResults[region] = { topics: result.topics };
 
       for (const t of result.topics) {
-        await supabase.from('market_pulse_items_v1').insert({
+        await ownedDbTable('market_pulse_items_v1').insert({
           job_id: jobId,
           company_id: companyId,
           region,
@@ -154,7 +151,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
     } catch (err) {
       regionResults[region] = { error: true, message: err instanceof Error ? err.message : 'Region analysis failed' };
     }
-    await supabase.from('market_pulse_jobs_v1').update({ region_results: regionResults }).eq('id', jobId);
+    await ownedDbTable('market_pulse_jobs_v1').update({ region_results: regionResults }).eq('id', jobId);
   }
 
   let consolidated: ConsolidatedPulseOutput;
@@ -192,8 +189,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
         !('error' in e[1]) && 'topics' in e[1]
     );
     if (successfulEntries.length === 0) {
-      await supabase
-        .from('market_pulse_jobs_v1')
+      await ownedDbTable('market_pulse_jobs_v1')
         .update({
           progress_stage: 'FINISHED',
           status: 'FAILED',
@@ -219,8 +215,7 @@ export async function processMarketPulseJobV1(jobId: string): Promise<void> {
 
   const confidenceIndex = computeConfidenceIndex(consolidated, 0);
 
-  await supabase
-    .from('market_pulse_jobs_v1')
+  await ownedDbTable('market_pulse_jobs_v1')
     .update({
       progress_stage: 'FINISHED',
       status: finalStatus,

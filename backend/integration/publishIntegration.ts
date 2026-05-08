@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Publish Integration
  * 
@@ -72,8 +73,7 @@ export async function integratePublishError(
 
   // Update scheduled_post with error code
   const { supabase } = await import('../db/supabaseClient');
-  await supabase
-    .from('scheduled_posts')
+  await ownedDbTable('scheduled_posts')
     .update({
       error_code: platformError.code,
       error_message: platformError.user_message,

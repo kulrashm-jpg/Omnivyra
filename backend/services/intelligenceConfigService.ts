@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Intelligence Orchestration Config Service
  *
@@ -151,8 +152,7 @@ export function resolveConfig(
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 export async function getAllGlobalConfigs(): Promise<GlobalConfig[]> {
-  const { data, error } = await supabase
-    .from('intelligence_global_config')
+  const { data, error } = await ownedDbTable('intelligence_global_config')
     .select('*')
     .order('priority', { ascending: true });
   if (error) throw new Error(error.message);
@@ -160,8 +160,7 @@ export async function getAllGlobalConfigs(): Promise<GlobalConfig[]> {
 }
 
 export async function getGlobalConfig(jobType: string): Promise<GlobalConfig | null> {
-  const { data } = await supabase
-    .from('intelligence_global_config')
+  const { data } = await ownedDbTable('intelligence_global_config')
     .select('*')
     .eq('job_type', jobType)
     .maybeSingle();
@@ -173,8 +172,7 @@ export async function updateGlobalConfig(
   updates:   Partial<Omit<GlobalConfig, 'job_type' | 'updated_at'>>,
   updatedBy: string,
 ): Promise<GlobalConfig> {
-  const { data, error } = await supabase
-    .from('intelligence_global_config')
+  const { data, error } = await ownedDbTable('intelligence_global_config')
     .update({ ...updates, updated_at: new Date().toISOString(), updated_by: updatedBy })
     .eq('job_type', jobType)
     .select('*')
@@ -184,8 +182,7 @@ export async function updateGlobalConfig(
 }
 
 export async function getCompanyOverrides(companyId: string): Promise<CompanyOverride[]> {
-  const { data, error } = await supabase
-    .from('intelligence_company_overrides')
+  const { data, error } = await ownedDbTable('intelligence_company_overrides')
     .select('*')
     .eq('company_id', companyId)
     .order('job_type');
@@ -197,8 +194,7 @@ export async function getCompanyOverride(
   companyId: string,
   jobType:   string,
 ): Promise<CompanyOverride | null> {
-  const { data } = await supabase
-    .from('intelligence_company_overrides')
+  const { data } = await ownedDbTable('intelligence_company_overrides')
     .select('*')
     .eq('company_id', companyId)
     .eq('job_type', jobType)
@@ -212,8 +208,7 @@ export async function upsertCompanyOverride(
   fields:    Partial<Omit<CompanyOverride, 'id' | 'company_id' | 'job_type' | 'created_at' | 'updated_at'>>,
   updatedBy: string,
 ): Promise<CompanyOverride> {
-  const { data, error } = await supabase
-    .from('intelligence_company_overrides')
+  const { data, error } = await ownedDbTable('intelligence_company_overrides')
     .upsert({
       company_id: companyId,
       job_type:   jobType,
@@ -231,8 +226,7 @@ export async function deleteCompanyOverride(
   companyId: string,
   jobType:   string,
 ): Promise<void> {
-  const { error } = await supabase
-    .from('intelligence_company_overrides')
+  const { error } = await ownedDbTable('intelligence_company_overrides')
     .delete()
     .eq('company_id', companyId)
     .eq('job_type', jobType);
@@ -269,8 +263,7 @@ export async function buildSchedulerStack(
   const [globals, allOverrides] = await Promise.all([
     getAllGlobalConfigs(),
     companyIds && companyIds.length > 0
-      ? supabase
-          .from('intelligence_company_overrides')
+      ? ownedDbTable('intelligence_company_overrides')
           .select('*')
           .in('company_id', companyIds)
           .then(r => (r.data ?? []) as CompanyOverride[])
@@ -341,8 +334,7 @@ export async function applyNewAccountBoost(
  */
 export async function getDailyJobCount(companyId: string): Promise<number> {
   const todayUtc = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
-  const { count } = await supabase
-    .from('intelligence_execution_log')
+  const { count } = await ownedDbTable('intelligence_execution_log')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .gte('started_at', `${todayUtc}T00:00:00.000Z`)
@@ -362,8 +354,7 @@ export async function getCompanyPriorityAdjustment(
   companyId: string,
 ): Promise<'new' | 'inactive' | 'normal'> {
   // New company check
-  const { data: profile } = await supabase
-    .from('company_profiles')
+  const { data: profile } = await ownedDbTable('company_profiles')
     .select('created_at')
     .eq('company_id', companyId)
     .maybeSingle();
@@ -375,8 +366,7 @@ export async function getCompanyPriorityAdjustment(
 
   // Inactive company check — no completed run in 30 days
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000).toISOString();
-  const { count } = await supabase
-    .from('intelligence_execution_log')
+  const { count } = await ownedDbTable('intelligence_execution_log')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('status', 'completed')
@@ -394,8 +384,7 @@ export async function logExecutionStart(
   companyId:   string | null,
   triggeredBy: string = 'scheduler',
 ): Promise<string> {
-  const { data, error } = await supabase
-    .from('intelligence_execution_log')
+  const { data, error } = await ownedDbTable('intelligence_execution_log')
     .insert({ job_type: jobType, company_id: companyId, triggered_by: triggeredBy, status: 'running' })
     .select('id')
     .single();
@@ -414,7 +403,7 @@ export async function logSkipped(
   triggeredBy  = 'scheduler',
 ): Promise<void> {
   const now = new Date().toISOString();
-  await supabase.from('intelligence_execution_log').insert({
+  await ownedDbTable('intelligence_execution_log').insert({
     job_type:    jobType,
     company_id:  companyId,
     triggered_by: triggeredBy,
@@ -434,8 +423,7 @@ export async function logExecutionEnd(
   reason?:    string,
 ): Promise<void> {
   const now       = new Date();
-  const { data: existing } = await supabase
-    .from('intelligence_execution_log')
+  const { data: existing } = await ownedDbTable('intelligence_execution_log')
     .select('started_at')
     .eq('id', logId)
     .maybeSingle();
@@ -444,8 +432,7 @@ export async function logExecutionEnd(
     ? now.getTime() - new Date(existing.started_at).getTime()
     : null;
 
-  await supabase
-    .from('intelligence_execution_log')
+  await ownedDbTable('intelligence_execution_log')
     .update({
       status,
       finished_at:  now.toISOString(),
@@ -462,8 +449,7 @@ export async function getRecentExecutionLogs(
   companyId?: string,
   limit       = 50,
 ): Promise<unknown[]> {
-  let q = supabase
-    .from('intelligence_execution_log')
+  let q = ownedDbTable('intelligence_execution_log')
     .select('*')
     .order('started_at', { ascending: false })
     .limit(limit);

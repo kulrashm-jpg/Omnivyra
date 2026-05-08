@@ -2,11 +2,13 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
 import { resolveUserContext } from './userContextService';
 import {
+
   getCompanyRoleIncludingInvited,
   normalizePermissionRole,
   normalizeRole,
   Role,
 } from './rbacPrimitives';
+import { ownedDbTable } from '../db/writeOwner';
 
 export { getCompanyRoleIncludingInvited, normalizePermissionRole, Role };
 
@@ -117,8 +119,7 @@ export const getRbacConfig = async (): Promise<RbacConfig> => {
     return rbacCache.value;
   }
   const fallback: RbacConfig = { roles: ALL_ROLES, permissions: { ...PERMISSIONS } };
-  const { data, error } = await supabase
-    .from('rbac_config')
+  const { data, error } = await ownedDbTable('rbac_config')
     .select('roles, permissions, updated_at')
     .order('updated_at', { ascending: false })
     .limit(1);
@@ -147,8 +148,7 @@ export const saveRbacConfig = async (input: {
     updated_by: input.updatedBy || null,
     updated_at: new Date().toISOString(),
   };
-  const { data, error } = await supabase
-    .from('rbac_config')
+  const { data, error } = await ownedDbTable('rbac_config')
     .insert(payload)
     .select('roles, permissions')
     .single();
@@ -175,8 +175,7 @@ export const getUserRole = async (
   companyId: string
 ): Promise<{ role: Role | null; error: string | null; membershipType?: 'EXTERNAL' | 'INTERNAL' }> => {
   // Query company-specific role first (happy path: 1 DB round-trip)
-  const { data, error } = await supabase
-    .from('user_company_roles')
+  const { data, error } = await ownedDbTable('user_company_roles')
     .select('role, status')
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -193,8 +192,7 @@ export const getUserRole = async (
   }
 
   // No active role: check invited (admin fallback) before "any role" check
-  const { data: invitedData } = await supabase
-    .from('user_company_roles')
+  const { data: invitedData } = await ownedDbTable('user_company_roles')
     .select('role')
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -212,8 +210,7 @@ export const getUserRole = async (
   }
 
   // No role for company: check if user has any role (distinguish COMPANY_ACCESS_DENIED vs null)
-  const { data: anyRoleRows, error: anyRoleError } = await supabase
-    .from('user_company_roles')
+  const { data: anyRoleRows, error: anyRoleError } = await ownedDbTable('user_company_roles')
     .select('role')
     .eq('user_id', userId)
     .limit(1);
@@ -247,8 +244,7 @@ export const getUserCompanyRole = async (
 };
 
 export const isSuperAdmin = async (userId: string): Promise<boolean> => {
-  const { data, error } = await supabase
-    .from('user_company_roles')
+  const { data, error } = await ownedDbTable('user_company_roles')
     .select('id')
     .eq('user_id', userId)
     .eq('role', Role.SUPER_ADMIN)
@@ -258,8 +254,7 @@ export const isSuperAdmin = async (userId: string): Promise<boolean> => {
 };
 
 export const isPlatformSuperAdmin = async (userId: string): Promise<boolean> => {
-  const { data, error } = await supabase
-    .from('user_company_roles')
+  const { data, error } = await ownedDbTable('user_company_roles')
     .select('id')
     .eq('user_id', userId)
     .eq('role', Role.SUPER_ADMIN)

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Buyer Intent Intelligence Service
  *
@@ -62,8 +63,7 @@ export async function calculateBuyerIntentAccounts(organizationId: string): Prom
   const LOOKBACK_DAYS = 30;
   const cutoff = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: opps, error: oppError } = await supabase
-    .from('engagement_opportunities')
+  const { data: opps, error: oppError } = await ownedDbTable('engagement_opportunities')
     .select('author_id, opportunity_type, platform, source_message_id, detected_at')
     .eq('organization_id', organizationId)
     .gte('detected_at', cutoff)
@@ -136,8 +136,7 @@ export async function calculateBuyerIntentAccounts(organizationId: string): Prom
   maxP = maxP || 1;
 
   const authorIds = [...new Set(rows.map((r) => r.author_id))];
-  const { data: authors } = await supabase
-    .from('engagement_authors')
+  const { data: authors } = await ownedDbTable('engagement_authors')
     .select('id, username, display_name')
     .in('id', authorIds);
   const authorMap = new Map(
@@ -162,7 +161,7 @@ export async function calculateBuyerIntentAccounts(organizationId: string): Prom
     const intentSignals =
       agg.buying_intent + agg.recommendation_request + agg.product_comparison + agg.problem_discussion;
 
-    const { error: upsertError } = await supabase.from('buyer_intent_accounts').upsert(
+    const { error: upsertError } = await ownedDbTable('buyer_intent_accounts').upsert(
       {
         organization_id: organizationId,
         author_id: agg.author_id,
@@ -192,8 +191,7 @@ export async function getBuyerIntentAccounts(
   organizationId: string,
   limit = 20
 ): Promise<BuyerIntentAccount[]> {
-  const { data, error } = await supabase
-    .from('buyer_intent_accounts')
+  const { data, error } = await ownedDbTable('buyer_intent_accounts')
     .select('id, author_id, author_name, platform, message_count, intent_signals, recommendation_requests, comparison_mentions, intent_score, last_detected_at')
     .eq('organization_id', organizationId)
     .order('intent_score', { ascending: false })

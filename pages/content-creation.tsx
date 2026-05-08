@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import type { GetServerSideProps } from 'next';
 import { 
   ArrowLeft, 
   Target, 
@@ -26,6 +27,16 @@ import {
 } from 'lucide-react';
 import CampaignAIChat from '../components/CampaignAIChat.dynamic';
 import { isCreatorDependentContentType } from '../utils/contentTaxonomy';
+
+export const DEPRECATED_RUNTIME_ROUTE = '/content-creation';
+export const CANONICAL_RUNTIME_ROUTE = '/posts/create';
+
+export const getServerSideProps: GetServerSideProps = async () => ({
+  redirect: {
+    destination: CANONICAL_RUNTIME_ROUTE,
+    permanent: false,
+  },
+});
 
 export default function ContentCreation() {
   const [activeTab, setActiveTab] = useState('overview');

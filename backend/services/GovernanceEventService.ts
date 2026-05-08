@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Governance Event Persistence Service.
  * Stage 10 Phase 3: Authoritative audit layer.
@@ -101,8 +102,7 @@ export async function recordGovernanceEvent(params: RecordGovernanceEventParams)
     }
 
     let previousEventHash: string | null = null;
-    const { data: latest } = await supabase
-      .from('campaign_governance_events')
+    const { data: latest } = await ownedDbTable('campaign_governance_events')
       .select('event_hash')
       .eq('campaign_id', campaignId)
       .order('created_at', { ascending: false })
@@ -123,7 +123,7 @@ export async function recordGovernanceEvent(params: RecordGovernanceEventParams)
     });
 
     const createdAt = new Date().toISOString();
-    await supabase.from('campaign_governance_events').insert({
+    await ownedDbTable('campaign_governance_events').insert({
       company_id: companyId,
       campaign_id: campaignId,
       event_type: eventType,

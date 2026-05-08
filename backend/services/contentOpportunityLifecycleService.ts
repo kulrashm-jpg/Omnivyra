@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Content Opportunity Lifecycle Service
  * Supports full lifecycle from discovery to campaign execution and impact analysis.
@@ -30,8 +31,7 @@ export async function assignOpportunity(
   userId: string,
   organizationId: string
 ): Promise<boolean> {
-  const { error } = await supabase
-    .from('engagement_content_opportunities')
+  const { error } = await ownedDbTable('engagement_content_opportunities')
     .update({
       assigned_to: userId,
       status: 'assigned',
@@ -52,8 +52,7 @@ export async function linkOpportunityToCampaign(
   campaignId: string,
   organizationId: string
 ): Promise<boolean> {
-  const { data: existing } = await supabase
-    .from('engagement_content_opportunities')
+  const { data: existing } = await ownedDbTable('engagement_content_opportunities')
     .select('campaign_id')
     .eq('id', id)
     .eq('organization_id', organizationId)
@@ -63,8 +62,7 @@ export async function linkOpportunityToCampaign(
     return false;
   }
 
-  const { error } = await supabase
-    .from('engagement_content_opportunities')
+  const { error } = await ownedDbTable('engagement_content_opportunities')
     .update({
       campaign_id: campaignId,
       status: 'in_campaign',
@@ -85,8 +83,7 @@ export async function linkOpportunityToContent(
   contentId: string,
   organizationId: string
 ): Promise<boolean> {
-  const { error } = await supabase
-    .from('engagement_content_opportunities')
+  const { error } = await ownedDbTable('engagement_content_opportunities')
     .update({
       content_id: contentId,
       status: 'content_created',
@@ -107,8 +104,7 @@ export async function recordOpportunityImpact(
   metrics: ImpactMetrics,
   organizationId: string
 ): Promise<boolean> {
-  const { data: row } = await supabase
-    .from('engagement_content_opportunities')
+  const { data: row } = await ownedDbTable('engagement_content_opportunities')
     .select('impact_metrics')
     .eq('id', id)
     .eq('organization_id', organizationId)
@@ -117,8 +113,7 @@ export async function recordOpportunityImpact(
   const existing = (row?.impact_metrics as Record<string, number> | null) ?? {};
   const merged = { ...existing, ...metrics };
 
-  const { error } = await supabase
-    .from('engagement_content_opportunities')
+  const { error } = await ownedDbTable('engagement_content_opportunities')
     .update({
       impact_metrics: merged,
       status: 'performance_tracked',
@@ -135,8 +130,7 @@ export async function recordOpportunityImpact(
 }
 
 export async function completeOpportunity(id: string, organizationId: string): Promise<boolean> {
-  const { error } = await supabase
-    .from('engagement_content_opportunities')
+  const { error } = await ownedDbTable('engagement_content_opportunities')
     .update({
       status: 'completed',
       updated_at: new Date().toISOString(),

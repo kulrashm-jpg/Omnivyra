@@ -8,6 +8,7 @@ import {
   clearSessionCookie,
   revokeAllSessionsForUser,
 } from '../../../backend/security/SessionAuthorityService';
+import { revokeForUser as revokeStepUpForUser } from '../../../backend/security/stepup/StepUpSessionService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 
 type SuccessResponse = { success: true; route: string };
@@ -140,16 +141,18 @@ export default async function handler(
     return res.status(500).json({ error: 'Failed to update password status' });
   }
 
-  // Credential rotation: revoke ALL existing auth_sessions for this user
-  // (NIST 800-63B; OWASP ASVS V3.6). The user must re-authenticate. The
-  // current session cookie (if any) is also cleared so the next request
-  // forces a fresh login.
+  // Credential rotation: revoke ALL existing auth_sessions AND step-up
+  // sessions for this user (NIST 800-63B; OWASP ASVS V3.6). The user
+  // must re-authenticate everywhere. The current session cookie (if
+  // any) is also cleared so the next request forces a fresh login.
   //
   // Fail-soft: a failure here does not block password change — but it is
   // logged loudly so an operator can investigate.
   let revokedCount = 0;
+  let revokedStepUpCount = 0;
   try {
     revokedCount = await revokeAllSessionsForUser(user.id, `credential_rotation:${flow}`);
+    revokedStepUpCount = await revokeStepUpForUser(user.id, `credential_rotation:${flow}`);
     clearSessionCookie(res);
   } catch (err) {
     logger.warn('auth_set_password_session_revoke_failed', {
@@ -163,7 +166,7 @@ export default async function handler(
     decision: 'auth_session_revoked',
     actorUserId: user.id,
     principalUserId: user.id,
-    reason: `password_changed_flow=${flow} revoked=${revokedCount}`,
+    reason: `password_changed_flow=${flow} revoked_auth=${revokedCount} revoked_stepup=${revokedStepUpCount}`,
     ip: clientIp(req),
     userAgent: userAgent(req),
   });

@@ -53,7 +53,7 @@ import {
   formatStyleInstructions,
   type WritingStyleProfile,
 } from '../lib/content/writingStyleEngine';
-import type { CompanyProfile } from '../backend/services/companyProfileService';
+import type { CompanyProfile } from '../lib/shared/companyProfileTypes';
 import AIBlogCardModal from '../components/blog/AIBlogCardModal';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -1445,4 +1445,5 @@ export default function BlogIntelView({ d }: { d: S }) {
     </>
   );
 }
+
 

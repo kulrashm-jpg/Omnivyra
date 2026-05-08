@@ -4,7 +4,7 @@ import { useRouter } from 'next/router';
 import {
   Menu, X, ChevronDown, BarChart3, FileText, Megaphone, MessageSquare,
   Settings, LogOut, Users, CreditCard, Zap, Link2, HelpCircle,
-  Sun, Moon, LifeBuoy, BookOpen, Home,
+  Sun, Moon, LifeBuoy, BookOpen, Home, Shield,
 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
@@ -12,6 +12,10 @@ import { useCredits } from '@/hooks/useCredits';
 import { useTour } from './tour/TourContext';
 import { TourOverlay } from './tour/TourOverlay';
 import { NotificationBell } from './NotificationBell';
+import {
+  SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS,
+  SETTINGS_ROUTE_SECURITY,
+} from '../lib/settings/canonicalRegistry';
 
 // ── Nav structure ──────────────────────────────────────────────────────────────
 
@@ -29,13 +33,13 @@ const NAV_ITEMS = [
     label: 'Content',
     icon: FileText,
     children: [
-      { label: 'Post',        href: '/content-studio' },
-      { label: 'Blog',        href: '/blogs' },
+      { label: 'Post',        href: '/posts/create' },
+      { label: 'Blog',        href: '/blogs/create' },
       { label: 'Story',       href: '/stories/create' },
       { label: 'Article',     href: '/articles' },
       { label: 'Whitepaper',  href: '/whitepapers/create' },
       { label: 'Case Study',  href: '/case-studies/create' },
-      { label: 'Thread',      href: '/content-creation' },
+      { label: 'Thread',      href: '/threads/create' },
       { label: 'Guide',       href: '/guides/create' },
       { label: 'Newsletter',  href: '/newsletters/create' },
     ],
@@ -44,7 +48,7 @@ const NAV_ITEMS = [
     label: 'Campaigns',
     icon: Megaphone,
     children: [
-      { label: 'BOLT (Text)',        href: '/command-center/bolt-text-strategy' },
+      { label: 'BOLT (Text)',        href: '/command-center/bolt-text' },
       { label: 'BOLT (Creator)',     href: '/command-center/bolt-creator-strategy' },
       { label: 'Intelligence Mix',   href: '/command-center/intelligent-mix-strategy' },
       { label: 'Strategic Campaign', href: '/command-center/bolt-combined-strategy' },
@@ -273,8 +277,10 @@ function UserMenu({
             )}
             <Item icon={Link2}      label="Integrations"       href="/integrations?focus=website" />
             {isCompanyAdmin && (
-              <Item icon={Settings} label="Settings"           href="/settings/company-admin-access" />
+              <Item icon={Settings} label="Settings"           href={SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS} />
             )}
+            {/* Security settings are per-user, not per-company-role; visible to every authenticated user. */}
+            <Item icon={Shield}     label="Security"           href={SETTINGS_ROUTE_SECURITY} />
           </Section>
 
           <Section>
@@ -393,7 +399,13 @@ const Header: React.FC = () => {
 
   const displayName = userName?.trim() || 'User';
   const roleLabel = getRoleLabel(userRole);
-  const isCompanyAdmin = (userRole || '').toUpperCase() === 'COMPANY_ADMIN';
+  // SETTINGS visibility: COMPANY_ADMIN OR SUPER_ADMIN OR ADMIN.
+  // Was previously a literal equality check that hid Settings from SUPER_ADMINs.
+  const normalizedRole = (userRole || '').toUpperCase();
+  const isCompanyAdmin =
+    normalizedRole === 'COMPANY_ADMIN' ||
+    normalizedRole === 'SUPER_ADMIN' ||
+    normalizedRole === 'ADMIN';
 
   // Determine which top-level nav is active based on current route
   const activeNav = NAV_ITEMS.findIndex((item) =>
@@ -547,10 +559,11 @@ const Header: React.FC = () => {
                 {isCompanyAdmin && (
                   <div className="grid grid-cols-2 gap-1.5 px-1">
                     {[
-                      { label: 'Settings', href: '/settings/company-admin-access', icon: Settings },
-                      { label: 'Users',    href: '/team-management',                icon: Users },
-                      { label: 'Usage',    href: '/super-admin/consumption',        icon: BarChart3 },
-                      { label: 'Plans',    href: '/pricing',                        icon: CreditCard },
+                      { label: 'Settings', href: SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS, icon: Settings },
+                      { label: 'Security', href: SETTINGS_ROUTE_SECURITY,             icon: Shield },
+                      { label: 'Users',    href: '/team-management',                  icon: Users },
+                      { label: 'Usage',    href: '/super-admin/consumption',          icon: BarChart3 },
+                      { label: 'Plans',    href: '/pricing',                          icon: CreditCard },
                     ].map((m) => (
                       <Link
                         key={m.href}

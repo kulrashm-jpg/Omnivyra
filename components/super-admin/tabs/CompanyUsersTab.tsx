@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 import {
   type CompanyData,
   type AppUserData,
@@ -38,15 +39,12 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     setIsLoading(true);
     try {
       const companiesResponse = await fetchWithAuth('/api/super-admin/companies');
-      if (companiesResponse.ok) {
-        const data = await companiesResponse.json();
-        setCompanies(data.companies || []);
-      }
+      const companiesParsed = await parseJsonResponse<{ companies?: any[] }>(companiesResponse, '/api/super-admin/companies');
+      if (companiesParsed.ok === true) setCompanies(companiesParsed.data.companies || []);
+
       const usersResponse = await fetchWithAuth('/api/super-admin/users');
-      if (usersResponse.ok) {
-        const data = await usersResponse.json();
-        setAppUsers(data.users || []);
-      }
+      const usersParsed = await parseJsonResponse<{ users?: any[] }>(usersResponse, '/api/super-admin/users');
+      if (usersParsed.ok === true) setAppUsers(usersParsed.data.users || []);
     } catch (error) {
       console.error('Error loading company/user data:', error);
     } finally {
@@ -71,13 +69,13 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: companyForm.name, website: companyForm.website, industry: companyForm.industry }),
       });
-      if (response.ok) {
+      const parsed = await parseJsonResponse(response, '/api/super-admin/companies');
+      if (parsed.ok === true) {
         setCompanyForm({ name: '', website: '', industry: '' });
         setShowCreateCompanyModal(false);
         loadData();
       } else {
-        const result = await response.json();
-        alert(result.error || 'Failed to create company');
+        alert(parsed.message || 'Failed to create company');
       }
     } catch (error) {
       console.error('Error creating company:', error);
@@ -99,13 +97,13 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: companyAdminForm.email, companyId: companyAdminForm.companyId, role: companyAdminForm.role }),
       });
-      if (response.ok) {
+      const parsed = await parseJsonResponse(response, '/api/super-admin/users');
+      if (parsed.ok === true) {
         setCompanyAdminForm({ email: '', companyId: '', role: 'COMPANY_ADMIN' });
         setShowCreateCompanyAdminModal(false);
         loadData();
       } else {
-        const result = await response.json();
-        alert(result.error || 'Failed to create company admin');
+        alert(parsed.message || 'Failed to create company admin');
       }
     } catch (error) {
       console.error('Error creating company admin:', error);

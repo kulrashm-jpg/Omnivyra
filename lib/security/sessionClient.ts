@@ -7,7 +7,15 @@
  *
  * NO local capability derivation. NO local step-up trust. NO frontend
  * auth authority. The client merely REFLECTS what the server reports.
+ *
+ * Phase: Global Fetch Hardening — every fetch goes through `safeFetchJson`
+ * so HTML auth-redirect pages, framework 5xx pages, network errors, and
+ * parse failures surface as structured runtime errors instead of cryptic
+ * "Unexpected token '<'" parse explosions. The 401 → null UX semantics for
+ * "not signed in" are preserved.
  */
+
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 
 // ── Types (mirrors server response shapes; subset for client convenience) ──
 
@@ -55,17 +63,24 @@ export interface FrontendCapabilitiesSnapshot {
 // ── Endpoints ────────────────────────────────────────────────────────────────
 
 export async function fetchSessionSnapshot(): Promise<FrontendSessionSnapshot | null> {
-  const r = await fetch('/api/auth/session', { method: 'GET', credentials: 'same-origin' });
-  if (r.status === 401) return null;
-  if (!r.ok) throw new Error(`/api/auth/session failed: ${r.status}`);
-  return await r.json() as FrontendSessionSnapshot;
+  const result = await safeFetchJson<FrontendSessionSnapshot>(
+    '/api/auth/session',
+    { method: 'GET', credentials: 'same-origin' },
+  );
+  if (result.ok === true) return result.data;
+  // 401 → "not signed in" → null. Preserves prior UX semantics.
+  if (result.status === 401) return null;
+  throw new Error(`/api/auth/session failed (${result.status}, ${result.reason}): ${result.message}`);
 }
 
 export async function fetchCapabilities(): Promise<FrontendCapabilitiesSnapshot | null> {
-  const r = await fetch('/api/auth/capabilities', { method: 'GET', credentials: 'same-origin' });
-  if (r.status === 401) return null;
-  if (!r.ok) throw new Error(`/api/auth/capabilities failed: ${r.status}`);
-  return await r.json() as FrontendCapabilitiesSnapshot;
+  const result = await safeFetchJson<FrontendCapabilitiesSnapshot>(
+    '/api/auth/capabilities',
+    { method: 'GET', credentials: 'same-origin' },
+  );
+  if (result.ok === true) return result.data;
+  if (result.status === 401) return null;
+  throw new Error(`/api/auth/capabilities failed (${result.status}, ${result.reason}): ${result.message}`);
 }
 
 /**
@@ -76,10 +91,12 @@ export async function fetchCapabilities(): Promise<FrontendCapabilitiesSnapshot 
  * Supabase access token; the two are complementary.
  */
 export async function logoutCurrentSession(): Promise<{ revokedAuthSessionId: string | null }> {
-  const r = await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-  if (!r.ok) throw new Error(`/api/auth/logout failed: ${r.status}`);
-  const body = await r.json() as { revokedAuthSessionId: string | null };
-  return body;
+  const result = await safeFetchJson<{ revokedAuthSessionId: string | null }>(
+    '/api/auth/logout',
+    { method: 'POST', credentials: 'same-origin' },
+  );
+  if (result.ok === true) return result.data;
+  throw new Error(`/api/auth/logout failed (${result.status}, ${result.reason}): ${result.message}`);
 }
 
 /**
@@ -87,8 +104,11 @@ export async function logoutCurrentSession(): Promise<{ revokedAuthSessionId: st
  * expired) so the caller can re-trigger sign-in.
  */
 export async function refreshCurrentSession(): Promise<{ sessionId: string; expiresAt: string } | null> {
-  const r = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'same-origin' });
-  if (r.status === 401) return null;
-  if (!r.ok) throw new Error(`/api/auth/refresh failed: ${r.status}`);
-  return await r.json() as { sessionId: string; expiresAt: string };
+  const result = await safeFetchJson<{ sessionId: string; expiresAt: string }>(
+    '/api/auth/refresh',
+    { method: 'POST', credentials: 'same-origin' },
+  );
+  if (result.ok === true) return result.data;
+  if (result.status === 401) return null;
+  throw new Error(`/api/auth/refresh failed (${result.status}, ${result.reason}): ${result.message}`);
 }

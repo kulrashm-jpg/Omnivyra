@@ -6,6 +6,7 @@ import {
 } from './viralitySnapshotBuilder';
 import { runDiagnosticPrompt } from './llm/openaiAdapter';
 import { buildDecideRequest, requestDecision, DecisionResult } from './omnivyreClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type EvidenceType = 'weekly_plan' | 'daily_plan' | 'scheduled_post' | 'asset';
 
@@ -250,8 +251,7 @@ async function getCachedAssessment(
   campaignId: string,
   snapshotHash: string
 ): Promise<ViralityAssessment | null> {
-  const { data, error } = await supabase
-    .from('campaign_virality_assessments')
+  const { data, error } = await ownedDbTable('campaign_virality_assessments')
     .select('*')
     .eq('campaign_id', campaignId)
     .eq('snapshot_hash', snapshotHash)
@@ -280,8 +280,7 @@ async function getCachedAssessment(
 async function storeAssessment(
   assessment: ViralityAssessment
 ): Promise<void> {
-  const { error } = await supabase
-    .from('campaign_virality_assessments')
+  const { error } = await ownedDbTable('campaign_virality_assessments')
     .insert({
       campaign_id: assessment.campaign_id,
       snapshot_hash: assessment.snapshot_hash,

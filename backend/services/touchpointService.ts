@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type TouchpointInput = {
   companyId: string;
@@ -74,8 +75,7 @@ export async function bulkCreateTouchpoints(
   }
 
   const payload = touchpoints.map((touchpoint) => toDbPayload(touchpoint));
-  const { data, error } = await supabase
-    .from('unified_touchpoints')
+  const { data, error } = await ownedDbTable('unified_touchpoints')
     .upsert(payload, {
       onConflict: 'company_id,reference_table,reference_id',
       ignoreDuplicates: true,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Execution Checkpoint Service
  * Guarantees exactly-once progression advancement via atomic checkpoints.
@@ -50,8 +51,7 @@ async function contentExists(contentId: string, source: ContentSource): Promise<
     return asset != null;
   }
   if (source === 'daily_content_plans') {
-    const { data, error } = await supabase
-      .from('daily_content_plans')
+    const { data, error } = await ownedDbTable('daily_content_plans')
       .select('id')
       .eq('id', contentId)
       .maybeSingle();
@@ -84,8 +84,7 @@ export async function createCheckpoint(
   week: number,
   day: number
 ): Promise<ExecutionCheckpoint | null> {
-  const { data: existing } = await supabase
-    .from('campaign_execution_checkpoint')
+  const { data: existing } = await ownedDbTable('campaign_execution_checkpoint')
     .select('*')
     .eq('campaign_id', campaignId)
     .eq('week', week)
@@ -97,8 +96,7 @@ export async function createCheckpoint(
     if (status === 'completed') return null;
     if (status === 'in_progress') return toCheckpoint(existing as Record<string, unknown>);
     if (status === 'abandoned') {
-      const { data: updated, error } = await supabase
-        .from('campaign_execution_checkpoint')
+      const { data: updated, error } = await ownedDbTable('campaign_execution_checkpoint')
         .update({
           status: 'in_progress',
           content_id: null,
@@ -114,8 +112,7 @@ export async function createCheckpoint(
     }
   }
 
-  const { data: inserted, error } = await supabase
-    .from('campaign_execution_checkpoint')
+  const { data: inserted, error } = await ownedDbTable('campaign_execution_checkpoint')
     .insert({
       campaign_id: campaignId,
       week,
@@ -130,8 +127,7 @@ export async function createCheckpoint(
 
   if (error) {
     if ((error as any).code === '23505') {
-      const { data: conflict } = await supabase
-        .from('campaign_execution_checkpoint')
+      const { data: conflict } = await ownedDbTable('campaign_execution_checkpoint')
         .select('*')
         .eq('campaign_id', campaignId)
         .eq('week', week)
@@ -154,8 +150,7 @@ export async function completeCheckpoint(
   contentId: string,
   contentSource: ContentSource = 'content_assets'
 ): Promise<{ checkpoint: ExecutionCheckpoint; state: Awaited<ReturnType<typeof markDayComplete>> } | null> {
-  const { data: row, error: fetchError } = await supabase
-    .from('campaign_execution_checkpoint')
+  const { data: row, error: fetchError } = await ownedDbTable('campaign_execution_checkpoint')
     .select('*')
     .eq('campaign_id', campaignId)
     .eq('week', week)
@@ -171,8 +166,7 @@ export async function completeCheckpoint(
   }
   if (status !== 'in_progress') return null;
 
-  const { data: updated, error } = await supabase
-    .from('campaign_execution_checkpoint')
+  const { data: updated, error } = await ownedDbTable('campaign_execution_checkpoint')
     .update({
       status: 'completed',
       content_id: contentId,
@@ -199,8 +193,7 @@ export async function abandonCheckpoint(
   week: number,
   day: number
 ): Promise<ExecutionCheckpoint | null> {
-  const { data: updated, error } = await supabase
-    .from('campaign_execution_checkpoint')
+  const { data: updated, error } = await ownedDbTable('campaign_execution_checkpoint')
     .update({
       status: 'abandoned',
       content_id: null,
@@ -225,8 +218,7 @@ export async function resolveOrphanedCheckpoints(campaignId: string): Promise<{
   finalized: { week: number; day: number }[];
   abandoned: { week: number; day: number }[];
 }> {
-  const { data: rows, error } = await supabase
-    .from('campaign_execution_checkpoint')
+  const { data: rows, error } = await ownedDbTable('campaign_execution_checkpoint')
     .select('*')
     .eq('campaign_id', campaignId)
     .eq('status', 'in_progress');
@@ -266,8 +258,7 @@ export async function getCheckpoint(
   week: number,
   day: number
 ): Promise<ExecutionCheckpoint | null> {
-  const { data, error } = await supabase
-    .from('campaign_execution_checkpoint')
+  const { data, error } = await ownedDbTable('campaign_execution_checkpoint')
     .select('*')
     .eq('campaign_id', campaignId)
     .eq('week', week)

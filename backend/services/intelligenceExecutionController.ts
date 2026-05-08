@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Intelligence Execution Controller
  * Controls execution frequency, protects resources, prioritizes companies.
@@ -23,8 +24,7 @@ export const LIMITS = {
 } as const;
 
 async function getPriority(companyId: string): Promise<PriorityLevel> {
-  const { data } = await supabase
-    .from('company_execution_priority')
+  const { data } = await ownedDbTable('company_execution_priority')
     .select('priority_level')
     .eq('company_id', companyId)
     .maybeSingle();
@@ -40,8 +40,7 @@ async function countExecutionsInLastHour(
   const since = new Date();
   since.setHours(since.getHours() - 1);
   const sinceStr = since.toISOString();
-  const { count, error } = await supabase
-    .from('intelligence_execution_metrics')
+  const { count, error } = await ownedDbTable('intelligence_execution_metrics')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('execution_type', executionType)
@@ -52,8 +51,7 @@ async function countExecutionsInLastHour(
 
 async function countOptimizationsToday(companyId: string): Promise<number> {
   const today = new Date().toISOString().slice(0, 10);
-  const { count, error } = await supabase
-    .from('intelligence_execution_metrics')
+  const { count, error } = await ownedDbTable('intelligence_execution_metrics')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('execution_type', 'optimization_run')
@@ -104,14 +102,14 @@ export async function recordExecution(
   executionType: ExecutionType,
   options?: { status?: string; latencyMs?: number }
 ): Promise<void> {
-  await supabase.from('intelligence_execution_metrics').insert({
+  await ownedDbTable('intelligence_execution_metrics').insert({
     company_id: companyId,
     execution_type: executionType,
     executed_at: new Date().toISOString(),
   });
 
   const status = options?.status ?? 'success';
-  await supabase.from('intelligence_execution_logs').insert({
+  await ownedDbTable('intelligence_execution_logs').insert({
     company_id: companyId,
     execution_type: executionType,
     status,
@@ -128,7 +126,7 @@ export async function recordExecutionSkipped(
   executionType: ExecutionType,
   reason: string
 ): Promise<void> {
-  await supabase.from('intelligence_execution_logs').insert({
+  await ownedDbTable('intelligence_execution_logs').insert({
     company_id: companyId,
     execution_type: executionType,
     status: 'skipped_due_to_limits',

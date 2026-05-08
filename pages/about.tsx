@@ -1,621 +1,684 @@
-import React from 'react';
+import Head from 'next/head';
 import Link from 'next/link';
-import Image from 'next/image';
-import Footer from '../components/landing/Footer';
-import { getAboutImages } from '../lib/unsplashAboutImages';
-import type { AboutImages, AboutImage } from '../lib/unsplashAboutImages';
+import type { CSSProperties } from 'react';
 
-// ── Reusable image block ───────────────────────────────────────────────────────
+const BLUE_FIELD = 'linear-gradient(150deg, #071D3A 0%, #0A3770 54%, #0A66C2 100%)';
+const CENTERPIECE_FIELD = 'linear-gradient(160deg, #06182F 0%, #082B55 58%, #0A4F94 100%)';
 
-function SectionImage({
-  image,
-  alt,
-  className = '',
-}: {
-  image: AboutImage;
-  alt: string;
-  className?: string;
-}) {
+const AI_PROMISES = ['speed', 'automation', 'intelligence', 'content scale', 'optimization', 'execution acceleration'];
+
+const FRACTURE_ACCELERATORS = ['Content creation', 'Campaign execution', 'Publishing', 'Optimization', 'Automation', 'Analysis'];
+
+const ECOSYSTEM_PARTS = [
+  'analytics platforms',
+  'social systems',
+  'AI tools',
+  'publishing systems',
+  'visibility layers',
+  'reporting environments',
+  'automation tools',
+];
+
+const INTERPRETATION_LAYERS = [
+  'authority',
+  'operational movement',
+  'discoverability',
+  'contextual relevance',
+  'coordination across systems',
+  'evolving visibility behavior',
+];
+
+const TEAM_OUTCOMES = ['understand direction', 'reduce fragmentation', 'operate with greater confidence'];
+
+const PRINCIPLES = [
+  {
+    title: 'Clarity before complexity',
+    body: 'We believe operational understanding should come before operational scale.',
+  },
+  {
+    title: 'Intelligence inside the workflow',
+    body: 'We believe intelligence becomes more meaningful when generated from connected operational context.',
+  },
+  {
+    title: 'Systems should adapt',
+    body: 'We believe marketing platforms should evolve with operational behavior instead of forcing rigid disconnected workflows.',
+  },
+];
+
+const FOOTER_COLUMNS = [
+  {
+    heading: 'Product',
+    links: [
+      { label: 'Features', href: '/features' },
+      { label: 'Solutions', href: '/solutions' },
+      { label: 'Pricing', href: '/pricing' },
+    ],
+  },
+  {
+    heading: 'Company',
+    links: [
+      { label: 'About', href: '/about' },
+      { label: 'Blog', href: '/blog' },
+    ],
+  },
+  {
+    heading: 'Legal',
+    links: [
+      { label: 'Privacy Policy', href: '/privacy' },
+      { label: 'Terms of Service', href: '/terms' },
+      { label: 'Data Deletion Instructions', href: '/data-deletion' },
+    ],
+  },
+];
+
+function AtmosphericTexture({ mode = 'dark' }: { mode?: 'dark' | 'light' }) {
+  const isDark = mode === 'dark';
+
   return (
-    <div className={`relative w-full overflow-hidden rounded-2xl ${className}`}>
-      <Image
-        src={image.url}
-        alt={alt}
-        width={1400}
-        height={787}
-        className="w-full h-full object-cover"
-        sizes="(max-width: 768px) 100vw, (max-width: 1280px) 80vw, 1200px"
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      <div
+        className={`absolute inset-0 ${
+          isDark ? 'omnivyra-dark-grid opacity-20' : 'omnivyra-light-grid opacity-65'
+        }`}
       />
-      <a
-        href={`${image.photoUrl}?utm_source=omnivyra&utm_medium=referral`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="absolute bottom-2 right-3 text-[10px] text-white/70 hover:text-white transition-colors"
-      >
-        Photo by {image.credit} · Unsplash
-      </a>
+      <div
+        className={`absolute left-0 right-0 top-[28%] h-px bg-gradient-to-r from-transparent ${
+          isDark ? 'via-[#A9DAFF]/20' : 'via-[#0A66C2]/12'
+        } to-transparent`}
+      />
+      <div
+        className={`absolute left-0 right-0 top-[72%] h-px bg-gradient-to-r from-transparent ${
+          isDark ? 'via-white/10' : 'via-[#0A66C2]/10'
+        } to-transparent`}
+      />
+      <div
+        className={`absolute -right-28 top-16 h-64 w-64 rounded-full blur-3xl ${
+          isDark ? 'bg-[#3FA9F5]/10' : 'bg-[#3FA9F5]/8'
+        }`}
+      />
+      <div
+        className={`absolute -left-24 bottom-10 h-56 w-56 rounded-full blur-3xl ${
+          isDark ? 'bg-[#0A66C2]/14' : 'bg-[#0A66C2]/7'
+        }`}
+      />
     </div>
   );
 }
 
-// ── Who This Is For — card ─────────────────────────────────────────────────────
-
-type AudienceCard = {
-  icon: string;
-  role: string;
-  need: string;
-};
-
-const AUDIENCE: AudienceCard[] = [
-  { icon: '📊', role: 'CMOs & Marketing Leaders', need: 'Need clarity before committing budget' },
-  { icon: '🚀', role: 'Founders', need: 'Need results without mastering everything' },
-  { icon: '🤝', role: 'Teams', need: 'Need alignment across moving parts' },
-  { icon: '⚡', role: 'Creators & Operators', need: 'Need consistent, predictable growth' },
-];
-
-// ── What Changes — benefit grid ───────────────────────────────────────────────
-
-const BENEFITS = [
-  { icon: '✓', text: 'You stop second-guessing' },
-  { icon: '✓', text: 'You catch issues earlier' },
-  { icon: '✓', text: 'You spend with confidence' },
-  { icon: '✓', text: 'You work with structure' },
-  { icon: '✓', text: 'You reduce firefighting' },
-  { icon: '✓', text: 'You move with direction' },
-];
-
-// ── Page ──────────────────────────────────────────────────────────────────────
-
-export default function AboutPage({ hero, chaos, disconnected, connected, blueprint }: AboutImages) {
+function JourneyField() {
   return (
-    <div className="min-h-screen bg-[#F5F9FF] font-sans">
+    <div className="pointer-events-none fixed inset-0 z-0 opacity-50" aria-hidden="true">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_16%_18%,rgba(10,102,194,0.055),transparent_28%),radial-gradient(circle_at_82%_82%,rgba(63,169,245,0.05),transparent_30%)]" />
+      <svg className="h-full w-full" viewBox="0 0 1400 1000" preserveAspectRatio="none">
+        <path
+          d="M80 210 C 290 120, 410 250, 610 220 S 900 130, 1260 260"
+          fill="none"
+          stroke="rgba(10,102,194,0.055)"
+          strokeWidth="1.4"
+          strokeDasharray="3 20"
+          className="omnivyra-signal-drift-slow"
+        />
+        <path
+          d="M110 780 C 330 620, 520 760, 710 650 S 1010 560, 1290 710"
+          fill="none"
+          stroke="rgba(63,169,245,0.05)"
+          strokeWidth="1.4"
+          className="omnivyra-signal-breathe"
+        />
+        <path
+          d="M180 510 C 380 470, 510 520, 690 500 S 980 450, 1220 520"
+          fill="none"
+          stroke="rgba(10,102,194,0.035)"
+          strokeWidth="1"
+          strokeDasharray="1 24"
+          className="omnivyra-signal-drift"
+        />
+      </svg>
+    </div>
+  );
+}
 
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 1 — HERO
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-[#0A1F44] via-[#0A3872] to-[#0A66C2]">
-        {/* Decorative orbs */}
-        <div className="pointer-events-none absolute -top-32 -left-32 h-96 w-96 rounded-full bg-[#0A66C2]/30 blur-[120px]" />
-        <div className="pointer-events-none absolute top-20 right-0 h-72 w-72 rounded-full bg-[#3FA9F5]/20 blur-[100px]" />
-        <div className="pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 h-64 w-[600px] rounded-full bg-[#0A66C2]/20 blur-[80px]" />
+function FragmentedHeroField() {
+  return (
+    <div className="absolute inset-0 opacity-85" aria-hidden="true">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_22%,rgba(169,218,255,0.16),transparent_28%),radial-gradient(circle_at_82%_45%,rgba(63,169,245,0.14),transparent_30%)]" />
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 1200 720" preserveAspectRatio="none">
+        <path
+          d="M120 160 C 260 120, 330 260, 450 230 S 660 120, 760 210 S 930 340, 1080 280"
+          fill="none"
+          stroke="rgba(169,218,255,0.18)"
+          strokeWidth="1"
+          strokeDasharray="5 18"
+          className="omnivyra-signal-drift"
+        />
+        <path
+          d="M170 520 C 310 410, 430 560, 560 450 S 760 410, 910 500 S 1040 520, 1130 410"
+          fill="none"
+          stroke="rgba(63,169,245,0.22)"
+          strokeWidth="1"
+          strokeDasharray="3 16"
+          className="omnivyra-signal-drift-slow"
+        />
+        <path
+          d="M320 140 C 370 260, 430 370, 610 360 S 890 260, 1010 430"
+          fill="none"
+          stroke="rgba(255,255,255,0.10)"
+          strokeWidth="1"
+          className="omnivyra-signal-breathe"
+        />
+      </svg>
+      <span className="absolute left-[11%] top-[21%] hidden h-2 w-2 rounded-full bg-[#A9DAFF]/55 md:block" />
+      <span className="absolute left-[63%] top-[16%] hidden h-1.5 w-1.5 rounded-full bg-white/45 md:block" />
+      <span className="absolute left-[77%] top-[44%] hidden h-2 w-2 rounded-full bg-[#A9DAFF]/45 md:block" />
+      <span className="absolute left-[24%] top-[63%] hidden h-1.5 w-1.5 rounded-full bg-white/40 md:block" />
+      <span className="absolute left-[54%] top-[73%] hidden h-2 w-2 rounded-full bg-[#3FA9F5]/55 md:block" />
+    </div>
+  );
+}
 
-        <div className="relative mx-auto max-w-5xl px-6 pt-24 pb-20 sm:pt-32 sm:pb-28 text-center">
-          {/* Eyebrow */}
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-xs font-medium uppercase tracking-widest text-white/80 mb-8">
-            About Omnivyra
+function FractureVisual() {
+  return (
+    <div className="relative min-h-[430px] overflow-hidden rounded-[30px] border border-[#C9DDF3] bg-white/82 p-5 shadow-[0_26px_76px_rgba(10,31,68,0.10)] backdrop-blur">
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(10,102,194,0.08)_1px,transparent_1px),linear-gradient(180deg,rgba(10,102,194,0.06)_1px,transparent_1px)] bg-[size:42px_42px]" />
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 650 480" preserveAspectRatio="none">
+        <path
+          d="M90 90 C 210 60, 250 170, 350 130 S 470 55, 555 120"
+          fill="none"
+          stroke="rgba(10,102,194,0.24)"
+          strokeWidth="1.5"
+          strokeDasharray="4 14"
+          className="omnivyra-signal-drift"
+        />
+        <path
+          d="M96 375 C 190 275, 285 415, 360 300 S 470 255, 560 345"
+          fill="none"
+          stroke="rgba(10,102,194,0.18)"
+          strokeWidth="1.5"
+          strokeDasharray="2 13"
+          className="omnivyra-signal-drift-slow"
+        />
+        <path
+          d="M165 190 C 250 235, 330 210, 410 250 S 485 315, 540 265"
+          fill="none"
+          stroke="rgba(7,29,58,0.12)"
+          strokeWidth="1.5"
+          className="omnivyra-signal-breathe"
+        />
+      </svg>
+      <div className="relative grid min-h-[390px] grid-cols-2 gap-4 sm:grid-cols-3">
+        {ECOSYSTEM_PARTS.map((item, index) => (
+          <div
+            key={item}
+            className="omnivyra-node-drift relative self-start rounded-2xl border border-[#D8E3F0] bg-[#F7FBFF]/92 px-4 py-4 shadow-[0_12px_34px_rgba(10,31,68,0.045)]"
+            style={
+              {
+                '--node-duration': `${9 + index}s`,
+                '--node-delay': `${index * 0.25}s`,
+                '--node-offset': index % 3 === 1 ? '2rem' : index % 3 === 2 ? '0.75rem' : '0rem',
+              } as CSSProperties
+            }
+          >
+            <span className="absolute right-4 top-4 h-2 w-2 rounded-full bg-[#0A66C2]" />
+            <p className="max-w-[130px] text-sm font-black leading-5 text-[#071D3A]">{item}</p>
           </div>
+        ))}
+      </div>
+      <div className="relative mt-5 rounded-2xl bg-[#071D3A] px-5 py-4 text-white">
+        <p className="text-xs font-black uppercase tracking-[0.16em] text-[#A9DAFF]">The fracture</p>
+        <p className="mt-2 text-sm font-semibold leading-6">Scattered systems. No shared operating truth.</p>
+      </div>
+    </div>
+  );
+}
 
-          <h1 className="text-4xl font-bold tracking-tight text-white sm:text-6xl lg:text-7xl leading-[1.1]">
-            Clarity,{' '}
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#3FA9F5] to-white">
-              before you commit.
+function CenterpiecePause() {
+  return (
+    <section
+      className="relative z-10 overflow-hidden px-6 py-28 text-white sm:py-36 lg:px-8"
+      style={{ background: CENTERPIECE_FIELD }}
+    >
+      <AtmosphericTexture mode="dark" />
+      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+        <svg className="absolute inset-0 h-full w-full opacity-28" viewBox="0 0 1200 520" preserveAspectRatio="none">
+          <path
+            d="M80 150 C 250 90, 390 220, 520 180 S 760 80, 920 210 S 1080 320, 1160 220"
+            fill="none"
+            stroke="rgba(169,218,255,0.10)"
+            strokeWidth="1"
+            strokeDasharray="3 22"
+            className="omnivyra-signal-breathe"
+          />
+          <path
+            d="M70 370 C 260 270, 410 410, 600 300 S 850 240, 1120 350"
+            fill="none"
+            stroke="rgba(255,255,255,0.055)"
+            strokeWidth="1"
+          />
+        </svg>
+      </div>
+      <div className="relative mx-auto max-w-[980px]">
+        <div className="space-y-7">
+          <p className="text-[2.45rem] font-black leading-[1.05] tracking-tight sm:text-5xl lg:text-6xl">
+            Capability expanded.
+          </p>
+          <p className="max-w-[860px] pl-0 text-[2.45rem] font-black leading-[1.05] tracking-tight text-[#A9DAFF]/90 sm:pl-12 sm:text-5xl lg:text-6xl">
+            Connected understanding did not.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function OrchestrationVisual() {
+  return (
+    <div className="relative overflow-hidden rounded-[30px] border border-white/15 bg-white/10 p-6 backdrop-blur">
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(169,218,255,0.10)_1px,transparent_1px),linear-gradient(180deg,rgba(169,218,255,0.09)_1px,transparent_1px)] bg-[size:44px_44px]" />
+      <div className="absolute bottom-8 left-8 top-8 w-px bg-gradient-to-b from-transparent via-[#A9DAFF]/28 to-transparent" />
+      <svg className="absolute inset-0 h-full w-full opacity-60" viewBox="0 0 620 420" preserveAspectRatio="none">
+        <path
+          d="M82 72 C 210 85, 230 178, 365 160 S 500 178, 552 92"
+          fill="none"
+          stroke="rgba(169,218,255,0.20)"
+          strokeWidth="1.2"
+          strokeDasharray="5 18"
+          className="omnivyra-signal-drift"
+        />
+        <path
+          d="M82 325 C 205 280, 285 352, 402 280 S 520 226, 558 320"
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth="1.2"
+          className="omnivyra-signal-breathe"
+        />
+      </svg>
+      <div className="relative space-y-5">
+        {INTERPRETATION_LAYERS.map((item, index) => (
+          <div key={item} className="flex items-center gap-4">
+            <span className="h-2 w-2 rounded-full bg-[#A9DAFF]/60" />
+            <span className="h-px flex-1 bg-gradient-to-r from-[#A9DAFF]/35 via-[#A9DAFF]/50 to-[#A9DAFF]/10" />
+            <span
+              className={`rounded-full border px-4 py-2 text-sm font-black ${
+                index % 2 === 0
+                  ? 'border-white/20 bg-white/12 text-white'
+                  : 'border-[#A9DAFF]/25 bg-[#A9DAFF]/10 text-[#EAF8FF]'
+              }`}
+            >
+              {item}
             </span>
-          </h1>
+          </div>
+        ))}
+      </div>
+      <div className="relative mt-8 rounded-2xl border border-[#A9DAFF]/20 bg-[#071D3A]/45 px-5 py-4">
+        <p className="text-sm font-semibold leading-6 text-[#DDF1FF]">
+          Separate signals become useful only when the system can interpret how they move together.
+        </p>
+      </div>
+    </div>
+  );
+}
 
-          <p className="mt-6 mx-auto max-w-2xl text-lg text-white/75 leading-relaxed sm:text-xl">
-            Omnivyra helps you understand your marketing — before you spend, before you scale, before you guess.
-          </p>
+function HarmonyVisual() {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      <svg className="absolute inset-0 h-full w-full opacity-70" viewBox="0 0 1200 500" preserveAspectRatio="none">
+        <path
+          d="M80 310 C 260 180, 430 220, 590 250 S 880 330, 1120 170"
+          fill="none"
+          stroke="rgba(10,102,194,0.16)"
+          strokeWidth="2"
+        />
+        <path
+          d="M120 360 C 310 260, 430 320, 600 300 S 900 220, 1080 300"
+          fill="none"
+          stroke="rgba(63,169,245,0.16)"
+          strokeWidth="2"
+        />
+      </svg>
+      <div className="absolute left-[18%] top-[34%] h-2 w-2 rounded-full bg-[#0A66C2]" />
+      <div className="absolute left-[50%] top-[49%] h-2 w-2 rounded-full bg-[#3FA9F5]" />
+      <div className="absolute right-[20%] top-[38%] h-2 w-2 rounded-full bg-[#0A66C2]" />
+    </div>
+  );
+}
 
-          <p className="mt-4 text-base text-white/50 italic">
-            Most marketing problems don't start in execution. They start before it.
-          </p>
-
-          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link
-              href="/get-free-credits"
-              className="rounded-full bg-white px-8 py-3.5 text-sm font-semibold text-[#0A1F44] shadow-lg hover:bg-white/90 transition-all"
-            >
-              Get Free Credits
+function CinematicFooter() {
+  return (
+    <footer className="relative overflow-hidden bg-[#F5F9FF] px-6 pb-10 pt-14 lg:px-8">
+      <AtmosphericTexture mode="light" />
+      <div className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-[#F5F9FF] via-[#F5F9FF]/85 to-transparent" />
+      <div className="relative mx-auto max-w-[1180px] pt-10">
+        <div className="h-px w-full bg-gradient-to-r from-transparent via-[#C9DDF3]/65 to-transparent" />
+        <div className="mt-12 grid gap-12 lg:grid-cols-[1.22fr_1fr] lg:items-start">
+          <div>
+            <Link href="/" aria-label="Omnivyra home" className="inline-flex">
+              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
             </Link>
-            <Link
-              href="/features"
-              className="rounded-full border border-white/30 bg-white/10 px-8 py-3.5 text-sm font-semibold text-white backdrop-blur-sm hover:bg-white/20 transition-all"
-            >
-              See How It Works
-            </Link>
-          </div>
-        </div>
-
-        {/* Hero image */}
-        <div className="mx-auto max-w-5xl px-6 pb-0">
-          <div className="relative aspect-[16/7] overflow-hidden rounded-t-2xl shadow-2xl">
-            <Image
-              src={hero.url}
-              alt="Abstract clarity visual"
-              fill
-              className="object-cover opacity-80"
-              priority
-              sizes="(max-width: 1280px) 100vw, 1280px"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#0A1F44]/60 to-transparent" />
-            <a
-              href={`${hero.photoUrl}?utm_source=omnivyra&utm_medium=referral`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="absolute bottom-3 right-4 text-[10px] text-white/60 hover:text-white transition-colors"
-            >
-              Photo by {hero.credit} · Unsplash
-            </a>
-          </div>
-        </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 2 — THE REALITY
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="relative overflow-hidden bg-[#0B1F33]">
-        {/* Subtle orb */}
-        <div className="pointer-events-none absolute top-0 right-0 h-80 w-80 rounded-full bg-[#0A66C2]/15 blur-[100px]" />
-
-        <div className="relative mx-auto max-w-6xl px-6 py-14 sm:py-20">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-14 items-stretch">
-
-            {/* Left: text */}
-            <div className="flex flex-col justify-center">
-              <div className="inline-block w-fit rounded-full bg-white/10 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-white/60 mb-5">
-                The Reality
-              </div>
-              <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl leading-tight">
-                Marketing didn't get simpler.
-                <br />
-                <span className="text-[#3FA9F5]">It just got faster.</span>
-              </h2>
-
-              {/* Stat row */}
-              <div className="mt-8 grid grid-cols-3 gap-3">
-                {[
-                  { num: '14+', label: 'avg channels per brand' },
-                  { num: '40%', label: 'budget spent without clarity' },
-                  { num: '3×', label: 'more tools than 5 years ago' },
-                ].map(({ num, label }) => (
-                  <div key={num} className="rounded-xl border border-white/10 bg-white/5 px-3 py-4 text-center">
-                    <p className="text-2xl font-bold text-[#3FA9F5]">{num}</p>
-                    <p className="mt-1 text-xs text-white/50 leading-snug">{label}</p>
-                  </div>
-                ))}
-              </div>
-
-              <p className="mt-7 text-white/60 leading-relaxed text-sm">
-                And less time to ask:{' '}
-                <span className="text-white/90 font-medium italic">Is this ready? Will this work? What are we missing?</span>
-              </p>
-              <p className="mt-4 text-white/60 leading-relaxed text-sm">
-                Most teams move forward anyway.{' '}
-                <strong className="text-white font-semibold">They launch first. Understand later.</strong>
-              </p>
-
-              <div className="mt-6 rounded-xl border-l-4 border-[#3FA9F5] bg-white/5 px-5 py-4">
-                <p className="text-sm text-[#3FA9F5] font-medium leading-relaxed">
-                  Not because they lack effort — but because they lacked visibility before execution.
-                </p>
-              </div>
-            </div>
-
-            {/* Right: image */}
-            <div className="relative overflow-hidden rounded-2xl min-h-[280px]">
-              <Image
-                src={chaos.url}
-                alt="Marketing analytics dashboard showing multiple channel performance"
-                fill
-                className="object-cover"
-                sizes="(max-width: 1024px) 100vw, 50vw"
-              />
-              {/* Dark overlay bottom */}
-              <div className="absolute inset-0 bg-gradient-to-t from-[#0B1F33]/70 via-transparent to-transparent" />
-              {/* Caption */}
-              <div className="absolute bottom-4 left-4 right-4">
-                <p className="text-xs text-white/40 italic">Tracking more channels — seeing less of what matters</p>
-              </div>
-              <a
-                href={`${chaos.photoUrl}?utm_source=omnivyra&utm_medium=referral`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="absolute bottom-2 right-3 text-[9px] text-white/30 hover:text-white/60 transition-colors"
-              >
-                {chaos.credit} · Unsplash
-              </a>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 3 — THE GAP
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="bg-white">
-        <div className="mx-auto max-w-6xl px-6 py-14 sm:py-20">
-
-          {/* Section label + heading — full width */}
-          <div className="mb-10">
-            <div className="inline-block rounded-full bg-amber-100 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-amber-700 mb-4">
-              The Gap
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-20 items-end">
-              <h2 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl leading-tight">
-                The problem isn't effort.
-                <br />
-                <span className="text-[#0A66C2]">It's what you can't see.</span>
-              </h2>
-              <p className="text-[#6B7C93] text-base leading-relaxed">
-                Automation increased speed — not clarity. More activity doesn't mean better outcomes.
-                Without structure, it creates noise.
-              </p>
-            </div>
-          </div>
-
-          {/* 3 symptom cards + image side by side */}
-          <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-stretch">
-
-            {/* Cards — span 2 cols */}
-            <div className="lg:col-span-2 flex flex-col gap-4">
-              {[
-                {
-                  label: 'Disconnected',
-                  desc: 'Channels, content and campaigns run in silos — no shared view of readiness.',
-                  icon: '⛓️',
-                  color: 'border-red-200 bg-red-50',
-                  dot: 'bg-red-400',
-                },
-                {
-                  label: 'Reactive',
-                  desc: 'Problems surface mid-campaign. Fixes happen after spend, not before it.',
-                  icon: '🔥',
-                  color: 'border-amber-200 bg-amber-50',
-                  dot: 'bg-amber-400',
-                },
-                {
-                  label: 'Evaluated too late',
-                  desc: 'Budgets are committed before anyone checks whether the system is ready.',
-                  icon: '⏱️',
-                  color: 'border-orange-200 bg-orange-50',
-                  dot: 'bg-orange-400',
-                },
-              ].map(({ label, desc, icon, color, dot }) => (
-                <div key={label} className={`flex items-start gap-4 rounded-2xl border ${color} px-5 py-4`}>
-                  <span className="text-xl mt-0.5 shrink-0">{icon}</span>
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={`h-2 w-2 rounded-full ${dot} shrink-0`} />
-                      <p className="text-sm font-bold text-[#0B1F33]">{label}</p>
-                    </div>
-                    <p className="text-xs text-[#6B7C93] leading-relaxed">{desc}</p>
-                  </div>
-                </div>
-              ))}
-
-              {/* Punchline */}
-              <div className="rounded-2xl border-l-4 border-[#0A66C2] bg-[#F5F9FF] px-5 py-4 mt-1">
-                <p className="text-sm font-semibold text-[#0B1F33] leading-relaxed">
-                  Without structure, speed becomes a liability — not an advantage.
-                </p>
-              </div>
-            </div>
-
-            {/* Image — span 3 cols */}
-            <div className="lg:col-span-3 relative overflow-hidden rounded-2xl min-h-[360px] shadow-lg">
-              <Image
-                src={disconnected.url}
-                alt="Marketing performance gap — activity vs results"
-                fill
-                className="object-cover"
-                sizes="(max-width: 1024px) 100vw, 60vw"
-              />
-              <div className="absolute inset-0 bg-gradient-to-tr from-[#0B1F33]/50 via-transparent to-transparent" />
-              {/* Floating label */}
-              <div className="absolute top-5 left-5 rounded-xl bg-white/90 backdrop-blur-sm px-4 py-3 shadow-lg max-w-[200px]">
-                <p className="text-xs font-bold text-red-600 mb-0.5">Gap identified</p>
-                <p className="text-xs text-[#6B7C93] leading-snug">Activity high. Results unclear. No structure in between.</p>
-              </div>
-              <a
-                href={`${disconnected.photoUrl}?utm_source=omnivyra&utm_medium=referral`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="absolute bottom-2 right-3 text-[9px] text-white/40 hover:text-white/70 transition-colors"
-              >
-                {disconnected.credit} · Unsplash
-              </a>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 4 — WHO THIS IS FOR
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="bg-white">
-        <div className="mx-auto max-w-6xl px-6 py-20 sm:py-28">
-          <div className="text-center mb-14">
-            <div className="inline-block rounded-full bg-[#0A66C2]/10 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-[#0A66C2] mb-6">
-              Who It's For
-            </div>
-            <h2 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">
-              If you're responsible for growth,
-              <br className="hidden sm:block" />
-              <span className="text-[#0A66C2]"> this was built for you.</span>
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-            {AUDIENCE.map(({ icon, role, need }) => (
-              <div
-                key={role}
-                className="group relative rounded-2xl border border-gray-100 bg-[#F5F9FF] p-6 hover:border-[#0A66C2]/30 hover:shadow-md transition-all duration-200"
-              >
-                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-sm text-2xl">
-                  {icon}
-                </div>
-                <h3 className="text-base font-semibold text-[#0B1F33] leading-snug mb-2">{role}</h3>
-                <p className="text-sm text-[#6B7C93] leading-relaxed">{need}</p>
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 rounded-b-2xl bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-12 text-center">
-            <p className="text-[#6B7C93] text-base">
-              Different roles. Same pressure.{' '}
-              <span className="font-semibold text-[#0B1F33]">"We need this to work."</span>
+            <p className="mt-5 max-w-sm text-sm leading-7 text-[#5D6F83]">
+              Built for clarity, control, and direction in modern marketing.
             </p>
           </div>
-        </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 5 — WHAT OMNIVYRA DOES
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="relative overflow-hidden bg-[#0A1F44]">
-        {/* Full-bleed image as section background — right half */}
-        <div className="absolute inset-y-0 right-0 w-full lg:w-1/2">
-          <Image
-            src={connected.url}
-            alt="Team building unified marketing strategy"
-            fill
-            className="object-cover object-center opacity-30 lg:opacity-50"
-            sizes="(max-width: 1024px) 100vw, 50vw"
-          />
-          <div className="absolute inset-0 bg-gradient-to-r from-[#0A1F44] via-[#0A1F44]/80 to-[#0A1F44]/20 lg:via-[#0A1F44]/60 lg:to-transparent" />
-        </div>
-
-        <div className="relative mx-auto max-w-6xl px-6 py-14 sm:py-20">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-16">
-            {/* Text — full left half */}
-            <div>
-              <div className="inline-block rounded-full border border-white/20 bg-white/10 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-white/70 mb-5">
-                What We Built
-              </div>
-              <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl leading-tight">
-                So we built{' '}
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#3FA9F5] to-white">
-                  something different.
-                </span>
-              </h2>
-              <p className="mt-5 text-white/60 text-sm leading-relaxed">
-                Omnivyra starts before execution — not during it.
-              </p>
-
-              {/* 4-step connected flow */}
-              <div className="mt-7 relative">
-                {/* Vertical connector */}
-                <div className="absolute left-[19px] top-8 bottom-8 w-px bg-gradient-to-b from-[#3FA9F5]/60 to-[#3FA9F5]/10" />
-                <div className="space-y-4">
-                  {[
-                    { step: '01', text: 'Understand your current state', sub: 'Audit readiness before anything else' },
-                    { step: '02', text: 'Identify gaps early',            sub: "Surface what's missing, not what's broken" },
-                    { step: '03', text: 'Align everything to campaigns',  sub: 'One view — channels, content, conversion' },
-                    { step: '04', text: 'Move forward with clarity',      sub: 'Spend with confidence, not hope' },
-                  ].map(({ step, text, sub }) => (
-                    <div key={step} className="flex items-start gap-4 pl-1">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#3FA9F5]/40 bg-[#3FA9F5]/10 text-xs font-bold text-[#3FA9F5]">
-                        {step}
-                      </div>
-                      <div className="pt-1">
-                        <p className="text-sm font-semibold text-white">{text}</p>
-                        <p className="text-xs text-white/40 mt-0.5">{sub}</p>
-                      </div>
-                    </div>
+          <div className="grid grid-cols-2 gap-x-10 gap-y-8 sm:grid-cols-3">
+            {FOOTER_COLUMNS.map((column) => (
+              <div key={column.heading}>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-[#071D3A]">{column.heading}</p>
+                <ul className="mt-4 space-y-3">
+                  {column.links.map((link) => (
+                    <li key={link.href}>
+                      <Link href={link.href} className="text-sm text-[#5D6F83] transition hover:text-[#0A66C2]">
+                        {link.label}
+                      </Link>
+                    </li>
                   ))}
-                </div>
-              </div>
-
-              <div className="mt-8 rounded-2xl border border-[#3FA9F5]/20 bg-white/5 backdrop-blur-sm px-5 py-4">
-                <p className="text-sm text-white/75 leading-relaxed">
-                  Not by adding more tools — but by{' '}
-                  <strong className="text-white">connecting everything into one system</strong>{' '}
-                  — your campaign planning software and marketing insights platform in one place.
-                </p>
-              </div>
-            </div>
-
-            {/* Right col: floating stat cards over the image */}
-            <div className="hidden lg:flex flex-col justify-center gap-4 pl-8">
-              {[
-                { label: 'Pre-execution clarity', value: 'Before you spend' },
-                { label: 'Gap detection',         value: 'Before launch' },
-                { label: 'One connected view',    value: 'Not 7 dashboards' },
-              ].map(({ label, value }) => (
-                <div key={label} className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md px-5 py-4">
-                  <p className="text-xs text-white/40 uppercase tracking-widest mb-1">{label}</p>
-                  <p className="text-base font-bold text-white">{value}</p>
-                </div>
-              ))}
-              <a
-                href={`${connected.photoUrl}?utm_source=omnivyra&utm_medium=referral`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[9px] text-white/20 hover:text-white/40 transition-colors mt-2 self-end"
-              >
-                {connected.credit} · Unsplash
-              </a>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 6 — WHAT CHANGES
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="bg-[#F5F9FF]">
-        <div className="mx-auto max-w-5xl px-6 py-20 sm:py-28">
-          <div className="text-center mb-14">
-            <div className="inline-block rounded-full bg-emerald-100 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-emerald-700 mb-6">
-              The Difference
-            </div>
-            <h2 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">
-              What changes when you
-              <span className="text-[#0A66C2]"> have clarity</span>
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {BENEFITS.map(({ text }) => (
-              <div
-                key={text}
-                className="flex items-center gap-4 rounded-2xl border border-gray-100 bg-white px-6 py-5 shadow-sm hover:shadow-md hover:border-[#0A66C2]/20 transition-all"
-              >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5]">
-                  <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                  </svg>
-                </div>
-                <span className="text-sm font-semibold text-[#0B1F33]">{text}</span>
+                </ul>
               </div>
             ))}
           </div>
         </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 7 — PHILOSOPHY
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="bg-[#F5F9FF]">
-        <div className="mx-auto max-w-6xl px-6 py-14 sm:py-20">
-
-          {/* Full-width image with overlay — sits above the text content */}
-          <div className="relative overflow-hidden rounded-2xl mb-10 shadow-lg">
-            <div className="aspect-[21/7] relative">
-              <Image
-                src={blueprint.url}
-                alt="Marketing team working as a structured system"
-                fill
-                className="object-cover object-top"
-                sizes="(max-width: 1280px) 100vw, 1280px"
-              />
-              <div className="absolute inset-0 bg-gradient-to-r from-[#0A1F44]/80 via-[#0A1F44]/50 to-transparent" />
-              {/* Overlay text */}
-              <div className="absolute inset-0 flex items-center px-8 sm:px-12">
-                <div className="max-w-lg">
-                  <div className="inline-block rounded-full bg-white/10 border border-white/20 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-white/70 mb-4">
-                    Our Philosophy
-                  </div>
-                  <p className="text-2xl sm:text-3xl font-bold text-white leading-snug">
-                    Marketing works better when it's treated{' '}
-                    <span className="text-[#3FA9F5]">like a system.</span>
-                  </p>
-                  <p className="mt-3 text-white/60 text-sm leading-relaxed">
-                    Campaigns, content, channels, and conversion are connected — not isolated.
-                  </p>
-                </div>
-              </div>
-            </div>
-            <a
-              href={`${blueprint.photoUrl}?utm_source=omnivyra&utm_medium=referral`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="absolute bottom-2 right-3 text-[9px] text-white/30 hover:text-white/60 transition-colors"
-            >
-              {blueprint.credit} · Unsplash
-            </a>
-          </div>
-
-          {/* Content below the image */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Before/After */}
-            <div className="lg:col-span-1 grid grid-cols-2 gap-4 content-start">
-              <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-5">
-                <p className="text-xs font-bold text-red-500 uppercase tracking-wide mb-2">Treated separately</p>
-                <p className="text-sm text-red-700 leading-snug">Unpredictable outcomes. Reactive decisions.</p>
-              </div>
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-5">
-                <p className="text-xs font-bold text-emerald-600 uppercase tracking-wide mb-2">Treated as a system</p>
-                <p className="text-sm text-emerald-700 leading-snug">Scalable, structured, confident execution.</p>
-              </div>
-            </div>
-
-            {/* AI callout */}
-            <div className="rounded-2xl border border-violet-100 bg-violet-50 px-6 py-5">
-              <p className="text-xs font-bold text-violet-600 uppercase tracking-widest mb-2">On AI</p>
-              <p className="text-sm text-violet-800 leading-relaxed font-medium">
-                AI doesn't fix broken systems. It amplifies what already exists.
-              </p>
-              <p className="text-xs text-violet-600 mt-2 leading-relaxed">
-                Strong foundations in your content strategy and SEO analysis enable clarity — not confusion.
-              </p>
-            </div>
-
-            {/* Closing principle */}
-            <div className="rounded-2xl bg-gradient-to-br from-[#0A1F44] to-[#0A66C2] px-6 py-5 flex flex-col justify-between">
-              <div className="text-2xl text-white/20 font-serif leading-none">"</div>
-              <div>
-                <p className="text-base font-bold text-white leading-snug">
-                  Structure creates clarity.
-                </p>
-                <p className="text-sm text-white/60 mt-1">Clarity enables growth.</p>
-              </div>
-              <p className="text-xs text-white/30 mt-4 uppercase tracking-widest">Omnivyra</p>
-            </div>
-          </div>
+        <div className="mt-14 h-px w-full bg-gradient-to-r from-transparent via-[#D8E3F0]/70 to-transparent" />
+        <div className="mt-7 flex flex-col gap-3 text-xs text-[#6B7C93] sm:flex-row sm:items-center sm:justify-between">
+          <p>&copy; {new Date().getFullYear()} Omnivyra. All rights reserved.</p>
+          <p>Marketing Decision Intelligence Platform</p>
         </div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════════════════════════
-          SECTION 8 — FINAL CTA
-      ══════════════════════════════════════════════════════════════════════════ */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-[#0A1F44] via-[#0A3872] to-[#0A66C2]">
-        <div className="pointer-events-none absolute -top-24 left-1/4 h-72 w-72 rounded-full bg-[#3FA9F5]/20 blur-[100px]" />
-        <div className="pointer-events-none absolute bottom-0 right-1/4 h-48 w-96 rounded-full bg-white/5 blur-[80px]" />
-
-        <div className="relative mx-auto max-w-3xl px-6 py-24 sm:py-32 text-center">
-          {/* Decorative line */}
-          <div className="mx-auto mb-8 h-px w-24 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-
-          <h2 className="text-3xl font-bold tracking-tight text-white sm:text-5xl leading-tight">
-            If you had clarity,
-            <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#3FA9F5] to-white">
-              what would you do differently?
-            </span>
-          </h2>
-
-          <p className="mt-6 text-lg text-white/65">
-            Now you don't have to guess.
-          </p>
-
-          <div className="mt-10">
-            <Link
-              href="/get-free-credits"
-              className="inline-flex items-center gap-2 rounded-full bg-white px-10 py-4 text-sm font-bold text-[#0A1F44] shadow-xl hover:bg-white/90 transition-all hover:scale-105"
-            >
-              👉 Get Free Credits
-            </Link>
-          </div>
-
-          <p className="mt-6 text-xs text-white/40">
-            No credit card required · 300 credits free · Start in minutes
-          </p>
-
-          <div className="mx-auto mt-12 h-px w-24 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-        </div>
-      </section>
-
-      <Footer />
-    </div>
+      </div>
+    </footer>
   );
 }
 
-export async function getStaticProps() {
-  const images = await getAboutImages();
-  return {
-    props: images,
-    revalidate: 86400,
-  };
+export default function AboutPage() {
+  return (
+    <>
+      <Head>
+        <title>About | Omnivyra</title>
+        <meta
+          name="description"
+          content="Omnivyra exists because AI changed marketing faster than marketing systems could evolve."
+        />
+      </Head>
+
+      <main className="relative isolate min-h-screen overflow-hidden bg-[#F5F9FF]" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <JourneyField />
+        <section
+          className="relative z-10 flex min-h-[calc(100svh-65px)] overflow-hidden text-white"
+          style={{ background: BLUE_FIELD }}
+        >
+          <AtmosphericTexture mode="dark" />
+          <FragmentedHeroField />
+          <div className="absolute inset-x-0 bottom-0 h-px bg-[#A9DAFF]/18" />
+          <div className="relative mx-auto flex w-full max-w-[1180px] items-center px-6 py-4 sm:py-6 lg:px-8">
+            <div className="max-w-[820px]">
+              <p className="inline-flex rounded-full border border-[#3FA9F5]/30 bg-[#3FA9F5]/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-[#A9DAFF]">
+                About Omnivyra
+              </p>
+              <h1 className="mt-3 max-w-[820px] text-[2.05rem] font-black leading-[1.02] tracking-tight sm:text-5xl lg:text-[3.05rem] xl:text-[3.15rem]">
+                AI changed marketing faster than marketing systems could evolve.
+              </h1>
+              <div className="mt-3 grid max-w-4xl gap-3 lg:grid-cols-[0.7fr_1fr] lg:gap-5">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-[#A9DAFF]">AI promised</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {AI_PROMISES.map((item) => (
+                      <span
+                        key={item}
+                        className="rounded-full border border-white/14 bg-white/10 px-2.5 py-1.5 text-[11px] font-bold text-[#EAF8FF] backdrop-blur"
+                      >
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2 text-sm leading-6 text-white/82 sm:text-[0.95rem] sm:leading-6">
+                  <div>
+                    <p>But what emerged was an ecosystem of</p>
+                    <p className="mt-1 inline rounded-lg bg-white/10 px-1.5 py-0.5 font-black text-white">
+                      disconnected tools solving disconnected problems.
+                    </p>
+                  </div>
+                  <p>Teams gained more capability, yet operational understanding became increasingly fragmented.</p>
+                  <p className="font-semibold text-[#DDF1FF]">Omnivyra was created because of that disconnect.</p>
+                </div>
+              </div>
+              <div className="mt-4 sm:mt-5">
+                <Link
+                  href="/solutions"
+                  data-ga-primary-cta
+                  data-ga-label="Explore Omnivyra"
+                  data-ga-location="about_hero"
+                  className="inline-flex min-h-[46px] items-center justify-center rounded-xl bg-white px-6 py-3 text-sm font-bold text-[#0A66C2] shadow-[0_16px_34px_rgba(10,102,194,0.24)] transition hover:-translate-y-0.5 hover:bg-[#EEF6FF]"
+                >
+                  Explore Omnivyra
+                </Link>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="relative z-10 overflow-hidden px-6 pb-14 pt-20 lg:px-8 lg:pb-16 lg:pt-24">
+          <AtmosphericTexture mode="light" />
+          <div className="relative mx-auto grid max-w-[1180px] gap-12 lg:grid-cols-[0.94fr_1.06fr] lg:items-center">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#0A66C2]">The fracture</p>
+              <h2 className="mt-4 text-3xl font-black tracking-tight text-[#071D3A] sm:text-5xl">
+                Modern marketing became increasingly powerful, and increasingly disconnected.
+              </h2>
+              <div className="mt-8 space-y-5 text-base leading-8 text-[#4E6175]">
+                <p>AI accelerated everything.</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {FRACTURE_ACCELERATORS.map((item) => (
+                    <p key={item} className="border-l border-[#0A66C2]/30 pl-4 text-sm font-black text-[#0A3A7A]">
+                      {item}
+                    </p>
+                  ))}
+                </div>
+                <p>
+                  But instead of creating operational clarity, the ecosystem expanded into scattered platforms, isolated
+                  intelligence, fragmented workflows, and disconnected decision systems.
+                </p>
+                <p>Teams today operate across systems that rarely understand each other operationally.</p>
+                <p>Teams gained more marketing power than ever before.</p>
+                <p>Yet many started understanding less about how everything was actually moving together.</p>
+                <p className="text-xl font-black leading-snug text-[#071D3A]">It is lack of connected understanding.</p>
+              </div>
+            </div>
+            <FractureVisual />
+          </div>
+        </section>
+
+        <CenterpiecePause />
+
+        <section className="relative z-10 overflow-hidden px-6 pb-24 pt-20 lg:px-8 lg:pt-24">
+          <AtmosphericTexture mode="light" />
+          <div className="relative mx-auto max-w-[930px] text-center">
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#0A66C2]">Why Omnivyra exists</p>
+            <h2 className="mt-4 text-3xl font-black tracking-tight text-[#071D3A] sm:text-5xl">
+              Omnivyra was created to reconnect marketing operationally.
+            </h2>
+            <div className="mx-auto mt-10 max-w-3xl space-y-7 text-lg leading-9 text-[#4E6175]">
+              <p>We did not start Omnivyra to add another marketing tool.</p>
+              <p>
+                We started it because modern marketing increasingly felt like disconnected systems trying to simulate
+                connected understanding.
+              </p>
+              <div className="mx-auto max-w-3xl border-y border-[#C9DDF3] py-8 text-left sm:px-8">
+                <p className="text-2xl font-black leading-snug tracking-tight text-[#071D3A] sm:text-3xl">
+                  At some point, marketing systems stopped helping teams understand marketing.
+                </p>
+                <p className="mt-5 text-xl leading-9 text-[#4E6175]">
+                  They started helping teams manage fragments of it.
+                </p>
+                <p className="mt-5 text-xl font-black leading-9 text-[#0A66C2]">That realization stayed with us.</p>
+                <p className="mt-5 text-xl leading-9 text-[#4E6175]">Over time, it became difficult to ignore.</p>
+                <p className="mt-5 text-xl leading-9 text-[#4E6175]">And eventually, it became Omnivyra.</p>
+              </div>
+              <p className="mx-auto max-w-2xl text-2xl font-black leading-snug text-[#071D3A]">
+                The future required something different.
+              </p>
+              <p>
+                Systems that could understand operational context, connect fragmented visibility, and guide teams with
+                greater clarity.
+              </p>
+              <p className="font-black text-[#071D3A]">
+                That belief continues to shape everything Omnivyra is becoming.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="relative z-10 overflow-hidden px-6 py-24 text-white lg:px-8" style={{ background: BLUE_FIELD }}>
+          <AtmosphericTexture mode="dark" />
+          <div className="relative mx-auto grid max-w-[1180px] gap-12 lg:grid-cols-[0.92fr_1.08fr] lg:items-center">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#A9DAFF]">What shapes Omnivyra</p>
+              <h2 className="mt-4 text-3xl font-black tracking-tight sm:text-5xl">
+                We think discoverability is no longer just about publishing.
+              </h2>
+              <div className="mt-8 space-y-5 text-base leading-8 text-[#DDF1FF] sm:text-lg">
+                <p>
+                  It is increasingly shaped by interpretation, authority, coordination, consistency, and operational
+                  movement across systems that were never designed to think together.
+                </p>
+                <p>We think future marketing systems will need to understand more than isolated performance metrics.</p>
+                <p>They will increasingly need to interpret:</p>
+              </div>
+              <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                {INTERPRETATION_LAYERS.map((item) => (
+                  <p key={item} className="border-l border-[#A9DAFF]/40 pl-4 text-sm font-black text-white">
+                    {item}
+                  </p>
+                ))}
+              </div>
+              <div className="mt-8 space-y-5 text-base leading-8 text-[#DDF1FF] sm:text-lg">
+                <p>We believe intelligent marketing systems should help teams:</p>
+              </div>
+              <div className="mt-6 flex flex-wrap gap-3">
+                {TEAM_OUTCOMES.map((item) => (
+                  <span key={item} className="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-black text-white">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <OrchestrationVisual />
+          </div>
+        </section>
+
+        <section className="relative z-10 overflow-hidden px-6 py-24 lg:px-8">
+          <AtmosphericTexture mode="light" />
+          <div className="relative mx-auto max-w-[1180px]">
+            <div className="max-w-2xl">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#0A66C2]">How Omnivyra builds</p>
+              <h2 className="mt-4 text-3xl font-black tracking-tight text-[#071D3A] sm:text-5xl">
+                Built with patience for complexity, and discipline around clarity.
+              </h2>
+            </div>
+            <div className="mt-14 grid gap-10 lg:grid-cols-3 lg:items-start">
+              {PRINCIPLES.map((item, index) => (
+                <div
+                  key={item.title}
+                  className={`border-t border-[#C9DDF3] pt-6 ${index === 1 ? 'lg:mt-14' : index === 2 ? 'lg:mt-28' : ''}`}
+                >
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-[#0A66C2]">
+                    {String(index + 1).padStart(2, '0')}
+                  </p>
+                  <h3 className="mt-4 text-2xl font-black tracking-tight text-[#071D3A]">{item.title}</h3>
+                  <p className="mt-4 text-base leading-8 text-[#5D6F83]">{item.body}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-20 max-w-3xl border-l border-[#0A66C2]/30 bg-white/28 py-2 pl-6 backdrop-blur-[2px]">
+              <p className="text-2xl font-black leading-snug tracking-tight text-[#071D3A] sm:text-3xl">
+                We are not interested in adding more operational noise to marketing.
+              </p>
+              <p className="mt-5 text-lg leading-8 text-[#4E6175]">
+                We are interested in helping teams reconnect understanding across systems that increasingly stopped
+                speaking the same language.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="relative z-10 overflow-hidden px-6 pb-16 pt-24 lg:px-8">
+          <AtmosphericTexture mode="light" />
+          <HarmonyVisual />
+          <div className="relative mx-auto max-w-[900px] text-center">
+            <h2 className="text-3xl font-black tracking-tight text-[#071D3A] sm:text-5xl">
+              Marketing became more powerful. Understanding became more fragmented.
+            </h2>
+            <p className="mx-auto mt-6 max-w-2xl text-xl font-black leading-8 text-[#0A66C2]">
+              Omnivyra exists to reconnect them.
+            </p>
+            <div className="mt-10">
+              <Link
+                href="/solutions"
+                className="inline-flex min-h-[46px] items-center justify-center rounded-xl border border-[#0A66C2]/25 bg-white/60 px-5 py-3 text-sm font-bold text-[#0A66C2] shadow-[0_10px_24px_rgba(10,102,194,0.10)] backdrop-blur transition hover:-translate-y-0.5 hover:bg-white"
+              >
+                Explore Omnivyra
+              </Link>
+            </div>
+          </div>
+        </section>
+
+        <CinematicFooter />
+      </main>
+
+      <style jsx global>{`
+        @keyframes omnivyraSignalDrift {
+          0%,
+          100% {
+            stroke-dashoffset: 0;
+            opacity: 0.62;
+          }
+          50% {
+            stroke-dashoffset: -42;
+            opacity: 1;
+          }
+        }
+
+        @keyframes omnivyraSignalBreathe {
+          0%,
+          100% {
+            opacity: 0.36;
+          }
+          50% {
+            opacity: 0.72;
+          }
+        }
+
+        .omnivyra-signal-drift {
+          animation: omnivyraSignalDrift 12s ease-in-out infinite;
+        }
+
+        .omnivyra-signal-drift-slow {
+          animation: omnivyraSignalDrift 16s ease-in-out infinite reverse;
+        }
+
+        .omnivyra-signal-breathe {
+          animation: omnivyraSignalBreathe 9s ease-in-out infinite;
+        }
+
+        @keyframes omnivyraNodeDrift {
+          0%,
+          100% {
+            transform: translate3d(0, var(--node-offset, 0rem), 0);
+          }
+          50% {
+            transform: translate3d(0, calc(var(--node-offset, 0rem) - 5px), 0);
+          }
+        }
+
+        .omnivyra-node-drift {
+          animation: omnivyraNodeDrift var(--node-duration, 10s) ease-in-out var(--node-delay, 0s) infinite;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .omnivyra-signal-drift,
+          .omnivyra-signal-drift-slow,
+          .omnivyra-signal-breathe,
+          .omnivyra-node-drift {
+            animation: none;
+          }
+        }
+      `}</style>
+    </>
+  );
 }

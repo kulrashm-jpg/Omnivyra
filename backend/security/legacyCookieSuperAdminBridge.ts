@@ -36,6 +36,22 @@ import type { AuthenticatedPrincipal } from '../../shared/contracts/security';
  */
 export const LEGACY_BRIDGE_HARD_EXPIRY_AT = new Date('2026-08-05T00:00:00Z');
 
+// ── Dry-run knob (Wave 3A bridge collapse pre-audit) ────────────────────────
+/**
+ * When LEGACY_BRIDGE_DRY_RUN=1 (or =true), the bridge ALWAYS returns null
+ * — simulating Wave 3 removal — but still emits a `bridge_authority_rejected`
+ * audit row whenever a cookie is present. This lets operators observe what
+ * would break if the bridge were deleted, without actually deleting it.
+ *
+ * Wave 3A spec: "fail-closed simulation mode; bridge deprecation warnings;
+ * NO bridge removal yet; NO hidden fallback authority; all bridge consumers
+ * observable."
+ */
+export function isLegacyBridgeDryRun(): boolean {
+  const v = (process.env.LEGACY_BRIDGE_DRY_RUN ?? '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
 // ── Cookie name (matches existing /api/super-admin/login.ts) ─────────────────
 const SUPER_ADMIN_COOKIE = 'super_admin_session';
 const CONTENT_ARCHITECT_COOKIE = 'content_architect_session';
@@ -84,6 +100,25 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
 
   const ip = clientIp(req);
   const userAgent = (req.headers['user-agent'] as string | undefined) ?? null;
+
+  // Dry-run simulation: emit a rejection audit row so operators can see
+  // every bridge dependency that WOULD break under Wave 3 removal, without
+  // actually granting authority. Runs BEFORE the hard-expiry check so the
+  // simulation is deterministic regardless of clock state.
+  if (isLegacyBridgeDryRun()) {
+    await logCookieSuperAdminUsage({
+      capability: 'super_admin.legacy',
+      decision: 'bridge_authority_rejected',
+      reason: 'LEGACY_BRIDGE_DRY_RUN=1 — simulating Wave 3 removal',
+      ip,
+      userAgent,
+    });
+    logger.warn('legacy_super_admin_bridge_dry_run_rejection', {
+      cookie: superAdminCookie === '1' ? 'super_admin_session' : 'content_architect_session',
+      ip,
+    });
+    return null;
+  }
 
   // Hard expiry.
   if (Date.now() >= LEGACY_BRIDGE_HARD_EXPIRY_AT.getTime()) {

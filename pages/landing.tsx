@@ -5,10 +5,10 @@ export default function LandingPage() {
   return (
     <>
       <Head>
-        <title>Marketing Performance Analytics and Action System | Omnivyra</title>
+        <title>Active Intelligence for AI-Era Marketing Operations | Omnivyra</title>
         <meta
           name="description"
-          content="Omnivyra helps teams analyze marketing performance, identify trends and drop-offs, prioritize next best actions, and execute from one system."
+          content="Omnivyra generates Active Intelligence from digital authority signals, visibility reporting, campaigns, content, market context, recommendations, and connected marketing operations."
         />
         <script
           type="application/ld+json"

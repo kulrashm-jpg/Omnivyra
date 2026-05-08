@@ -1,4 +1,4 @@
-import { PLATFORM_LABELS } from '../../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import { isCreatorDependentContentType } from '../../utils/contentTaxonomy';
 import { getIntentLabelForContentType } from '../../utils/formatLineForContentType';
 import { prettyContentTypeLabel } from './planningCatalog';
@@ -321,3 +321,4 @@ export function buildReviewActivityCardsForWeek(
 
   return fallbackCards;
 }
+

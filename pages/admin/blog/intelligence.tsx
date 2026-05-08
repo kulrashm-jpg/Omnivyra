@@ -53,7 +53,7 @@ import {
   formatStyleInstructions,
   type WritingStyleProfile,
 } from '../../../lib/content/writingStyleEngine';
-import type { CompanyProfile } from '../../../backend/services/companyProfileService';
+import type { CompanyProfile } from '../../../lib/shared/companyProfileTypes';
 import AIBlogCardModal from '../../../components/blog/AIBlogCardModal';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -133,3 +133,4 @@ export default function BlogIntelligencePage() {
   if (d._hasError) return <div className='p-6 text-red-600'>{d._hasError}</div>;
   return <BlogIntelView d={d} />;
 }
+

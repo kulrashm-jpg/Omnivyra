@@ -14,6 +14,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import {
   ArrowLeft, Gift, ClipboardList, Zap, Activity, Users,
   CheckCircle, XCircle, Trash2, RefreshCw, Search, ChevronDown,
@@ -175,12 +176,14 @@ export default function FreeCreditsPage() {
   // ── Data fetchers ───────────────────────────────────────────────────────────
   const fetchSummary = useCallback(async () => {
     setSummaryLoading(true);
-    const r = await fetch('/api/super-admin/free-credits/summary');
-    if (r.ok) {
-      const d = await r.json();
-      setSummary(d.summary);
-      setCategoryTotals(d.categoryTotals ?? {});
-      setMonthlyTrend(d.monthlyTrend ?? {});
+    const result = await safeFetchJson<{ summary: any; categoryTotals?: any; monthlyTrend?: any }>(
+      '/api/super-admin/free-credits/summary',
+      { credentials: 'same-origin' },
+    );
+    if (result.ok === true) {
+      setSummary(result.data.summary);
+      setCategoryTotals(result.data.categoryTotals ?? {});
+      setMonthlyTrend(result.data.monthlyTrend ?? {});
     }
     setSummaryLoading(false);
   }, []);
@@ -188,23 +191,32 @@ export default function FreeCreditsPage() {
   const fetchRequests = useCallback(async () => {
     setReqLoading(true);
     const params = new URLSearchParams({ status: reqStatus, limit: '100', search: reqSearch });
-    const r = await fetch(`/api/super-admin/free-credits/requests?${params}`);
-    if (r.ok) { const d = await r.json(); setRequests(d.requests ?? []); setReqTotal(d.total ?? 0); }
+    const result = await safeFetchJson<{ requests?: AccessRequest[]; total?: number }>(
+      `/api/super-admin/free-credits/requests?${params}`,
+      { credentials: 'same-origin' },
+    );
+    if (result.ok === true) { setRequests(result.data.requests ?? []); setReqTotal(result.data.total ?? 0); }
     setReqLoading(false);
   }, [reqStatus, reqSearch]);
 
   const fetchActivity = useCallback(async () => {
     setActivityLoading(true);
-    const r = await fetch(`/api/super-admin/free-credits/activity?source=${activitySource}&limit=200`);
-    if (r.ok) { const d = await r.json(); setActivity(d.activity ?? []); }
+    const result = await safeFetchJson<{ activity?: any[] }>(
+      `/api/super-admin/free-credits/activity?source=${activitySource}&limit=200`,
+      { credentials: 'same-origin' },
+    );
+    if (result.ok === true) setActivity(result.data.activity ?? []);
     setActivityLoading(false);
   }, [activitySource]);
 
   const fetchProfiles = useCallback(async () => {
     setProfilesLoading(true);
     const params = new URLSearchParams({ limit: '100', search: profileSearch });
-    const r = await fetch(`/api/super-admin/free-credits/profiles?${params}`);
-    if (r.ok) { const d = await r.json(); setProfiles(d.profiles ?? []); setProfilesTotal(d.total ?? 0); }
+    const result = await safeFetchJson<{ profiles?: any[]; total?: number }>(
+      `/api/super-admin/free-credits/profiles?${params}`,
+      { credentials: 'same-origin' },
+    );
+    if (result.ok === true) { setProfiles(result.data.profiles ?? []); setProfilesTotal(result.data.total ?? 0); }
     setProfilesLoading(false);
   }, [profileSearch]);
 
@@ -220,8 +232,11 @@ export default function FreeCreditsPage() {
     if (orgSearchTimer.current) clearTimeout(orgSearchTimer.current);
     orgSearchTimer.current = setTimeout(async () => {
       setGrantOrgLoading(true);
-      const r = await fetch(`/api/super-admin/companies?search=${encodeURIComponent(grantOrgSearch)}&limit=10`);
-      if (r.ok) { const d = await r.json(); setGrantOrgs(d.companies ?? d.data ?? []); }
+      const result = await safeFetchJson<{ companies?: any[]; data?: any[] }>(
+        `/api/super-admin/companies?search=${encodeURIComponent(grantOrgSearch)}&limit=10`,
+        { credentials: 'same-origin' },
+      );
+      if (result.ok === true) setGrantOrgs(result.data.companies ?? result.data.data ?? []);
       setGrantOrgLoading(false);
     }, 400);
   }, [grantOrgSearch]);

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Trend Campaign multi-region recommendation job processor (v2).
  * Loads recommendation_jobs_v2, runs per-region generation, then consolidation.
@@ -28,8 +29,7 @@ type JobV2Row = {
 export async function processRecommendationJobV2(jobId: string): Promise<void> {
   const now = new Date().toISOString();
 
-  const { data: job, error: fetchError } = await supabase
-    .from('recommendation_jobs_v2')
+  const { data: job, error: fetchError } = await ownedDbTable('recommendation_jobs_v2')
     .select('id, company_id, status, strategic_payload, selected_pillars, regions, region_results')
     .eq('id', jobId)
     .single();
@@ -43,8 +43,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
     return;
   }
 
-  await supabase
-    .from('recommendation_jobs_v2')
+  await ownedDbTable('recommendation_jobs_v2')
     .update({ status: 'RUNNING', progress_stage: 'INITIALIZING', updated_at: now })
     .eq('id', jobId);
 
@@ -56,8 +55,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
 
     let pillarSummaries: PillarSummary[] = [];
     if (pillarIds.length > 0) {
-      const { data: items } = await supabase
-        .from('opportunity_items')
+      const { data: items } = await ownedDbTable('opportunity_items')
         .select('id, title, summary')
         .eq('company_id', companyId)
         .in('id', pillarIds);
@@ -68,7 +66,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
     const regionResults: Record<string, TrendRegionRecommendation | { error: true; message: string }> = {};
 
     for (const region of regions) {
-      await supabase.from('recommendation_jobs_v2').update({ progress_stage: 'SCANNING', updated_at: new Date().toISOString() }).eq('id', jobId);
+      await ownedDbTable('recommendation_jobs_v2').update({ progress_stage: 'SCANNING', updated_at: new Date().toISOString() }).eq('id', jobId);
       const start = Date.now();
       try {
         const result = await generateTrendRecommendationForRegion(
@@ -90,8 +88,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
         regionResults[region] = { error: true, message };
       }
 
-      await supabase
-        .from('recommendation_jobs_v2')
+      await ownedDbTable('recommendation_jobs_v2')
         .update({
           region_results: regionResults,
           updated_at: new Date().toISOString(),
@@ -119,14 +116,13 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
       finalStatus = 'COMPLETED';
     }
 
-    await supabase.from('recommendation_jobs_v2').update({ progress_stage: 'CONSOLIDATING', updated_at: new Date().toISOString() }).eq('id', jobId);
+    await ownedDbTable('recommendation_jobs_v2').update({ progress_stage: 'CONSOLIDATING', updated_at: new Date().toISOString() }).eq('id', jobId);
     const consolidated =
       successCount > 0
         ? await consolidateRegionalResults(successfulResults)
         : { global_opportunities: [], region_specific_insights: {}, execution_priority_order: [], consolidated_risks: [], strategic_summary: '', confidence_index: 0 };
 
-    await supabase
-      .from('recommendation_jobs_v2')
+    await ownedDbTable('recommendation_jobs_v2')
       .update({
         progress_stage: 'FINISHED',
         status: finalStatus,
@@ -137,8 +133,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
       .eq('id', jobId);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Job failed';
-    await supabase
-      .from('recommendation_jobs_v2')
+    await ownedDbTable('recommendation_jobs_v2')
       .update({
         status: 'FAILED',
         error: message,

@@ -44,8 +44,8 @@ export interface CampaignAiPlanInput {
   collectedPlanningContext?: Record<string, unknown>;
   /** Optional one-click orchestration: generation + adaptation + scheduling */
   autopilot?: boolean;
-  /** For bolt pipeline observability: correlate AI calls to bolt_execution_runs */
-  bolt_run_id?: string | null;
+  /** Variant-scoped observability metadata supplied by adapters. */
+  variantMetadata?: Record<string, unknown>;
   /** Account context for planning influence (maturity, performance, recommendations) */
   account_context?: import('./../../types/accountContext').AccountContext | null;
   /** Performance learnings from a previous campaign — fed forward into the AI prompt so each campaign improves on the last. */

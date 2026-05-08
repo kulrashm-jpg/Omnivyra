@@ -7,7 +7,7 @@
 import React, { useState, useRef } from 'react';
 import Head from 'next/head';
 import type { GetServerSideProps } from 'next';
-import { getForm, CaptureForm } from '../../backend/services/leadService';
+import { getForm, CaptureForm } from '../../lib/server/leadService';
 
 interface Props {
   form: CaptureForm;
@@ -208,3 +208,4 @@ export default function CapturePage({ form }: Props) {
     </>
   );
 }
+

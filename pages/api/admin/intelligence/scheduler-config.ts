@@ -17,21 +17,18 @@ import {
   updateGlobalConfig,
   getRecentExecutionLogs,
 } from '../../../../backend/services/intelligenceConfigService';
-
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
-
-async function resolveUser(req: NextApiRequest): Promise<string> {
-  const { getSupabaseUserFromRequest } = await import('../../../../backend/services/supabaseAuthService');
-  const { user } = await getSupabaseUserFromRequest(req);
-  return user?.email ?? user?.id ?? 'super_admin';
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW, INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
+  // GET = read; PUT = mutation.
+  const cap = req.method === 'PUT' ? INTELLIGENCE_OVERRIDE_MANAGE : SUPER_ADMIN_DASHBOARD_VIEW;
+  const guard = await requireCapability(req, res, {
+    capability: cap,
+    reason: `intelligence scheduler-config (${req.method})`,
+  });
+  if (guard.ok !== true) return;
+  const resolveUser = async () => guard.principal.email || guard.principal.userId;
 
   // ── GET — full global config listing ──────────────────────────────────────
   if (req.method === 'GET') {
@@ -81,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      const updatedBy = await resolveUser(req);
+      const updatedBy = await resolveUser();
       const config = await updateGlobalConfig(job_type, updates as Parameters<typeof updateGlobalConfig>[1], updatedBy);
       return res.status(200).json({ config });
     } catch (err) {

@@ -1,4 +1,4 @@
-import { PLATFORM_LABELS } from '../../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import { isEligiblePlanningType, prettyContentTypeLabel } from './planningCatalog';
 import type { StructuredPlan } from './types';
 
@@ -229,3 +229,4 @@ export function buildCollectedPlanningContextForApi({
 
   return Object.keys(base).length > 0 ? base : undefined;
 }
+

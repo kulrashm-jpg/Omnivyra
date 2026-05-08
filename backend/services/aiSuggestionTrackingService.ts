@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 /**
  * ai_suggestions tracking — records when the UI shows an AI suggestion to
@@ -37,8 +38,7 @@ export type AiSuggestionRecord = {
 export async function recordSuggestionShown(input: AiSuggestionInput): Promise<AiSuggestionRecord | null> {
   const correlationId = input.execution_correlation_id || randomUUID();
   try {
-    const { data, error } = await supabase
-      .from('ai_suggestions')
+    const { data, error } = await ownedDbTable('ai_suggestions')
       .insert({
         organization_id: input.organization_id,
         platform: input.platform,
@@ -78,8 +78,7 @@ export async function recordSuggestionAccepted(input: {
 }): Promise<boolean> {
   const now = new Date().toISOString();
   try {
-    let q = supabase
-      .from('ai_suggestions')
+    let q = ownedDbTable('ai_suggestions')
       .update({
         accepted_at: now,
         action_id: input.action_id ?? null,
@@ -113,8 +112,7 @@ export async function recordSuggestionRejected(input: {
 }): Promise<boolean> {
   const now = new Date().toISOString();
   try {
-    let q = supabase
-      .from('ai_suggestions')
+    let q = ownedDbTable('ai_suggestions')
       .update({
         rejected_at: now,
         rejected_reason: input.reason ?? null,

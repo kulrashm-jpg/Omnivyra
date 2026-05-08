@@ -18,7 +18,7 @@ import {
   formatStyleInstructions,
   type WritingStyleProfile,
 } from '../../lib/content/writingStyleEngine';
-import type { CompanyProfile } from '../../backend/services/companyProfileService';
+import type { CompanyProfile } from '../../lib/shared/companyProfileTypes';
 import type { BriefInsight, DraftFieldSuggestions, TemplateSessionPayload, EnrichedGap } from '../blogs.types';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -553,3 +553,4 @@ export default function ArticlesPage() {
     </>
   );
 }
+

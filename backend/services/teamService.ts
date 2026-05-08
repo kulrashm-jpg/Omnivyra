@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Team Service
  * 
@@ -30,8 +31,7 @@ export async function assignWeek(
   assignedByUserId: string
 ): Promise<void> {
   console.warn('DEPRECATED: weekly_content_refinements write path triggered (teamService.assignWeek)');
-  const { error } = await supabase
-    .from('weekly_content_refinements')
+  const { error } = await ownedDbTable('weekly_content_refinements')
     .update({
       assigned_to_user_id: assignedToUserId,
       status: 'not_started',
@@ -45,8 +45,7 @@ export async function assignWeek(
   }
 
   // Create notification for assignee
-  await supabase
-    .from('notifications')
+  await ownedDbTable('notifications')
     .insert({
       user_id: assignedToUserId,
       type: 'assignment',
@@ -91,8 +90,7 @@ export async function updateWeekStatus(
     updateData.notes = notes;
   }
   console.warn('DEPRECATED: weekly_content_refinements write path triggered (teamService.updateWeekStatus)');
-  const { error } = await supabase
-    .from('weekly_content_refinements')
+  const { error } = await ownedDbTable('weekly_content_refinements')
     .update(updateData)
     .eq('campaign_id', campaignId)
     .eq('week_number', weekNumber);
@@ -120,8 +118,7 @@ export async function getUserAssignments(
     status?: 'not_started' | 'in_progress' | 'completed';
   } = {}
 ): Promise<WeekAssignment[]> {
-  let query = supabase
-    .from('weekly_content_refinements')
+  let query = ownedDbTable('weekly_content_refinements')
     .select('*')
     .eq('assigned_to_user_id', userId);
 
@@ -154,8 +151,7 @@ export async function getUserAssignments(
  * Get team members for a campaign
  */
 export async function getCampaignTeam(campaignId: string): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('weekly_content_refinements')
+  const { data, error } = await ownedDbTable('weekly_content_refinements')
     .select('assigned_to_user_id')
     .eq('campaign_id', campaignId)
     .not('assigned_to_user_id', 'is', null);

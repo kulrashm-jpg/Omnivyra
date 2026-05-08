@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Readiness Service
  *
@@ -49,8 +50,7 @@ function isScheduledOrCompleted(status?: string | null, scheduledPostId?: string
 export async function getCampaignReadiness(
   campaignId: string
 ): Promise<CampaignReadinessResult | null> {
-  const { data, error } = await supabase
-    .from('campaign_readiness')
+  const { data, error } = await ownedDbTable('campaign_readiness')
     .select('*')
     .eq('campaign_id', campaignId)
     .single();
@@ -70,8 +70,7 @@ export async function evaluateCampaignReadiness(
 ): Promise<CampaignReadinessResult> {
   const blockingIssues: ReadinessIssue[] = [];
 
-  const { data: campaign, error: campaignError } = await supabase
-    .from('campaigns')
+  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .select('id')
     .eq('id', campaignId)
     .single();
@@ -92,14 +91,12 @@ export async function evaluateCampaignReadiness(
   }
 
   let weekNumbers: number[] = [];
-  const { data: weeklyPlans, error: weeklyError } = await supabase
-    .from('weekly_content_plans')
+  const { data: weeklyPlans, error: weeklyError } = await ownedDbTable('weekly_content_plans')
     .select('week_number')
     .eq('campaign_id', campaignId);
 
   if (weeklyError) {
-    const { data: refinements } = await supabase
-      .from('weekly_content_refinements')
+    const { data: refinements } = await ownedDbTable('weekly_content_refinements')
       .select('week_number')
       .eq('campaign_id', campaignId);
     weekNumbers = (refinements || []).map((r: any) => r.week_number);
@@ -139,8 +136,7 @@ export async function evaluateCampaignReadiness(
     });
   }
 
-  const { data: dailyPlans, error: dailyError } = await supabase
-    .from('daily_content_plans')
+  const { data: dailyPlans, error: dailyError } = await ownedDbTable('daily_content_plans')
     .select(
       'id, week_number, content, media_requirements, media_urls, status, scheduled_post_id'
     )
@@ -246,7 +242,7 @@ export async function evaluateCampaignReadiness(
 
   const lastEvaluated = new Date().toISOString();
 
-  const { error: upsertError } = await supabase.from('campaign_readiness').upsert(
+  const { error: upsertError } = await ownedDbTable('campaign_readiness').upsert(
     {
       campaign_id: campaignId,
       readiness_percentage: readinessPercentage,

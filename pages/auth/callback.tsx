@@ -103,10 +103,13 @@ export default function AuthCallback() {
         // sessionStorage so /onboarding/domain-verification can display it.
         // The DB stores HMAC(token); this is the only window to surface the
         // raw value to the client.
+        let syncJson: {
+          domain_verification?: { token: string; final_domain: string };
+          mfa_required?: true;
+          factors?: ReadonlyArray<'totp' | 'webauthn'>;
+        } = {};
         try {
-          const syncJson = await syncRes.clone().json().catch(() => ({})) as {
-            domain_verification?: { token: string; final_domain: string };
-          };
+          syncJson = await syncRes.clone().json().catch(() => ({}));
           if (syncJson.domain_verification?.token) {
             window.sessionStorage.setItem(
               'domain_verification_token_v1',
@@ -118,6 +121,23 @@ export default function AuthCallback() {
           }
         } catch {
           /* non-fatal — verification UI will degrade gracefully */
+        }
+
+        // ── MFA-required branch ──────────────────────────────────────────
+        // The server has issued a short-lived mfa_intent cookie. We must
+        // NOT call verify-email or post-login-route here — neither
+        // endpoint will work without an auth_session, and the session
+        // cannot exist until the MFA challenge passes. Route the user
+        // straight to the challenge page; on success, /auth/mfa will mint
+        // the session and continue the flow itself.
+        if (syncJson.mfa_required === true) {
+          setStatusMsg('One more step — confirm with your authenticator.');
+          const factorParam = (syncJson.factors ?? []).join(',');
+          const next = factorParam
+            ? `/auth/mfa?factors=${encodeURIComponent(factorParam)}`
+            : '/auth/mfa';
+          router.replace(next);
+          return;
         }
 
         setStatusMsg('Verifying your account…');

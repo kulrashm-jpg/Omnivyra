@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Activate Intelligence System
  * Run: npx ts-node backend/scripts/activateIntelligenceSystem.ts
@@ -19,7 +20,7 @@ const SOURCES = [
 ];
 
 async function safeCount(table: string, pkCol = 'id'): Promise<number> {
-  const { count, error } = await supabase.from(table).select(pkCol, { count: 'exact', head: true });
+  const { count, error } = await ownedDbTable(table).select(pkCol, { count: 'exact', head: true });
   if (error) return -1;
   return count ?? -1;
 }
@@ -29,13 +30,12 @@ async function main() {
 
   // 1. Insert external API sources
   for (const src of SOURCES) {
-    const { data: existing } = await supabase
-      .from('external_api_sources')
+    const { data: existing } = await ownedDbTable('external_api_sources')
       .select('id')
       .eq('name', src.name)
       .maybeSingle();
     if (!existing) {
-      const { error } = await supabase.from('external_api_sources').insert(src);
+      const { error } = await ownedDbTable('external_api_sources').insert(src);
       if (error) {
         console.warn(`[activate] Failed to insert ${src.name}:`, error.message);
       } else {
@@ -45,13 +45,12 @@ async function main() {
   }
 
   // 2. Get first company and all active sources
-  const { data: companies } = await supabase.from('companies').select('id').order('created_at').limit(1);
-  const { data: sources } = await supabase.from('external_api_sources').select('id').eq('is_active', true);
+  const { data: companies } = await ownedDbTable('companies').select('id').order('created_at').limit(1);
+  const { data: sources } = await ownedDbTable('external_api_sources').select('id').eq('is_active', true);
 
   if (companies?.length && sources?.length) {
     for (const s of sources) {
-      const { error } = await supabase
-        .from('company_api_configs')
+      const { error } = await ownedDbTable('company_api_configs')
         .upsert(
           { company_id: companies[0]!.id, api_source_id: s.id, enabled: true, polling_frequency: '2h' },
           { onConflict: 'company_id,api_source_id', ignoreDuplicates: false }
@@ -61,14 +60,13 @@ async function main() {
     console.log('[activate] company_api_configs: linked', companies[0]!.id, 'to', sources.length, 'sources');
 
     // 3. Phase-3 config for distribution
-    const { data: hasTopic } = await supabase
-      .from('company_intelligence_topics')
+    const { data: hasTopic } = await ownedDbTable('company_intelligence_topics')
       .select('id')
       .eq('company_id', companies[0]!.id)
       .eq('topic', 'marketing')
       .maybeSingle();
     if (!hasTopic) {
-      await supabase.from('company_intelligence_topics').insert({
+      await ownedDbTable('company_intelligence_topics').insert({
         company_id: companies[0]!.id,
         topic: 'marketing',
         enabled: true,

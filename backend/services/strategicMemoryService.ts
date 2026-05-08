@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Strategic Memory Service
  *
@@ -70,8 +71,7 @@ export async function generateStrategicMemorySnapshot(campaign_id: string): Prom
     awareness_level: awareness.awareness_level,
   };
 
-  const { data: row, error } = await supabase
-    .from('strategic_memory_snapshots')
+  const { data: row, error } = await ownedDbTable('strategic_memory_snapshots')
     .insert({
       campaign_id,
       week_index,
@@ -97,8 +97,7 @@ export async function getLastStrategicMemorySnapshots(
   campaign_id: string,
   limit: number = 3
 ): Promise<StrategicMemorySnapshot[]> {
-  const { data, error } = await supabase
-    .from('strategic_memory_snapshots')
+  const { data, error } = await ownedDbTable('strategic_memory_snapshots')
     .select('id, campaign_id, week_index, metrics_summary, insights_summary, created_at')
     .eq('campaign_id', campaign_id)
     .order('created_at', { ascending: false })
@@ -161,8 +160,7 @@ export async function getStrategicMemoryTrend(campaign_id: string): Promise<Stra
 export async function getCurrentStrategicMemorySnapshot(
   campaign_id: string
 ): Promise<StrategicMemorySnapshot | null> {
-  const { data, error } = await supabase
-    .from('strategic_memory_snapshots')
+  const { data, error } = await ownedDbTable('strategic_memory_snapshots')
     .select('id, campaign_id, week_index, metrics_summary, insights_summary, created_at')
     .eq('campaign_id', campaign_id)
     .order('created_at', { ascending: false })

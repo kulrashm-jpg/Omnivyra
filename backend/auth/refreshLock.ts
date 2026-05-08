@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Token refresh distributed lock.
  *
@@ -40,23 +41,20 @@ export async function acquireRefreshLock(
   const cutoffIso = new Date(Date.now() - ttlSeconds * 1000).toISOString();
 
   // Fast path: insert. If no conflict, we own the lock.
-  const { error: insertError } = await supabase
-    .from('token_refresh_locks')
+  const { error: insertError } = await ownedDbTable('token_refresh_locks')
     .insert({ lock_key: lockKey, acquired_at: now, acquired_by: owner ?? null });
 
   if (!insertError) return true;
 
   // PK conflict — a row exists. If it's stale, take it over.
-  const { data: existing } = await supabase
-    .from('token_refresh_locks')
+  const { data: existing } = await ownedDbTable('token_refresh_locks')
     .select('acquired_at')
     .eq('lock_key', lockKey)
     .maybeSingle();
 
   if (!existing) {
     // Row vanished between insert and select (rare). Try insert once more.
-    const { error: retryError } = await supabase
-      .from('token_refresh_locks')
+    const { error: retryError } = await ownedDbTable('token_refresh_locks')
       .insert({ lock_key: lockKey, acquired_at: now, acquired_by: owner ?? null });
     return !retryError;
   }
@@ -68,8 +66,7 @@ export async function acquireRefreshLock(
 
   // Stale — take it over with a guarded update so we lose to any other taker
   // that races us through this window.
-  const { data: takenOver, error: updateError } = await supabase
-    .from('token_refresh_locks')
+  const { data: takenOver, error: updateError } = await ownedDbTable('token_refresh_locks')
     .update({ acquired_at: now, acquired_by: owner ?? null })
     .eq('lock_key', lockKey)
     .lt('acquired_at', cutoffIso)
@@ -85,7 +82,7 @@ export async function acquireRefreshLock(
  * longer exists.
  */
 export async function releaseRefreshLock(lockKey: string): Promise<void> {
-  await supabase.from('token_refresh_locks').delete().eq('lock_key', lockKey);
+  await ownedDbTable('token_refresh_locks').delete().eq('lock_key', lockKey);
 }
 
 /**

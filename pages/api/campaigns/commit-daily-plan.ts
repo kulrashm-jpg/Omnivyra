@@ -3,6 +3,7 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { syncCampaignVersionStage } from '../../../backend/db/campaignVersionStore';
 import { buildDailyExecutionMetadata, parseDailyExecutionMetadata } from '../../../lib/dailyExecutionMetadata';
 import { applyDefaultRetention } from '../../../backend/services/contentRetentionLifecycle';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 type DailyExecutionItem = {
   execution_id: string;
@@ -210,6 +211,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!campaignId || !weekNumber || !day || !activities) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     // Calculate the date for this day
     const weekStartDate = new Date();

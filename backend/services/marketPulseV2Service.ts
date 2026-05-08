@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getProfile } from './companyProfileService';
 import { buildCompanyContext } from './companyContextService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export const MARKET_PULSE_CATEGORIES = [
   'competitor_moves',
@@ -231,8 +232,7 @@ export async function createMarketPulseRun(
   legacyJobId: string | null,
 ) {
   const context = await getMarketPulseContext(companyId);
-  const { data, error } = await supabase
-    .from('market_pulse_runs')
+  const { data, error } = await ownedDbTable('market_pulse_runs')
     .insert({
       company_id: companyId,
       mode: input.mode,
@@ -263,8 +263,7 @@ export async function createMarketPulseRun(
 }
 
 export async function getMarketPulseRun(runId: string, companyId: string) {
-  const { data: run, error } = await supabase
-    .from('market_pulse_runs')
+  const { data: run, error } = await ownedDbTable('market_pulse_runs')
     .select('*')
     .eq('id', runId)
     .eq('company_id', companyId)
@@ -274,8 +273,7 @@ export async function getMarketPulseRun(runId: string, companyId: string) {
     throw new Error(error?.message || 'Market Pulse run not found');
   }
 
-  const { data: findings } = await supabase
-    .from('market_pulse_findings')
+  const { data: findings } = await ownedDbTable('market_pulse_findings')
     .select('*')
     .eq('run_id', runId)
     .order('relevance_score', { ascending: false });
@@ -353,15 +351,14 @@ async function upsertMemory(
   latestFindingHash: string,
   changeStatus: 'new' | 'updated' | 'unchanged' | 'resolved',
 ) {
-  const { data: existing } = await supabase
-    .from('market_pulse_memory')
+  const { data: existing } = await ownedDbTable('market_pulse_memory')
     .select('*')
     .eq('company_id', companyId)
     .eq('canonical_event_key', canonicalEventKey)
     .maybeSingle();
 
   if (!existing) {
-    await supabase.from('market_pulse_memory').insert({
+    await ownedDbTable('market_pulse_memory').insert({
       company_id: companyId,
       canonical_event_key: canonicalEventKey,
       latest_finding_hash: latestFindingHash,
@@ -379,8 +376,7 @@ async function upsertMemory(
       ? 'unchanged'
       : changeStatus;
 
-  await supabase
-    .from('market_pulse_memory')
+  await ownedDbTable('market_pulse_memory')
     .update({
       latest_finding_hash: latestFindingHash,
       last_seen_at: new Date().toISOString(),
@@ -398,8 +394,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
   const legacyJobId = String(run.context_snapshot?.legacy_job_id ?? '').trim();
   if (!legacyJobId) return { run, findings };
 
-  const { data: legacyJob } = await supabase
-    .from('market_pulse_jobs_v1')
+  const { data: legacyJob } = await ownedDbTable('market_pulse_jobs_v1')
     .select('*')
     .eq('id', legacyJobId)
     .single();
@@ -418,8 +413,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
             ? 'running'
             : 'pending';
 
-  await supabase
-    .from('market_pulse_runs')
+  await ownedDbTable('market_pulse_runs')
     .update({
       status: nextStatus,
       error: legacyJob.error ?? null,
@@ -449,8 +443,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
     const canonicalEventKey = slugify(`${title}-${regions.join('-') || 'global'}`);
     const itemHash = findingHash(title, summary, category, regions);
 
-    const { data: memory } = await supabase
-      .from('market_pulse_memory')
+    const { data: memory } = await ownedDbTable('market_pulse_memory')
       .select('*')
       .eq('company_id', companyId)
       .eq('canonical_event_key', canonicalEventKey)
@@ -463,7 +456,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
           ? 'unchanged'
           : 'updated';
 
-    await supabase.from('market_pulse_findings').insert({
+    await ownedDbTable('market_pulse_findings').insert({
       run_id: runId,
       company_id: companyId,
       canonical_event_key: canonicalEventKey,
@@ -495,8 +488,7 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
 }
 
 export async function getAutomationSettings(companyId: string) {
-  const { data } = await supabase
-    .from('market_pulse_automation_settings')
+  const { data } = await ownedDbTable('market_pulse_automation_settings')
     .select('*')
     .eq('company_id', companyId)
     .maybeSingle();
@@ -504,8 +496,7 @@ export async function getAutomationSettings(companyId: string) {
 }
 
 export async function getMarketPulseHistory(companyId: string) {
-  const { data, error } = await supabase
-    .from('market_pulse_runs')
+  const { data, error } = await ownedDbTable('market_pulse_runs')
     .select('id, mode, objective, categories, status, credits_consumed, created_at, completed_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
@@ -519,8 +510,7 @@ export async function getMarketPulseHistory(companyId: string) {
 }
 
 export async function upsertAutomationSettings(companyId: string, payload: Record<string, unknown>) {
-  const { data, error } = await supabase
-    .from('market_pulse_automation_settings')
+  const { data, error } = await ownedDbTable('market_pulse_automation_settings')
     .upsert({
       company_id: companyId,
       ...payload,
@@ -536,8 +526,7 @@ export async function upsertAutomationSettings(companyId: string, payload: Recor
 }
 
 export async function deleteAutomationSettings(companyId: string) {
-  const { error } = await supabase
-    .from('market_pulse_automation_settings')
+  const { error } = await ownedDbTable('market_pulse_automation_settings')
     .delete()
     .eq('company_id', companyId);
   if (error) {

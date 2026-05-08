@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
-import { PLATFORM_OPTIONS, PLATFORM_LABELS } from '../../backend/constants/platforms';
+import { PLATFORM_OPTIONS, PLATFORM_LABELS } from '../../lib/shared/platforms';
 import {
   CREATOR_DEPENDENT_PLANNING_LABELS,
   PLANNING_CONTENT_TYPE_LABELS,
@@ -277,3 +277,4 @@ export function useCampaignAiPlanningCatalog({
     hasEffectiveCatalog,
   };
 }
+

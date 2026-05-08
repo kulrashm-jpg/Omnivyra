@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Recovery Service — Step 8
  *
@@ -24,8 +25,7 @@ export type RecoveryResult = {
 
 /** Get company_id and name for a campaign. */
 async function getCampaignMeta(campaignId: string): Promise<{ company_id: string; name: string } | null> {
-  const { data } = await supabase
-    .from('campaigns')
+  const { data } = await ownedDbTable('campaigns')
     .select('company_id, name')
     .eq('id', campaignId)
     .maybeSingle();
@@ -106,7 +106,7 @@ export async function generateRecoveryCampaign(
 
   // Store as pending_campaign for immediate review
   try {
-    const { data, error } = await supabase.from('pending_campaigns').insert({
+    const { data, error } = await ownedDbTable('pending_campaigns').insert({
       company_id:      companyId,
       campaign_plan:   recoveryPlan,
       generation_meta: recoveryPlan.generation_meta,
@@ -119,7 +119,7 @@ export async function generateRecoveryCampaign(
     result.recovery_pending_id = (data as { id: string }).id;
 
     // Notify user
-    await supabase.from('notifications').insert({
+    await ownedDbTable('notifications').insert({
       company_id: companyId,
       type:       'campaign_recovery_generated',
       title:      'Recovery campaign ready',

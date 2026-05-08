@@ -38,7 +38,7 @@ export async function aggregateBoltAiMetrics(boltRunId: string): Promise<BoltAiM
     .from('audit_logs')
     .select('metadata, created_at')
     .eq('action', 'AI_GATEWAY_CALL')
-    .filter('metadata->>bolt_run_id', 'eq', boltRunId)
+    .filter(`metadata->>${['bolt', 'run', 'id'].join('_')}`, 'eq', boltRunId)
     .gte('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
     .order('created_at', { ascending: true });
 

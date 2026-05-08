@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Consumption Analytics Service
  * Aggregates LLM and external API usage from usage_events and usage_meter_monthly.
@@ -154,8 +155,7 @@ export async function getLlmConsumption(
 
   // Base query — LLM events for this org and period
   // Use * so missing optional columns (e.g. feature_area pre-migration) don't crash the query.
-  const { data: events, error } = await supabase
-    .from('usage_events')
+  const { data: events, error } = await ownedDbTable('usage_events')
     .select('*')
     .eq('organization_id', organizationId)
     .eq('source_type', 'llm')
@@ -303,8 +303,7 @@ export async function getLlmConsumption(
     const realUserIds = Array.from(userMap.keys()).filter(uid => uid !== '__system__' && uid !== ZERO_UUID);
     if (realUserIds.length > 0) {
       try {
-        const { data: userRows } = await supabase
-          .from('users')
+        const { data: userRows } = await ownedDbTable('users')
           .select('supabase_uid, email')
           .in('supabase_uid', realUserIds);
         const emailMap = new Map((userRows ?? []).map((u: { supabase_uid: string; email?: string }) => [u.supabase_uid, u.email ?? null]));
@@ -315,8 +314,7 @@ export async function getLlmConsumption(
       } catch { /* public.users query failed — emails stay null */ }
 
       // Resolve membership type: users with a role row in this org are 'member'; others are 'guest'
-      const { data: roleRows } = await supabase
-        .from('user_company_roles')
+      const { data: roleRows } = await ownedDbTable('user_company_roles')
         .select('user_id')
         .eq('company_id', organizationId)
         .in('user_id', realUserIds);
@@ -347,8 +345,7 @@ export async function getApiConsumption(
   const startDate = new Date(Date.UTC(year, month - 1, 1)).toISOString();
   const endDate = new Date(Date.UTC(year, month, 1)).toISOString();
 
-  const { data: events, error } = await supabase
-    .from('usage_events')
+  const { data: events, error } = await ownedDbTable('usage_events')
     .select('source_name, source_type, latency_ms, error_flag, total_cost')
     .eq('organization_id', organizationId)
     .eq('source_type', 'external_api')
@@ -423,8 +420,7 @@ export async function getAllOrgsConsumption(
   const startDate = new Date(Date.UTC(year, month - 1, 1)).toISOString();
   const endDate = new Date(Date.UTC(year, month, 1)).toISOString();
 
-  const { data: events, error } = await supabase
-    .from('usage_events')
+  const { data: events, error } = await ownedDbTable('usage_events')
     .select('organization_id, source_type, total_tokens, total_cost')
     .gte('created_at', startDate)
     .lt('created_at', endDate);
@@ -451,8 +447,7 @@ export async function getAllOrgsConsumption(
   // Fetch org names
   const orgIds = Array.from(orgMap.keys());
   if (orgIds.length > 0) {
-    const { data: profiles } = await supabase
-      .from('company_profiles')
+    const { data: profiles } = await ownedDbTable('company_profiles')
       .select('company_id, company_name')
       .in('company_id', orgIds);
     for (const p of (profiles ?? []) as Array<{ company_id: string; company_name: string }>) {
@@ -461,8 +456,7 @@ export async function getAllOrgsConsumption(
     }
 
     // Fetch credit balances
-    const { data: credits } = await supabase
-      .from('organization_credits')
+    const { data: credits } = await ownedDbTable('organization_credits')
       .select('organization_id, free_balance, paid_balance, incentive_balance')
       .in('organization_id', orgIds);
     for (const c of (credits ?? []) as Array<{ organization_id: string; free_balance: number; paid_balance: number; incentive_balance: number }>) {
@@ -477,16 +471,14 @@ export async function getAllOrgsConsumption(
 // ─── Credits ─────────────────────────────────────────────────────────────────
 
 export async function getOrgCreditSummary(organizationId: string): Promise<OrgCreditSummary | null> {
-  const { data: credit } = await supabase
-    .from('organization_credits')
+  const { data: credit } = await ownedDbTable('organization_credits')
     .select('free_balance, paid_balance, incentive_balance, lifetime_purchased, lifetime_consumed, credit_rate_usd')
     .eq('organization_id', organizationId)
     .maybeSingle();
 
   if (!credit) return null;
 
-  const { data: txRows } = await supabase
-    .from('credit_transactions')
+  const { data: txRows } = await ownedDbTable('credit_transactions')
     .select('id, transaction_type, credits_delta, balance_after, usd_equivalent, reference_type, note, created_at')
     .eq('organization_id', organizationId)
     .order('created_at', { ascending: false })
@@ -596,8 +588,7 @@ export async function updateOrgCreditRate(params: {
   creditRateUsd: number;
   performedBy: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const { error } = await supabase
-    .from('organization_credits')
+  const { error } = await ownedDbTable('organization_credits')
     .upsert({
       organization_id: params.organizationId,
       credit_rate_usd: params.creditRateUsd,

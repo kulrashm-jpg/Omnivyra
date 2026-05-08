@@ -1,25 +1,18 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<{ userId: string | null } | null> {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    return { userId: null };
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (isAdmin) return { userId: user.id };
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return null;
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BLOG_PUBLISH_MANAGE, SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const auth = await requireSuperAdmin(req, res);
-  if (!auth) return;
+  // Read uses dashboard-view (bridge satisfies); write uses BLOG_PUBLISH_MANAGE
+  // (canonical SUPER_ADMIN only — bridge cannot mutate blog content).
+  const cap = req.method === 'GET' ? SUPER_ADMIN_DASHBOARD_VIEW : BLOG_PUBLISH_MANAGE;
+  const guard = await requireCapability(req, res, {
+    capability: cap,
+    reason: `blog admin (${req.method})`,
+  });
+  if (guard.ok !== true) return;
+  const auth = { userId: guard.principal.userId };
 
   if (req.method === 'GET') {
     try {

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Intelligence Graph Engine
  * Phase 3: Builds relationships between signals. Edges stored in intelligence_graph_edges.
@@ -74,8 +75,7 @@ export async function insertGraphEdges(
 
   if (rows.length === 0) return { inserted: 0, skipped: 0 };
 
-  const { data, error } = await supabase
-    .from('intelligence_graph_edges')
+  const { data, error } = await ownedDbTable('intelligence_graph_edges')
     .upsert(rows, {
       onConflict: 'source_signal_id,target_signal_id,edge_type',
       ignoreDuplicates: true,
@@ -165,8 +165,7 @@ export async function buildGraphForCompanySignals(
   since.setHours(since.getHours() - windowHours);
   const sinceStr = since.toISOString();
 
-  const { data: cisRows, error: cisError } = await supabase
-    .from('company_intelligence_signals')
+  const { data: cisRows, error: cisError } = await ownedDbTable('company_intelligence_signals')
     .select('signal_id, intelligence_signals!inner(id, topic, signal_type, primary_category, detected_at)')
     .eq('company_id', companyId)
     .gte('created_at', sinceStr);
@@ -222,7 +221,7 @@ export async function getEdgesForSignal(
   signalId: string,
   options?: { direction?: 'out' | 'in' | 'both'; edgeType?: EdgeType }
 ): Promise<Array<{ id: string; source_signal_id: string; target_signal_id: string; edge_type: string; edge_strength: number | null }>> {
-  let query = supabase.from('intelligence_graph_edges').select('id, source_signal_id, target_signal_id, edge_type, edge_strength');
+  let query = ownedDbTable('intelligence_graph_edges').select('id, source_signal_id, target_signal_id, edge_type, edge_strength');
 
   if (options?.direction === 'out') {
     query = query.eq('source_signal_id', signalId);

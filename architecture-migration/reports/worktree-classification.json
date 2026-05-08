@@ -1,0 +1,1986 @@
+{
+  "counts": {
+    "activeRequired": 84,
+    "safeArchive": 1,
+    "inProgressUserWork": 40,
+    "architectureTargets": 99
+  },
+  "categories": {
+    "activeRequired": [
+      {
+        "status": " M",
+        "file": "backend/adapters/facebookAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/instagramAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/linkedinAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/pinterestAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/platformAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/spotifyAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/starmakerAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/sunoAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/tiktokAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/xAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/youtubeAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/queue/jobProcessors/boltContentJobProcessor.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/scheduler/cron.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/scheduler/schedulerService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/security/audit/SecurityAuditService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/aiGateway.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltContentGenerationForSchedule.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltMetricsAggregator.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltPipelineService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltScheduleBlockProcessor.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/publicTypes.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/resolveExecutionContext.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/runWithContextGuards.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/types.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/commandCenterStateService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/communityAiActionExecutor.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/companyIntelligenceConfigService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/contentGeneration/blueprintGenerator.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/contentGeneration/platformVariantGenerator.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/executionEngines/index.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/extensionReliabilityService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/structuredPlanScheduler.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/BlogIntelView.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/BoltStrategyView.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/CampaignDetailsContent.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/CampaignWeeklySection.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/ContentRenderer.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/WeekCard.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/blog/intelligence/useBlogIntelligence.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/chatHelpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/planningContextHelpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/reviewActivityHelpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/useCampaignAiPlanningCatalog.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/community-ai/PlaybookEditor.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/community-ai/PlaybookList.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/hooks/useDashboardState.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/CampaignValidationCard.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/FinalizeSection.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/GrowthStrategyCard.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/PlatformContentMatrix.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/StrategyBuilderStep.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/WhatIfPanel.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/plannerSessionStore.ts"
+      },
+      {
+        "status": " M",
+        "file": "hooks/commandCenterScoreModel.ts"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useActivityWorkspaceDerivedState.ts"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useBlogIntel.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useCampaignDetailsCore.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useCampaignDetailsHandlers.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useCampaignDetailsState.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useUserState.ts"
+      },
+      {
+        "status": " M",
+        "file": "lib/engagementTelemetry.ts"
+      },
+      {
+        "status": " M",
+        "file": "lib/plannerStrategicCard.ts"
+      },
+      {
+        "status": " M",
+        "file": "lib/supabaseBrowser.ts"
+      },
+      {
+        "status": " M",
+        "file": "package.json"
+      },
+      {
+        "status": " M",
+        "file": "pages/admin/blog/intelligence.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/api/campaigns/[id]/repurpose-and-schedule.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/api/campaigns/generate-weekly-structure.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/api/campaigns/weekly-structure-helpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/articles/index.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaign-details/[id].tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaign-details/helpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaign-planner.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaigns.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/capture/[id].tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/community-ai/playbooks.tsx"
+      },
+      {
+        "status": "??",
+        "file": "backend/adapters/platformAdapterTypes.ts"
+      },
+      {
+        "status": "??",
+        "file": "backend/db/writeOwner.ts"
+      },
+      {
+        "status": "??",
+        "file": "backend/security/env.ts"
+      },
+      {
+        "status": "??",
+        "file": "backend/security/webauthn/"
+      },
+      {
+        "status": "??",
+        "file": "lib/api/"
+      },
+      {
+        "status": "??",
+        "file": "lib/server/"
+      },
+      {
+        "status": "??",
+        "file": "lib/shared/"
+      },
+      {
+        "status": "??",
+        "file": "lib/simulation/"
+      },
+      {
+        "status": "??",
+        "file": "pages/api/auth/passkeys/"
+      }
+    ],
+    "safeArchive": [
+      {
+        "status": " M",
+        "file": "tsconfig.tsbuildinfo"
+      }
+    ],
+    "inProgressUserWork": [
+      {
+        "status": " M",
+        "file": ".claude/scheduled_tasks.lock"
+      },
+      {
+        "status": " M",
+        "file": ".claude/settings.local.json"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/facebookAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/instagramAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/linkedinAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/pinterestAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/platformAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/spotifyAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/starmakerAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/sunoAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/tiktokAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/xAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/adapters/youtubeAdapter.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/scheduler/cron.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/scheduler/schedulerService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/security/audit/SecurityAuditService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltMetricsAggregator.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/commandCenterStateService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/communityAiActionExecutor.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/companyIntelligenceConfigService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/executionEngines/index.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/extensionReliabilityService.ts"
+      },
+      {
+        "status": " M",
+        "file": "lib/engagementTelemetry.ts"
+      },
+      {
+        "status": " M",
+        "file": "lib/plannerStrategicCard.ts"
+      },
+      {
+        "status": " M",
+        "file": "lib/supabaseBrowser.ts"
+      },
+      {
+        "status": " M",
+        "file": "next-env.d.ts"
+      },
+      {
+        "status": " M",
+        "file": "package.json"
+      },
+      {
+        "status": " M",
+        "file": "scripts/audit-blog-combinations.ts"
+      },
+      {
+        "status": " M",
+        "file": "scripts/debug-weekly-api-shape.ts"
+      },
+      {
+        "status": " M",
+        "file": "scripts/debug-weekly-sim.ts"
+      },
+      {
+        "status": "??",
+        "file": "analytics/"
+      },
+      {
+        "status": "??",
+        "file": "backend/adapters/platformAdapterTypes.ts"
+      },
+      {
+        "status": "??",
+        "file": "backend/security/env.ts"
+      },
+      {
+        "status": "??",
+        "file": "backend/security/webauthn/"
+      },
+      {
+        "status": "??",
+        "file": "features/"
+      },
+      {
+        "status": "??",
+        "file": "lib/api/"
+      },
+      {
+        "status": "??",
+        "file": "lib/server/"
+      },
+      {
+        "status": "??",
+        "file": "lib/simulation/"
+      },
+      {
+        "status": "??",
+        "file": "pages/api/auth/passkeys/"
+      },
+      {
+        "status": "??",
+        "file": "variants/"
+      }
+    ],
+    "architectureTargets": [
+      {
+        "status": " M",
+        "file": "backend/queue/jobProcessors/boltContentJobProcessor.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/aiGateway.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltContentGenerationForSchedule.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltPipelineService.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/boltScheduleBlockProcessor.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/publicTypes.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/resolveExecutionContext.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/runWithContextGuards.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/campaignAiOrchestrator/types.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/contentGeneration/blueprintGenerator.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/contentGeneration/platformVariantGenerator.ts"
+      },
+      {
+        "status": " M",
+        "file": "backend/services/structuredPlanScheduler.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/BlogIntelView.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/BoltStrategyView.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/CampaignDetailsContent.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/CampaignWeeklySection.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/ContentRenderer.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/WeekCard.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/blog/intelligence/useBlogIntelligence.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/chatHelpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/planningContextHelpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/reviewActivityHelpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/campaign-ai/useCampaignAiPlanningCatalog.ts"
+      },
+      {
+        "status": " M",
+        "file": "components/community-ai/PlaybookEditor.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/community-ai/PlaybookList.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/hooks/useDashboardState.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/CampaignValidationCard.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/FinalizeSection.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/GrowthStrategyCard.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/PlatformContentMatrix.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/StrategyBuilderStep.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/WhatIfPanel.tsx"
+      },
+      {
+        "status": " M",
+        "file": "components/planner/plannerSessionStore.ts"
+      },
+      {
+        "status": " M",
+        "file": "hooks/commandCenterScoreModel.ts"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useActivityWorkspaceDerivedState.ts"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useBlogIntel.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useCampaignDetailsCore.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useCampaignDetailsHandlers.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useCampaignDetailsState.tsx"
+      },
+      {
+        "status": " M",
+        "file": "hooks/useUserState.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/admin/blog/intelligence.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/api/campaigns/[id]/repurpose-and-schedule.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/api/campaigns/generate-weekly-structure.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/api/campaigns/weekly-structure-helpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/articles/index.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaign-details/[id].tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaign-details/helpers.ts"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaign-planner.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/campaigns.tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/capture/[id].tsx"
+      },
+      {
+        "status": " M",
+        "file": "pages/community-ai/playbooks.tsx"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/adapters/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/boundary-rules.warn.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/contracts/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/dependency-cruiser.warn.cjs"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/eslint-boundaries.warn.cjs"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/quarantine/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/boundary-leaks.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/dependency-cycles.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/deprecated-route-usage.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/deprecated-routes.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/direct-db-writes.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/duplicate-execution-owners.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/duplicate-routes.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/execution-map-ai-execution.md"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/execution-map-campaign-generation.md"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/execution-map-content-generation.md"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/execution-map-persistence-mutation-flow.md"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/execution-map-recommendation-generation.md"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/execution-map-scheduling-flow.md"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/final-stabilization-readiness/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/forensic-rebaseline/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/frontend-backend-imports.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/migration-order.md"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/oversized-files.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/p0-execution-migration/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/p0-risk-sprint/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase1/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase2-baseline-warning-counts.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase2/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase3-baseline-warning-counts.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase3/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase4-baseline-warning-counts.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase4/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase5-baseline-warning-counts.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase5-typecheck-current.txt"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase5/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase6-baseline-warning-counts.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/phase6/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/semantic-enforcement-audit/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/semantic-enforcement-implementation/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/stable-restoration/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/variant-contamination.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/warning-counts.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/reports/worktree-classification.json"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/repositories/"
+      },
+      {
+        "status": "??",
+        "file": "architecture-migration/tools/"
+      },
+      {
+        "status": "??",
+        "file": "backend/db/writeOwner.ts"
+      },
+      {
+        "status": "??",
+        "file": "lib/shared/"
+      }
+    ]
+  },
+  "overlapConflicts": [
+    {
+      "status": " M",
+      "file": "backend/adapters/facebookAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/instagramAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/linkedinAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/pinterestAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/platformAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/spotifyAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/starmakerAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/sunoAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/tiktokAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/xAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/adapters/youtubeAdapter.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/queue/jobProcessors/boltContentJobProcessor.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/scheduler/cron.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/scheduler/schedulerService.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/security/audit/SecurityAuditService.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/aiGateway.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/boltContentGenerationForSchedule.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/boltMetricsAggregator.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/boltPipelineService.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/boltScheduleBlockProcessor.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/publicTypes.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/resolveExecutionContext.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/runWithContextGuards.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/types.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/commandCenterStateService.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/communityAiActionExecutor.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/companyIntelligenceConfigService.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/executionEngines/index.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/extensionReliabilityService.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "backend/services/structuredPlanScheduler.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/BlogIntelView.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/BoltStrategyView.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/CampaignDetailsContent.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/CampaignWeeklySection.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/ContentRenderer.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/WeekCard.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/blog/intelligence/useBlogIntelligence.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/chatHelpers.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/planningContextHelpers.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/reviewActivityHelpers.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/useCampaignAiPlanningCatalog.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/community-ai/PlaybookEditor.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/community-ai/PlaybookList.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/hooks/useDashboardState.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/planner/CampaignValidationCard.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/planner/FinalizeSection.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/planner/GrowthStrategyCard.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/planner/PlatformContentMatrix.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/planner/StrategyBuilderStep.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/planner/WhatIfPanel.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "components/planner/plannerSessionStore.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "hooks/commandCenterScoreModel.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "hooks/useActivityWorkspaceDerivedState.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "hooks/useBlogIntel.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "hooks/useCampaignDetailsCore.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "hooks/useCampaignDetailsHandlers.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "hooks/useCampaignDetailsState.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "hooks/useUserState.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "lib/engagementTelemetry.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "lib/plannerStrategicCard.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "lib/supabaseBrowser.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "package.json",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/admin/blog/intelligence.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/api/campaigns/[id]/repurpose-and-schedule.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/api/campaigns/generate-weekly-structure.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/api/campaigns/weekly-structure-helpers.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/articles/index.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/campaign-details/[id].tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/campaign-details/helpers.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/campaign-planner.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/campaigns.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/capture/[id].tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": " M",
+      "file": "pages/community-ai/playbooks.tsx",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "backend/adapters/platformAdapterTypes.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "backend/db/writeOwner.ts",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "backend/security/env.ts",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "backend/security/webauthn/",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "lib/api/",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "lib/server/",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "lib/shared/",
+      "categories": [
+        "ARCHITECTURE_TARGETS",
+        "ACTIVE_REQUIRED"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "lib/simulation/",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    },
+    {
+      "status": "??",
+      "file": "pages/api/auth/passkeys/",
+      "categories": [
+        "ACTIVE_REQUIRED",
+        "IN_PROGRESS_USER_WORK"
+      ]
+    }
+  ],
+  "architectureTargetFilesCurrentlyDirty": [
+    {
+      "status": " M",
+      "file": "backend/queue/jobProcessors/boltContentJobProcessor.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/aiGateway.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/boltContentGenerationForSchedule.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/boltPipelineService.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/boltScheduleBlockProcessor.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/publicTypes.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/resolveExecutionContext.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/runWithContextGuards.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/campaignAiOrchestrator/types.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/contentGeneration/blueprintGenerator.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/contentGeneration/platformVariantGenerator.ts"
+    },
+    {
+      "status": " M",
+      "file": "backend/services/structuredPlanScheduler.ts"
+    },
+    {
+      "status": " M",
+      "file": "components/BlogIntelView.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/BoltStrategyView.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/CampaignDetailsContent.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/CampaignWeeklySection.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/ContentRenderer.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/WeekCard.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/blog/intelligence/useBlogIntelligence.ts"
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/chatHelpers.ts"
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/planningContextHelpers.ts"
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/reviewActivityHelpers.ts"
+    },
+    {
+      "status": " M",
+      "file": "components/campaign-ai/useCampaignAiPlanningCatalog.ts"
+    },
+    {
+      "status": " M",
+      "file": "components/community-ai/PlaybookEditor.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/community-ai/PlaybookList.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/hooks/useDashboardState.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/planner/CampaignValidationCard.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/planner/FinalizeSection.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/planner/GrowthStrategyCard.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/planner/PlatformContentMatrix.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/planner/StrategyBuilderStep.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/planner/WhatIfPanel.tsx"
+    },
+    {
+      "status": " M",
+      "file": "components/planner/plannerSessionStore.ts"
+    },
+    {
+      "status": " M",
+      "file": "hooks/commandCenterScoreModel.ts"
+    },
+    {
+      "status": " M",
+      "file": "hooks/useActivityWorkspaceDerivedState.ts"
+    },
+    {
+      "status": " M",
+      "file": "hooks/useBlogIntel.tsx"
+    },
+    {
+      "status": " M",
+      "file": "hooks/useCampaignDetailsCore.tsx"
+    },
+    {
+      "status": " M",
+      "file": "hooks/useCampaignDetailsHandlers.tsx"
+    },
+    {
+      "status": " M",
+      "file": "hooks/useCampaignDetailsState.tsx"
+    },
+    {
+      "status": " M",
+      "file": "hooks/useUserState.ts"
+    },
+    {
+      "status": " M",
+      "file": "pages/admin/blog/intelligence.tsx"
+    },
+    {
+      "status": " M",
+      "file": "pages/api/campaigns/[id]/repurpose-and-schedule.ts"
+    },
+    {
+      "status": " M",
+      "file": "pages/api/campaigns/generate-weekly-structure.ts"
+    },
+    {
+      "status": " M",
+      "file": "pages/api/campaigns/weekly-structure-helpers.ts"
+    },
+    {
+      "status": " M",
+      "file": "pages/articles/index.tsx"
+    },
+    {
+      "status": " M",
+      "file": "pages/campaign-details/[id].tsx"
+    },
+    {
+      "status": " M",
+      "file": "pages/campaign-details/helpers.ts"
+    },
+    {
+      "status": " M",
+      "file": "pages/campaign-planner.tsx"
+    },
+    {
+      "status": " M",
+      "file": "pages/campaigns.tsx"
+    },
+    {
+      "status": " M",
+      "file": "pages/capture/[id].tsx"
+    },
+    {
+      "status": " M",
+      "file": "pages/community-ai/playbooks.tsx"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/adapters/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/boundary-rules.warn.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/contracts/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/dependency-cruiser.warn.cjs"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/eslint-boundaries.warn.cjs"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/quarantine/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/boundary-leaks.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/dependency-cycles.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/deprecated-route-usage.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/deprecated-routes.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/direct-db-writes.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/duplicate-execution-owners.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/duplicate-routes.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/execution-map-ai-execution.md"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/execution-map-campaign-generation.md"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/execution-map-content-generation.md"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/execution-map-persistence-mutation-flow.md"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/execution-map-recommendation-generation.md"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/execution-map-scheduling-flow.md"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/final-stabilization-readiness/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/forensic-rebaseline/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/frontend-backend-imports.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/migration-order.md"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/oversized-files.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/p0-execution-migration/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/p0-risk-sprint/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase1/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase2-baseline-warning-counts.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase2/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase3-baseline-warning-counts.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase3/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase4-baseline-warning-counts.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase4/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase5-baseline-warning-counts.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase5-typecheck-current.txt"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase5/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase6-baseline-warning-counts.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/phase6/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/semantic-enforcement-audit/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/semantic-enforcement-implementation/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/stable-restoration/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/variant-contamination.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/warning-counts.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/reports/worktree-classification.json"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/repositories/"
+    },
+    {
+      "status": "??",
+      "file": "architecture-migration/tools/"
+    },
+    {
+      "status": "??",
+      "file": "backend/db/writeOwner.ts"
+    },
+    {
+      "status": "??",
+      "file": "lib/shared/"
+    }
+  ]
+}

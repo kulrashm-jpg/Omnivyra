@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../backend/db/writeOwner';
 /**
  * Baseline Conditioning Scenario Test
  *
@@ -136,8 +137,7 @@ async function runScenario(
   const expected = computeExpectedBaseline('early_stage', 'niche');
   const classification = classifyBaseline(followersForScenario, expected);
 
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
+  const { data: roleRow } = await ownedDbTable('user_company_roles')
     .select('company_id, user_id')
     .eq('status', 'active')
     .limit(1)
@@ -148,8 +148,7 @@ async function runScenario(
     throw new Error('No company_id/user_id found. Ensure user_company_roles has active entries.');
   }
 
-  const { data: campaign, error: campErr } = await (supabase as any)
-    .from('campaigns')
+  const { data: campaign, error: campErr } = await ownedDbTable('campaigns')
     .insert({
       name: `Baseline Test: ${scenarioName}`,
       description: `Scenario: ${scenarioName}`,
@@ -167,8 +166,7 @@ async function runScenario(
   }
 
   // Use platform_metrics_snapshots for baseline (getLatestSnapshotsPerPlatform uses latest per platform)
-  await (supabase as any)
-    .from('platform_metrics_snapshots')
+  await ownedDbTable('platform_metrics_snapshots')
     .insert({
       company_id: companyId,
       platform: 'linkedin',
@@ -190,7 +188,7 @@ async function runScenario(
     version: 1,
     created_at: new Date().toISOString(),
   };
-  const { error: verErr } = await (supabase as any).from('campaign_versions').insert(versionPayload);
+  const { error: verErr } = await ownedDbTable('campaign_versions').insert(versionPayload);
 
   if (verErr) {
     throw new Error(`Failed to create campaign version: ${verErr.message}`);
@@ -207,8 +205,8 @@ async function runScenario(
   const ev = evaluate(rawPlan);
   const week1 = extractWeek1Section(rawPlan);
 
-  await (supabase as any).from('campaign_versions').delete().eq('campaign_id', campaign.id);
-  await (supabase as any).from('campaigns').delete().eq('id', campaign.id);
+  await ownedDbTable('campaign_versions').delete().eq('campaign_id', campaign.id);
+  await ownedDbTable('campaigns').delete().eq('id', campaign.id);
 
   return {
     scenario: scenarioName,

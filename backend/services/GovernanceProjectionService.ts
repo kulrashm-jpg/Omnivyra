@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Stage 32 — Governance Read Model & Performance Isolation Layer.
  * Denormalized projection updated on event writes. Purely counters — no business logic.
@@ -63,8 +64,7 @@ export async function updateGovernanceProjectionFromEvent(event: GovernanceEvent
     const policyVersion = event.policy_version ?? '1.0.0';
     const policyHash = event.policy_hash ?? '';
 
-    const { data: existing, error: fetchError } = await supabase
-      .from('governance_projections')
+    const { data: existing, error: fetchError } = await ownedDbTable('governance_projections')
       .select('*')
       .eq('campaign_id', campaignId)
       .maybeSingle();
@@ -81,8 +81,7 @@ export async function updateGovernanceProjectionFromEvent(event: GovernanceEvent
 
     let blueprintStatus = (existing as any)?.blueprint_status ?? null;
     if (blueprintStatus == null) {
-      const { data: camp } = await supabase
-        .from('campaigns')
+      const { data: camp } = await ownedDbTable('campaigns')
         .select('blueprint_status, execution_status')
         .eq('id', campaignId)
         .maybeSingle();
@@ -117,8 +116,7 @@ export async function updateGovernanceProjectionFromEvent(event: GovernanceEvent
       updated_at: new Date().toISOString(),
     };
 
-    const { error: upsertError } = await supabase
-      .from('governance_projections')
+    const { error: upsertError } = await ownedDbTable('governance_projections')
       .upsert(payload, { onConflict: 'campaign_id' });
 
     if (upsertError) {
@@ -137,8 +135,7 @@ export type ProjectionStatus = 'ACTIVE' | 'REBUILDING' | 'MISSING';
  */
 export async function getProjectionStatus(campaignId: string): Promise<ProjectionStatus> {
   try {
-    const { data, error } = await supabase
-      .from('governance_projections')
+    const { data, error } = await ownedDbTable('governance_projections')
       .select('rebuilding_since')
       .eq('campaign_id', campaignId)
       .maybeSingle();
@@ -155,8 +152,7 @@ export async function getProjectionStatus(campaignId: string): Promise<Projectio
  */
 export async function rebuildGovernanceProjection(campaignId: string): Promise<void> {
   try {
-    const { data: campaign, error: campErr } = await supabase
-      .from('campaigns')
+    const { data: campaign, error: campErr } = await ownedDbTable('campaigns')
       .select('id, execution_status, blueprint_status')
       .eq('id', campaignId)
       .maybeSingle();
@@ -166,8 +162,7 @@ export async function rebuildGovernanceProjection(campaignId: string): Promise<v
       return;
     }
 
-    const { data: cv } = await supabase
-      .from('campaign_versions')
+    const { data: cv } = await ownedDbTable('campaign_versions')
       .select('company_id')
       .eq('campaign_id', campaignId)
       .limit(1)
@@ -194,15 +189,13 @@ async function doRebuild(
   companyId: string,
   campaign: { execution_status?: string; blueprint_status?: string }
 ): Promise<void> {
-  await supabase
-    .from('governance_projections')
+  await ownedDbTable('governance_projections')
     .upsert(
     { campaign_id: campaignId, company_id: companyId, rebuilding_since: new Date().toISOString() },
     { onConflict: 'campaign_id' }
   );
 
-  const { data: events, error: evErr } = await supabase
-    .from('campaign_governance_events')
+  const { data: events, error: evErr } = await ownedDbTable('campaign_governance_events')
     .select('event_type, event_status, metadata, created_at, policy_version, policy_hash')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: true });
@@ -257,8 +250,7 @@ async function doRebuild(
       rebuilding_since: null,
     };
 
-  const { error: upsertErr } = await supabase
-    .from('governance_projections')
+  const { error: upsertErr } = await ownedDbTable('governance_projections')
     .upsert(payload, { onConflict: 'campaign_id' });
 
   if (upsertErr) {

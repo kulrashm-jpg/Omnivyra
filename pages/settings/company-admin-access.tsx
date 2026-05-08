@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { getAuthToken } from '@/utils/getAuthToken';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import { ChevronDown, ChevronRight, Building2, Brain, Activity, Save } from 'lucide-react';
 
 type AccessResponse = {
@@ -111,27 +112,31 @@ export default function CompanyAdminAccessPage() {
   async function loadAccess(currentMode: 'global' | 'company' = mode, companyId?: string | null) {
     setLoading(true);
     setError(null);
-    try {
-      const headers = await getHeaders();
-      const search = new URLSearchParams({ mode: currentMode });
-      if (currentMode === 'company' && companyId) {
-        search.set('companyId', companyId);
-      }
-      const res = await fetch(`/api/settings/intelligence-access?${search.toString()}`, { headers });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error || 'Failed to load access settings');
-      }
-      const next = json as AccessResponse;
-      setData(next);
-      if (next.companyId) {
-        setSelectedCompanyId(next.companyId);
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load access settings');
-    } finally {
-      setLoading(false);
+    const headers = await getHeaders();
+    const search = new URLSearchParams({ mode: currentMode });
+    if (currentMode === 'company' && companyId) {
+      search.set('companyId', companyId);
     }
+    const result = await safeFetchJson<AccessResponse>(
+      `/api/settings/intelligence-access?${search.toString()}`,
+      { headers, credentials: 'same-origin' },
+    );
+    if (result.ok === true) {
+      setData(result.data);
+      if (result.data.companyId) {
+        setSelectedCompanyId(result.data.companyId);
+      }
+      setLoading(false);
+      return;
+    }
+    // Surface a clear message for every failure mode (HTML response, network
+    // error, 4xx/5xx with JSON, etc.) instead of cryptic "Unexpected token '<'".
+    const detail =
+      result.reason === 'non_json_response'
+        ? `Server returned ${result.contentType ?? 'non-JSON'} (status ${result.status}). Check authentication and try again.`
+        : result.message;
+    setError(detail);
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -148,32 +153,33 @@ export default function CompanyAdminAccessPage() {
     setError(null);
 
     const previous = data;
-    try {
-      const headers = await getHeaders();
-      const res = await fetch('/api/settings/intelligence-access', {
-        method: 'PUT',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          ...payload,
-          mode,
-          ...(mode === 'company' && selectedCompanyId ? { companyId: selectedCompanyId } : {}),
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json?.error || 'Failed to save');
-      }
-      setData(json as AccessResponse);
+    const headers = await getHeaders();
+    const result = await safeFetchJson<AccessResponse>('/api/settings/intelligence-access', {
+      method: 'PUT',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        ...payload,
+        mode,
+        ...(mode === 'company' && selectedCompanyId ? { companyId: selectedCompanyId } : {}),
+      }),
+    });
+    if (result.ok === true) {
+      setData(result.data);
       setNotice('Settings saved');
-    } catch (err: any) {
-      setError(err?.message || 'Failed to save');
-      setData(previous);
-    } finally {
       setSaving(false);
+      return;
     }
+    const detail =
+      result.reason === 'non_json_response'
+        ? `Server returned ${result.contentType ?? 'non-JSON'} (status ${result.status}).`
+        : result.message;
+    setError(detail);
+    setData(previous);
+    setSaving(false);
   }
 
   async function onResetToDefault() {

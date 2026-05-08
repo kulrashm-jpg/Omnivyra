@@ -18,7 +18,7 @@ import { requireAdminRateLimit } from '../../../../backend/services/requestAcces
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { requireCapability } from '../../../../backend/security/requireCapability';
-import { BILLING_MANAGE } from '../../../../shared/contracts/security';
+import { BILLING_PLATFORM_MANAGE } from '../../../../shared/contracts/security';
 
 type UpdateEntry = {
   action_type: string;
@@ -30,12 +30,12 @@ type UpdateEntry = {
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:credit-cost-config', 20, 60))) return;
 
-  // Wave 2C-C: capability + step-up gate. billing.manage covers credit
-  // cost configuration. Both GET (read config) and POST (mutate) flow
-  // through the same capability — viewing platform pricing tunables is
-  // also super-admin scope.
+  // Phase: Platform Authority Isolation. billing.platform.manage is a
+  // SUPER_ADMIN-only capability; replaces the previous BILLING_MANAGE gate
+  // (per-tenant) which would have allowed any COMPANY_ADMIN to satisfy
+  // this platform-level credit-cost mutation.
   const guard = await requireCapability(req, res, {
-    capability: BILLING_MANAGE,
+    capability: BILLING_PLATFORM_MANAGE,
     reason: `super-admin ${req.method === 'GET' ? 'reads' : 'updates'} credit cost config`,
   });
   if (guard.ok !== true) return;

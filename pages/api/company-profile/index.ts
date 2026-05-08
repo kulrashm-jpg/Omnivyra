@@ -68,7 +68,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const archCompanyId = getContentArchitectCompanyId(req);
         if (archCompanyId) {
-          const profile = await getProfile(archCompanyId, { autoRefine: false, languageRefine: true });
+          const profile = await getProfile(archCompanyId, { autoRefine: false, languageRefine: false });
           return res.status(200).json({
             companies: [{ company_id: archCompanyId, name: profile?.name || archCompanyId }],
             rolesByCompany: [{ company_id: archCompanyId, role: 'CONTENT_ARCHITECT' }],
@@ -90,6 +90,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (error || !user) {
           return res.status(401).json({ error: 'UNAUTHORIZED' });
         }
+        // Resolve the canonical display name from the users table so the
+        // frontend doesn't have to fall back to Supabase auth metadata
+        // (which produced "you"/"there" placeholders when missing).
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('name, email')
+          .eq('id', user.id)
+          .maybeSingle();
+        const resolvedUserName =
+          (userRow?.name as string | null | undefined) ||
+          (typeof user.email === 'string' ? user.email.split('@')[0] : '') ||
+          'User';
         // Only companies this user has an active role for — Company Admin never sees other companies
         const { data: roleRows, error: roleError } = await supabase
           .from('user_company_roles')
@@ -107,13 +119,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           company_id: row.company_id,
           role: normalizeListRole(row.role || ''),
         }));
+        // mode=list only consumes profile.name, which is not in the language-refine
+        // field set (target_audience, brand_voice, unique_value, etc.). Calling
+        // languageRefine here forces N LLM calls per company per page-load and was
+        // the source of the multi-second buffering spinner on /command-center.
         const profiles = await Promise.all(
           companyIds.map(async (id) => {
-            const profile = await getProfile(id, { autoRefine: false, languageRefine: true });
+            const profile = await getProfile(id, { autoRefine: false, languageRefine: false });
             return profile || { company_id: id, name: id };
           })
         );
         return res.status(200).json({
+          userId: user.id,
+          userName: resolvedUserName,
           companies: profiles.map((profile) => ({
             company_id: profile.company_id,
             name: profile.name || profile.company_id,

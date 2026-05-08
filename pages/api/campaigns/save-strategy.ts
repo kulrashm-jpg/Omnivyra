@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 const RESTRICTED_KEY_FRAGMENTS = [
   'apikey',
@@ -40,6 +41,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!campaignId || !strategy) {
       return res.status(400).json({ error: 'Campaign ID and strategy are required' });
     }
+
+    // Tenant guard: resolves the campaign's owning organizationId,
+    // verifies active membership, rejects bridge principals + soft-deleted
+    // orgs. Must run BEFORE any read/write of campaign data.
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     // Virality planning boundary: strategy data must not include credentials or automation metadata.
     const restrictedKey = findRestrictedKey(strategy);

@@ -5,7 +5,7 @@ import SectionCard from '../../components/community-ai/SectionCard';
 import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import PlaybookList from '../../components/community-ai/PlaybookList';
 import PlaybookEditor, { defaultPlaybook } from '../../components/community-ai/PlaybookEditor';
-import type { EngagementPlaybook } from '../../backend/services/playbooks/playbookTypes';
+import type { EngagementPlaybook } from '../../lib/shared/playbookTypes';
 
 export default function CommunityAiPlaybooks() {
   const { selectedCompanyId } = useCompanyContext();
@@ -136,3 +136,4 @@ export default function CommunityAiPlaybooks() {
     </CommunityAiLayout>
   );
 }
+

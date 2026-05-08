@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Analytics Normalization Service
  *
@@ -30,8 +31,7 @@ export async function upsertPostAnalytics(row: NormalizedPostAnalytics): Promise
   const engagementRate =
     m.reach > 0 ? parseFloat(((totalEngagement / m.reach) * 100).toFixed(4)) : 0;
 
-  const { error } = await supabase
-    .from('content_analytics')
+  const { error } = await ownedDbTable('content_analytics')
     .upsert(
       {
         scheduled_post_id: row.scheduled_post_id,
@@ -77,8 +77,7 @@ export async function upsertGrowthSnapshot(row: NormalizedGrowthSnapshot): Promi
   const capturedAt   = row.captured_at ?? new Date().toISOString();
   const capturedDate = capturedAt.split('T')[0]; // YYYY-MM-DD — matches captured_date column
 
-  const { error } = await supabase
-    .from('platform_metrics_snapshots')
+  const { error } = await ownedDbTable('platform_metrics_snapshots')
     .upsert(
       {
         company_id:        row.company_id,
@@ -110,16 +109,14 @@ export async function upsertGrowthSnapshot(row: NormalizedGrowthSnapshot): Promi
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function markPollDone(pollId: string): Promise<void> {
-  await supabase
-    .from('post_analytics_polls')
+  await ownedDbTable('post_analytics_polls')
     .update({ status: 'done', last_polled_at: new Date().toISOString() })
     .eq('id', pollId);
 }
 
 export async function markPollFailed(pollId: string, attempts: number): Promise<void> {
   const newStatus = attempts >= 3 ? 'failed' : 'pending';
-  await supabase
-    .from('post_analytics_polls')
+  await ownedDbTable('post_analytics_polls')
     .update({
       status:         newStatus,
       last_polled_at: new Date().toISOString(),
@@ -160,7 +157,7 @@ export async function schedulePostPolls(opts: {
     status:            'pending',
   }));
 
-  const { error } = await supabase.from('post_analytics_polls').insert(rows);
+  const { error } = await ownedDbTable('post_analytics_polls').insert(rows);
   if (error) {
     console.warn('[schedulePostPolls] insert failed:', error.message);
   }

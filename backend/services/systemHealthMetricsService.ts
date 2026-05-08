@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * System Health Metrics Service
  * Records operational health metrics for the engagement system.
@@ -13,7 +14,7 @@ export async function recordMetric(
   metadata?: Record<string, unknown> | null
 ): Promise<void> {
   try {
-    await supabase.from('system_health_metrics').insert({
+    await ownedDbTable('system_health_metrics').insert({
       component,
       metric_name,
       metric_value,
@@ -43,8 +44,7 @@ export async function getMetrics(options: {
   limit?: number;
 }): Promise<HealthMetricRow[]> {
   const { component, metric_name, time_window_hours, limit = 500 } = options;
-  let query = supabase
-    .from('system_health_metrics')
+  let query = ownedDbTable('system_health_metrics')
     .select('id, component, metric_name, metric_value, metric_unit, observed_at, metadata')
     .order('observed_at', { ascending: false })
     .limit(limit);

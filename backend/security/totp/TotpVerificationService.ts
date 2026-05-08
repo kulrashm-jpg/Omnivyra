@@ -24,6 +24,11 @@ import { authenticator } from 'otplib';
 import { logSecurityEvent } from '../audit/SecurityAuditService';
 import { findActiveForUser, touchLastUsed } from './TotpFactorRepository';
 import { readVaultSecret } from './VaultSecretClient';
+import {
+  check as mfaCheck,
+  recordFailure as mfaRecordFailure,
+  reset as mfaReset,
+} from '../MfaAttemptLimiter';
 import type { TotpVerifyResult } from './totpTypes';
 
 export interface VerifyTotpInput {
@@ -34,16 +39,28 @@ export interface VerifyTotpInput {
 }
 
 export async function verifyTotp(input: VerifyTotpInput): Promise<TotpVerifyResult> {
+  // Per-user + per-IP brute-force gate. Runs BEFORE we do any work so a
+  // locked-out user/IP costs nothing — and so the existence of an active
+  // factor is not leaked through timing differences when locked.
+  const gate = mfaCheck({ factor: 'totp', userId: input.userId, ip: input.ip ?? null });
+  if (!gate.allowed) {
+    await audit(input, 'RATE_LIMITED', null);
+    return { ok: false, reason: 'INVALID_TOKEN' };
+  }
+
   const factor = await findActiveForUser(input.userId);
   if (!factor) {
+    mfaRecordFailure({ factor: 'totp', userId: input.userId, ip: input.ip ?? null });
     await audit(input, 'NO_ACTIVE_FACTOR', null);
     return { ok: false, reason: 'NO_ACTIVE_FACTOR' };
   }
   if (factor.revokedAt) {
+    mfaRecordFailure({ factor: 'totp', userId: input.userId, ip: input.ip ?? null });
     await audit(input, 'FACTOR_REVOKED', factor.id);
     return { ok: false, reason: 'FACTOR_REVOKED' };
   }
   if (!factor.verifiedAt) {
+    mfaRecordFailure({ factor: 'totp', userId: input.userId, ip: input.ip ?? null });
     await audit(input, 'FACTOR_NOT_VERIFIED', factor.id);
     return { ok: false, reason: 'FACTOR_NOT_VERIFIED' };
   }
@@ -57,9 +74,14 @@ export async function verifyTotp(input: VerifyTotpInput): Promise<TotpVerifyResu
   const trimmed = input.token.trim();
   const valid = authenticator.verify({ token: trimmed, secret });
   if (!valid) {
+    mfaRecordFailure({ factor: 'totp', userId: input.userId, ip: input.ip ?? null });
     await audit(input, 'INVALID_TOKEN', factor.id);
     return { ok: false, reason: 'INVALID_TOKEN' };
   }
+
+  // Reset the rate-limit buckets on success so legitimate users don't
+  // accumulate failure counts from earlier mistypes.
+  mfaReset({ factor: 'totp', userId: input.userId, ip: input.ip ?? null });
 
   await touchLastUsed(factor.id);
   const verifiedAt = new Date();

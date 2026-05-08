@@ -7,6 +7,7 @@ import { evaluatePlaybookForEvent } from './playbooks/playbookEvaluator';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService';
 import { canExecuteAction } from './executionGuardrailService';
+import { ownedDbTable } from '../db/writeOwner';
 
 type AutoRule = {
   id: string;
@@ -86,8 +87,7 @@ const loadHistoryMetrics = async (
     dayStart.setHours(0, 0, 0, 0);
     const dayStartIso = dayStart.toISOString();
 
-    const { data: replyRows } = await supabase
-      .from('community_ai_actions')
+    const { data: replyRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -96,8 +96,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'reply')
       .gte('updated_at', hourAgo);
 
-    const { data: followRows } = await supabase
-      .from('community_ai_actions')
+    const { data: followRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -106,8 +105,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'follow')
       .gte('updated_at', dayStartIso);
 
-    const { data: actionRows } = await supabase
-      .from('community_ai_actions')
+    const { data: actionRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -167,8 +165,7 @@ const resolveActionRecord = async (
     return null;
   }
 
-  let query = supabase
-    .from('community_ai_actions')
+  let query = ownedDbTable('community_ai_actions')
     .select('*')
     .eq('tenant_id', tenantId)
     .eq('organization_id', organizationId)
@@ -187,8 +184,7 @@ const resolveActionRecord = async (
   }
 
   const id = action?.id || randomUUID();
-  const { data: created } = await supabase
-    .from('community_ai_actions')
+  const { data: created } = await ownedDbTable('community_ai_actions')
     .insert({
       id,
       tenant_id: tenantId,
@@ -228,7 +224,7 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
       reason: 'auto_rules_enabled=false',
       source: 'auto_rules',
     });
-    await supabase.from('audit_logs').insert({
+    await ownedDbTable('audit_logs').insert({
       actor_user_id: null,
       action: 'COMMUNITY_AI_PLATFORM_POLICY_BLOCK',
       metadata: {
@@ -244,8 +240,7 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
     (playbook) => playbook.status === 'active'
   );
 
-  const { data: rules } = await supabase
-    .from('community_ai_auto_rules')
+  const { data: rules } = await ownedDbTable('community_ai_auto_rules')
     .select('*')
     .eq('tenant_id', input.tenant_id)
     .eq('organization_id', input.organization_id)
@@ -263,8 +258,7 @@ export const evaluateAutoRules = async (input: AutoRuleInput) => {
           const platform = (action?.platform || input.platform || '').toString().toLowerCase();
           const actionType = (action?.action_type || '').toString().toLowerCase();
           if (targetId && platform && actionType) {
-            const { data: existing } = await supabase
-              .from('community_ai_actions')
+            const { data: existing } = await ownedDbTable('community_ai_actions')
               .select('id')
               .eq('tenant_id', input.tenant_id)
               .eq('organization_id', input.organization_id)

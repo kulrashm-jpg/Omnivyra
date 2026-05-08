@@ -3,6 +3,7 @@ import { normalizePlatform } from '../constants/platforms';
 import { notifyCommunityAi } from './communityAiNotificationService';
 import { sendCommunityAiWebhooks } from './communityAiWebhookService';
 import { supabase } from '../db/supabaseClient';
+
 import { getPlaybookById } from './playbooks/playbookService';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
 import { getToken } from './platformTokenService';
@@ -12,6 +13,7 @@ import { getCommunityAiPlatformPolicy } from './communityAiPlatformPolicyService
 import { logUsageEvent } from './usageLedgerService';
 import { incrementUsageMeter } from './usageMeterService';
 import { checkUsageBeforeExecution } from './usageEnforcementService';
+import { ownedDbTable } from '../db/writeOwner';
 
 type CommunityAiAction = {
   id: string;
@@ -170,8 +172,7 @@ export async function recordExecutionMetric(input: {
   };
 
   try {
-    const { error } = await supabase
-      .from('community_ai_execution_metric_events')
+    const { error } = await ownedDbTable('community_ai_execution_metric_events')
       .insert(row);
     if (!error) return;
     throw error;
@@ -183,8 +184,7 @@ export async function recordExecutionMetric(input: {
       '→ enqueueing to DLQ',
     );
     try {
-      const { error: dlqError } = await supabase
-        .from('community_ai_metric_dlq')
+      const { error: dlqError } = await ownedDbTable('community_ai_metric_dlq')
         .insert({
           ...row,
           last_error: String(primaryErr?.message || primaryErr).slice(0, 500),
@@ -338,8 +338,7 @@ const loadHistoryMetrics = async (
     dayStart.setHours(0, 0, 0, 0);
     const dayStartIso = dayStart.toISOString();
 
-    const { data: replyRows } = await supabase
-      .from('community_ai_actions')
+    const { data: replyRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -348,8 +347,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'reply')
       .gte('updated_at', hourAgo);
 
-    const { data: followRows } = await supabase
-      .from('community_ai_actions')
+    const { data: followRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -358,8 +356,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'follow')
       .gte('updated_at', dayStartIso);
 
-    const { data: actionRows } = await supabase
-      .from('community_ai_actions')
+    const { data: actionRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -769,8 +766,7 @@ export async function advanceCommandChain(input: {
   correlationId: string;
 }): Promise<{ advanced: boolean; next_index?: number; error?: string }> {
   try {
-    const { data: row, error: readErr } = await supabase
-      .from('community_ai_actions')
+    const { data: row, error: readErr } = await ownedDbTable('community_ai_actions')
       .select('id, command_chain, command_chain_index, status')
       .eq('id', input.actionId)
       .maybeSingle();
@@ -784,8 +780,7 @@ export async function advanceCommandChain(input: {
     if (nextIndex >= chain.length) {
       return { advanced: false }; // caller should finalize terminal status
     }
-    const { error: upErr } = await supabase
-      .from('community_ai_actions')
+    const { error: upErr } = await ownedDbTable('community_ai_actions')
       .update({
         status: 'pending',
         command_chain_index: nextIndex,
@@ -954,7 +949,7 @@ export async function persistExecutionResult(input: {
     });
   }
 
-  let q = supabase.from('community_ai_actions').update(update).eq('id', input.actionId);
+  let q = ownedDbTable('community_ai_actions').update(update).eq('id', input.actionId);
   if (input.expectedFromStatuses && input.expectedFromStatuses.length > 0) {
     q = q.in('status', input.expectedFromStatuses);
   }
@@ -969,8 +964,7 @@ export async function persistExecutionResult(input: {
     // Unique-index collision (idempotency_key) surfaces here. Resolve by
     // returning the prior terminal row so the caller can reply idempotently.
     if (update.idempotency_key) {
-      const { data: prior } = await supabase
-        .from('community_ai_actions')
+      const { data: prior } = await ownedDbTable('community_ai_actions')
         .select('id, status')
         .eq('organization_id', input.organizationId)
         .eq('idempotency_key', update.idempotency_key)
@@ -987,8 +981,7 @@ export async function persistExecutionResult(input: {
     return { ok: false, error: updateError.message };
   }
   if (!updated) {
-    const { data: latest } = await supabase
-      .from('community_ai_actions')
+    const { data: latest } = await ownedDbTable('community_ai_actions')
       .select('status')
       .eq('id', input.actionId)
       .maybeSingle();
@@ -1090,14 +1083,12 @@ export const executeAction = async (
   // fly (engagement APIs, bulk engagement). Inserts a minimal pending row
   // if none exists so the downstream persist path has something to update.
   if (options?.persist && options?.auto_insert) {
-    const { data: existing } = await supabase
-      .from('community_ai_actions')
+    const { data: existing } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('id', action.id)
       .maybeSingle();
     if (!existing) {
-      const { error: insertError } = await supabase
-        .from('community_ai_actions')
+      const { error: insertError } = await ownedDbTable('community_ai_actions')
         .insert({
           id: action.id,
           tenant_id: action.tenant_id,
@@ -1204,7 +1195,7 @@ const runExecution = async (
 ): Promise<ExecutionResult> => {
   const policy = await getCommunityAiPlatformPolicy();
   if (!policy.execution_enabled) {
-    await supabase.from('audit_logs').insert({
+    await ownedDbTable('audit_logs').insert({
       actor_user_id: null,
       action: 'COMMUNITY_AI_PLATFORM_POLICY_BLOCK',
       metadata: {

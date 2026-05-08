@@ -2,6 +2,7 @@ import { decodeOAuthState, encodeOAuthState } from '../auth/oauthState';
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
 import { supabase } from '../db/supabaseClient';
 import { getAnalyticsProviderConfig } from './analyticsProviderConfigService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type AnalyticsProvider = 'GA4';
 export type AnalyticsIntegrationStatus = 'connected' | 'disconnected' | 'error';
@@ -155,8 +156,7 @@ function parseGoogleResourceId(resourceName: string | null | undefined): string 
 }
 
 async function getAnalyticsIntegration(companyId: string): Promise<AnalyticsIntegrationRecord | null> {
-  const { data, error } = await supabase
-    .from('analytics_integrations')
+  const { data, error } = await ownedDbTable('analytics_integrations')
     .select('*')
     .eq('company_id', companyId)
     .eq('provider', GA4_PROVIDER)
@@ -177,8 +177,7 @@ async function ensureAnalyticsIntegration(
   const timestamp = new Date().toISOString();
 
   if (existing) {
-    const { data, error } = await supabase
-      .from('analytics_integrations')
+    const { data, error } = await ownedDbTable('analytics_integrations')
       .update({
         status,
         updated_at: timestamp,
@@ -194,8 +193,7 @@ async function ensureAnalyticsIntegration(
     return data as AnalyticsIntegrationRecord;
   }
 
-  const { data, error } = await supabase
-    .from('analytics_integrations')
+  const { data, error } = await ownedDbTable('analytics_integrations')
     .insert({
       company_id: companyId,
       provider: GA4_PROVIDER,
@@ -224,8 +222,7 @@ async function saveAnalyticsTokens(integrationId: string, token: TokenExchangeRe
     updated_at: timestamp,
   };
 
-  const { data: existing, error: lookupError } = await supabase
-    .from('analytics_tokens')
+  const { data: existing, error: lookupError } = await ownedDbTable('analytics_tokens')
     .select('id')
     .eq('integration_id', integrationId)
     .maybeSingle();
@@ -235,8 +232,7 @@ async function saveAnalyticsTokens(integrationId: string, token: TokenExchangeRe
   }
 
   if (existing?.id) {
-    const { error } = await supabase
-      .from('analytics_tokens')
+    const { error } = await ownedDbTable('analytics_tokens')
       .update(payload)
       .eq('id', existing.id);
 
@@ -246,7 +242,7 @@ async function saveAnalyticsTokens(integrationId: string, token: TokenExchangeRe
     return;
   }
 
-  const { error } = await supabase.from('analytics_tokens').insert({
+  const { error } = await ownedDbTable('analytics_tokens').insert({
     ...payload,
     created_at: timestamp,
   });
@@ -257,8 +253,7 @@ async function saveAnalyticsTokens(integrationId: string, token: TokenExchangeRe
 }
 
 async function getAnalyticsTokenRecord(integrationId: string): Promise<AnalyticsTokenRecord | null> {
-  const { data, error } = await supabase
-    .from('analytics_tokens')
+  const { data, error } = await ownedDbTable('analytics_tokens')
     .select('*')
     .eq('integration_id', integrationId)
     .maybeSingle();
@@ -284,7 +279,7 @@ async function syncAnalyticsProperties(
   const timestamp = new Date().toISOString();
 
   if (properties.length > 0) {
-    const { error } = await supabase.from('analytics_properties').upsert(
+    const { error } = await ownedDbTable('analytics_properties').upsert(
       properties.map((property) => ({
         integration_id: integrationId,
         property_id: property.propertyId,
@@ -300,8 +295,7 @@ async function syncAnalyticsProperties(
     }
   }
 
-  const { data, error } = await supabase
-    .from('analytics_properties')
+  const { data, error } = await ownedDbTable('analytics_properties')
     .select('*')
     .eq('integration_id', integrationId)
     .order('property_name', { ascending: true });
@@ -651,8 +645,7 @@ export async function saveSelectedProperty(
     throw new Error('GA4 integration not found for company');
   }
 
-  const { data: property, error: propertyError } = await supabase
-    .from('analytics_properties')
+  const { data: property, error: propertyError } = await ownedDbTable('analytics_properties')
     .select('*')
     .eq('integration_id', integration.id)
     .eq('property_id', propertyId)
@@ -667,8 +660,7 @@ export async function saveSelectedProperty(
 
   const timestamp = new Date().toISOString();
 
-  const { error: resetError } = await supabase
-    .from('analytics_properties')
+  const { error: resetError } = await ownedDbTable('analytics_properties')
     .update({ is_active: false, updated_at: timestamp })
     .eq('integration_id', integration.id)
     .eq('is_active', true);
@@ -677,8 +669,7 @@ export async function saveSelectedProperty(
     throw new Error(`Failed to deactivate current GA4 property: ${resetError.message}`);
   }
 
-  const { data, error } = await supabase
-    .from('analytics_properties')
+  const { data, error } = await ownedDbTable('analytics_properties')
     .update({ is_active: true, updated_at: timestamp })
     .eq('id', (property as AnalyticsPropertyRecord).id)
     .select('*')
@@ -697,8 +688,7 @@ export async function getActiveProperty(companyId: string): Promise<AnalyticsPro
   const integration = await getAnalyticsIntegration(companyId);
   if (!integration) return null;
 
-  const { data, error } = await supabase
-    .from('analytics_properties')
+  const { data, error } = await ownedDbTable('analytics_properties')
     .select('*')
     .eq('integration_id', integration.id)
     .eq('is_active', true)
@@ -734,8 +724,7 @@ export async function refreshAccessToken(integrationId: string): Promise<Analyti
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    await supabase
-      .from('analytics_integrations')
+    await ownedDbTable('analytics_integrations')
       .update({ status: 'error', updated_at: new Date().toISOString() })
       .eq('id', integrationId);
     throw new Error(`GA4 token refresh failed (${response.status}): ${body || 'unknown error'}`);
@@ -752,8 +741,7 @@ export async function refreshAccessToken(integrationId: string): Promise<Analyti
   };
 
   await saveAnalyticsTokens(integrationId, nextToken);
-  await supabase
-    .from('analytics_integrations')
+  await ownedDbTable('analytics_integrations')
     .update({ status: 'connected', updated_at: new Date().toISOString() })
     .eq('id', integrationId);
 
@@ -797,8 +785,7 @@ export async function listGoogleAnalyticsProperties(
     }
   }
 
-  const { data, error } = await supabase
-    .from('analytics_properties')
+  const { data, error } = await ownedDbTable('analytics_properties')
     .select('*')
     .eq('integration_id', integration.id)
     .order('property_name', { ascending: true });

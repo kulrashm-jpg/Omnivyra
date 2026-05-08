@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Company Match Service
  *
@@ -138,8 +139,7 @@ export async function findMatchingCompany(params: {
   // ── 1. Website URL the user entered (primary, no email-domain restriction) ─
   const enteredWebsiteDomain = website ? extractDomain(website) : null;
   if (enteredWebsiteDomain && !isFreeEmailDomain(enteredWebsiteDomain)) {
-    const { data: rows, error } = await supabase
-      .from('companies')
+    const { data: rows, error } = await ownedDbTable('companies')
       .select('id, name')
       .eq('status', 'active')
       .eq('website_domain', enteredWebsiteDomain)
@@ -160,8 +160,7 @@ export async function findMatchingCompany(params: {
 
   if (isCorporateEmail) {
     // 2a. Against website_domain
-    const { data: wRows } = await supabase
-      .from('companies')
+    const { data: wRows } = await ownedDbTable('companies')
       .select('id, name')
       .eq('status', 'active')
       .eq('website_domain', emailDomain)
@@ -176,8 +175,7 @@ export async function findMatchingCompany(params: {
     }
 
     // 2b. Against admin_email_domain (fallback for companies without a real website)
-    const { data: aRows } = await supabase
-      .from('companies')
+    const { data: aRows } = await ownedDbTable('companies')
       .select('id, name')
       .eq('status', 'active')
       .eq('admin_email_domain', emailDomain)
@@ -197,8 +195,7 @@ export async function findMatchingCompany(params: {
     const normalised = normaliseName(companyName);
     if (normalised.length >= 3) {
       const firstWord = normalised.split(' ')[0];
-      const { data: rows } = await supabase
-        .from('companies')
+      const { data: rows } = await ownedDbTable('companies')
         .select('id, name')
         .eq('status', 'active')
         .ilike('name', `%${firstWord}%`)
@@ -221,8 +218,7 @@ export async function findMatchingCompany(params: {
  * Get all active COMPANY_ADMIN users for a given company (for notifications).
  */
 export async function getCompanyAdmins(companyId: string): Promise<CompanyAdmin[]> {
-  const { data: roles } = await supabase
-    .from('user_company_roles')
+  const { data: roles } = await ownedDbTable('user_company_roles')
     .select('user_id')
     .eq('company_id', companyId)
     .eq('role', 'COMPANY_ADMIN')
@@ -233,8 +229,7 @@ export async function getCompanyAdmins(companyId: string): Promise<CompanyAdmin[
   const admins: CompanyAdmin[] = [];
   for (const row of roles) {
     try {
-      const { data: userData } = await supabase
-        .from('users')
+      const { data: userData } = await ownedDbTable('users')
         .select('email')
         .eq('id', row.user_id)
         .maybeSingle();
@@ -287,7 +282,7 @@ export async function notifyCompanyAdminsOfSelfJoin(params: {
     created_at: now,
   }));
 
-  const { error } = await supabase.from('notifications').insert(notifications);
+  const { error } = await ownedDbTable('notifications').insert(notifications);
   if (error) {
     console.error('[companyMatch] notification insert failed:', error.message);
   }

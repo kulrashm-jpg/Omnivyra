@@ -15,7 +15,7 @@ import { processLock, type SupabaseClient } from '@supabase/supabase-js';
 const GLOBAL_KEY = '__supabase_browser_client__';
 
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __supabase_browser_client__: SupabaseClient | undefined;
 }
 

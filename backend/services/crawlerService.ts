@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
 import { ensureCanonicalDomain, hashKey, normalizeHost, normalizeUrl, resolveCompanyWebsite } from './ingestionUtils';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface CrawlPageResult {
   url: string;
@@ -208,8 +209,7 @@ async function persistCrawledPage(companyId: string, domainId: string, page: Cra
   insertedLinks: number;
   pageInserted: boolean;
 }> {
-  const { data: pageRow, error: pageError } = await supabase
-    .from('canonical_pages')
+  const { data: pageRow, error: pageError } = await ownedDbTable('canonical_pages')
     .upsert(
       {
         company_id: companyId,
@@ -241,11 +241,11 @@ async function persistCrawledPage(companyId: string, domainId: string, page: Cra
 
   const pageId = (pageRow as { id: string }).id;
 
-  await supabase.from('page_content').delete().eq('company_id', companyId).eq('page_id', pageId);
-  await supabase.from('page_links').delete().eq('company_id', companyId).eq('from_page_id', pageId);
+  await ownedDbTable('page_content').delete().eq('company_id', companyId).eq('page_id', pageId);
+  await ownedDbTable('page_links').delete().eq('company_id', companyId).eq('from_page_id', pageId);
 
   if (page.contentBlocks.length > 0) {
-    const { error } = await supabase.from('page_content').insert(
+    const { error } = await ownedDbTable('page_content').insert(
       page.contentBlocks.map((block, index) => ({
         company_id: companyId,
         page_id: pageId,
@@ -262,7 +262,7 @@ async function persistCrawledPage(companyId: string, domainId: string, page: Cra
   }
 
   if (page.internalLinks.length > 0) {
-    const { error } = await supabase.from('page_links').insert(
+    const { error } = await ownedDbTable('page_links').insert(
       page.internalLinks.map((link, index) => ({
         company_id: companyId,
         from_page_id: pageId,
@@ -278,8 +278,7 @@ async function persistCrawledPage(companyId: string, domainId: string, page: Cra
     }
   }
 
-  await supabase
-    .from('page_links')
+  await ownedDbTable('page_links')
     .update({ to_page_id: pageId })
     .eq('company_id', companyId)
     .eq('to_url', page.url)
@@ -322,8 +321,7 @@ export async function crawlCompanyWebsite(input: CrawlCompanyWebsiteInput): Prom
     try {
       fetched = await fetchHtml(current.url, timeoutMs);
     } catch (error) {
-      await supabase
-        .from('canonical_pages')
+      await ownedDbTable('canonical_pages')
         .upsert(
           {
             company_id: input.companyId,

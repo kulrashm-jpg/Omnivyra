@@ -17,10 +17,8 @@ import {
   getSystemThrottleLevel,
   invalidateThrottleCache,
 } from '../../../../backend/services/intelligenceHealthService';
-
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW, INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
 const ALLOWED_FIELDS = new Set([
   'cpu_medium_threshold',
@@ -31,9 +29,13 @@ const ALLOWED_FIELDS = new Set([
 ]);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
+  // GET = read-only dashboard. PUT = elevated mutation.
+  const cap = req.method === 'PUT' ? INTELLIGENCE_OVERRIDE_MANAGE : SUPER_ADMIN_DASHBOARD_VIEW;
+  const guard = await requireCapability(req, res, {
+    capability: cap,
+    reason: `intelligence throttle (${req.method})`,
+  });
+  if (guard.ok !== true) return;
 
   // ── GET ───────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {

@@ -11,11 +11,9 @@ import {
 } from '../snapshotReportNarrativeHelpers';
 import type {
   CompanyNarrativeContext,
-  SignalAvailabilityLevel,
   SnapshotAction,
   SnapshotReport,
   SnapshotReportSection,
-  SnapshotSignalKey,
   SnapshotTopPriority,
   StrategicContext,
 } from '../snapshotReportTypes';
@@ -60,7 +58,9 @@ export function buildDiagnosis(params: {
 
 export function buildSummary(params: {
   sections: SnapshotReportSection[];
-  signalAvailability: Record<SnapshotSignalKey, SignalAvailabilityLevel>;
+  // Canonical evidence-coverage signal: list of human-readable channel labels that are
+  // below the NORMAL threshold. Replaces the legacy SignalAvailabilityLevel record.
+  weakSignalChannels: string[];
   competitorIntelligence: CompetitorIntelligenceResult;
   narrative: PrimaryNarrative;
   readiness?: ReportReadinessResult | null;
@@ -71,9 +71,7 @@ export function buildSummary(params: {
   const insightCount = params.sections.reduce((sum, section) => sum + section.insights.length, 0);
   const actionCount = params.sections.reduce((sum, section) => sum + section.actions.length, 0);
   const coreProblem = normalizeCoreProblem(params.coreProblem ?? params.narrative.primary_problem);
-  const missingSignals = Object.entries(params.signalAvailability)
-    .filter(([, status]) => status !== 'NORMAL')
-    .map(([key]) => key.replace(/_/g, ' '));
+  const missingSignals = params.weakSignalChannels;
   const competitorCount = params.competitorIntelligence.detected_competitors.length;
   const competitorFallbackUsed =
     params.competitorIntelligence.discovery_metadata?.is_fallback_used === true
@@ -181,7 +179,7 @@ export function buildDecisionSnapshot(params: {
   coreProblem: string;
   companyContext?: CompanyNarrativeContext;
   strategicContext?: StrategicContext;
-  signalAvailability: Record<SnapshotSignalKey, SignalAvailabilityLevel>;
+  weakSignalChannelCount: number;
   unifiedSummary: SnapshotReport['unified_intelligence_summary'];
   seoSummary: SnapshotReport['seo_executive_summary'];
   geoAeoSummary: SnapshotReport['geo_aeo_executive_summary'];
@@ -259,7 +257,7 @@ export function buildDecisionSnapshot(params: {
       ? `If executed well, ${params.companyContext.companyName} should become more visible in ${params.companyContext.marketContext}, with impact visible in commercial-query impressions, organic landing-page CTR, and conversion progression on decision pages.`
       : `If executed well, ${constraintArea} should improve first, with impact visible in commercial-query impressions, organic landing-page CTR, and conversion progression on decision pages.`;
 
-  const lowSignalCount = Object.values(params.signalAvailability).filter((value) => value !== 'NORMAL').length;
+  const lowSignalCount = params.weakSignalChannelCount;
   let outcomeConfidence: 'high' | 'medium' | 'low' =
     params.unifiedSummary.confidence === 'high' && params.seoSummary.confidence === 'high'
       ? 'high'

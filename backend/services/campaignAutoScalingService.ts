@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Auto-Scaling Service — Step 7
  *
@@ -25,8 +26,7 @@ export type ScalingResult = {
 
 /** Load current posting frequency for a campaign from its strategy or campaigns table. */
 async function getCurrentFrequency(campaignId: string): Promise<Record<string, number>> {
-  const { data } = await supabase
-    .from('campaigns')
+  const { data } = await ownedDbTable('campaigns')
     .select('posting_frequency')
     .eq('id', campaignId)
     .maybeSingle();
@@ -35,8 +35,7 @@ async function getCurrentFrequency(campaignId: string): Promise<Record<string, n
 
 /** Get company_id for a campaign. */
 async function getCompanyId(campaignId: string): Promise<string | null> {
-  const { data } = await supabase
-    .from('campaigns')
+  const { data } = await ownedDbTable('campaigns')
     .select('company_id')
     .eq('id', campaignId)
     .maybeSingle();
@@ -77,7 +76,7 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
   }
 
   if (Object.keys(boostedFreq).length > 0) {
-    await supabase.from('campaigns')
+    await ownedDbTable('campaigns')
       .update({ posting_frequency: boostedFreq, updated_at: new Date().toISOString() })
       .eq('id', campaignId);
     result.actions.push(`Increased posting frequency +20%: ${JSON.stringify(boostedFreq)}`);
@@ -89,7 +88,7 @@ export async function tryAutoScale(campaignId: string): Promise<ScalingResult> {
   const minBudget    = Math.max(500, monthlyBasis);
   const maxBudget    = Math.max(2000, monthlyBasis * 3);
 
-  await supabase.from('campaign_decision_log').insert({
+  await ownedDbTable('campaign_decision_log').insert({
     campaign_id:       campaignId,
     action:            'CONTINUE',
     ad_recommendation: 'SCALE',

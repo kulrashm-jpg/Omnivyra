@@ -10,8 +10,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { renderOmnivyraSnapshotMasterHtml, renderReportHtmlTemplate } from '../../../backend/services/export/reportHtmlTemplateRenderer';
-import { renderReportPdf } from '../../../backend/services/export/reportPdfRenderer';
+import {
+  renderCanonicalReportHtml,
+  renderCanonicalReportPdf,
+} from '../../../backend/services/export/canonicalReportPipeline';
 import {
   mapSnapshot,
   mapPerformance,
@@ -64,6 +66,9 @@ function buildGeneratingPayload(
     diagnosis: '',
     summary: '',
     overallScore: 0,
+    overallScoreState: 'insufficient_signal',
+    systemMaturity: 'building_baseline',
+    canonical: null,
     confidenceSource: '',
     insights: [],
     metrics: [],
@@ -339,15 +344,13 @@ export default async function handler(
     applyLogoFallback(withComparison);
     const sanitizedWithComparison = applyLogoFallback(sanitizeReportViewPayload(withComparison));
     if (format === 'html') {
-      const html = type === 'snapshot'
-        ? renderOmnivyraSnapshotMasterHtml(sanitizedWithComparison).html
-        : renderReportHtmlTemplate(sanitizedWithComparison).html;
+      const html = renderCanonicalReportHtml(sanitizedWithComparison);
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'private, no-store');
       return (res as NextApiResponse<any>).status(200).send(html);
     }
     if (format === 'pdf') {
-      const pdfBuffer = await renderReportPdf(sanitizedWithComparison);
+      const pdfBuffer = await renderCanonicalReportPdf(sanitizedWithComparison);
       const filename = buildPdfDownloadFilename(
         type,
         sanitizedWithComparison.companyContext?.companyName ?? null,
@@ -397,16 +400,14 @@ export default async function handler(
   const sanitizedPayloadWithComparison = applyLogoFallback(sanitizeReportViewPayload(payloadWithComparison));
 
   if (format === 'html') {
-    const html = type === 'snapshot'
-      ? renderOmnivyraSnapshotMasterHtml(sanitizedPayloadWithComparison).html
-      : renderReportHtmlTemplate(sanitizedPayloadWithComparison).html;
+    const html = renderCanonicalReportHtml(sanitizedPayloadWithComparison);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'private, no-store');
     return (res as NextApiResponse<any>).status(200).send(html);
   }
 
   if (format === 'pdf') {
-    const pdfBuffer = await renderReportPdf(sanitizedPayloadWithComparison);
+    const pdfBuffer = await renderCanonicalReportPdf(sanitizedPayloadWithComparison);
     const filename = buildPdfDownloadFilename(
       type,
       sanitizedPayloadWithComparison.companyContext?.companyName ?? null,

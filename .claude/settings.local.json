@@ -217,7 +217,13 @@
       "Bash(PORT=3000 npm run *)",
       "PowerShell(Start-Process powershell -Verb RunAs -ArgumentList \"-NoProfile\",\"-Command\",\"taskkill /F /T /PID 1212; Start-Sleep -Seconds 1\")",
       "PowerShell(Start-Process powershell -Verb RunAs -ArgumentList \"-NoProfile\",\"-Command\",\"taskkill /F /T /PID 21168; taskkill /F /T /PID 14440; taskkill /F /T /PID 18420; taskkill /F /T /PID 1820; taskkill /F /T /PID 10780; Start-Sleep -Seconds 1\")",
-      "PowerShell(Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/\" -UseBasicParsing -TimeoutSec 30 -MaximumRedirection 0 -ErrorAction Stop; \"HTTP $\\($r.StatusCode\\) on 3000\" } catch [System.Net.WebException] { if \\($_.Exception.Response\\) { \"HTTP $\\([int]$_.Exception.Response.StatusCode\\) on 3000\" } else { \"Connection error: $\\($_.Exception.Message\\)\" } })"
+      "PowerShell(Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri \"http://localhost:3000/\" -UseBasicParsing -TimeoutSec 30 -MaximumRedirection 0 -ErrorAction Stop; \"HTTP $\\($r.StatusCode\\) on 3000\" } catch [System.Net.WebException] { if \\($_.Exception.Response\\) { \"HTTP $\\([int]$_.Exception.Response.StatusCode\\) on 3000\" } else { \"Connection error: $\\($_.Exception.Message\\)\" } })",
+      "PowerShell(Get-Item *)",
+      "PowerShell(Get-Content C:\\\\virality\\\\.next\\\\dev\\\\logs\\\\next-development.log | Select-String -Pattern '\"level\":\"\\(ERROR|WARN\\)\"' | Select-Object -Last 30 | ForEach-Object { $_.Line })",
+      "Bash(npm audit *)",
+      "Bash([ -s \"C:\\\\\\\\Users\\\\\\\\Admin\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--virality\\\\\\\\fd112cf7-06f6-4e2d-ba70-d37fce6f544e\\\\\\\\tasks\\\\\\\\bqvkfwgo8.output\" ])",
+      "Bash(tee C:/tmp/build-smoke.log)",
+      "Bash(git diff *)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

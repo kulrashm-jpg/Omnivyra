@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { inferExecutionMode } from '@/backend/services/executionModeInference';
+import { inferExecutionMode } from '@/lib/shared/executionModeInference';
 import {
   CONTENT_TYPE_OPTIONS_BY_PLATFORM,
   VIDEO_CONTENT_TYPES,
@@ -152,3 +152,5 @@ export function useActivityWorkspaceDerivedState({
     writerBrief,
   };
 }
+
+

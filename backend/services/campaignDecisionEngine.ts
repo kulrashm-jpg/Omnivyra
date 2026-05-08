@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Decision Engine
  *
@@ -94,7 +95,7 @@ export async function evaluateCampaignDecision(campaignId: string): Promise<Camp
 
   // Persist decision
   try {
-    await supabase.from('campaign_decision_log').insert({
+    await ownedDbTable('campaign_decision_log').insert({
       campaign_id: campaignId,
       action,
       ad_recommendation: adRecommendation,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Feature Completion Sync Engine
  * Upserts computed feature status into database
@@ -58,8 +59,7 @@ export async function syncFeatureCompletion(
         completed_at: feature.status === 'completed' ? new Date() : null,
       };
 
-      const { error, data } = await supabase
-        .from('feature_completion')
+      const { error, data } = await ownedDbTable('feature_completion')
         .upsert(upsertData, {
           onConflict: 'company_id,feature_key', // Unique constraint
         })
@@ -141,8 +141,7 @@ export async function syncFeatureCompletionBatch(
 export async function getFeatureCompletionStatus(
   companyId: string
 ): Promise<FeatureCompletionRecord[]> {
-  const { data, error } = await supabase
-    .from('feature_completion')
+  const { data, error } = await ownedDbTable('feature_completion')
     .select('*')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
@@ -187,8 +186,7 @@ export async function getFeatureCompletionSummary(companyId: string): Promise<{
  * @param companyId Company UUID
  */
 export async function resetFeatureCompletion(companyId: string): Promise<void> {
-  const { error } = await supabase
-    .from('feature_completion')
+  const { error } = await ownedDbTable('feature_completion')
     .delete()
     .eq('company_id', companyId);
 

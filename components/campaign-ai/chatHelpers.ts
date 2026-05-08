@@ -1,4 +1,4 @@
-import { REQUIRED_EXECUTION_FIELDS } from '../../backend/constants/campaignPlanningGatherOrder';
+import { REQUIRED_EXECUTION_FIELDS } from '../../lib/shared/campaignPlanningGatherOrder';
 import type { QuickPickConfig, StructuredPlan } from './types';
 
 export const GATHER_ORDER_KEYS = new Set<string>([...REQUIRED_EXECUTION_FIELDS, 'capacity_override']);
@@ -128,3 +128,4 @@ export function renderPlanSummary(plan: StructuredPlan) {
   const dayCount = plan.weeks.reduce((sum, week) => sum + (week.daily?.length ?? 0), 0);
   return `${weekCount} weeks • ${dayCount} days`;
 }
+

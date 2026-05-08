@@ -31,18 +31,8 @@ import { publishToSpotify } from './spotifyAdapter';
 import { publishToStarMaker } from './starmakerAdapter';
 import { publishToSuno } from './sunoAdapter';
 import { publishToPinterest } from './pinterestAdapter';
-
-export interface PublishResult {
-  success: boolean;
-  platform_post_id?: string;
-  post_url?: string;
-  published_at?: Date;
-  error?: {
-    code: string;
-    message: string;
-    retryable?: boolean;
-  };
-}
+import type { PublishResult } from './platformAdapterTypes';
+export type { PublishResult } from './platformAdapterTypes';
 
 /**
  * Publish a scheduled post to its platform

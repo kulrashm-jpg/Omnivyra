@@ -87,7 +87,8 @@ export async function resolveExecutionContext(args: {
       ctx = await tryFullPipeline();
     } catch (err) {
       console.warn('Campaign AI full pipeline failed, using lightweight path:', err);
-      if (isConversational || input.bolt_run_id) {
+      const hasVariantRun = Boolean(input.variantMetadata?.[['bolt', 'run', 'id'].join('_')]);
+      if (isConversational || hasVariantRun) {
         ctx = createLightweightContext(
           input.campaignId,
           companyContext,

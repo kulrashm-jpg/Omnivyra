@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Usage Ledger Service — append-only financial telemetry.
  * Logs LLM usage, external API usage, automation execution.
@@ -374,7 +375,7 @@ export async function logUsageEvent(params: {
       });
     }
 
-    await supabase.from('usage_events').insert({
+    await ownedDbTable('usage_events').insert({
       organization_id: params.organization_id,
       campaign_id: params.campaign_id ?? null,
       user_id: params.user_id ?? null,

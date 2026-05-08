@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * WhatsApp Rate Limiter
  *
@@ -86,15 +87,13 @@ async function redisIncrBy(key: string, count: number, ttlSeconds: number): Prom
 // ── DB layer (fallback) ───────────────────────────────────────────────────────
 
 async function dbGetDailyUsage(socialAccountId: string): Promise<number> {
-  const { data } = await supabase
-    .from('social_accounts')
+  const { data } = await ownedDbTable('social_accounts')
     .select('messaging_tier')
     .eq('id', socialAccountId)
     .single();
 
   // Read current_usage_day from api_provider_accounts linked to this WA source
-  const { data: usage } = await supabase
-    .from('api_provider_accounts')
+  const { data: usage } = await ownedDbTable('api_provider_accounts')
     .select('current_usage_day')
     .eq('account_name', socialAccountId) // best available link without schema change
     .single();
@@ -127,8 +126,7 @@ export async function checkAndConsume(params: {
   const { social_account_id, phone_number_id, company_id, plan, count } = params;
 
   // Resolve tier from social_accounts
-  const { data: account } = await supabase
-    .from('social_accounts')
+  const { data: account } = await ownedDbTable('social_accounts')
     .select('messaging_tier')
     .eq('id', social_account_id)
     .single();
@@ -195,8 +193,7 @@ export function getBroadcastChunkStrategy(tier: number): ChunkStrategy {
  */
 export async function resetDailyCounters(): Promise<void> {
   // api_provider_accounts.current_usage_day reset for WA sources
-  const { error } = await supabase
-    .from('api_provider_accounts')
+  const { error } = await ownedDbTable('api_provider_accounts')
     .update({ current_usage_day: 0, last_reset_at: new Date().toISOString() })
     .eq('is_active', true);
     // Note: filter by WA api_source_id once WhatsApp is added to external_api_sources

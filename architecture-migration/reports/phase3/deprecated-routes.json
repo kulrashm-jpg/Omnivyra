@@ -1,0 +1,500 @@
+[
+  {
+    "file": "pages/api/accounts/[platform]/test.ts",
+    "line": 9,
+    "route": "/api/accounts/[platform]/test",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/active-leads/context.ts",
+    "line": 9,
+    "route": "/api/active-leads/context",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/admin/feedback.ts",
+    "line": 9,
+    "route": "/api/admin/feedback",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/admin/org/[id]/control.ts",
+    "line": 9,
+    "route": "/api/admin/org/[id]/control",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/admin/pricing/recommendations.ts",
+    "line": 9,
+    "route": "/api/admin/pricing/recommendations",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/analytics/growth.ts",
+    "line": 9,
+    "route": "/api/analytics/growth",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/analytics/summary.ts",
+    "line": 9,
+    "route": "/api/analytics/summary",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/analytics/system-state.ts",
+    "line": 9,
+    "route": "/api/analytics/system-state",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/automation/logs.ts",
+    "line": 9,
+    "route": "/api/automation/logs",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/block-templates/[id].ts",
+    "line": 9,
+    "route": "/api/block-templates/[id]",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/blogs/resolve.ts",
+    "line": 9,
+    "route": "/api/blogs/resolve",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/calendar/batch.ts",
+    "line": 9,
+    "route": "/api/calendar/batch",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/recommendations.ts",
+    "line": 9,
+    "route": "/api/campaigns/recommendations",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/[id]/prediction.ts",
+    "line": 9,
+    "route": "/api/campaigns/[id]/prediction",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/community/engagement.ts",
+    "line": 9,
+    "route": "/api/community/engagement",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/community/insights.ts",
+    "line": 9,
+    "route": "/api/community/insights",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/community/threads.ts",
+    "line": 9,
+    "route": "/api/community/threads",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/community-ai/playbooks/evaluate.ts",
+    "line": 9,
+    "route": "/api/community-ai/playbooks/evaluate",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/company-intelligence/insights.ts",
+    "line": 9,
+    "route": "/api/company-intelligence/insights",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/competitors/feedback.ts",
+    "line": 9,
+    "route": "/api/competitors/feedback",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/content/creator/generate.ts",
+    "line": 9,
+    "route": "/api/content/creator/generate",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/credits/earn/feedback.ts",
+    "line": 9,
+    "route": "/api/credits/earn/feedback",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/credits/usage.ts",
+    "line": 9,
+    "route": "/api/credits/usage",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/engagement/opportunity/resolve.ts",
+    "line": 9,
+    "route": "/api/engagement/opportunity/resolve",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/engagement/unified.ts",
+    "line": 9,
+    "route": "/api/engagement/unified",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/external-apis/platforms.ts",
+    "line": 9,
+    "route": "/api/external-apis/platforms",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/governance/summary.ts",
+    "line": 9,
+    "route": "/api/governance/summary",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/growth-intelligence/community.ts",
+    "line": 9,
+    "route": "/api/growth-intelligence/community",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/growth-intelligence/engagement.ts",
+    "line": 9,
+    "route": "/api/growth-intelligence/engagement",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/insights/campaign.ts",
+    "line": 9,
+    "route": "/api/insights/campaign",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/insights/content.ts",
+    "line": 9,
+    "route": "/api/insights/content",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/insights/engagement.ts",
+    "line": 9,
+    "route": "/api/insights/engagement",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/insights/leads.ts",
+    "line": 9,
+    "route": "/api/insights/leads",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/insights/market.ts",
+    "line": 9,
+    "route": "/api/insights/market",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/intelligence/recommendation-feedback.ts",
+    "line": 9,
+    "route": "/api/intelligence/recommendation-feedback",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/leads/job/create.ts",
+    "line": 9,
+    "route": "/api/leads/job/create",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/media/link.ts",
+    "line": 9,
+    "route": "/api/media/link",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/opportunities/refresh-slots.ts",
+    "line": 9,
+    "route": "/api/opportunities/refresh-slots",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/opportunities/[id]/promote.ts",
+    "line": 9,
+    "route": "/api/opportunities/[id]/promote",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/organization/enforcement-state.ts",
+    "line": 9,
+    "route": "/api/organization/enforcement-state",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/organization/usage-summary.ts",
+    "line": 9,
+    "route": "/api/organization/usage-summary",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/outreach-plans/index.ts",
+    "line": 9,
+    "route": "/api/outreach-plans",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/platform/compliance-check.ts",
+    "line": 9,
+    "route": "/api/platform/compliance-check",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/platform/promotion-metadata.ts",
+    "line": 9,
+    "route": "/api/platform/promotion-metadata",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/platform/rules.ts",
+    "line": 9,
+    "route": "/api/platform/rules",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/prioritized-decisions.ts",
+    "line": 9,
+    "route": "/api/prioritized-decisions",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/queue/stats.ts",
+    "line": 9,
+    "route": "/api/queue/stats",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/job/create.ts",
+    "line": 9,
+    "route": "/api/recommendations/job/create",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/merge.ts",
+    "line": 9,
+    "route": "/api/recommendations/merge",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/run.ts",
+    "line": 9,
+    "route": "/api/recommendations/run",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/[id]/prepare-plan.ts",
+    "line": 9,
+    "route": "/api/recommendations/[id]/prepare-plan",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/[id]/restore.ts",
+    "line": 9,
+    "route": "/api/recommendations/[id]/restore",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/[id]/result.ts",
+    "line": 9,
+    "route": "/api/recommendations/[id]/result",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/reports/execute.ts",
+    "line": 9,
+    "route": "/api/reports/execute",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/reports/growth.ts",
+    "line": 9,
+    "route": "/api/reports/growth",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/reports/performance.ts",
+    "line": 9,
+    "route": "/api/reports/performance",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/reports/snapshot.ts",
+    "line": 9,
+    "route": "/api/reports/snapshot",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/response/generate.ts",
+    "line": 9,
+    "route": "/api/response/generate",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/response/rules.ts",
+    "line": 9,
+    "route": "/api/response/rules",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/response/suggestions.ts",
+    "line": 9,
+    "route": "/api/response/suggestions",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/response/templates.ts",
+    "line": 9,
+    "route": "/api/response/templates",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/social-platforms/registry.ts",
+    "line": 9,
+    "route": "/api/social-platforms/registry",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/social-platforms/test-connection.ts",
+    "line": 9,
+    "route": "/api/social-platforms/test-connection",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/activity-cost-breakdown-v2.ts",
+    "line": 9,
+    "route": "/api/super-admin/activity-cost-breakdown-v2",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/audit-logs.ts",
+    "line": 9,
+    "route": "/api/super-admin/audit-logs",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/credit-packages/index.ts",
+    "line": 9,
+    "route": "/api/super-admin/credit-packages",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/credits/grant.ts",
+    "line": 9,
+    "route": "/api/super-admin/credits/grant",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/llm/models.ts",
+    "line": 9,
+    "route": "/api/super-admin/llm/models",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/llm/providers.ts",
+    "line": 9,
+    "route": "/api/super-admin/llm/providers",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/plans/assign.ts",
+    "line": 9,
+    "route": "/api/super-admin/plans/assign",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/plans/get-organization-plan.ts",
+    "line": 9,
+    "route": "/api/super-admin/plans/get-organization-plan",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/plans/override.ts",
+    "line": 9,
+    "route": "/api/super-admin/plans/override",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/plans/toggle.ts",
+    "line": 9,
+    "route": "/api/super-admin/plans/toggle",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/savings-report.ts",
+    "line": 9,
+    "route": "/api/super-admin/savings-report",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/system-trends.ts",
+    "line": 9,
+    "route": "/api/super-admin/system-trends",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/usage/grant-access.ts",
+    "line": 9,
+    "route": "/api/super-admin/usage/grant-access",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/usage/revoke-access.ts",
+    "line": 9,
+    "route": "/api/super-admin/usage/revoke-access",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/usage-alerts.ts",
+    "line": 9,
+    "route": "/api/super-admin/usage-alerts",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/usage-meter.ts",
+    "line": 9,
+    "route": "/api/super-admin/usage-meter",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/super-admin/usage-report.ts",
+    "line": 9,
+    "route": "/api/super-admin/usage-report",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/team/invite.ts",
+    "line": 9,
+    "route": "/api/team/invite",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/team/self-joined.ts",
+    "line": 9,
+    "route": "/api/team/self-joined",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/trends/drift-check.ts",
+    "line": 9,
+    "route": "/api/trends/drift-check",
+    "severity": "warn"
+  }
+]

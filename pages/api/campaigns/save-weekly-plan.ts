@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -12,6 +13,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!campaignId || !weeklyPlan) {
       return res.status(400).json({ error: 'Campaign ID and weekly plan are required' });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     // Save weekly plan
     const { data: planData, error: planError } = await supabase

@@ -1,14 +1,23 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getRbacConfig, saveRbacConfig } from '../../../backend/services/rbacService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../backend/services/adminAuditService';
 import { logger } from '../../../backend/services/logger';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { IDENTITY_ADMIN } from '../../../shared/contracts/security';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:rbac', 20, 60))) return;
-  const admin = await requireSuperAdminUser(req, res);
-  if (!admin) return;
+  // Phase: Platform Authority Hard Enforcement. RBAC mutation is platform-tier
+  // identity admin scope; phishing-resistant + trusted-device step-up enforced
+  // automatically via the IDENTITY_ADMIN policy in StepUpPolicyRegistry.
+  const guard = await requireCapability(req, res, {
+    capability: IDENTITY_ADMIN,
+    reason: `rbac config (${req.method})`,
+  });
+  if (guard.ok !== true) return;
+  const admin = { id: guard.principal.userId };
 
   if (req.method === 'GET') {
     try {

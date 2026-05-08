@@ -117,7 +117,7 @@ export default function CompanyBlogIndex() {
               <BookOpen className="h-8 w-8" />
               <p className="text-sm">No published posts yet.</p>
               <Link
-                href="/blogs"
+                href="/blogs/create"
                 className="inline-flex items-center gap-1.5 rounded-full bg-[#0A66C2] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0A66C2]/90 transition-colors"
               >
                 Create your first blog

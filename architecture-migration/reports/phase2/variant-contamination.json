@@ -1,0 +1,266 @@
+[
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 102,
+    "text": "bolt_run_id: boltRunId,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 105,
+    "text": "bolt_text_only: boltTextOnlyBody,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 109,
+    "text": "// Only default to text-only when bolt_text_only is explicitly passed.",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 110,
+    "text": "// Do NOT default to true just because bolt_run_id is set — creator campaigns run via BOLT too.",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 266,
+    "text": "? { campaignMode: 'QUICK_LAUNCH' as const, distributionMode: 'same_day_per_topic' as const }",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/generateWeeklyStructure.ts",
+    "line": 268,
+    "text": "? { campaignMode: 'STRATEGIC' as const, distributionMode: 'staggered' as const }",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 958,
+    "text": "bolt_run_id?: string;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/campaigns/weekly-structure-helpers.ts",
+    "line": 963,
+    "text": "bolt_text_only?: boolean;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/cardToContentBridge.ts",
+    "line": 337,
+    "text": "const strategyMode = readStrategyMode(card);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/cardToContentBridge.ts",
+    "line": 371,
+    "text": "const modeSignal = strategyMode ? `The ${strategyMode} approach assumes ${pillarContext} is the primary lever` : '';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/cardToContentBridge.ts",
+    "line": 516,
+    "text": "const strategyMode = readStrategyMode(card);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/content/cardToContentBridge.ts",
+    "line": 584,
+    "text": "const strategyModeLabel = strategyMode ? ` under a ${strategyMode} strategy mode` : '';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/aiGateway.ts",
+    "line": 113,
+    "text": "bolt_run_id?: string | null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/aiGateway.ts",
+    "line": 849,
+    "text": "...(request.bolt_run_id ? { bolt_run_id: request.bolt_run_id } : {}),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltMetricsAggregator.ts",
+    "line": 41,
+    "text": ".filter('metadata->>bolt_run_id', 'eq', boltRunId)",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 493,
+    "text": "bolt_text_only: !isCreatorDependent && !isCombined,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 530,
+    "text": "bolt_run_id: runId,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 709,
+    "text": "bolt_run_id: runId,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 711,
+    "text": "bolt_text_only: options?.boltTextOnly ?? true,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 757,
+    "text": "campaignMode: string | undefined,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 789,
+    "text": "campaignMode,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 863,
+    "text": "const campaignMode = (payload.executionConfig as Record<string, unknown>)?.campaign_mode as string | undefined;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 864,
+    "text": "const isUnifiedCreator = campaignMode === 'creator';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 865,
+    "text": "const isLegacyCreatorDependent = campaignMode === 'creator_dependent';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 868,
+    "text": "const isCombined = campaignMode === 'combined';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 1078,
+    "text": "campaignMode,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/campaignAiOrchestrator/publicTypes.ts",
+    "line": 40,
+    "text": "bolt_run_id?: string | null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/campaignAiOrchestrator/resolveExecutionContext.ts",
+    "line": 90,
+    "text": "if (isConversational || input.bolt_run_id) {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/campaignAiOrchestrator/types.ts",
+    "line": 48,
+    "text": "bolt_run_id?: string | null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/commandCenterStateService.ts",
+    "line": 112,
+    "text": "const isCreator = context.role?.includes('CREATOR') || context.role?.includes('PUBLISHER');",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/commandCenterStateService.ts",
+    "line": 114,
+    "text": "status = isCreator || isAdmin ? 'done' : 'missing';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 25,
+    "text": "export type CampaignMode = 'QUICK_LAUNCH' | 'STRATEGIC';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 51,
+    "text": "bolt_run_id?: string | null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 55,
+    "text": "campaignMode?: CampaignMode;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 191,
+    "text": "const mode = input.campaignMode ?? 'STRATEGIC';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 256,
+    "text": "campaign_mode: mode,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 278,
+    "text": "campaign_mode: mode,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 342,
+    "text": "const boltRunId = batch[0]?.bolt_run_id ?? null;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 353,
+    "text": "...(boltRunId ? { bolt_run_id: boltRunId } : {}),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/dailyContentDistributionPlanService.ts",
+    "line": 654,
+    "text": "...(input.bolt_run_id ? { bolt_run_id: input.bolt_run_id } : {}),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/executionEngines/index.ts",
+    "line": 4,
+    "text": "export type ExecutionEngineMode = 'text' | 'creator' | 'combined' | 'creator_dependent' | string | undefined;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 752,
+    "text": "campaignMode?: string;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1607,
+    "text": "const campaignMode = String(options?.campaignMode || executionConfig.campaign_mode || 'text');",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1608,
+    "text": "const isUnifiedCreatorMode = campaignMode === 'creator';",
+    "severity": "warn"
+  }
+]

@@ -34,7 +34,7 @@
  */
 
 import axios from 'axios';
-import { PublishResult } from './platformAdapter';
+import type { PublishResult } from './platformAdapterTypes';
 import { formatContentForPlatform } from '../utils/contentFormatter';
 import { config } from '@/config';
 

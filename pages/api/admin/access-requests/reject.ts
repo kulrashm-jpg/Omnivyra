@@ -9,21 +9,20 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { IDENTITY_ADMIN_REVOKE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!profile?.is_super_admin) return res.status(403).json({ error: 'Forbidden' });
+  // Reject is the access-grant counterpart; gate with IDENTITY_ADMIN_REVOKE
+  // (step-up required). Drops the dead profiles.is_super_admin lookup.
+  const guard = await requireCapability(req, res, {
+    capability: IDENTITY_ADMIN_REVOKE,
+    reason: 'access request reject',
+  });
+  if (guard.ok !== true) return;
+  const user = { id: guard.principal.userId };
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { requestId, reason } = body as { requestId: string; reason: string };

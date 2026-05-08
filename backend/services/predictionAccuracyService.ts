@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Prediction Accuracy Service — closes the predict → execute → learn loop.
  *
@@ -36,8 +37,7 @@ async function getLatestPrediction(campaignId: string): Promise<{
   predicted_reach: number;
   predicted_leads: number;
 } | null> {
-  const { data } = await supabase
-    .from('campaign_predictions')
+  const { data } = await ownedDbTable('campaign_predictions')
     .select('id, predicted_engagement_rate, predicted_reach, predicted_leads')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false })
@@ -108,7 +108,7 @@ export async function evaluatePredictionAccuracy(
       accuracy_score:            accuracyScore,
     };
 
-    await supabase.from('prediction_accuracy_log').insert({
+    await ownedDbTable('prediction_accuracy_log').insert({
       ...logEntry,
       evaluated_at: new Date().toISOString(),
     });
@@ -130,16 +130,14 @@ export async function getAveragePredictionAccuracy(companyId: string): Promise<{
 } | null> {
   try {
     // Join via campaigns table to scope to company
-    const { data: campaignIds } = await supabase
-      .from('campaigns')
+    const { data: campaignIds } = await ownedDbTable('campaigns')
       .select('id')
       .eq('company_id', companyId);
 
     if (!campaignIds?.length) return null;
     const ids = campaignIds.map((c: { id: string }) => c.id);
 
-    const { data: logs } = await supabase
-      .from('prediction_accuracy_log')
+    const { data: logs } = await ownedDbTable('prediction_accuracy_log')
       .select('accuracy_score')
       .in('campaign_id', ids);
 

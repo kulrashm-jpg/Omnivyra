@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type RecommendationAuditLogInput = {
   recommendation_id?: string | null;
@@ -18,7 +19,7 @@ export type RecommendationAuditLogInput = {
 
 export const logRecommendationAudit = async (input: RecommendationAuditLogInput): Promise<void> => {
   try {
-    const { error } = await supabase.from('recommendation_audit_logs').insert({
+    const { error } = await ownedDbTable('recommendation_audit_logs').insert({
       recommendation_id: input.recommendation_id ?? null,
       campaign_id: input.campaign_id ?? null,
       company_id: input.company_id ?? null,
@@ -44,8 +45,7 @@ export const logRecommendationAudit = async (input: RecommendationAuditLogInput)
 };
 
 export const getAuditByRecommendationId = async (id: string) => {
-  const { data, error } = await supabase
-    .from('recommendation_audit_logs')
+  const { data, error } = await ownedDbTable('recommendation_audit_logs')
     .select('*')
     .eq('recommendation_id', id)
     .order('created_at', { ascending: false })
@@ -57,8 +57,7 @@ export const getAuditByRecommendationId = async (id: string) => {
 };
 
 export const getAuditByCampaignId = async (campaignId: string) => {
-  const { data, error } = await supabase
-    .from('recommendation_audit_logs')
+  const { data, error } = await ownedDbTable('recommendation_audit_logs')
     .select('*')
     .eq('campaign_id', campaignId)
     .order('created_at', { ascending: false });

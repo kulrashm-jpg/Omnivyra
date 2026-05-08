@@ -10,6 +10,7 @@ import { resolveUnifiedPerson, type IdentityExternalKeys } from './identityResol
 import { bulkCreateTouchpoints, type TouchpointInput } from './touchpointService';
 import { normalizeSource, type UnifiedSource } from './sourceNormalizationService';
 import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface CrmLeadRecord {
   externalId?: string | null;
@@ -93,8 +94,7 @@ async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSo
   if (!row.email?.trim()) return;
   const source = row.source?.trim() || 'crm';
   const externalLeadKey = row.externalId || hashKey(companyId, row.email, source);
-  const { data: existing } = await supabase
-    .from('leads')
+  const { data: existing } = await ownedDbTable('leads')
     .select('id')
     .eq('company_id', companyId)
     .eq('email', row.email)
@@ -115,7 +115,7 @@ async function upsertLegacyLead(companyId: string, row: CrmLeadRecord, unifiedSo
     throw new Error('IDENTITY_REQUIRED_FOR_LEAD');
   }
 
-  await supabase.from('leads').insert({
+  await ownedDbTable('leads').insert({
     company_id: companyId,
     name: row.name || row.email,
     email: row.email,
@@ -154,8 +154,7 @@ async function upsertCanonicalUser(
     },
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('canonical_users')
+  const { data: existing, error: existingError } = await ownedDbTable('canonical_users')
     .select('id')
     .eq('company_id', companyId)
     .eq('external_user_key', userKey)
@@ -166,14 +165,14 @@ async function upsertCanonicalUser(
   }
 
   if (existing?.id) {
-    const { error } = await supabase.from('canonical_users').update(payload).eq('id', existing.id);
+    const { error } = await ownedDbTable('canonical_users').update(payload).eq('id', existing.id);
     if (error) {
       throw new Error(`Failed to update CRM user: ${error.message}`);
     }
     return existing.id;
   }
 
-  const { data, error } = await supabase.from('canonical_users').insert(payload).select('id').single();
+  const { data, error } = await ownedDbTable('canonical_users').insert(payload).select('id').single();
   if (error) {
     throw new Error(`Failed to insert CRM user: ${error.message}`);
   }
@@ -204,8 +203,7 @@ async function upsertCanonicalLead(params: {
     unified_source: params.unifiedSource,
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('canonical_leads')
+  const { data: existing, error: existingError } = await ownedDbTable('canonical_leads')
     .select('id')
     .eq('company_id', params.companyId)
     .eq('external_lead_key', params.leadKey)
@@ -216,14 +214,14 @@ async function upsertCanonicalLead(params: {
   }
 
   if (existing?.id) {
-    const { error } = await supabase.from('canonical_leads').update(payload).eq('id', existing.id);
+    const { error } = await ownedDbTable('canonical_leads').update(payload).eq('id', existing.id);
     if (error) {
       throw new Error(`Failed to update CRM lead: ${error.message}`);
     }
     return existing.id;
   }
 
-  const { data, error } = await supabase.from('canonical_leads').insert(payload).select('id').single();
+  const { data, error } = await ownedDbTable('canonical_leads').insert(payload).select('id').single();
   if (error) {
     throw new Error(`Failed to insert CRM lead: ${error.message}`);
   }
@@ -258,8 +256,7 @@ async function upsertRevenueEvent(params: {
     },
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('canonical_revenue_events')
+  const { data: existing, error: existingError } = await ownedDbTable('canonical_revenue_events')
     .select('id')
     .eq('company_id', params.companyId)
     .eq('external_revenue_key', revenueKey)
@@ -270,14 +267,14 @@ async function upsertRevenueEvent(params: {
   }
 
   if (existing?.id) {
-    const { error } = await supabase.from('canonical_revenue_events').update(payload).eq('id', existing.id);
+    const { error } = await ownedDbTable('canonical_revenue_events').update(payload).eq('id', existing.id);
     if (error) {
       throw new Error(`Failed to update CRM revenue event: ${error.message}`);
     }
     return existing.id;
   }
 
-  const { data, error } = await supabase.from('canonical_revenue_events').insert(payload).select('id').single();
+  const { data, error } = await ownedDbTable('canonical_revenue_events').insert(payload).select('id').single();
   if (error) {
     throw new Error(`Failed to insert CRM revenue event: ${error.message}`);
   }

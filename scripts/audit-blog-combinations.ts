@@ -162,7 +162,7 @@ async function main() {
     for (const template of templates) {
       for (const angle of ANGLES) {
         // Keep the harness deterministic and easy to read in logs.
-        // eslint-disable-next-line no-console
+         
         console.log(`Running ${wordTarget}+ | ${template.name} | ${angle}`);
         const row = await runOneCombination(topic, wordTarget, template, angle);
         row.passed = row.totalScore >= threshold;
@@ -193,27 +193,27 @@ async function main() {
   const outPath = path.join(process.cwd(), 'tmp_blog_combination_audit.json');
   writeFileSync(outPath, JSON.stringify(summary, null, 2), 'utf8');
 
-  // eslint-disable-next-line no-console
+   
   console.log(`\nAudit complete: ${passed.length}/${rows.length} passed >= ${threshold}`);
-  // eslint-disable-next-line no-console
+   
   console.log(`Average score: ${summary.averageScore}`);
-  // eslint-disable-next-line no-console
+   
   console.log(`Report written to ${outPath}`);
   if (failed.length > 0) {
-    // eslint-disable-next-line no-console
+     
     console.log('\nLowest-scoring combinations:');
     failed
       .sort((a, b) => a.totalScore - b.totalScore)
       .slice(0, 10)
       .forEach((row) => {
-        // eslint-disable-next-line no-console
+         
         console.log(`- ${row.wordTarget}+ | ${row.template} | ${row.angle} -> ${row.totalScore}/100`);
       });
   }
 }
 
 main().catch((error) => {
-  // eslint-disable-next-line no-console
+   
   console.error('[audit-blog-combinations] Failed:', error);
   process.exit(1);
 });

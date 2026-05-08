@@ -59,7 +59,7 @@ import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../config/featureFlags';
 import { useCampaignWizard, createCampaignWizardStore } from '../store/campaignWizardStore';
 import { hydrateWizardFromSnapshot, exportWizardToSaveWizardStatePayload, exportWizardToPlanningContext } from '../lib/wizard/campaignWizardAdapter';
 import { useCampaignResume } from './useCampaignResume';
-import { PLATFORM_LABELS } from '../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../lib/shared/platforms';
 
 import type { Campaign, WeeklyPlan, DailyPlan, ReadinessResponse, GateResponse, GateRequiredAction, DiagnosticSummary, ViralityAssessmentResponse, RecommendationSummary, PerformanceSummary } from '../pages/campaign-details/types';
 
@@ -799,3 +799,4 @@ export function useCampaignDetailsCore() {
     wizardStateDbSaveTimeoutRef,
   };
 }
+

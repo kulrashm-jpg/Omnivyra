@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { supabase } from '../../db/supabaseClient';
 import { composeSnapshotReport } from '../../services/snapshotReportService';
+import { ownedDbTable } from '../../db/writeOwner';
 
 type ValidationSummary = {
   key_present: boolean;
@@ -132,8 +133,7 @@ describe('live SERP validation', () => {
       serpProbe.error = 'No SERP key found';
     }
 
-    const membershipRes = await supabase
-      .from('user_company_roles')
+    const membershipRes = await ownedDbTable('user_company_roles')
       .select('company_id, user_id')
       .eq('status', 'active')
       .limit(1)
@@ -168,8 +168,7 @@ describe('live SERP validation', () => {
       });
 
       const createdAt = new Date(now + index * 1000).toISOString();
-      const insertRes = await supabase
-        .from('reports')
+      const insertRes = await ownedDbTable('reports')
         .insert({
           company_id: companyId,
           user_id: userId,
@@ -223,8 +222,7 @@ describe('live SERP validation', () => {
       ? Number(((fallbackNew / generated.length) * 100).toFixed(1))
       : 0;
 
-    const previousRowsRes = await supabase
-      .from('reports')
+    const previousRowsRes = await ownedDbTable('reports')
       .select('data')
       .eq('company_id', companyId)
       .eq('report_type', 'content_readiness')
@@ -274,5 +272,4 @@ describe('live SERP validation', () => {
     expect(generated.length).toBe(2);
   }, 240000);
 });
-
 

@@ -1,0 +1,16 @@
+{
+  "mode": "warn-only",
+  "frontendRoots": ["components", "hooks", "pages"],
+  "frontendExclusions": ["pages/api"],
+  "restrictedFrontendImports": ["backend/*", "@/backend/*", "../backend/*", "../../backend/*"],
+  "repositoryRoots": ["backend/db", "architecture-migration/repositories"],
+  "maxFileLines": 500,
+  "criticalDomains": [
+    "campaigns",
+    "scheduling",
+    "content-generation",
+    "recommendations",
+    "ai-execution",
+    "persistence"
+  ]
+}

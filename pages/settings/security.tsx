@@ -58,9 +58,19 @@ interface SessionRow {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 async function jsonOrThrow<T>(r: Response): Promise<T> {
+  // Phase: Global Fetch Hardening — validate content-type on BOTH success
+  // and failure paths. Previously the success path called r.json() directly
+  // and could throw "Unexpected token '<'" if the response was a 200 with
+  // an HTML body (rare but possible from upstream interceptors).
+  const contentType = r.headers.get('content-type') ?? '';
+  const isJson = /\bapplication\/(?:json|problem\+json)\b/i.test(contentType);
   if (!r.ok) {
     const detail = await r.text().catch(() => '');
-    throw new Error(`Request failed: ${r.status} ${detail}`);
+    throw new Error(`Request failed: ${r.status} ${isJson ? detail : `(${contentType || 'no content-type'}) ${detail.slice(0, 200)}`}`);
+  }
+  if (!isJson) {
+    const snippet = await r.text().catch(() => '');
+    throw new Error(`Expected JSON response, got ${contentType || 'no content-type'} (status ${r.status}): ${snippet.slice(0, 200)}`);
   }
   return await r.json() as T;
 }

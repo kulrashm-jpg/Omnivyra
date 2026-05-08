@@ -8,6 +8,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import {
   Settings, Building2, Zap, ChevronDown, ChevronUp, Save,
   RefreshCw, AlertCircle, CheckCircle2, Loader2, Trash2,
@@ -166,11 +167,11 @@ function GlobalConfigTab() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-config');
-      if (r.ok) {
-        const d = await r.json();
-        setConfigs(d.configs ?? []);
-      }
+      const result = await safeFetchJson<{ configs?: GlobalConfigRow[] }>(
+        '/api/admin/intelligence/scheduler-config',
+        { credentials: 'same-origin' },
+      );
+      if (result.ok === true) setConfigs(result.data.configs ?? []);
     } finally { setLoading(false); }
   }, []);
 
@@ -192,18 +193,21 @@ function GlobalConfigTab() {
     if (!patch || Object.keys(patch).length === 0) return;
     setSaving(s => new Set(s).add(row.job_type));
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-config', {
-        method:  'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ job_type: row.job_type, ...patch }),
-      });
-      if (r.ok) {
+      const result = await safeFetchJson(
+        '/api/admin/intelligence/scheduler-config',
+        {
+          method:  'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body:    JSON.stringify({ job_type: row.job_type, ...patch }),
+        },
+      );
+      if (result.ok === true) {
         setEdits(prev => { const n = { ...prev }; delete n[row.job_type]; return n; });
         setMsg({ type: 'ok', text: `${row.label} updated.` });
         load();
       } else {
-        const d = await r.json();
-        setMsg({ type: 'err', text: d.error ?? 'Update failed' });
+        setMsg({ type: 'err', text: result.message || 'Update failed' });
       }
     } finally {
       setSaving(s => { const n = new Set(s); n.delete(row.job_type); return n; });
@@ -367,11 +371,11 @@ function CompanyOverridesTab() {
     setSelectedId(cid);
     setLoading(true);
     try {
-      const r = await fetch(`/api/admin/intelligence/scheduler-overrides?company_id=${encodeURIComponent(cid)}`);
-      if (r.ok) {
-        const d = await r.json();
-        setJobs(d.jobs ?? []);
-      }
+      const result = await safeFetchJson<{ jobs?: ResolvedJob[] }>(
+        `/api/admin/intelligence/scheduler-overrides?company_id=${encodeURIComponent(cid)}`,
+        { credentials: 'same-origin' },
+      );
+      if (result.ok === true) setJobs(result.data.jobs ?? []);
     } finally { setLoading(false); }
   }
 
@@ -395,18 +399,21 @@ function CompanyOverridesTab() {
     if (!patch) return;
     setSaving(s => new Set(s).add(job.job_type));
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-overrides', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ company_id: selectedId, job_type: job.job_type, ...patch }),
-      });
-      if (r.ok) {
+      const result = await safeFetchJson(
+        '/api/admin/intelligence/scheduler-overrides',
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body:    JSON.stringify({ company_id: selectedId, job_type: job.job_type, ...patch }),
+        },
+      );
+      if (result.ok === true) {
         setMsg({ type: 'ok', text: `Override saved for ${job.label}.` });
         setEditOverride(prev => { const n = { ...prev }; delete n[job.job_type]; return n; });
         loadOverrides(selectedId);
       } else {
-        const d = await r.json();
-        setMsg({ type: 'err', text: d.error ?? 'Save failed' });
+        setMsg({ type: 'err', text: result.message || 'Save failed' });
       }
     } finally {
       setSaving(s => { const n = new Set(s); n.delete(job.job_type); return n; });
@@ -417,12 +424,16 @@ function CompanyOverridesTab() {
     if (!job.override) return;
     setDeleting(s => new Set(s).add(job.job_type));
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-overrides', {
-        method:  'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ company_id: selectedId, job_type: job.job_type }),
-      });
-      if (r.ok) {
+      const result = await safeFetchJson(
+        '/api/admin/intelligence/scheduler-overrides',
+        {
+          method:  'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body:    JSON.stringify({ company_id: selectedId, job_type: job.job_type }),
+        },
+      );
+      if (result.ok === true) {
         setMsg({ type: 'ok', text: `Override removed — ${job.label} now uses global defaults.` });
         loadOverrides(selectedId);
       }
@@ -650,13 +661,16 @@ function BoostTab() {
     if (!selectedId) return;
     setLoading(true);
     try {
-      const r = await fetch('/api/admin/intelligence/scheduler-boost', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ company_id: selectedId, action, duration_hours: duration }),
-      });
-      const d = await r.json();
-      if (r.ok) {
+      const result = await safeFetchJson(
+        '/api/admin/intelligence/scheduler-boost',
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body:    JSON.stringify({ company_id: selectedId, action, duration_hours: duration }),
+        },
+      );
+      if (result.ok === true) {
         setMsg({
           type: 'ok',
           text: action === 'apply'
@@ -664,7 +678,7 @@ function BoostTab() {
             : `Boost removed for ${selectedCompany?.name}. Jobs return to normal priority.`,
         });
       } else {
-        setMsg({ type: 'err', text: d.error ?? 'Operation failed' });
+        setMsg({ type: 'err', text: result.message || 'Operation failed' });
       }
     } finally { setLoading(false); }
   }
@@ -811,13 +825,13 @@ function InsightsTab() {
   const load = useCallback(async (d: number) => {
     setLoading(true);
     setError(null);
-    try {
-      const r = await fetch(`/api/admin/intelligence/execution-insights?days=${d}`);
-      if (!r.ok) { const e = await r.json(); throw new Error(e.error ?? 'Load failed'); }
-      setData(await r.json());
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unknown error');
-    } finally { setLoading(false); }
+    const result = await safeFetchJson<InsightsData>(
+      `/api/admin/intelligence/execution-insights?days=${d}`,
+      { credentials: 'same-origin' },
+    );
+    if (result.ok === true) setData(result.data);
+    else setError(result.message);
+    setLoading(false);
   }, []);
 
   useEffect(() => { load(days); }, [load, days]);

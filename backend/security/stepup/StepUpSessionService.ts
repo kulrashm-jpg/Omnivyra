@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * StepUpSessionService — mint / revoke / query elevated sessions.
  *
@@ -65,8 +66,7 @@ export async function mint(input: MintStepUpSessionInput): Promise<MintStepUpSes
   const startedAt = new Date();
   const expiresAt = new Date(startedAt.getTime() + ttl * 1000);
 
-  const { data, error } = await db
-    .from('stepup_sessions')
+  const { data, error } = await ownedDbTable('stepup_sessions')
     .insert({
       user_id:           principal.userId,
       auth_session_id:   principal.sessionId,
@@ -117,8 +117,7 @@ export async function getActiveStatus(
   userId: string,
   authSessionId: string,
 ): Promise<StepUpSessionStatus> {
-  const { data } = await db
-    .from('stepup_sessions')
+  const { data } = await ownedDbTable('stepup_sessions')
     .select('*')
     .eq('user_id', userId)
     .eq('auth_session_id', authSessionId)
@@ -147,8 +146,7 @@ export async function getActiveStatus(
 // ── Revoke ───────────────────────────────────────────────────────────────────
 
 export async function revokeForAuthSession(authSessionId: string, reason: string): Promise<number> {
-  const { data } = await db
-    .from('stepup_sessions')
+  const { data } = await ownedDbTable('stepup_sessions')
     .update({ revoked_at: new Date().toISOString() })
     .eq('auth_session_id', authSessionId)
     .is('revoked_at', null)
@@ -157,6 +155,27 @@ export async function revokeForAuthSession(authSessionId: string, reason: string
   const count = data?.length ?? 0;
   if (count > 0) {
     logger.warn('stepup_sessions_revoked', { authSessionId, count, reason });
+  }
+  return count;
+}
+
+/**
+ * Revoke every active stepup_session for a user, regardless of which
+ * auth_session they were bound to. Used when the underlying account is
+ * being globally re-authenticated (password change, recovery login,
+ * device revocation cascade) — in those cases every elevation must die
+ * with the sessions that produced it.
+ */
+export async function revokeForUser(userId: string, reason: string): Promise<number> {
+  const { data } = await ownedDbTable('stepup_sessions')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .is('revoked_at', null)
+    .is('consumed_at', null)
+    .select('id');
+  const count = data?.length ?? 0;
+  if (count > 0) {
+    logger.warn('stepup_sessions_revoked_for_user', { userId, count, reason });
   }
   return count;
 }

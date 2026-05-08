@@ -1,0 +1,477 @@
+{
+  "retainedCompatibilityBridges": [
+    {
+      "route": "/blogs",
+      "canonical": "/blogs/create",
+      "classification": "C. operationally permanent alias",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "medium",
+      "authorityIsolationLevel": "redirect-only, non-primary-navigation",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "low",
+      "permanence": "permanent compatibility",
+      "dependencies": [
+        "route matchers",
+        "assistant/path context",
+        "external link preservation"
+      ],
+      "architectureImplication": "does not indicate unresolved architecture",
+      "physicalPage": null,
+      "redirect": {
+        "destination": "/blogs/create",
+        "file": "next.config.js",
+        "line": 61
+      },
+      "pageLocalRedirect": false,
+      "deprecatedRouteMarker": false,
+      "noindex": true,
+      "consumerEvidence": [
+        {
+          "file": "components/layout/GlobalHeader.tsx",
+          "line": 87,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        },
+        {
+          "file": "components/layout/navigationConfig.tsx",
+          "line": 53,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        },
+        {
+          "file": "components/layout/navigationConfig.tsx",
+          "line": 216,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        },
+        {
+          "file": "hooks/useAssistant.ts",
+          "line": 120,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        },
+        {
+          "file": "hooks/useNextActionPrompt.ts",
+          "line": 75,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        },
+        {
+          "file": "lib/routes/canonicalRegistry.ts",
+          "line": 97,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 56,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 61,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/blogs'"
+        }
+      ],
+      "retirementDecision": "retain: redirect/registry compatibility bridge, no deletion proof recorded"
+    },
+    {
+      "route": "/content-creation",
+      "canonical": "/posts/create",
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "page-local redirect + noindex + non-primary-navigation",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "high",
+      "permanence": "temporary compatibility",
+      "dependencies": [
+        "external/deep-link preservation"
+      ],
+      "architectureImplication": "canonical /posts/create owns campaignId, content-plan mutation, AI save, edit, retry, delete, and schedule continuation",
+      "physicalPage": "pages/content-creation.tsx",
+      "redirect": {
+        "destination": "/posts/create",
+        "file": "next.config.js",
+        "line": 62
+      },
+      "pageLocalRedirect": true,
+      "deprecatedRouteMarker": true,
+      "noindex": true,
+      "consumerEvidence": [
+        {
+          "file": "components/layout/navigationConfig.tsx",
+          "line": 53,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        },
+        {
+          "file": "lib/routes/canonicalRegistry.ts",
+          "line": 81,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 40,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 62,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        },
+        {
+          "file": "pages/content-creation.tsx",
+          "line": 31,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 30,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 38,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 223,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-creation'"
+        }
+      ],
+      "retirementDecision": "retain: state/session/deep-link compatibility evidence still exists"
+    },
+    {
+      "route": "/content-studio",
+      "canonical": "/posts/create",
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "medium",
+      "operationalDependencyLevel": "medium",
+      "authorityIsolationLevel": "matcher-only compatibility",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "high",
+      "permanence": "temporary compatibility",
+      "dependencies": [
+        "legacy content-studio matcher"
+      ],
+      "architectureImplication": "canonical post flow now owns campaign and scheduler handoff continuity",
+      "physicalPage": null,
+      "redirect": null,
+      "pageLocalRedirect": false,
+      "deprecatedRouteMarker": false,
+      "noindex": false,
+      "consumerEvidence": [
+        {
+          "file": "components/layout/navigationConfig.tsx",
+          "line": 53,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 30,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 44,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 69,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 224,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio'"
+        }
+      ],
+      "retirementDecision": "retain: redirect/registry compatibility bridge, no deletion proof recorded"
+    },
+    {
+      "route": "/content-studio/post",
+      "canonical": "/posts/create",
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "mostly complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": [
+        "deep-link preservation"
+      ],
+      "architectureImplication": "does not currently indicate active duplicate architecture",
+      "physicalPage": null,
+      "redirect": {
+        "destination": "/posts/create",
+        "file": "next.config.js",
+        "line": 63
+      },
+      "pageLocalRedirect": false,
+      "deprecatedRouteMarker": false,
+      "noindex": true,
+      "consumerEvidence": [
+        {
+          "file": "lib/routes/canonicalRegistry.ts",
+          "line": 80,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio/post'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 48,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio/post'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 63,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/content-studio/post'"
+        }
+      ],
+      "retirementDecision": "retain: redirect/registry compatibility bridge, no deletion proof recorded"
+    },
+    {
+      "route": "/threads/generate",
+      "canonical": "/threads/intelligence",
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": [
+        "external/shared-link preservation"
+      ],
+      "architectureImplication": "does not indicate unresolved architecture",
+      "physicalPage": null,
+      "redirect": {
+        "destination": "/threads/intelligence",
+        "file": "next.config.js",
+        "line": 64
+      },
+      "pageLocalRedirect": false,
+      "deprecatedRouteMarker": false,
+      "noindex": true,
+      "consumerEvidence": [
+        {
+          "file": "lib/routes/canonicalRegistry.ts",
+          "line": 120,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/threads/generate'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 64,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/threads/generate'"
+        }
+      ],
+      "retirementDecision": "retain: redirect/registry compatibility bridge, no deletion proof recorded"
+    },
+    {
+      "route": "/threads/template",
+      "canonical": "/threads/intelligence",
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": [
+        "external/shared-link preservation"
+      ],
+      "architectureImplication": "does not indicate unresolved architecture",
+      "physicalPage": null,
+      "redirect": {
+        "destination": "/threads/intelligence",
+        "file": "next.config.js",
+        "line": 65
+      },
+      "pageLocalRedirect": false,
+      "deprecatedRouteMarker": false,
+      "noindex": true,
+      "consumerEvidence": [
+        {
+          "file": "lib/routes/canonicalRegistry.ts",
+          "line": 121,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/threads/template'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 65,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/threads/template'"
+        }
+      ],
+      "retirementDecision": "retain: redirect/registry compatibility bridge, no deletion proof recorded"
+    },
+    {
+      "route": "/threads/suggestions",
+      "canonical": "/threads/intelligence",
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": [
+        "external/shared-link preservation"
+      ],
+      "architectureImplication": "does not indicate unresolved architecture",
+      "physicalPage": null,
+      "redirect": {
+        "destination": "/threads/intelligence",
+        "file": "next.config.js",
+        "line": 66
+      },
+      "pageLocalRedirect": false,
+      "deprecatedRouteMarker": false,
+      "noindex": true,
+      "consumerEvidence": [
+        {
+          "file": "lib/routes/canonicalRegistry.ts",
+          "line": 122,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/threads/suggestions'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 66,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/threads/suggestions'"
+        }
+      ],
+      "retirementDecision": "retain: redirect/registry compatibility bridge, no deletion proof recorded"
+    },
+    {
+      "route": "/command-center/bolt-text-strategy",
+      "canonical": "/command-center/bolt-text",
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "medium",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "page-local redirect + noindex + non-primary-navigation",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "high",
+      "permanence": "temporary compatibility",
+      "dependencies": [
+        "external strategy deep links"
+      ],
+      "architectureImplication": "canonical /command-center/bolt-text owns BOLT strategy-state lifecycle",
+      "physicalPage": "pages/command-center/bolt-text-strategy.tsx",
+      "redirect": {
+        "destination": "/command-center/bolt-text",
+        "file": "next.config.js",
+        "line": 67
+      },
+      "pageLocalRedirect": true,
+      "deprecatedRouteMarker": true,
+      "noindex": true,
+      "consumerEvidence": [
+        {
+          "file": "components/layout/navigationConfig.tsx",
+          "line": 80,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        },
+        {
+          "file": "lib/routes/canonicalRegistry.ts",
+          "line": 123,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 44,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        },
+        {
+          "file": "next.config.js",
+          "line": 67,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        },
+        {
+          "file": "pages/command-center/bolt-text-strategy.tsx",
+          "line": 20,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 30,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 50,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        },
+        {
+          "file": "proxy.ts",
+          "line": 226,
+          "category": "navigation-or-runtime-reference",
+          "text": "'/command-center/bolt-text-strategy'"
+        }
+      ],
+      "retirementDecision": "retain: redirect/registry compatibility bridge, no deletion proof recorded"
+    }
+  ],
+  "deprecatedApiConsumers": [
+    {
+      "file": "pages/admin/blog/content-refine.tsx",
+      "line": 162,
+      "api": "/api/admin/blog/generate"
+    },
+    {
+      "file": "pages/community-ai/connectors.tsx",
+      "line": 45,
+      "api": "/api/community-ai/connectors/status"
+    },
+    {
+      "file": "pages/community-ai/connectors.tsx",
+      "line": 129,
+      "api": "/api/community-ai/connectors/"
+    },
+    {
+      "file": "pages/super-admin/free-credits.tsx",
+      "line": 167,
+      "api": "/api/super-admin/session"
+    }
+  ],
+  "staleRuntimeImports": []
+}

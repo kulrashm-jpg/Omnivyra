@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../backend/db/writeOwner';
 /**
  * Backfill unified_transactions from the legacy ledger tables.
  *
@@ -76,8 +77,7 @@ const _rateCache = new Map<string, number>();
 async function getCreditRate(orgId: string): Promise<number> {
   const cached = _rateCache.get(orgId);
   if (cached != null) return cached;
-  const { data } = await supabase
-    .from('organization_credits')
+  const { data } = await ownedDbTable('organization_credits')
     .select('credit_rate_usd')
     .eq('organization_id', orgId)
     .maybeSingle();
@@ -94,8 +94,7 @@ async function findMatchingCreditRow(
   const ts = new Date(row.created_at).getTime();
   const lo = new Date(ts - WINDOW_MS).toISOString();
   const hi = new Date(ts + WINDOW_MS).toISOString();
-  const { data } = await supabase
-    .from('credit_usage_log')
+  const { data } = await ownedDbTable('credit_usage_log')
     .select('id, organization_id, action, credits, created_at')
     .eq('organization_id', row.organization_id)
     .eq('action',          row.action_key)
@@ -107,8 +106,7 @@ async function findMatchingCreditRow(
 }
 
 async function alreadyBackfilled(row: UsageEventsRow): Promise<boolean> {
-  const { data } = await supabase
-    .from('unified_transactions')
+  const { data } = await ownedDbTable('unified_transactions')
     .select('id')
     .eq('organization_id', row.organization_id)
     .eq('source_type',     row.source_type)
@@ -164,7 +162,7 @@ async function backfillOne(row: UsageEventsRow, dryRun: boolean): Promise<'inser
 
   if (dryRun) return 'inserted';
 
-  const { error } = await supabase.from('unified_transactions').insert(payload);
+  const { error } = await ownedDbTable('unified_transactions').insert(payload);
   if (error) {
     console.warn(`[backfill] failed row=${row.id} code=${(error as any).code} msg=${error.message.slice(0, 160)}`);
     return 'failed';
@@ -187,8 +185,7 @@ async function run(): Promise<void> {
   const hardEnd = until ?? new Date().toISOString();
 
   for (;;) {
-    const query = supabase
-      .from('usage_events')
+    const query = ownedDbTable('usage_events')
       .select(
         'id, organization_id, user_id, source_type, provider_name, model_name, action_key, process_type, feature_area, input_tokens, output_tokens, total_tokens, unit_cost, total_cost, pricing_snapshot, error_flag, error_type, metadata, campaign_id, latency_ms, created_at',
       )

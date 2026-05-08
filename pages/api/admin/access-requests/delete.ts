@@ -9,21 +9,18 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { IDENTITY_ADMIN_DELETE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'DELETE') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!profile?.is_super_admin) return res.status(403).json({ error: 'Forbidden' });
+  const guard = await requireCapability(req, res, {
+    capability: IDENTITY_ADMIN_DELETE,
+    reason: 'access request soft-delete',
+  });
+  if (guard.ok !== true) return;
+  const user = { id: guard.principal.userId };
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { requestId } = body as { requestId: string };

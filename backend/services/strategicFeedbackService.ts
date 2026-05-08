@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Strategic Feedback Service
  *
@@ -39,8 +40,7 @@ async function loadCampaignEngagementData(campaign_id: string): Promise<{
   actions: any[];
   campaignUserId: string | null;
 }> {
-  const { data: campaign } = await supabase
-    .from('campaigns')
+  const { data: campaign } = await ownedDbTable('campaigns')
     .select('id, user_id')
     .eq('id', campaign_id)
     .single();
@@ -48,8 +48,7 @@ async function loadCampaignEngagementData(campaign_id: string): Promise<{
     return { posts: [], comments: [], actions: [], campaignUserId: null };
   }
 
-  const { data: posts } = await supabase
-    .from('scheduled_posts')
+  const { data: posts } = await ownedDbTable('scheduled_posts')
     .select('id, platform, platform_post_id')
     .eq('campaign_id', campaign_id)
     .eq('status', 'published');
@@ -62,8 +61,7 @@ async function loadCampaignEngagementData(campaign_id: string): Promise<{
 
   let comments: any[] = [];
   if (postIds.length > 0) {
-    const { data: commentRows } = await supabase
-      .from('post_comments')
+    const { data: commentRows } = await ownedDbTable('post_comments')
       .select('*')
       .in('scheduled_post_id', postIds);
     comments = commentRows ?? [];
@@ -77,8 +75,7 @@ async function loadCampaignEngagementData(campaign_id: string): Promise<{
 
   let actions: any[] = [];
   if (companyId && (platformPostIds.size > 0 || platformCommentIds.size > 0)) {
-    const { data: actionRows } = await supabase
-      .from('community_ai_actions')
+    const { data: actionRows } = await ownedDbTable('community_ai_actions')
       .select('*')
       .eq('tenant_id', companyId)
       .eq('organization_id', companyId)
@@ -244,7 +241,7 @@ async function storeStrategicFeedback(
   payload: StrategicFeedbackPayload
 ): Promise<void> {
   const user_id = campaignUserId ?? (await getSystemUserId());
-  const { error } = await supabase.from('activity_feed').insert({
+  const { error } = await ownedDbTable('activity_feed').insert({
     user_id,
     action_type: STRATEGIC_FEEDBACK_ACTION_TYPE,
     entity_type: 'campaign',
@@ -263,8 +260,7 @@ async function storeStrategicFeedback(
 }
 
 async function getSystemUserId(): Promise<string> {
-  const { data } = await supabase
-    .from('users')
+  const { data } = await ownedDbTable('users')
     .select('id')
     .limit(1)
     .order('created_at', { ascending: true })
@@ -278,8 +274,7 @@ async function getSystemUserId(): Promise<string> {
 export async function getLatestStrategicFeedback(
   campaign_id: string
 ): Promise<StrategicFeedbackPayload | null> {
-  const { data, error } = await supabase
-    .from('activity_feed')
+  const { data, error } = await ownedDbTable('activity_feed')
     .select('metadata, created_at')
     .eq('campaign_id', campaign_id)
     .eq('action_type', STRATEGIC_FEEDBACK_ACTION_TYPE)
@@ -308,8 +303,7 @@ export async function hasRecentStrategicFeedback(
   campaign_id: string
 ): Promise<boolean> {
   const cutoff = new Date(Date.now() - RECENT_FEEDBACK_HOURS * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('activity_feed')
+  const { data, error } = await ownedDbTable('activity_feed')
     .select('id')
     .eq('campaign_id', campaign_id)
     .eq('action_type', STRATEGIC_FEEDBACK_ACTION_TYPE)

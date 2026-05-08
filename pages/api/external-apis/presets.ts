@@ -4,6 +4,8 @@ import { externalApiPresets } from '../../../backend/services/externalApiPresets
 import { ExternalApiSource } from '../../../backend/services/externalApiService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import {
   getUserRole,
   getCompanyRoleIncludingInvited,
@@ -13,29 +15,18 @@ import {
   Role,
 } from '../../../backend/services/rbacService';
 
+// Phase 2: requirePlatformAdmin migrated to canonical capability gate.
+// Replaces the previous legacy-session-synthesizer + Supabase + role-string
+// fallback chain with a single requireCapability(SUPER_ADMIN_DASHBOARD_VIEW)
+// call. Bridge principals satisfy this read-only capability via the
+// expanded LEGACY_COOKIE_SUPER_ADMIN_CAPABILITIES allowlist.
 const requirePlatformAdmin = async (req: NextApiRequest, res: NextApiResponse) => {
-  const legacySession = getLegacySuperAdminSession(req);
-  if (legacySession) {
-    return { userId: legacySession.userId, role: 'SUPER_ADMIN' };
-  }
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-  if (await isPlatformSuperAdmin(user.id)) {
-    return { userId: user.id, role: 'SUPER_ADMIN' };
-  }
-  if (await isSuperAdmin(user.id)) {
-    console.debug('SUPER_ADMIN_FALLBACK', {
-      path: req.url,
-      userId: user.id,
-      source: 'rbacService.isSuperAdmin',
-    });
-    return { userId: user.id, role: 'SUPER_ADMIN' };
-  }
-  res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-  return null;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'external-apis platform admin access',
+  });
+  if (guard.ok !== true) return null;
+  return { userId: guard.principal.userId, role: 'SUPER_ADMIN' };
 };
 
 const requireExternalApiAccess = async (

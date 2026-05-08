@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Token Store
  * 
@@ -109,8 +110,7 @@ export interface TokenObject {
  * @returns Decrypted token object or null if not found
  */
 export async function getToken(socialAccountId: string): Promise<TokenObject | null> {
-  const { data, error } = await supabase
-    .from('social_accounts')
+  const { data, error } = await ownedDbTable('social_accounts')
     .select('access_token, refresh_token, token_expires_at')
     .eq('id', socialAccountId)
     .single();
@@ -182,8 +182,7 @@ export async function setToken(socialAccountId: string, token: TokenObject): Pro
   if (encryptedRefreshToken) updateData.refresh_token = encryptedRefreshToken;
   if (token.expires_at) updateData.token_expires_at = token.expires_at;
 
-  const { error } = await supabase
-    .from('social_accounts')
+  const { error } = await ownedDbTable('social_accounts')
     .update(updateData)
     .eq('id', socialAccountId);
 
@@ -217,8 +216,7 @@ export async function dualWriteSocialAccount(opts: {
     : (token.scope ? token.scope.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean) : null);
   try {
     // Find existing row
-    const query = supabase
-      .from('social_accounts')
+    const query = ownedDbTable('social_accounts')
       .select('id')
       .eq('user_id', userId)
       .eq('company_id', companyId)
@@ -235,7 +233,7 @@ export async function dualWriteSocialAccount(opts: {
         updated_at: new Date().toISOString(),
       };
       if (scopeList) updatePayload.permissions = scopeList;
-      await supabase.from('social_accounts').update(updatePayload).eq('id', existing.id);
+      await ownedDbTable('social_accounts').update(updatePayload).eq('id', existing.id);
       await setToken(existing.id, token);
     } else {
       const encrypted = encryptTokenColumns(token);
@@ -252,7 +250,7 @@ export async function dualWriteSocialAccount(opts: {
         refresh_token: encrypted.refresh_token,
       };
       if (scopeList) insertPayload.permissions = scopeList;
-      const { data: inserted } = await supabase.from('social_accounts').insert(insertPayload).select('id').single();
+      const { data: inserted } = await ownedDbTable('social_accounts').insert(insertPayload).select('id').single();
       if (inserted?.id) await setToken(inserted.id, token);
     }
   } catch (err: any) {
@@ -270,7 +268,7 @@ export async function deactivateSocialAccount(opts: {
   platform: string;
 }): Promise<void> {
   try {
-    await supabase.from('social_accounts').update({
+    await ownedDbTable('social_accounts').update({
       is_active: false,
       updated_at: new Date().toISOString(),
     })

@@ -1,5 +1,6 @@
 import { supabase } from '../../db/supabaseClient';
 import { getPlaybookById } from '../playbooks/playbookService';
+import { ownedDbTable } from '../../db/writeOwner';
 
 type CandidateInput = {
   tenant_id: string;
@@ -60,8 +61,7 @@ export const generateNetworkActionCandidates = async (input: CandidateInput) => 
   dayStart.setHours(0, 0, 0, 0);
   const dayStartIso = dayStart.toISOString();
 
-  const { data: engagedToday } = await supabase
-    .from('community_ai_actions')
+  const { data: engagedToday } = await ownedDbTable('community_ai_actions')
     .select('id')
     .eq('tenant_id', input.tenant_id)
     .eq('organization_id', input.organization_id)
@@ -79,8 +79,7 @@ export const generateNetworkActionCandidates = async (input: CandidateInput) => 
   const requestedLimit = typeof input.limit === 'number' && input.limit > 0 ? input.limit : remaining;
   const finalLimit = Math.min(requestedLimit, remaining);
 
-  let discoveryQuery = supabase
-    .from('community_ai_discovered_users')
+  let discoveryQuery = ownedDbTable('community_ai_discovered_users')
     .select('*')
     .eq('tenant_id', input.tenant_id)
     .eq('organization_id', input.organization_id)
@@ -118,8 +117,7 @@ export const generateNetworkActionCandidates = async (input: CandidateInput) => 
   }
 
   const discoveredIds = filteredDiscovered.map((user) => user.id);
-  const { data: existingActions } = await supabase
-    .from('community_ai_actions')
+  const { data: existingActions } = await ownedDbTable('community_ai_actions')
     .select('discovered_user_id, action_type, status')
     .eq('tenant_id', input.tenant_id)
     .eq('organization_id', input.organization_id)
@@ -175,7 +173,7 @@ export const generateNetworkActionCandidates = async (input: CandidateInput) => 
     return { created_count: 0, skipped_count: skipped, reason: 'All candidates deduplicated' };
   }
 
-  const { error: insertError } = await supabase.from('community_ai_actions').insert(rows);
+  const { error: insertError } = await ownedDbTable('community_ai_actions').insert(rows);
   if (insertError) {
     throw new Error(`Failed to insert network actions: ${insertError.message}`);
   }

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Outcome Tracking Engine
  * Phase 5: Tracks real-world outcomes from recommendations.
@@ -57,8 +58,7 @@ export async function recordOutcome(
   };
 
   if (input.recommendation_id) {
-    const { data, error } = await supabase
-      .from('intelligence_outcomes')
+    const { data, error } = await ownedDbTable('intelligence_outcomes')
       .upsert(row, {
         onConflict: 'company_id,recommendation_id,outcome_type',
         ignoreDuplicates: true,
@@ -71,8 +71,7 @@ export async function recordOutcome(
     return { id: data?.id ?? null, inserted };
   }
 
-  const { data, error } = await supabase
-    .from('intelligence_outcomes')
+  const { data, error } = await ownedDbTable('intelligence_outcomes')
     .insert(row)
     .select('id')
     .single();
@@ -88,8 +87,7 @@ export async function getOutcomeHistory(
   companyId: string,
   options?: { limit?: number }
 ): Promise<OutcomeRow[]> {
-  const { data, error } = await supabase
-    .from('intelligence_outcomes')
+  const { data, error } = await ownedDbTable('intelligence_outcomes')
     .select('id, company_id, recommendation_id, outcome_type, success_score, created_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })

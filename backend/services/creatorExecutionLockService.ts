@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 type LockState = {
   locked_by: string | null;
@@ -48,8 +49,7 @@ export async function acquireCreatorExecutionLock(input: {
   const claimedRows = Array.isArray(data) ? data : data ? [data] : [];
   const claimed = claimedRows[0] as Record<string, unknown> | undefined;
   if (!claimed) {
-    const { data: existing, error: inspectError } = await supabase
-      .from('daily_content_plans')
+    const { data: existing, error: inspectError } = await ownedDbTable('daily_content_plans')
       .select('locked_by, lease_expires_at, attempt_count, retry_count, max_retries, plan_version')
       .eq('id', input.dailyPlanId)
       .maybeSingle();
@@ -108,8 +108,7 @@ export async function releaseCreatorExecutionLock(input: {
   dailyPlanId: string;
   lockOwner: string;
 }): Promise<void> {
-  const { error } = await supabase
-    .from('daily_content_plans')
+  const { error } = await ownedDbTable('daily_content_plans')
     .update({
       locked_by: null,
       lease_expires_at: null,

@@ -1,4 +1,5 @@
 import { supabase } from '../../db/supabaseClient';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Append-only automation audit logger. Every decision — allowed or
@@ -24,8 +25,7 @@ export async function recordAutomationDecision(input: {
   metadata?: Record<string, unknown> | null;
 }): Promise<{ ok: boolean; row_id?: string; error?: string }> {
   try {
-    const { data, error } = await supabase
-      .from('automation_logs')
+    const { data, error } = await ownedDbTable('automation_logs')
       .insert({
         organization_id: input.organization_id,
         action_id: input.action_id ?? null,
@@ -58,8 +58,7 @@ export async function readRecentAutomationLogs(input: {
 }): Promise<Array<Record<string, unknown>>> {
   const limit = Math.min(200, Math.max(1, input.limit ?? 50));
   try {
-    const { data } = await supabase
-      .from('automation_logs')
+    const { data } = await ownedDbTable('automation_logs')
       .select('id, action_id, platform, action_type, target_id, decision, reason, confidence_level, confidence_score, pattern_type, created_at, metadata')
       .eq('organization_id', input.organization_id)
       .order('created_at', { ascending: false })

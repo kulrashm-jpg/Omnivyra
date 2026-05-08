@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Prediction Engine
  *
@@ -340,7 +341,7 @@ export async function predictCampaignOutcome(plan: CampaignPlanInput): Promise<C
 
   // Persist to DB (non-blocking)
   try {
-    await supabase.from('campaign_predictions').insert({
+    await ownedDbTable('campaign_predictions').insert({
       campaign_id:               plan.campaign_id,
       predicted_engagement_rate: engagementRate,
       predicted_reach:           totalReach,

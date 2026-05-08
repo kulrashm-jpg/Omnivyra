@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Audit Logging Service
  *
@@ -113,8 +114,7 @@ export async function flushAuditQueue(): Promise<void> {
     const BATCH_SIZE = 50;
     for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
       const batch = toInsert.slice(i, i + BATCH_SIZE);
-      const { error } = await supabase
-        .from('audit_logs')
+      const { error } = await ownedDbTable('audit_logs')
         .insert(batch);
 
       if (error) {
@@ -148,8 +148,7 @@ export async function getAuditLogs(
     limit?: number;
   }
 ): Promise<StoredAuditLog[]> {
-  let query = supabase
-    .from('audit_logs')
+  let query = ownedDbTable('audit_logs')
     .select('*')
     .eq('company_id', companyId);
 
@@ -250,8 +249,7 @@ export async function detectAnomalousAccess(
 export async function ensureAuditLogsTable(): Promise<void> {
   try {
     // Test query to see if table exists
-    const { error } = await supabase
-      .from('audit_logs')
+    const { error } = await ownedDbTable('audit_logs')
       .select('id')
       .limit(1);
 

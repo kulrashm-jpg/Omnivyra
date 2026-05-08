@@ -15,12 +15,14 @@ import { validateAssetReadiness } from '../creatorAssetValidationService';
 import { checkCapability, normalizeCreatorPlatform } from '../creatorCapabilityMap';
 import { renderAsset } from '../creatorAssetRenderer';
 import type {
+
   CanonicalCreatorOutput,
   CreatorExecutionEngine,
   CreatorGenerationContext,
   CreatorScheduleResult,
   CreatorScheduledRow,
 } from './types';
+import { ownedDbTable } from '../../db/writeOwner';
 
 type CreatorBlueprintType = 'video_script' | 'carousel' | 'story' | 'post_blueprint' | 'thread_blueprint';
 
@@ -839,8 +841,7 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
         timestamp: row.scheduledForIso,
       });
 
-      const { data: inserted, error } = await supabase
-        .from('scheduled_posts')
+      const { data: inserted, error } = await ownedDbTable('scheduled_posts')
         .insert(insertPayload)
         .select('id, platform_post_id')
         .maybeSingle();
@@ -848,8 +849,7 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
       if (error) {
         const failureType = classifyScheduleFailure(error.message);
         if ((error as any)?.code === '23505') {
-          const { data: existing, error: existingError } = await supabase
-            .from('scheduled_posts')
+          const { data: existing, error: existingError } = await ownedDbTable('scheduled_posts')
             .select('id, platform_post_id')
             .eq('id', String((inserted as any)?.id || ''))
             .maybeSingle();

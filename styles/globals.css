@@ -23,6 +23,51 @@ html, body {
   0%, 100% { transform: translateX(10px) translateY(0px); }
   50% { transform: translateX(10px) translateY(-10px); }
 }
+
+@keyframes landing-reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.landing-reveal {
+  animation: landing-reveal-up 700ms ease-out both;
+}
+
+.landing-delay-1 {
+  animation-delay: 80ms;
+}
+
+.landing-delay-2 {
+  animation-delay: 160ms;
+}
+
+.landing-delay-3 {
+  animation-delay: 240ms;
+}
+
+.omnivyra-dark-grid {
+  background-image:
+    linear-gradient(rgba(169, 218, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(169, 218, 255, 0.08) 1px, transparent 1px),
+    radial-gradient(circle at 18% 22%, rgba(63, 169, 245, 0.16), transparent 32%),
+    radial-gradient(circle at 82% 12%, rgba(255, 255, 255, 0.10), transparent 28%);
+  background-size: 72px 72px, 72px 72px, auto, auto;
+}
+
+.omnivyra-light-grid {
+  background-image:
+    linear-gradient(rgba(10, 102, 194, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(10, 102, 194, 0.06) 1px, transparent 1px),
+    radial-gradient(circle at 20% 18%, rgba(63, 169, 245, 0.12), transparent 30%),
+    radial-gradient(circle at 84% 30%, rgba(10, 102, 194, 0.08), transparent 26%);
+  background-size: 72px 72px, 72px 72px, auto, auto;
+}
 .animate-float-slow  { animation: float-slow  4s ease-in-out infinite; }
 .animate-float-mid   { animation: float-mid   5s ease-in-out infinite 0.8s; }
 .animate-float-fast  { animation: float-fast  3.5s ease-in-out infinite 1.4s; }

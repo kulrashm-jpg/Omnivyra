@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Marketing Memory Service
  * Persistent memory for AI learning from campaign performance.
@@ -45,8 +46,7 @@ export async function saveMarketingMemory(memory: MarketingMemoryEntry): Promise
   const { company_id, memory_type, memory_key, memory_value, confidence = 0.8, source } = memory;
   if (!company_id || !memory_key || !validateMemoryType(memory_type)) return null;
 
-  const { data, error } = await supabase
-    .from('marketing_memory')
+  const { data, error } = await ownedDbTable('marketing_memory')
     .insert({
       company_id,
       memory_type,
@@ -75,8 +75,7 @@ export async function getMarketingMemory(
   companyId: string,
   memoryKey: string
 ): Promise<MarketingMemoryEntry | null> {
-  const { data, error } = await supabase
-    .from('marketing_memory')
+  const { data, error } = await ownedDbTable('marketing_memory')
     .select('id, company_id, memory_type, memory_key, memory_value, confidence, source, created_at')
     .eq('company_id', companyId)
     .eq('memory_key', memoryKey)
@@ -107,8 +106,7 @@ export async function searchMarketingMemory(
   const q = (query ?? '').trim().toLowerCase();
   if (!q) return [];
 
-  const { data, error } = await supabase
-    .from('marketing_memory')
+  const { data, error } = await ownedDbTable('marketing_memory')
     .select('id, company_id, memory_type, memory_key, memory_value, confidence, source, created_at')
     .eq('company_id', companyId)
     .ilike('memory_key', `%${q}%`)
@@ -136,8 +134,7 @@ export async function getMarketingMemoriesByType(
   memoryType: MemoryType,
   limit = 20
 ): Promise<MarketingMemoryEntry[]> {
-  const { data, error } = await supabase
-    .from('marketing_memory')
+  const { data, error } = await ownedDbTable('marketing_memory')
     .select('id, company_id, memory_type, memory_key, memory_value, confidence, source, created_at')
     .eq('company_id', companyId)
     .eq('memory_type', memoryType)
@@ -158,8 +155,7 @@ export async function getMarketingMemoriesByType(
 }
 
 async function enforceRetention(companyId: string): Promise<void> {
-  const { data: rows, error } = await supabase
-    .from('marketing_memory')
+  const { data: rows, error } = await ownedDbTable('marketing_memory')
     .select('id')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
@@ -168,6 +164,6 @@ async function enforceRetention(companyId: string): Promise<void> {
 
   const idsToDelete = rows.slice(RETENTION_LIMIT).map((r) => r.id).filter(Boolean);
   if (idsToDelete.length > 0) {
-    await supabase.from('marketing_memory').delete().in('id', idsToDelete);
+    await ownedDbTable('marketing_memory').delete().in('id', idsToDelete);
   }
 }

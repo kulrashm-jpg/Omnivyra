@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../backend/db/writeOwner';
 /**
  * scripts/backfillCanonicalDomains.ts
  *
@@ -104,8 +105,7 @@ async function main() {
   const supabase = getClient();
 
   // 1. Pull every system-backfilled row.
-  const { data: rows, error } = await supabase
-    .from('company_domains')
+  const { data: rows, error } = await ownedDbTable('company_domains')
     .select('id, company_id, input_domain, final_domain, verification_status, created_via')
     .eq('created_via', 'system');
   if (error) {
@@ -188,8 +188,7 @@ async function main() {
       continue;
     }
 
-    const { error: updErr } = await supabase
-      .from('company_domains')
+    const { error: updErr } = await ownedDbTable('company_domains')
       .update({
         input_domain:   inputDomain,
         final_domain:   newFinal,
@@ -226,8 +225,7 @@ async function main() {
 
   // 3. Collision scan — group by final_domain across the WHOLE table, not
   //    just the system-backfilled subset, so admin/user rows are included.
-  const { data: allRows, error: allErr } = await supabase
-    .from('company_domains')
+  const { data: allRows, error: allErr } = await ownedDbTable('company_domains')
     .select('id, company_id, final_domain');
   if (allErr) {
     console.error('collision_scan_select_failed', allErr.message);
@@ -267,8 +265,7 @@ async function main() {
   //    in every collided group. No automatic ownership decision.
   if (!dryRun && collisions.length > 0) {
     const allCollidedIds = collisions.flatMap((c) => c.domain_record_ids);
-    const { error: freezeErr } = await supabase
-      .from('company_domains')
+    const { error: freezeErr } = await ownedDbTable('company_domains')
       .update({ verification_status: 'pending' })
       .in('id', allCollidedIds);
     if (freezeErr) {

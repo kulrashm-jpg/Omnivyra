@@ -1,0 +1,225 @@
+# Persistence Mutation Flow Map
+
+## Entrypoints
+- pages/api/**
+- backend/services/**
+- backend/jobs/**
+- backend/queue/**
+
+## Orchestration Owners
+- backend/db/* stores
+- backend/services/* direct Supabase callers
+- pages/api/* direct Supabase callers
+
+## DB Mutation Points
+- backend/auth/refreshLock.ts:44 insert token_refresh_locks
+- backend/auth/refreshLock.ts:59 insert token_refresh_locks
+- backend/auth/refreshLock.ts:72 update token_refresh_locks
+- backend/auth/refreshLock.ts:88 delete token_refresh_locks
+- backend/auth/tokenRefresh.ts:164 update social_accounts
+- backend/auth/tokenStore.ts:186 update social_accounts
+- backend/auth/tokenStore.ts:238 update social_accounts
+- backend/auth/tokenStore.ts:255 insert social_accounts
+- backend/auth/tokenStore.ts:273 update social_accounts
+- backend/domain/from-lib/anomaly/detectionEngine.ts:143 insert system_anomalies
+- backend/domain/from-lib/auth/auditLog.ts:50 insert auth_audit_logs
+- backend/domain/from-lib/identity/identityGateway.ts:58 insert unified_persons
+- backend/domain/from-lib/observability/incidentManager.ts:125 upsert incidents
+- backend/domain/from-lib/observability/incidentManager.ts:142 insert incident_events
+- backend/integration/publishIntegration.ts:76 update scheduled_posts
+- backend/jobs/analyticsAttributionJob.ts:175 upsert analytics_touchpoints
+- backend/jobs/analyticsAttributionJob.ts:237 upsert analytics_attribution_validation_daily
+- backend/jobs/analyticsAutomationJob.ts:116 upsert analytics_automation_runs
+- backend/jobs/analyticsDailyAggregationJob.ts:221 delete analytics_daily_metrics
+- backend/jobs/analyticsDailyAggregationJob.ts:226 delete analytics_daily_session_metrics
+- backend/jobs/analyticsDailyAggregationJob.ts:240 insert analytics_daily_metrics
+- backend/jobs/analyticsDailyAggregationJob.ts:250 insert analytics_daily_session_metrics
+- backend/jobs/analyticsInsightJob.ts:538 upsert analytics_anomalies
+- backend/jobs/analyticsInsightJob.ts:539 upsert analytics_insights
+- backend/jobs/analyticsInsightJob.ts:540 upsert analytics_recommendations
+- backend/jobs/analyticsRecommendationEvaluationJob.ts:95 update analytics_recommendations
+- backend/jobs/dailyIntelligenceScheduler.ts:123 upsert scheduler_locks
+- backend/jobs/dailyIntelligenceScheduler.ts:130 delete scheduler_locks
+- backend/jobs/dailyIntelligenceScheduler.ts:243 insert intelligence_job_runs
+- backend/jobs/dailyIntelligenceScheduler.ts:575 update intelligence_job_runs
+- backend/jobs/dailyIntelligenceScheduler.ts:591 insert intelligence_job_runs
+- backend/jobs/dailyIntelligenceScheduler.ts:644 update intelligence_job_runs
+- backend/jobs/dailyIntelligenceScheduler.ts:660 insert intelligence_job_runs
+- backend/jobs/engagementOpportunityScanner.ts:25 insert opportunity_engine_errors
+- backend/jobs/engagementOpportunityScanner.ts:164 insert opportunity_radar
+- backend/jobs/engagementOpportunityScanner.ts:200 insert campaign_proposals
+- backend/jobs/engagementSignalArchiveJob.ts:56 insert campaign_activity_engagement_signals_archive
+- backend/jobs/engagementSignalArchiveJob.ts:66 delete campaign_activity_engagement_signals
+- backend/jobs/intelligenceEventCleanup.ts:43 upsert intelligence_cleanup_progress
+- backend/jobs/intelligenceEventCleanup.ts:110 delete intelligence_events
+- backend/jobs/performanceAggregationJob.ts:178 upsert company_theme_performance
+- backend/jobs/performanceAggregationJob.ts:186 upsert company_platform_performance
+- backend/jobs/performanceAggregationJob.ts:194 upsert company_content_type_performance
+- backend/jobs/performanceIngestionJob.ts:215 delete campaign_performance_signals
+- backend/jobs/performanceIngestionJob.ts:220 insert campaign_performance_signals
+- backend/jobs/weeklyPricingAnalysisJob.ts:101 upsert org_weekly_metrics
+- backend/jobs/weeklyPricingAnalysisJob.ts:258 upsert pricing_intelligence
+- backend/jobs/weeklyPricingAnalysisJob.ts:289 update pricing_adjustment_queue
+- backend/jobs/weeklyPricingAnalysisJob.ts:295 insert pricing_adjustment_queue
+- backend/middleware/authMiddleware.ts:66 update users
+- backend/middleware/authMiddleware.ts:73 update users
+- backend/middleware/withIdempotency.ts:61 insert api_idempotency_keys
+- backend/middleware/withIdempotency.ts:85 update api_idempotency_keys
+- backend/middleware/withIdempotency.ts:152 update api_idempotency_keys
+- backend/queue/engagementSignalQueue.ts:87 insert campaign_activity_engagement_signals
+- backend/queue/jobProcessors/campaignPlanningProcessor.ts:76 upsert campaign_plan_jobs
+- backend/queue/jobProcessors/campaignPlanningProcessor.ts:216 upsert campaign_week_plan
+- backend/queue/jobProcessors/campaignPlanningProcessor.ts:366 upsert campaign_week_plan
+- backend/queue/jobProcessors/publishProcessor.ts:219 update scheduled_posts
+- backend/queue/jobProcessors/whatsappWebhookProcessor.ts:103 upsert engagement_threads
+- backend/queue/jobProcessors/whatsappWebhookProcessor.ts:127 upsert engagement_messages
+- backend/scheduler/idempotency.ts:58 insert job_execution_log
+- backend/scheduler/schedulerService.ts:676 insert lead_jobs_v1
+- backend/scheduler/schedulerService.ts:682 insert lead_jobs_v1
+- backend/scripts/activateCompanyIntelligence.ts:63 insert company_intelligence_topics
+- backend/scripts/activateCompanyIntelligence.ts:69 insert company_intelligence_topics
+- backend/scripts/activateCompanyIntelligence.ts:88 insert company_intelligence_keywords
+- backend/scripts/activateCompanyIntelligence.ts:94 insert company_intelligence_keywords
+- backend/scripts/activateCompanyIntelligence.ts:113 insert company_intelligence_competitors
+- backend/scripts/activateCompanyIntelligence.ts:119 insert company_intelligence_competitors
+- backend/scripts/activateIntelligenceSystem.ts:33 insert external_api_sources
+- backend/scripts/activateIntelligenceSystem.ts:38 insert external_api_sources
+- backend/scripts/activateIntelligenceSystem.ts:48 upsert companies
+- backend/scripts/activateIntelligenceSystem.ts:49 upsert external_api_sources
+- backend/scripts/activateIntelligenceSystem.ts:54 upsert company_api_configs
+- backend/scripts/activateIntelligenceSystem.ts:65 insert company_intelligence_topics
+- backend/scripts/activateIntelligenceSystem.ts:71 insert company_intelligence_topics
+- backend/scripts/seedPlatformOauthConfigsFromEnv.ts:91 upsert platform_oauth_configs
+- backend/services/actionPricingApplyService.ts:37 update action_pricing_config
+- backend/services/actionPricingApplyService.ts:47 insert action_pricing_config
+- backend/services/activityLogger.ts:64 insert activity_feed
+- backend/services/adminAuditService.ts:13 insert super_admin_audit_logs
+- backend/services/adsIngestionService.ts:83 update campaigns
+- backend/services/adsIngestionService.ts:90 insert campaigns
+- backend/services/adsIngestionService.ts:140 update campaign_metrics
+- backend/services/adsIngestionService.ts:147 insert campaign_metrics
+- backend/services/aiSuggestionTrackingService.ts:41 insert ai_suggestions
+- backend/services/aiSuggestionTrackingService.ts:82 update ai_suggestions
+- backend/services/aiSuggestionTrackingService.ts:117 update ai_suggestions
+- backend/services/alertService.ts:59 insert alerts
+- backend/services/analyticsIntegrationService.ts:181 update analytics_integrations
+- backend/services/analyticsIntegrationService.ts:198 insert analytics_integrations
+- backend/services/analyticsIntegrationService.ts:239 update analytics_tokens
+- backend/services/analyticsIntegrationService.ts:249 insert analytics_tokens
+- backend/services/analyticsIntegrationService.ts:287 upsert analytics_properties
+- backend/services/analyticsIntegrationService.ts:671 update analytics_properties
+- backend/services/analyticsIntegrationService.ts:681 update analytics_properties
+- backend/services/analyticsIntegrationService.ts:738 update analytics_integrations
+- backend/services/analyticsIntegrationService.ts:756 update analytics_integrations
+- backend/services/analyticsNormalizationService.ts:34 upsert content_analytics
+- backend/services/analyticsNormalizationService.ts:81 upsert platform_metrics_snapshots
+- backend/services/analyticsNormalizationService.ts:114 update post_analytics_polls
+- backend/services/analyticsNormalizationService.ts:122 update post_analytics_polls
+- backend/services/analyticsNormalizationService.ts:163 insert post_analytics_polls
+- backend/services/analyticsProviderConfigService.ts:140 upsert analytics_provider_config
+- backend/services/analyticsService.ts:185 upsert content_analytics
+- backend/services/analyticsService.ts:335 upsert platform_performance
+- backend/services/auditActorService.ts:74 insert audit_logs
+- backend/services/auditLoggingService.ts:117 insert audit_logs
+- backend/services/automation/automationConfigStore.ts:155 upsert automation_config
+- backend/services/automation/automationLogger.ts:28 insert automation_logs
+- backend/services/automation/automationService.ts:194 update automation_usage
+- backend/services/autonomousDecisionLogger.ts:33 insert autonomous_decision_logs
+- backend/services/autonomousScheduler.ts:52 insert pending_campaigns
+- backend/services/autonomousScheduler.ts:70 insert campaigns
+- backend/services/autonomousScheduler.ts:92 insert notifications
+- backend/services/autonomousScheduler.ts:107 update pending_campaigns
+- backend/services/behaviorActionTrackingService.ts:166 insert intelligence_actions
+- backend/services/behaviorActionTrackingService.ts:312 update intelligence_actions
+- backend/services/blockTemplateService.ts:103 insert block_templates
+- backend/services/blockTemplateService.ts:128 update block_templates
+- backend/services/blockTemplateService.ts:142 delete block_templates
+- backend/services/blockTemplateService.ts:158 update block_templates
+- backend/services/blogService.ts:180 insert blogs
+- backend/services/blogService.ts:247 update blogs
+- backend/services/blogService.ts:257 delete blogs
+- backend/services/blogService.ts:321 update blogs
+- backend/services/boltPipelineService.ts:265 update campaign_versions
+- backend/services/boltPipelineService.ts:793 update campaigns
+- backend/services/boltPipelineService.ts:1154 update campaigns
+- backend/services/boltScheduleBlockProcessor.ts:690 update daily_content_plans
+- backend/services/buyerIntentIntelligenceService.ts:165 upsert buyer_intent_accounts
+- backend/services/CampaignAutoOptimizationService.ts:83 update campaigns
+- backend/services/campaignAutoScalingService.ts:80 update campaigns
+- backend/services/campaignAutoScalingService.ts:92 insert campaign_decision_log
+- backend/services/CampaignCompletionService.ts:64 update campaigns
+- backend/services/campaignContextService.ts:99 upsert campaign_context
+- backend/services/campaignContextService.ts:142 upsert campaign_context
+- backend/services/campaignDecisionEngine.ts:97 insert campaign_decision_log
+- backend/services/campaignExecutionCheckpointService.ts:101 update campaign_execution_checkpoint
+- backend/services/campaignExecutionCheckpointService.ts:118 insert campaign_execution_checkpoint
+- backend/services/campaignExecutionCheckpointService.ts:175 update campaign_execution_checkpoint
+- backend/services/campaignExecutionCheckpointService.ts:203 update campaign_execution_checkpoint
+- backend/services/campaignExecutionStateService.ts:144 insert campaign_execution_state
+- backend/services/campaignExecutionStateService.ts:231 update campaign_execution_state
+- backend/services/campaignExecutionStateService.ts:269 update campaign_execution_state
+- backend/services/campaignExecutionStateService.ts:324 update campaign_execution_state
+- backend/services/campaignHealthMonitor.ts:94 update campaigns
+- backend/services/campaignHealthMonitor.ts:104 insert campaigns
+- backend/services/campaignHealthMonitor.ts:111 insert notifications
+- backend/services/campaignHealthMonitor.ts:151 update campaigns
+- backend/services/campaignHealthMonitor.ts:264 insert campaign_health_reports
+- backend/services/campaignKnowledgeGraphService.ts:292 upsert campaign_topic_map
+- backend/services/campaignLearningsStore.ts:60 update campaign_learnings
+- backend/services/campaignLearningsStore.ts:70 insert campaign_learnings
+- backend/services/campaignOpportunityEngine.ts:176 insert campaign_opportunities
+- backend/services/campaignPlanningInputsService.ts:152 insert campaign_planning_inputs
+- backend/services/campaignPredictionEngine.ts:343 insert campaign_predictions
+- backend/services/CampaignPreemptionService.ts:74 insert campaign_preemption_requests
+- backend/services/CampaignPreemptionService.ts:207 update campaigns
+- backend/services/CampaignPreemptionService.ts:245 insert campaign_preemption_log
+- backend/services/CampaignPreemptionService.ts:410 update campaign_preemption_requests
+- backend/services/CampaignPreemptionService.ts:443 update campaign_preemption_requests
+- backend/services/campaignReadinessService.ts:249 upsert campaign_readiness
+- backend/services/campaignRecommendationExtensionService.ts:112 delete campaign_recommendation_weeks
+- backend/services/campaignRecommendationExtensionService.ts:118 insert campaign_recommendation_weeks
+- backend/services/campaignRecommendationExtensionService.ts:161 update campaign_recommendation_weeks
+- backend/services/campaignRecommendationExtensionService.ts:244 update campaign_week_plan
+- backend/services/campaignRecommendationExtensionService.ts:256 update campaign_recommendation_weeks
+- backend/services/campaignRecoveryService.ts:109 insert pending_campaigns
+- backend/services/campaignRecoveryService.ts:122 insert notifications
+- backend/services/campaignStrategyMemoryService.ts:84 upsert campaign_strategy_memory
+- backend/services/canonicalLeadSignalService.ts:216 upsert contacts
+- backend/services/canonicalLeadSignalService.ts:246 update engagement_threads
+- backend/services/canonicalLeadSignalService.ts:317 upsert lead_signals
+- backend/services/collaborationMentionService.ts:55 upsert message_mentions
+- backend/services/collaborationMentionService.ts:64 insert intelligence_alerts
+- backend/services/collaborationMessageService.ts:66 upsert message_reads
+- backend/services/communityAiActionLogService.ts:27 insert community_ai_action_logs
+- backend/services/communityAiAutoRuleService.ts:191 insert community_ai_actions
+- backend/services/communityAiAutoRuleService.ts:231 insert audit_logs
+- backend/services/communityAiNotificationService.ts:21 insert community_ai_notifications
+- backend/services/communityAiOmnivyraService.ts:237 insert community_ai_actions
+- backend/services/communityAiScheduler.ts:89 insert audit_logs
+- backend/services/communityPostEngine.ts:115 insert community_posts
+- backend/services/communitySignalService.ts:97 insert engagement_opportunities
+- backend/services/companyIntelligenceConfigService.ts:152 insert company_intelligence_topics
+- backend/services/companyIntelligenceConfigService.ts:162 update company_intelligence_topics
+- backend/services/companyIntelligenceConfigService.ts:173 update company_intelligence_topics
+- backend/services/companyIntelligenceConfigService.ts:215 insert company_intelligence_competitors
+- backend/services/companyIntelligenceConfigService.ts:232 update company_intelligence_competitors
+- backend/services/companyIntelligenceConfigService.ts:243 update company_intelligence_competitors
+- backend/services/companyIntelligenceConfigService.ts:267 insert company_intelligence_products
+- backend/services/companyIntelligenceConfigService.ts:277 update company_intelligence_products
+- backend/services/companyIntelligenceConfigService.ts:288 update company_intelligence_products
+- backend/services/companyIntelligenceConfigService.ts:312 insert company_intelligence_regions
+- backend/services/companyIntelligenceConfigService.ts:322 update company_intelligence_regions
+- backend/services/companyIntelligenceConfigService.ts:333 update company_intelligence_regions
+- backend/services/companyIntelligenceConfigService.ts:357 insert company_intelligence_keywords
+- backend/services/companyIntelligenceConfigService.ts:367 update company_intelligence_keywords
+
+## Queue Boundaries
+- backend/queue/**
+- backend/workers/**
+- backend/jobs/**
+
+## API Boundaries
+- pages/api/**
+
+## Duplicate Ownership Points
+- Multiple non-repository layers mutate Supabase directly; see direct-db-writes.json

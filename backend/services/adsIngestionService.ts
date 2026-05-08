@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import axios from 'axios';
 import { supabase } from '../db/supabaseClient';
 import { hashKey, safeNumber, todayIsoDate } from './ingestionUtils';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface AdsCampaignRow {
   externalCampaignKey?: string | null;
@@ -68,8 +69,7 @@ async function upsertCampaign(input: {
     status: input.row.status ?? 'active',
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('campaigns')
+  const { data: existing, error: existingError } = await ownedDbTable('campaigns')
     .select('id')
     .eq('company_id', input.companyId)
     .eq('external_campaign_key', input.externalCampaignKey)
@@ -80,14 +80,14 @@ async function upsertCampaign(input: {
   }
 
   if (existing?.id) {
-    const { error } = await supabase.from('campaigns').update(payload).eq('id', existing.id);
+    const { error } = await ownedDbTable('campaigns').update(payload).eq('id', existing.id);
     if (error) {
       throw new Error(`Failed to update ads campaign ${input.row.name}: ${error.message}`);
     }
     return existing.id;
   }
 
-  const { data, error } = await supabase.from('campaigns').insert({
+  const { data, error } = await ownedDbTable('campaigns').insert({
     id: randomUUID(),
     ...payload,
   }).select('id').single();
@@ -123,8 +123,7 @@ async function upsertCampaignMetrics(input: {
     },
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('campaign_metrics')
+  const { data: existing, error: existingError } = await ownedDbTable('campaign_metrics')
     .select('id')
     .eq('company_id', input.companyId)
     .eq('external_campaign_key', input.externalCampaignKey)
@@ -137,14 +136,14 @@ async function upsertCampaignMetrics(input: {
   }
 
   if (existing?.id) {
-    const { error } = await supabase.from('campaign_metrics').update(payload).eq('id', existing.id);
+    const { error } = await ownedDbTable('campaign_metrics').update(payload).eq('id', existing.id);
     if (error) {
       throw new Error(`Failed to update ads metrics for ${input.row.name}: ${error.message}`);
     }
     return;
   }
 
-  const { error } = await supabase.from('campaign_metrics').insert(payload);
+  const { error } = await ownedDbTable('campaign_metrics').insert(payload);
   if (error) {
     throw new Error(`Failed to insert ads metrics for ${input.row.name}: ${error.message}`);
   }

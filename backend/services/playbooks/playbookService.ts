@@ -1,9 +1,9 @@
 import { supabase } from '../../db/supabaseClient';
 import type { EngagementPlaybook } from './playbookTypes';
+import { ownedDbTable } from '../../db/writeOwner';
 
 export const createPlaybook = async (playbook: EngagementPlaybook) => {
-  const { data, error } = await supabase
-    .from('community_ai_playbooks')
+  const { data, error } = await ownedDbTable('community_ai_playbooks')
     .insert({
       ...playbook,
       created_at: new Date().toISOString(),
@@ -21,8 +21,7 @@ export const updatePlaybook = async (
   id: string,
   playbook: Partial<EngagementPlaybook> & { tenant_id: string; organization_id: string }
 ) => {
-  const { data, error } = await supabase
-    .from('community_ai_playbooks')
+  const { data, error } = await ownedDbTable('community_ai_playbooks')
     .update({ ...playbook, updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('tenant_id', playbook.tenant_id)
@@ -36,8 +35,7 @@ export const updatePlaybook = async (
 };
 
 export const listPlaybooks = async (tenant_id: string, organization_id: string) => {
-  const { data, error } = await supabase
-    .from('community_ai_playbooks')
+  const { data, error } = await ownedDbTable('community_ai_playbooks')
     .select('*')
     .eq('tenant_id', tenant_id)
     .eq('organization_id', organization_id)
@@ -53,8 +51,7 @@ export const getPlaybookById = async (
   tenant_id: string,
   organization_id: string
 ) => {
-  const { data, error } = await supabase
-    .from('community_ai_playbooks')
+  const { data, error } = await ownedDbTable('community_ai_playbooks')
     .select('*')
     .eq('id', id)
     .eq('tenant_id', tenant_id)
@@ -71,8 +68,7 @@ export const deactivatePlaybook = async (
   tenant_id: string,
   organization_id: string
 ) => {
-  const { data, error } = await supabase
-    .from('community_ai_playbooks')
+  const { data, error } = await ownedDbTable('community_ai_playbooks')
     .update({ status: 'inactive', updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('tenant_id', tenant_id)

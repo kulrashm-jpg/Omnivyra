@@ -369,7 +369,7 @@ export async function generateMasterContentStrict(
   };
 }
 
-export async function generateMasterContentFromIntent(item: DailyExecutionItemLike): Promise<MasterContentPayload> {
+async function generateMasterContentRuntime(item: DailyExecutionItemLike): Promise<MasterContentPayload> {
   const itemId = sanitizeIdPart(item.execution_id || item.title || item.topic || item.platform || 'daily-item');
   const nowIso = new Date().toISOString();
 
@@ -601,3 +601,5 @@ export async function generateMasterContentFromIntent(item: DailyExecutionItemLi
     };
   }
 }
+
+export { generateMasterContentRuntime as generateMasterContentFromIntent };

@@ -80,7 +80,35 @@ interface FormatSelectionPageProps {
   accentColor: AccentColor;
   backPath?: string;
   pageTitle?: string;
+  enableCanonicalHandoffs?: boolean;
 }
+
+type CampaignContentPlan = {
+  id?: string;
+  campaignId?: string;
+  dayOfWeek?: string;
+  date?: string;
+  platform?: string;
+  contentType?: string;
+  topic?: string;
+  content?: string;
+  hashtags?: string[];
+  status?: string;
+  aiGenerated?: boolean;
+};
+
+type CampaignGoal = Record<string, unknown>;
+type CampaignRecord = Record<string, unknown>;
+
+const CANONICAL_CONTENT_DAYS = [
+  { id: 'monday', name: 'Monday' },
+  { id: 'tuesday', name: 'Tuesday' },
+  { id: 'wednesday', name: 'Wednesday' },
+  { id: 'thursday', name: 'Thursday' },
+  { id: 'friday', name: 'Friday' },
+];
+
+const CANONICAL_CONTENT_PLATFORMS = ['linkedin', 'instagram', 'facebook', 'twitter'];
 
 export default function FormatSelectionPage({
   title,
@@ -91,11 +119,193 @@ export default function FormatSelectionPage({
   accentColor,
   backPath = '/command-center/content',
   pageTitle,
+  enableCanonicalHandoffs = false,
 }: FormatSelectionPageProps) {
   const router = useRouter();
   const { user, isLoading } = useCompanyContext();
   const c = ACCENT_CLASSES[accentColor];
   const formatCountLabel = `${formats.length} format${formats.length === 1 ? '' : 's'}`;
+  const campaignId = typeof router.query.campaignId === 'string' ? router.query.campaignId : null;
+  const objective = typeof router.query.objective === 'string' ? router.query.objective : '';
+  const [campaignData, setCampaignData] = React.useState<CampaignRecord | null>(null);
+  const [campaignGoals, setCampaignGoals] = React.useState<CampaignGoal[]>([]);
+  const [contentPlans, setContentPlans] = React.useState<CampaignContentPlan[]>([]);
+  const [campaignLoading, setCampaignLoading] = React.useState(false);
+  const [campaignSaving, setCampaignSaving] = React.useState(false);
+  const [campaignError, setCampaignError] = React.useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = React.useState('monday');
+  const [selectedPlatform, setSelectedPlatform] = React.useState('linkedin');
+  const [selectedContentType, setSelectedContentType] = React.useState('post');
+
+  function buildFormatHref(format: string) {
+    const query = new URLSearchParams({ format });
+    if (campaignId) query.set('campaignId', campaignId);
+    if (objective) query.set('objective', objective);
+    return `${generatePath}?${query.toString()}`;
+  }
+
+  function buildCanonicalHandoffHref(target: 'campaign' | 'scheduler') {
+    const query = new URLSearchParams({
+      source: 'posts-create',
+      contentType: 'post',
+    });
+    if (campaignId) query.set('campaignId', campaignId);
+    if (objective) query.set('objective', objective);
+    if (target === 'campaign') {
+      query.set('mode', 'direct');
+      return `/campaign-planner?${query.toString()}`;
+    }
+    return `/multi-platform-scheduler?${query.toString()}`;
+  }
+
+  React.useEffect(() => {
+    if (!campaignId) return;
+
+    let cancelled = false;
+    const loadCampaignContinuation = async () => {
+      setCampaignLoading(true);
+      setCampaignError(null);
+      try {
+        const [campaignResponse, goalsResponse, plansResponse] = await Promise.all([
+          fetch(`/api/campaigns?type=campaign&campaignId=${encodeURIComponent(campaignId)}`),
+          fetch(`/api/campaigns?type=goals&campaignId=${encodeURIComponent(campaignId)}`),
+          fetch(`/api/campaigns?type=content-plan&campaignId=${encodeURIComponent(campaignId)}`),
+        ]);
+
+        if (cancelled) return;
+
+        if (campaignResponse.ok) {
+          const campaignResult = await campaignResponse.json().catch(() => null) as { campaign?: CampaignRecord } | null;
+          setCampaignData(campaignResult?.campaign || null);
+        }
+        if (goalsResponse.ok) {
+          const goalsResult = await goalsResponse.json().catch(() => null) as { goals?: CampaignGoal[] } | null;
+          setCampaignGoals(Array.isArray(goalsResult?.goals) ? goalsResult.goals : []);
+        }
+        if (plansResponse.ok) {
+          const plansResult = await plansResponse.json().catch(() => null) as { plans?: CampaignContentPlan[] } | null;
+          setContentPlans(Array.isArray(plansResult?.plans) ? plansResult.plans : []);
+        }
+      } catch {
+        if (!cancelled) setCampaignError('Unable to load campaign continuation right now.');
+      } finally {
+        if (!cancelled) setCampaignLoading(false);
+      }
+    };
+
+    void loadCampaignContinuation();
+    return () => {
+      cancelled = true;
+    };
+  }, [campaignId]);
+
+  async function generateCampaignContentPlan() {
+    if (!campaignId) return;
+
+    setCampaignSaving(true);
+    setCampaignError(null);
+    try {
+      const response = await fetch('/api/ai/generate-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId,
+          day: selectedDay,
+          platform: selectedPlatform,
+          contentType: selectedContentType,
+          campaignData,
+          campaignGoals,
+          brandVoice: 'Use the current company brand voice and campaign context.',
+          useAI: true,
+        }),
+      });
+
+      const result = await response.json().catch(() => null) as {
+        topic?: string;
+        content?: { text?: string; hashtags?: string[]; aiGenerated?: boolean };
+      } | null;
+
+      if (!response.ok || !result?.content?.text) {
+        throw new Error('Unable to generate campaign content.');
+      }
+
+      const contentPlan: CampaignContentPlan = {
+        campaignId,
+        dayOfWeek: selectedDay,
+        platform: selectedPlatform,
+        contentType: selectedContentType,
+        topic: result.topic || selectedContentType,
+        content: result.content.text,
+        hashtags: Array.isArray(result.content.hashtags) ? result.content.hashtags : [],
+        status: 'created',
+        aiGenerated: Boolean(result.content.aiGenerated),
+      };
+
+      const saveResponse = await fetch('/api/campaigns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'content-plan',
+          data: contentPlan,
+        }),
+      });
+
+      const saveResult = await saveResponse.json().catch(() => null) as { plan?: CampaignContentPlan } | null;
+      if (!saveResponse.ok || !saveResult?.plan) {
+        throw new Error('Unable to save generated campaign content.');
+      }
+
+      setContentPlans((prev) => [...prev, saveResult.plan as CampaignContentPlan]);
+    } catch (error) {
+      setCampaignError(error instanceof Error ? error.message : 'Unable to generate campaign content.');
+    } finally {
+      setCampaignSaving(false);
+    }
+  }
+
+  async function updateCampaignContentPlan(planId: string, updates: Partial<CampaignContentPlan>) {
+    setCampaignSaving(true);
+    setCampaignError(null);
+    try {
+      const response = await fetch('/api/campaigns', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'content-plan',
+          data: { id: planId, ...updates },
+        }),
+      });
+
+      if (!response.ok) throw new Error('Unable to save campaign content update.');
+      setContentPlans((prev) => prev.map((plan) => (plan.id === planId ? { ...plan, ...updates } : plan)));
+    } catch (error) {
+      setCampaignError(error instanceof Error ? error.message : 'Unable to save campaign content update.');
+    } finally {
+      setCampaignSaving(false);
+    }
+  }
+
+  async function deleteCampaignContentPlan(planId: string) {
+    setCampaignSaving(true);
+    setCampaignError(null);
+    try {
+      const response = await fetch('/api/campaigns', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'content-plan',
+          id: planId,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Unable to delete campaign content.');
+      setContentPlans((prev) => prev.filter((plan) => plan.id !== planId));
+    } catch (error) {
+      setCampaignError(error instanceof Error ? error.message : 'Unable to delete campaign content.');
+    } finally {
+      setCampaignSaving(false);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -166,6 +376,157 @@ export default function FormatSelectionPage({
                 <p className="mt-1 text-sm text-gray-700">After this, we move into intelligence, template selection, and generation guidance tailored to the chosen format.</p>
               </div>
             </div>
+
+            {(campaignId || enableCanonicalHandoffs) && (
+              <div className="mt-6 rounded-2xl border border-blue-100 bg-blue-50/80 px-4 py-4">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-blue-600">
+                  Canonical Continuity
+                </p>
+                <p className="mt-1 text-sm text-gray-700">
+                  {campaignId
+                    ? 'This canonical post flow is carrying the campaign continuation context for this deep link.'
+                    : 'Use this canonical post flow for campaign and scheduler handoffs without returning to legacy content-studio routes.'}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {campaignId ? (
+                    <Link
+                      href={`/schedule-review?campaignId=${encodeURIComponent(campaignId)}`}
+                      className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-blue-100"
+                    >
+                      Continue Schedule Review
+                    </Link>
+                  ) : null}
+                  {enableCanonicalHandoffs ? (
+                    <>
+                      <Link
+                        href={buildCanonicalHandoffHref('campaign')}
+                        className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-blue-100"
+                      >
+                        Use For Campaign
+                      </Link>
+                      <Link
+                        href={buildCanonicalHandoffHref('scheduler')}
+                        className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm ring-1 ring-blue-100"
+                      >
+                        Send To Scheduler
+                      </Link>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            )}
+
+            {campaignId && (
+              <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50/80 px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                      Campaign Content Plan
+                    </p>
+                    <p className="mt-1 text-sm text-gray-700">
+                      Canonical content-plan generation, save, edit, retry, and schedule handoff for this campaign.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm ring-1 ring-emerald-100">
+                    {campaignLoading ? 'Loading' : `${contentPlans.length} plan${contentPlans.length === 1 ? '' : 's'}`}
+                  </span>
+                </div>
+
+                <div className="mt-4 grid gap-2 md:grid-cols-4">
+                  <select
+                    value={selectedDay}
+                    onChange={(event) => setSelectedDay(event.target.value)}
+                    className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-sm text-gray-700"
+                  >
+                    {CANONICAL_CONTENT_DAYS.map((day) => (
+                      <option key={day.id} value={day.id}>{day.name}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={selectedPlatform}
+                    onChange={(event) => setSelectedPlatform(event.target.value)}
+                    className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-sm text-gray-700"
+                  >
+                    {CANONICAL_CONTENT_PLATFORMS.map((platform) => (
+                      <option key={platform} value={platform}>{platform}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={selectedContentType}
+                    onChange={(event) => setSelectedContentType(event.target.value)}
+                    className="rounded-xl border border-emerald-100 bg-white px-3 py-2 text-sm text-gray-700"
+                  >
+                    {formats.map((format) => (
+                      <option key={format.value} value={format.value}>{format.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void generateCampaignContentPlan()}
+                    disabled={campaignSaving || campaignLoading}
+                    className="rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {campaignSaving ? 'Saving...' : 'Generate & Save'}
+                  </button>
+                </div>
+
+                {campaignError ? (
+                  <p className="mt-3 rounded-xl border border-red-100 bg-white px-3 py-2 text-sm text-red-600">{campaignError}</p>
+                ) : null}
+
+                {contentPlans.length > 0 ? (
+                  <div className="mt-4 grid gap-3">
+                    {contentPlans.map((plan, index) => {
+                      const planId = plan.id || `${plan.dayOfWeek || 'day'}-${plan.platform || 'platform'}-${index}`;
+                      return (
+                        <div key={planId} className="rounded-2xl border border-emerald-100 bg-white p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-gray-900">
+                              {plan.topic || plan.contentType || 'Campaign content'}
+                            </p>
+                            <p className="text-xs font-medium text-emerald-700">
+                              {[plan.dayOfWeek, plan.platform, plan.status].filter(Boolean).join(' / ')}
+                            </p>
+                          </div>
+                          <textarea
+                            value={plan.content || ''}
+                            onChange={(event) => {
+                              const content = event.target.value;
+                              setContentPlans((prev) => prev.map((item, itemIndex) => (
+                                itemIndex === index ? { ...item, content } : item
+                              )));
+                            }}
+                            className="mt-3 min-h-[96px] w-full rounded-xl border border-emerald-100 px-3 py-2 text-sm leading-6 text-gray-700"
+                          />
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {plan.id ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => void updateCampaignContentPlan(plan.id as string, { content: plan.content, status: 'created' })}
+                                  disabled={campaignSaving}
+                                  className="rounded-full bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+                                >
+                                  Save Update
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void deleteCampaignContentPlan(plan.id as string)}
+                                  disabled={campaignSaving}
+                                  className="rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-red-600 ring-1 ring-red-100 disabled:opacity-50"
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
 
           <div className="mb-5 flex items-center justify-between">
@@ -183,7 +544,7 @@ export default function FormatSelectionPage({
             {formats.map((fmt) => (
               <button
                 key={fmt.value}
-                onClick={() => router.push(`${generatePath}?format=${fmt.value}`)}
+                onClick={() => router.push(buildFormatHref(fmt.value))}
                 className={`group relative flex min-h-[320px] flex-col overflow-hidden rounded-2xl border ${c.cardBorder} ${c.cardHoverBorder} bg-white/92 p-6 text-left shadow-[0_8px_28px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_40px_rgba(15,23,42,0.10)]`}
               >
                 <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${c.ribbon}`} />

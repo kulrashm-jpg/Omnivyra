@@ -28,7 +28,7 @@ export default function WeeklySummary() {
   };
 
   const stats = [
-    { label: 'Content', value: weeklyStats.contentCreated, icon: FileText, color: 'text-violet-600', href: '/blogs' },
+    { label: 'Content', value: weeklyStats.contentCreated, icon: FileText, color: 'text-violet-600', href: '/blogs/create' },
     { label: 'Campaigns', value: weeklyStats.campaignsLaunched, icon: Megaphone, color: 'text-emerald-600', href: '/campaigns' },
     { label: 'Engagement', value: weeklyStats.engagementActions, icon: MessageCircle, color: 'text-amber-600', href: '/command-center/engagement' },
   ];

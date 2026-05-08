@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Report Card Service
  *
@@ -175,8 +176,7 @@ export function normalizeReportDomain(input: string): string {
 }
 
 async function getCompanyDomain(companyId: string): Promise<string> {
-  const { data, error } = await supabase
-    .from('companies')
+  const { data, error } = await ownedDbTable('companies')
     .select('website, website_domain')
     .eq('id', companyId)
     .maybeSingle();
@@ -196,8 +196,7 @@ async function getCompanyDomain(companyId: string): Promise<string> {
 export async function getDomainReportState(domain: string): Promise<DomainReportState> {
   const normalizedDomain = normalizeReportDomain(domain);
 
-  const { data, error } = await supabase
-    .from('reports')
+  const { data, error } = await ownedDbTable('reports')
     .select('is_free, status')
     .eq('domain', normalizedDomain);
 
@@ -222,8 +221,7 @@ export async function getDomainReportState(domain: string): Promise<DomainReport
 }
 
 export async function getCompanyReports(companyId: string): Promise<ReportRecord[]> {
-  const { data, error } = await supabase
-    .from('reports')
+  const { data, error } = await ownedDbTable('reports')
     .select('*')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false });
@@ -318,8 +316,7 @@ async function createReport(
   }
 
   const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('reports')
+  const { data, error } = await ownedDbTable('reports')
     .insert({
       company_id: companyId,
       user_id: userId,
@@ -526,8 +523,7 @@ export async function updateReportStatus(
     payload.error_message = updates.errorMessage;
   }
 
-  const { error } = await supabase
-    .from('reports')
+  const { error } = await ownedDbTable('reports')
     .update(payload)
     .eq('id', reportId);
 

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * Persistence for `webauthn_challenges`.
  *
@@ -51,8 +52,7 @@ function rowToStored(row: ChallengeRow): StoredWebAuthnChallenge {
 }
 
 export async function issueChallenge(input: IssueChallengeInput): Promise<StoredWebAuthnChallenge> {
-  const { data, error } = await db
-    .from('webauthn_challenges')
+  const { data, error } = await ownedDbTable('webauthn_challenges')
     .insert({
       user_id:    input.userId,
       challenge:  input.challenge,
@@ -78,8 +78,7 @@ export async function loadChallenge(
   challenge: string,
   ceremony: WebAuthnCeremony,
 ): Promise<StoredWebAuthnChallenge | null> {
-  const { data } = await db
-    .from('webauthn_challenges')
+  const { data } = await ownedDbTable('webauthn_challenges')
     .select('*')
     .eq('challenge', challenge)
     .eq('ceremony', ceremony)
@@ -95,8 +94,7 @@ export async function loadChallenge(
  */
 export async function consumeChallenge(challengeId: string): Promise<boolean> {
   const now = new Date().toISOString();
-  const { data } = await db
-    .from('webauthn_challenges')
+  const { data } = await ownedDbTable('webauthn_challenges')
     .update({ consumed_at: now })
     .eq('id', challengeId)
     .is('consumed_at', null)
@@ -110,8 +108,7 @@ export async function consumeChallenge(challengeId: string): Promise<boolean> {
  * expires_at).
  */
 export async function purgeExpiredChallenges(beforeIso: string): Promise<number> {
-  const { data } = await db
-    .from('webauthn_challenges')
+  const { data } = await ownedDbTable('webauthn_challenges')
     .delete()
     .lt('expires_at', beforeIso)
     .select('id');

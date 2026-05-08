@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * Persistence for `totp_factors`.
  *
@@ -53,8 +54,7 @@ function rowToStored(row: FactorRow): StoredTotpFactor {
 }
 
 export async function findActiveForUser(userId: string): Promise<StoredTotpFactor | null> {
-  const { data } = await db
-    .from('totp_factors')
+  const { data } = await ownedDbTable('totp_factors')
     .select('*')
     .eq('user_id', userId)
     .is('revoked_at', null)
@@ -68,8 +68,7 @@ export async function findByIdForUser(
   factorId: string,
   userId: string,
 ): Promise<StoredTotpFactor | null> {
-  const { data } = await db
-    .from('totp_factors')
+  const { data } = await ownedDbTable('totp_factors')
     .select('*')
     .eq('id', factorId)
     .eq('user_id', userId)
@@ -88,8 +87,7 @@ export interface InsertPendingFactorInput {
 }
 
 export async function insertPending(input: InsertPendingFactorInput): Promise<StoredTotpFactor> {
-  const { data, error } = await db
-    .from('totp_factors')
+  const { data, error } = await ownedDbTable('totp_factors')
     .insert({
       user_id:         input.userId,
       vault_secret_id: input.vaultSecretId,
@@ -109,8 +107,7 @@ export async function insertPending(input: InsertPendingFactorInput): Promise<St
 
 export async function markVerified(factorId: string): Promise<StoredTotpFactor | null> {
   const now = new Date().toISOString();
-  const { data } = await db
-    .from('totp_factors')
+  const { data } = await ownedDbTable('totp_factors')
     .update({ verified_at: now, last_used_at: now })
     .eq('id', factorId)
     .is('verified_at', null)
@@ -121,8 +118,7 @@ export async function markVerified(factorId: string): Promise<StoredTotpFactor |
 }
 
 export async function touchLastUsed(factorId: string): Promise<void> {
-  await db
-    .from('totp_factors')
+  await ownedDbTable('totp_factors')
     .update({ last_used_at: new Date().toISOString() })
     .eq('id', factorId);
 }
@@ -132,8 +128,7 @@ export async function revokeFactor(
   userId: string,
   reason: string,
 ): Promise<boolean> {
-  const { data } = await db
-    .from('totp_factors')
+  const { data } = await ownedDbTable('totp_factors')
     .update({
       revoked_at: new Date().toISOString(),
       revocation_reason: reason,

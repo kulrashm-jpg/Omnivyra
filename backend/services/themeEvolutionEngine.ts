@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Theme Evolution Engine
  * Phase 6: Evolve themes from outcomes and feedback.
@@ -48,16 +49,14 @@ export async function evolveThemes(
     theme_updates: [],
   };
 
-  const { data: themes } = await supabase
-    .from('company_strategic_themes')
+  const { data: themes } = await ownedDbTable('company_strategic_themes')
     .select('id, theme_topic, theme_strength, created_at, archived_at')
     .eq('company_id', companyId)
     .is('archived_at', null);
 
   if (!themes || themes.length === 0) return result;
 
-  const { data: outcomes } = await supabase
-    .from('intelligence_outcomes')
+  const { data: outcomes } = await ownedDbTable('intelligence_outcomes')
     .select('success_score, created_at')
     .eq('company_id', companyId);
 
@@ -86,8 +85,7 @@ export async function evolveThemes(
     const createdBeforeCutoff = new Date(t.created_at) < cutoff;
 
     if (createdBeforeCutoff && current < 0.25) {
-      await supabase
-        .from('company_strategic_themes')
+      await ownedDbTable('company_strategic_themes')
         .update({ archived_at: new Date().toISOString() })
         .eq('id', t.id);
       result.themes_archived++;
@@ -97,8 +95,7 @@ export async function evolveThemes(
 
     const updated = Math.max(0, Math.min(1, current + clampedDelta));
     if (Math.abs(updated - current) > 0.001) {
-      await supabase
-        .from('company_strategic_themes')
+      await ownedDbTable('company_strategic_themes')
         .update({ theme_strength: updated })
         .eq('id', t.id);
       result.themes_updated++;
@@ -126,16 +123,14 @@ export async function evolveThemes(
         const strengthA = a.theme_strength ?? 0.5;
         const strengthB = b.theme_strength ?? 0.5;
         const mergedStrength = Math.min(1, (strengthA + strengthB) / 2 + 0.1);
-        await supabase
-          .from('company_strategic_themes')
+        await ownedDbTable('company_strategic_themes')
           .update({
             theme_topic: a.theme_topic.length >= b.theme_topic.length ? a.theme_topic : b.theme_topic,
             theme_strength: mergedStrength,
             supporting_signals: [],
           })
           .eq('id', a.id);
-        await supabase
-          .from('company_strategic_themes')
+        await ownedDbTable('company_strategic_themes')
           .update({ archived_at: new Date().toISOString() })
           .eq('id', b.id);
         result.themes_merged++;

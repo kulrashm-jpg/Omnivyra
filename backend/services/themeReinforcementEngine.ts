@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Theme Reinforcement Engine
  * Phase 5: Reinforce or weaken strategic themes from outcomes and feedback.
@@ -21,18 +22,15 @@ export type ThemeReinforcementResult = {
 export async function computeThemeReinforcement(
   companyId: string
 ): Promise<ThemeReinforcementResult[]> {
-  const { data: themes } = await supabase
-    .from('company_strategic_themes')
+  const { data: themes } = await ownedDbTable('company_strategic_themes')
     .select('id, theme_topic, theme_strength')
     .eq('company_id', companyId);
 
-  const { data: outcomes } = await supabase
-    .from('intelligence_outcomes')
+  const { data: outcomes } = await ownedDbTable('intelligence_outcomes')
     .select('success_score')
     .eq('company_id', companyId);
 
-  const { data: feedback } = await supabase
-    .from('recommendation_feedback')
+  const { data: feedback } = await ownedDbTable('recommendation_feedback')
     .select('feedback_type, feedback_score')
     .eq('company_id', companyId);
 
@@ -81,8 +79,7 @@ export async function persistThemeReinforcement(
   results: ThemeReinforcementResult[]
 ): Promise<void> {
   for (const r of results) {
-    await supabase
-      .from('company_strategic_themes')
+    await ownedDbTable('company_strategic_themes')
       .update({ theme_strength: r.updated_theme_strength })
       .eq('id', r.theme_id);
   }

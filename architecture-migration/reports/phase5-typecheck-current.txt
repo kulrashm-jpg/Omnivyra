@@ -1,0 +1,9 @@
+pages/community-ai/playbooks.tsx(121,11): error TS2322: Type 'import("C:/virality/shared/contracts/playbooks").EngagementPlaybook[]' is not assignable to type 'import("C:/virality/lib/shared/playbookTypes").EngagementPlaybook[]'.
+  Type 'import("C:/virality/shared/contracts/playbooks").EngagementPlaybook' is not assignable to type 'import("C:/virality/lib/shared/playbookTypes").EngagementPlaybook'.
+    Types of property 'automation_rules' are incompatible.
+      Type '{ auto_execute_low_risk?: boolean; require_human_approval_medium_risk?: boolean; block_high_risk?: boolean; }' is not assignable to type '{ auto_execute_low_risk: boolean; require_human_approval_medium_risk: boolean; block_high_risk: boolean; }'.
+        Property 'auto_execute_low_risk' is optional in type '{ auto_execute_low_risk?: boolean; require_human_approval_medium_risk?: boolean; block_high_risk?: boolean; }' but required in type '{ auto_execute_low_risk: boolean; require_human_approval_medium_risk: boolean; block_high_risk: boolean; }'.
+pages/community-ai/playbooks.tsx(130,13): error TS2322: Type 'import("C:/virality/shared/contracts/playbooks").EngagementPlaybook' is not assignable to type 'import("C:/virality/lib/shared/playbookTypes").EngagementPlaybook'.
+  Types of property 'automation_rules' are incompatible.
+    Type '{ auto_execute_low_risk?: boolean; require_human_approval_medium_risk?: boolean; block_high_risk?: boolean; }' is not assignable to type '{ auto_execute_low_risk: boolean; require_human_approval_medium_risk: boolean; block_high_risk: boolean; }'.
+      Property 'auto_execute_low_risk' is optional in type '{ auto_execute_low_risk?: boolean; require_human_approval_medium_risk?: boolean; block_high_risk?: boolean; }' but required in type '{ auto_execute_low_risk: boolean; require_human_approval_medium_risk: boolean; block_high_risk: boolean; }'.

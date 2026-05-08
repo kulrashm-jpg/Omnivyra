@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type IdentityExternalKeys = Record<string, unknown>;
 
@@ -82,8 +83,7 @@ function mergeExternalKeys(existing: IdentityExternalKeys | null | undefined, in
 }
 
 async function findPersonByEmail(companyId: string, email: string): Promise<UnifiedPersonRow | null> {
-  const { data, error } = await supabase
-    .from('unified_persons')
+  const { data, error } = await ownedDbTable('unified_persons')
     .select('id, company_id, primary_email, primary_phone, external_keys')
     .eq('company_id', companyId)
     .eq('primary_email', email)
@@ -99,8 +99,7 @@ async function findPersonByEmail(companyId: string, email: string): Promise<Unif
 }
 
 async function findPersonByPhone(companyId: string, phone: string): Promise<UnifiedPersonRow | null> {
-  const { data, error } = await supabase
-    .from('unified_persons')
+  const { data, error } = await ownedDbTable('unified_persons')
     .select('id, company_id, primary_email, primary_phone, external_keys')
     .eq('company_id', companyId)
     .eq('primary_phone', phone)
@@ -120,8 +119,7 @@ async function findPersonByExternalKeys(companyId: string, externalKeys: Identit
     return null;
   }
 
-  const { data, error } = await supabase
-    .from('unified_persons')
+  const { data, error } = await ownedDbTable('unified_persons')
     .select('id, company_id, primary_email, primary_phone, external_keys')
     .eq('company_id', companyId)
     .contains('external_keys', externalKeys)
@@ -163,8 +161,7 @@ async function updatePersonIfNeeded(
     return;
   }
 
-  const { error } = await supabase
-    .from('unified_persons')
+  const { error } = await ownedDbTable('unified_persons')
     .update(payload)
     .eq('id', person.id);
 
@@ -215,8 +212,7 @@ export async function resolveUnifiedPerson(input: IdentityResolutionInput): Prom
     };
   }
 
-  const { data, error } = await supabase
-    .from('unified_persons')
+  const { data, error } = await ownedDbTable('unified_persons')
     .insert({
       company_id: input.companyId,
       primary_email: email,

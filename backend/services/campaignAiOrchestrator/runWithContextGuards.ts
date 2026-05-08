@@ -1,5 +1,5 @@
 import type { CapacityValidationResult } from '../capacityFrequencyValidationGateway';
-import type { CampaignAiMode, CampaignAiPlanResult } from '../campaignAiOrchestrator';
+import type { CampaignAiMode, CampaignAiPlanResult } from './publicTypes';
 import type { DecisionResult } from '../omnivyreClient';
 
 export const DEFAULT_PLATFORM_STRATEGIES = [

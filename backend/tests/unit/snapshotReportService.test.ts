@@ -1,8 +1,5 @@
 import type { PersistedDecisionObject } from '../../services/decisionObjectService';
-import {
-  composeSnapshotReportFromDecisions,
-  ensureSnapshotDecisionFloor,
-} from '../../services/snapshotReportService';
+import { composeSnapshotReportFromDecisions } from '../../services/snapshotReportService';
 import type { ResolvedReportInput } from '../../services/reportInputResolver';
 import {
   assertSortedByTierThenScore,
@@ -114,57 +111,24 @@ function makeDecision(params: {
 }
 
 describe('snapshotReportService', () => {
-  it('guarantees a meaningful snapshot for minimal input', () => {
+  it('renders an honest insufficient-signal snapshot when no decisions are available', async () => {
     const resolvedInput = makeResolvedInput();
-    const floor = ensureSnapshotDecisionFloor({
-      companyId: 'company-1',
-      decisions: [],
-      resolvedInput,
-      minInsights: 3,
-    });
 
-    const report = composeSnapshotReportFromDecisions({
+    const report = await composeSnapshotReportFromDecisions({
       companyId: 'company-1',
       snapshotDecisions: [],
       resolvedInput,
     });
 
-    const insightCount = report.sections.reduce((sum, section) => sum + section.insights.length, 0);
-    const actionCount = report.sections.reduce((sum, section) => sum + section.actions.length, 0);
-
-    expect(floor.decisions.length).toBeGreaterThanOrEqual(3);
-    expect(report.diagnosis.length).toBeGreaterThan(20);
-    expect(report.primary_problem).toContain('The core problem is');
-    expect(report.seo_executive_summary.overall_health_score).toBeGreaterThan(0);
-    expect(report.seo_executive_summary.primary_problem.title.length).toBeGreaterThan(5);
-    expect(report.seo_executive_summary.top_3_actions.length).toBeGreaterThanOrEqual(2);
-    expect(report.geo_aeo_visuals.ai_answer_presence_radar.answer_coverage_score).toBeNull();
-    expect(report.geo_aeo_executive_summary.primary_gap.title.length).toBeGreaterThan(5);
-    expect(insightCount).toBeGreaterThanOrEqual(3);
-    expect(actionCount).toBeGreaterThanOrEqual(2);
-    expect(report.top_priorities.length).toBeGreaterThanOrEqual(1);
+    // Canonical Trust Foundation: empty input must produce an honest empty/insufficient-signal report.
+    // No synthetic decision floor, no fabricated insights, no manufactured actions.
+    expect(report.pipeline_audit.fallback_decisions_added).toBe(0);
     expect(report.score.dimensions).toHaveLength(9);
-    expect(report.score.weakest_dimensions.length).toBeGreaterThanOrEqual(1);
-    expect(report.score.limiting_factors.length).toBeGreaterThanOrEqual(1);
-    expect(report.score.growth_path.focus.length).toBeGreaterThanOrEqual(1);
-    expect(report.sections.flatMap((section) => section.insights).every((item) => item.why_it_matters.length > 10)).toBe(true);
-    expect(report.sections.flatMap((section) => section.insights).every((item) => item.business_impact.length > 20)).toBe(true);
-    expect(report.sections.flatMap((section) => section.actions).every((item) => item.steps.length >= 2)).toBe(true);
-    expect(report.sections.flatMap((section) => section.actions).every((item) => item.expected_upside.length > 20)).toBe(true);
-    expect(report.sections.flatMap((section) => section.actions).every((item) => ['quick_win', 'high_impact', 'strategic'].includes(item.priority_type))).toBe(true);
-    expect(report.top_priorities.every((item) => item.expected_upside.length > 20)).toBe(true);
-    expect(report.top_priorities.every((item) => ['quick_win', 'high_impact', 'strategic'].includes(item.priority_type))).toBe(true);
-    expect(report.visual_intelligence.seo_capability_radar.content_quality_score).not.toBeNull();
-    expect(report.visual_intelligence.seo_capability_radar.data_source_strength.content_quality_score).toBeTruthy();
-    expect(report.visual_intelligence.search_visibility_funnel.drop_off_reason_distribution.ranking_issue_pct).toBeNull();
-    expect(report.visual_intelligence.crawl_health_breakdown.severity_split.classification).toBe('unclassified');
-    expect(report.visual_intelligence.search_visibility_funnel.impressions).toBeNull();
+    expect(report.score.dimensions.every((d) => d.value === null || d.state === 'measured' || d.state === 'inferred')).toBe(true);
+    // The radar visual must render null (gap) rather than fake zeroes.
+    expect(report.geo_aeo_visuals.ai_answer_presence_radar.answer_coverage_score).toBeNull();
     expect(report.visual_intelligence.opportunity_coverage_matrix.opportunities).toHaveLength(0);
-    expect(report.pipeline_audit.fallback_decisions_added).toBeGreaterThanOrEqual(1);
-    expect(report.pipeline_audit.competitor_gap_decisions_added).toBeGreaterThanOrEqual(1);
-    expect(report.competitor_intelligence.detected_competitors.length).toBeGreaterThanOrEqual(1);
-    assertValidCompetitorList(report.competitor_intelligence.detected_competitors as any[]);
-    assertSortedByTierThenScore(report.competitor_intelligence.detected_competitors as any[]);
+    expect(report.visual_intelligence.search_visibility_funnel.impressions).toBeNull();
     expect(report.sections.map((section) => section.section_name)).toEqual([
       'Visibility',
       'Content Strength',
@@ -172,13 +136,13 @@ describe('snapshotReportService', () => {
     ]);
   });
 
-  it('strengthens insights when partial input is available', () => {
+  it('strengthens insights when partial input is available', async () => {
     const resolvedInput = makeResolvedInput({
       socialLinks: ['https://linkedin.com/company/example'],
       geography: 'United States',
     });
 
-    const report = composeSnapshotReportFromDecisions({
+    const report = await composeSnapshotReportFromDecisions({
       companyId: 'company-1',
       snapshotDecisions: [
         makeDecision({
@@ -195,8 +159,11 @@ describe('snapshotReportService', () => {
     });
 
     const opportunityCount = report.sections.reduce((sum, section) => sum + section.opportunities.length, 0);
-    expect(report.signal_availability.authority).not.toBe('NO_DATA');
-    expect(report.signal_availability.geo_relevance).not.toBe('NO_DATA');
+    // Canonical Architecture Consolidation (Phase 2): signal_availability is removed
+    // from the public report shape. Authority/geo coverage now flows through the
+    // canonical pillar score states.
+    const authorityPillar = report.canonical.pillars.find((p) => p.pillar === 'authority');
+    expect(authorityPillar).toBeDefined();
     expect(opportunityCount).toBeGreaterThanOrEqual(1);
     expect(report.seo_executive_summary.primary_problem.reasoning.length).toBeGreaterThan(10);
     expect(report.visual_intelligence.seo_capability_radar.content_quality_score).not.toBeNull();
@@ -208,7 +175,7 @@ describe('snapshotReportService', () => {
     expect(report.summary).toContain(report.primary_problem);
   });
 
-  it('preserves strong real decisions for fuller inputs', () => {
+  it('preserves strong real decisions for fuller inputs', async () => {
     const resolvedInput = makeResolvedInput({
       businessType: 'B2B Services',
       geography: 'United States',
@@ -216,7 +183,7 @@ describe('snapshotReportService', () => {
       competitors: [],
     });
 
-    const report = composeSnapshotReportFromDecisions({
+    const report = await composeSnapshotReportFromDecisions({
       companyId: 'company-1',
       snapshotDecisions: [
         makeDecision({
@@ -258,15 +225,19 @@ describe('snapshotReportService', () => {
       resolvedInput,
     });
 
-    expect(report.pipeline_audit.fallback_decisions_added).toBeLessThanOrEqual(1);
-    expect(report.score.value).toBeGreaterThanOrEqual(25);
+    expect(report.pipeline_audit.fallback_decisions_added).toBe(0);
+    expect(report.score.value === null || report.score.value >= 0).toBe(true);
     expect(report.diagnosis.length).toBeGreaterThan(30);
     expect(report.primary_problem.length).toBeGreaterThan(30);
     expect(
       report.seo_executive_summary.growth_opportunity === null ||
       report.seo_executive_summary.growth_opportunity.title.length > 5
     ).toBe(true);
-    expect(report.geo_aeo_executive_summary.overall_ai_visibility_score).toBeGreaterThanOrEqual(0);
+    // Canonical Trust Foundation: overall_ai_visibility_score is null when no GEO/AEO axis is measured.
+    expect(
+      report.geo_aeo_executive_summary.overall_ai_visibility_score === null ||
+      report.geo_aeo_executive_summary.overall_ai_visibility_score >= 0,
+    ).toBe(true);
     expect(report.seo_executive_summary.top_3_actions.every((item) => item.reasoning.length > 5)).toBe(true);
     expect(report.visual_intelligence.seo_capability_radar.content_quality_score).not.toBeNull();
     expect(report.visual_intelligence.seo_capability_radar.source_tags.content_quality_score).toBeTruthy();
@@ -276,13 +247,13 @@ describe('snapshotReportService', () => {
     expect(report.secondary_problems.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('sorts actions and priorities by priority type then impact score', () => {
+  it('sorts actions and priorities by priority type then impact score', async () => {
     const resolvedInput = makeResolvedInput({
       businessType: 'B2B Services',
       geography: 'United States',
     });
 
-    const report = composeSnapshotReportFromDecisions({
+    const report = await composeSnapshotReportFromDecisions({
       companyId: 'company-1',
       snapshotDecisions: [
         makeDecision({
@@ -333,7 +304,7 @@ describe('snapshotReportService', () => {
     expect(priorities.every((item, index, list) => index === 0 || rank[list[index - 1].priority_type] <= rank[item.priority_type])).toBe(true);
   });
 
-  it('builds structured action recommendations from real gap data', () => {
+  it('builds structured action recommendations from real gap data', async () => {
     const resolvedInput = makeResolvedInput({
       companyName: 'Drishik',
       websiteDomain: 'drishik.com',
@@ -352,7 +323,7 @@ describe('snapshotReportService', () => {
       },
     });
 
-    const report = composeSnapshotReportFromDecisions({
+    const report = await composeSnapshotReportFromDecisions({
       companyId: 'company-1',
       snapshotDecisions: [
         makeDecision({
@@ -460,14 +431,14 @@ describe('snapshotReportService', () => {
     assertSortedByTierThenScore(report.competitor_intelligence.detected_competitors as any[]);
     expect(action.title.length).toBeGreaterThan(5);
     expect(action.reasoning.length).toBeGreaterThan(20);
-    expect(action.tactics.length).toBeGreaterThanOrEqual(3);
+    expect(action.tactics.length).toBeGreaterThanOrEqual(2);
     expect(action.focus_page.length).toBeGreaterThan(0);
     expect(action.timeline.short.length).toBeGreaterThan(0);
     expect(action.timeline.mid.length).toBeGreaterThan(0);
     expect(action.timeline.long.length).toBeGreaterThan(0);
     expect(action.confidence).toBeGreaterThan(0);
-    expect(action.tactics.join(' ')).toContain('directories');
-    expect(action.tactics.join(' ')).toContain('proof-led asset');
-    expect(action.tactics.join(' ')).toContain('outreach sequence');
+    // Canonical Trust Foundation: tactic strings now reflect the actual top decision (a content
+    // gap in this fixture) rather than authority tactics injected by the deleted decision floor.
+    expect(action.tactics.every((tactic) => tactic.length > 5)).toBe(true);
   });
 });

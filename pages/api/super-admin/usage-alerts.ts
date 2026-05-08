@@ -1,6 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 function currentYearMonth(): { year: number; month: number } {
   const now = new Date();
@@ -13,7 +15,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:usage-alerts', 30, 60))) return;
 
-  if (!(await requireSuperAdminUser(req, res))) return;
+  // Phase: Platform Authority Hard Enforcement.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'platform usage-alerts dashboard',
+  });
+  if (guard.ok !== true) return;
 
   const { year: defaultYear, month: defaultMonth } = currentYearMonth();
   const organizationId = req.query.organization_id as string | undefined;

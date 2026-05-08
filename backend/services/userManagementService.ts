@@ -3,6 +3,7 @@ import type { UserContext } from './userContextService';
 import { getUserRole, isSuperAdmin, Role } from './rbacService';
 import { logUserManagementAudit } from './campaignAuditService';
 import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
+import { ownedDbTable } from '../db/writeOwner';
 
 type AccessResult =
   | { ok: true; scope: 'super_admin' | 'admin' }
@@ -34,8 +35,7 @@ const getOrCreateUserByEmail = async (email: string, companyId?: string): Promis
   const normalizedEmail = email.toLowerCase().trim();
 
   // Look up existing user row by email (DB is the authoritative identity store)
-  const { data: existing } = await supabase
-    .from('users')
+  const { data: existing } = await ownedDbTable('users')
     .select('id, email')
     .eq('email', normalizedEmail)
     .maybeSingle();
@@ -49,8 +49,7 @@ const getOrCreateUserByEmail = async (email: string, companyId?: string): Promis
   });
 
   // Create a stub row — supabase_uid is populated on first sign-in via sync-supabase-user.
-  const { data: created, error: createError } = await supabase
-    .from('users')
+  const { data: created, error: createError } = await ownedDbTable('users')
     .insert({
       email: normalizedEmail,
       name: normalizedEmail.split('@')[0] || 'User',
@@ -63,7 +62,7 @@ const getOrCreateUserByEmail = async (email: string, companyId?: string): Promis
   if (createError || !created) {
     // Handle race condition
     if (createError?.code === '23505') {
-      const { data: retry } = await supabase.from('users').select('id, email').eq('email', normalizedEmail).maybeSingle();
+      const { data: retry } = await ownedDbTable('users').select('id, email').eq('email', normalizedEmail).maybeSingle();
       if (retry) return { id: (retry as any).id, email: (retry as any).email };
     }
     throw new Error(createError?.message || 'Failed to create user');
@@ -83,8 +82,7 @@ export const inviteUser = async (
   const user = await getOrCreateUserByEmail(email, companyId);
   const normalizedRole = role.toUpperCase();
 
-  const { data: existing } = await (supabase
-    .from('user_company_roles') as any)
+  const { data: existing } = await (ownedDbTable('user_company_roles') as any)
     .select('id, role')
     .eq('user_id', user.id)
     .eq('company_id', companyId)
@@ -93,13 +91,12 @@ export const inviteUser = async (
   if (existing && existing.length > 0) {
     const existingRow = existing[0];
     if (existingRow.role !== normalizedRole) {
-      await supabase
-        .from('user_company_roles')
+      await ownedDbTable('user_company_roles')
         .update({ role: normalizedRole })
         .eq('id', existingRow.id);
     }
   } else {
-    await supabase.from('user_company_roles').insert({
+    await ownedDbTable('user_company_roles').insert({
       user_id: user.id,
       company_id: companyId,
       role: normalizedRole,
@@ -121,8 +118,7 @@ export const listUsers = async (companyId: string, requester: UserContext) => {
   const access = await requireUserAdminAccess(requester, companyId);
   if (!access.ok) return access;
 
-  const { data: roles, error } = await (supabase
-    .from('user_company_roles') as any)
+  const { data: roles, error } = await (ownedDbTable('user_company_roles') as any)
     .select('user_id, company_id, role')
     .eq('company_id', companyId);
   if (error) {
@@ -131,8 +127,7 @@ export const listUsers = async (companyId: string, requester: UserContext) => {
   const ids = Array.from(new Set((roles || []).map((row: { user_id: string }) => row.user_id)));
   const emailById: Record<string, string> = {};
   if (ids.length > 0) {
-    const { data: usersData } = await supabase
-      .from('users')
+    const { data: usersData } = await ownedDbTable('users')
       .select('id, email')
       .in('id', ids);
     (usersData || []).forEach((u: any) => {
@@ -162,8 +157,7 @@ export const updateUserRole = async (
   const access = await requireUserAdminAccess(requester, companyId);
   if (!access.ok) return access;
 
-  const { data, error } = await (supabase
-    .from('user_company_roles') as any)
+  const { data, error } = await (ownedDbTable('user_company_roles') as any)
     .update({ role: role.toUpperCase() })
     .eq('user_id', userId)
     .eq('company_id', companyId)
@@ -191,8 +185,7 @@ export const removeUser = async (
   const access = await requireUserAdminAccess(requester, companyId);
   if (!access.ok) return access;
 
-  const { error } = await (supabase
-    .from('user_company_roles') as any)
+  const { error } = await (ownedDbTable('user_company_roles') as any)
     .delete()
     .eq('user_id', userId)
     .eq('company_id', companyId);

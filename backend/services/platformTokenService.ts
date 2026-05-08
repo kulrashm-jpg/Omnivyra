@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Platform Token Service
  *
@@ -47,16 +48,14 @@ async function resolveSocialAccountIdForOrg(
 ): Promise<string | null> {
   const platformsToMatch = PLATFORM_ALIASES[platform] ?? [platform];
 
-  const { data: roleRows } = await supabase
-    .from('user_company_roles')
+  const { data: roleRows } = await ownedDbTable('user_company_roles')
     .select('user_id')
     .eq('company_id', organizationId)
     .eq('status', 'active');
   const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
   if (userIds.length === 0) return null;
 
-  const { data: rows } = await supabase
-    .from('social_accounts')
+  const { data: rows } = await ownedDbTable('social_accounts')
     .select('id')
     .in('user_id', userIds)
     .eq('is_active', true)
@@ -97,8 +96,7 @@ export const saveToken = async (
     payload.scopes = tokenData.scopes;
   }
 
-  const { data: existing, error: lookupError } = await supabase
-    .from('community_ai_platform_tokens')
+  const { data: existing, error: lookupError } = await ownedDbTable('community_ai_platform_tokens')
     .select('id')
     .eq('tenant_id', tenant_id)
     .eq('organization_id', organization_id)
@@ -110,8 +108,7 @@ export const saveToken = async (
   }
 
   if (existing && existing.length > 0) {
-    const { data, error } = await supabase
-      .from('community_ai_platform_tokens')
+    const { data, error } = await ownedDbTable('community_ai_platform_tokens')
       .update(payload)
       .eq('id', existing[0].id)
       .eq('tenant_id', tenant_id)
@@ -124,8 +121,7 @@ export const saveToken = async (
     return data?.[0] || null;
   }
 
-  const { data, error } = await supabase
-    .from('community_ai_platform_tokens')
+  const { data, error } = await ownedDbTable('community_ai_platform_tokens')
     .insert({ ...payload, created_at: new Date().toISOString() })
     .select('*')
     .limit(1);
@@ -182,16 +178,14 @@ export async function getPlatformsWithTokensForOrg(
 ): Promise<string[]> {
   const platforms = new Set<string>();
 
-  const { data: roleRows } = await supabase
-    .from('user_company_roles')
+  const { data: roleRows } = await ownedDbTable('user_company_roles')
     .select('user_id')
     .eq('company_id', organization_id)
     .eq('status', 'active');
   const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
   if (userIds.length === 0) return [];
 
-  const { data: saRows } = await supabase
-    .from('social_accounts')
+  const { data: saRows } = await ownedDbTable('social_accounts')
     .select('platform')
     .in('user_id', userIds)
     .eq('is_active', true)
@@ -215,16 +209,14 @@ export async function getPlatformsWithActiveSocialAccountsForOrg(
 ): Promise<string[]> {
   const platforms = new Set<string>();
 
-  const { data: roleRows } = await supabase
-    .from('user_company_roles')
+  const { data: roleRows } = await ownedDbTable('user_company_roles')
     .select('user_id')
     .eq('company_id', organization_id)
     .eq('status', 'active');
   const userIds = (roleRows ?? []).map((r: { user_id: string }) => r.user_id).filter(Boolean);
   if (userIds.length === 0) return [];
 
-  const { data: saRows } = await supabase
-    .from('social_accounts')
+  const { data: saRows } = await ownedDbTable('social_accounts')
     .select('platform')
     .in('user_id', userIds)
     .eq('is_active', true)
@@ -248,8 +240,7 @@ export async function getConnectorConnectedByUserId(
   platform: string,
 ): Promise<string | null> {
   const normalized = normalizePlatform(platform);
-  const { data, error } = await supabase
-    .from('community_ai_platform_tokens')
+  const { data, error } = await ownedDbTable('community_ai_platform_tokens')
     .select('connected_by_user_id')
     .eq('tenant_id', tenant_id)
     .eq('organization_id', organization_id)
@@ -271,8 +262,7 @@ export const revokeToken = async (
   platform: string,
 ) => {
   const normalized = normalizePlatform(platform);
-  const { data, error } = await supabase
-    .from('community_ai_platform_tokens')
+  const { data, error } = await ownedDbTable('community_ai_platform_tokens')
     .delete()
     .eq('tenant_id', tenant_id)
     .eq('organization_id', organization_id)

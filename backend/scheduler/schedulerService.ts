@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Scheduler Service
  * 
@@ -9,6 +10,7 @@
  */
 
 import { supabase } from '../db/supabaseClient';
+
 import { getQueue, getEngagementPollingQueue } from '../queue/bullmqClient';
 import { createQueueJob } from '../db/queries';
 import { getCampaignReadiness } from '../services/campaignReadinessService';
@@ -62,8 +64,7 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
 
   // Query due scheduled posts with priority sorting
   // Higher priority posts (priority > 0) are processed first
-  const { data: duePosts, error } = await supabase
-    .from('scheduled_posts')
+  const { data: duePosts, error } = await ownedDbTable('scheduled_posts')
     .select('id, user_id, social_account_id, platform, scheduled_for, status, priority, campaign_id')
     .eq('status', 'scheduled')
     .lte('scheduled_for', now)
@@ -83,8 +84,7 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
   }
 
   // Check for existing queue jobs to prevent duplicates
-  const { data: existingJobs } = await supabase
-    .from('queue_jobs')
+  const { data: existingJobs } = await ownedDbTable('queue_jobs')
     .select('scheduled_post_id, status')
     .in('scheduled_post_id', duePosts.map(p => p.id))
     .in('status', ['pending', 'processing']);
@@ -108,8 +108,7 @@ export async function findDuePostsAndEnqueue(): Promise<SchedulerResult> {
     }
 
     if (post.campaign_id) {
-      const { data: campaign, error: campaignError } = await supabase
-        .from('campaigns')
+      const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
         .select('status')
         .eq('id', post.campaign_id)
         .single();
@@ -205,8 +204,7 @@ export async function enqueueScheduledPostAt(
   scheduledFor: string,
 ): Promise<'enqueued' | 'duplicate' | 'past'> {
   // Duplicate guard: skip if a queue_jobs row already exists for this post
-  const { data: existing } = await supabase
-    .from('queue_jobs')
+  const { data: existing } = await ownedDbTable('queue_jobs')
     .select('id, status')
     .eq('scheduled_post_id', scheduledPostId)
     .in('status', ['pending', 'processing'])
@@ -305,8 +303,7 @@ export interface EnqueueIntelligencePollingResult {
 export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligencePollingResult> {
   const today = new Date().toISOString().slice(0, 10);
 
-  const { data: enabledConfigRows, error: configError } = await supabase
-    .from('company_api_configs')
+  const { data: enabledConfigRows, error: configError } = await ownedDbTable('company_api_configs')
     .select('api_source_id, polling_frequency')
     .eq('enabled', true);
 
@@ -316,8 +313,7 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
 
   if (configError || !enabledConfigRows?.length) {
     // Global fallback: no company configs — use all active API sources
-    const { data: activeSources, error: sourcesError } = await supabase
-      .from('external_api_sources')
+    const { data: activeSources, error: sourcesError } = await ownedDbTable('external_api_sources')
       .select('id, name, rate_limit_per_min, is_enabled_global, is_whitelisted, category')
       .eq('is_active', true);
 
@@ -336,8 +332,7 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
       const existing = pollingPriorityBySource.get(id);
       if (existing === undefined || p < existing) pollingPriorityBySource.set(id, p);
     }
-    const { data: companySources, error: sourcesError } = await supabase
-      .from('external_api_sources')
+    const { data: companySources, error: sourcesError } = await ownedDbTable('external_api_sources')
       .select('id, name, rate_limit_per_min, is_enabled_global, is_whitelisted, category')
       .eq('is_active', true)
       .in('id', enabledSourceIds);
@@ -350,8 +345,7 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
     console.log('[intelligence] company polling enabled');
   }
 
-  const { data: healthRows } = await supabase
-    .from('external_api_health')
+  const { data: healthRows } = await ownedDbTable('external_api_health')
     .select('api_source_id, reliability_score')
     .in('api_source_id', sources.map((s) => s.id));
 
@@ -360,8 +354,7 @@ export async function enqueueIntelligencePolling(): Promise<EnqueueIntelligenceP
     healthBySource.set(r.api_source_id, r.reliability_score ?? 1);
   });
 
-  const { data: usageRows } = await supabase
-    .from('external_api_usage')
+  const { data: usageRows } = await ownedDbTable('external_api_usage')
     .select('api_source_id, request_count')
     .eq('user_id', INTELLIGENCE_POLLER_USER_ID)
     .eq('usage_date', today)
@@ -525,8 +518,7 @@ export async function runCompanyTrendRelevance(): Promise<{
   total_themes_scored: number;
   errors: string[];
 }> {
-  const { data: companies, error } = await supabase
-    .from('companies')
+  const { data: companies, error } = await ownedDbTable('companies')
     .select('id')
     .eq('status', 'active');
 
@@ -642,8 +634,7 @@ const SCHEDULED_LEAD_REGIONS = ['GLOBAL'];
  */
 export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: number; errors: string[] }> {
   const { jobQueue } = await import('../queue/jobQueue');
-  const { data: companies, error } = await supabase
-    .from('company_profiles')
+  const { data: companies, error } = await ownedDbTable('company_profiles')
     .select('company_id')
     .not('company_id', 'is', null);
   if (error) {
@@ -660,14 +651,12 @@ export async function enqueueScheduledLeadDetection(): Promise<{ enqueued: numbe
 
   for (const companyId of companyIds) {
     try {
-      const { count } = await supabase
-        .from('lead_jobs_v1')
+      const { count } = await ownedDbTable('lead_jobs_v1')
         .select('*', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .gt('created_at', twentyFourHoursAgo);
       if ((count ?? 0) >= 2) continue;
-      const { data: job, error: insertError } = await supabase
-        .from('lead_jobs_v1')
+      const { data: job, error: insertError } = await ownedDbTable('lead_jobs_v1')
         .insert({
           company_id: companyId,
           platforms: SCHEDULED_LEAD_PLATFORMS,

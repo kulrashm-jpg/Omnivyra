@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type CampaignPlanningInputs = {
   recommendation_snapshot: unknown;
@@ -23,8 +24,7 @@ export type CampaignPlanningInputs = {
 export async function getCampaignPlanningInputs(
   campaignId: string
 ): Promise<CampaignPlanningInputs | null> {
-  const { data, error } = await supabase
-    .from('campaign_planning_inputs')
+  const { data, error } = await ownedDbTable('campaign_planning_inputs')
     .select(
       'recommendation_snapshot, available_content, weekly_capacity, exclusive_campaigns, selected_platforms, platform_content_requests, planning_stage, is_completed'
     )
@@ -149,7 +149,7 @@ export async function saveCampaignPlanningInputs(input: {
 
   // campaign_id is not guaranteed unique in all environments; append-only insert is deterministic
   // because readers always consume the latest row by updated_at.
-  const { error } = await supabase.from('campaign_planning_inputs').insert(payload as any);
+  const { error } = await ownedDbTable('campaign_planning_inputs').insert(payload as any);
   if (error) {
     const msg = String((error as any)?.message ?? '');
     // Fail open on transient network/Supabase connectivity issues so planning can proceed.

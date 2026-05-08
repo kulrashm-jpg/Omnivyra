@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { sendInvite } from './emailService';
 import { getRequestContext } from './requestContext';
+import { ownedDbTable } from '../db/writeOwner';
 
 const INVITE_EXPIRY_DAYS = 7;
 
@@ -25,8 +26,7 @@ function buildInvitationToken(email: string, companyId: string, idempotencyKey?:
 async function normalizeInvitationState(email: string, companyId: string): Promise<void> {
   const now = new Date().toISOString();
 
-  const { error } = await supabase
-    .from('invitations')
+  const { error } = await ownedDbTable('invitations')
     .update({ revoked_at: now })
     .eq('company_id', companyId)
     .eq('email', email.toLowerCase())
@@ -40,8 +40,7 @@ async function normalizeInvitationState(email: string, companyId: string): Promi
 }
 
 async function findExistingByIdempotencyKey(idempotencyKey: string): Promise<{ id: string; expires_at: string } | null> {
-  const { data, error } = await supabase
-    .from('invitations')
+  const { data, error } = await ownedDbTable('invitations')
     .select('id, expires_at')
     .eq('idempotency_key', idempotencyKey)
     .maybeSingle();
@@ -84,8 +83,7 @@ export async function createInvitation(input: {
   const tokenHash = hashInvitationToken(rawToken);
   const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 86_400_000).toISOString();
 
-  const { data, error } = await supabase
-    .from('invitations')
+  const { data, error } = await ownedDbTable('invitations')
     .insert({
       email: normalizedEmail,
       company_id: input.companyId,
@@ -137,8 +135,7 @@ export async function createAndSendInvitation(input: {
     );
   } catch (error) {
     if (!invitation.replayed) {
-      await supabase
-        .from('invitations')
+      await ownedDbTable('invitations')
         .update({ revoked_at: new Date().toISOString() })
         .eq('id', invitation.id);
     }

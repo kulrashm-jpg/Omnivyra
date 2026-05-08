@@ -46,7 +46,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       allCatalogContentTypeQuickPickOptions, creatorDependentQuickPickOptions, platformExtractCandidates, hasEffectiveCatalog,
     },
     ops: {
-      aiHistory, isHistoryLoading, auditReport, isAuditLoading, healthReport, isHealthLoading, optimizeWeekNumber, setOptimizeWeekNumber,
+      aiHistory, isHistoryLoading, auditReport, isAuditLoading, auditStartedAt, healthReport, isHealthLoading, optimizeWeekNumber, setOptimizeWeekNumber,
       optimizeReason, setOptimizeReason, isOptimizingWeek, optimizeResult, executionPlan, isExecutionLoading, executionWeekNumber,
       setExecutionWeekNumber, schedulerPayload, contentAssets, isContentLoading, contentWeekNumber, setContentWeekNumber,
       regenerateInstruction, setRegenerateInstruction, setHealthReport, handleOptimizeWeek, loadExecutionPlan, handleApproveScheduling,
@@ -415,6 +415,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
       isHistoryLoading,
       auditReport,
       isAuditLoading,
+      auditStartedAt,
       healthReport,
       isHealthLoading,
       optimizeWeekNumber,

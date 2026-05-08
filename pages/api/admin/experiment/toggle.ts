@@ -11,12 +11,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { invalidateConfigCache } from '@/backend/services/configService';
+import { requireCapability } from '@/backend/security/requireCapability';
+import { INTELLIGENCE_OVERRIDE_MANAGE } from '@/shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (req.cookies?.super_admin_session !== '1') {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
+  const guard = await requireCapability(req, res, {
+    capability: INTELLIGENCE_OVERRIDE_MANAGE,
+    reason: 'experiment toggle',
+  });
+  if (guard.ok !== true) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { experiment_name, active, note } = body as {

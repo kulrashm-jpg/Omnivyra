@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Community Post Engine
  * Converts campaign narratives into platform-ready posts.
@@ -54,8 +55,7 @@ export type GenerateCommunityPostsResult = {
  * Load campaign narratives that do not yet have community_posts.
  */
 async function loadNarrativesWithoutPosts(): Promise<Array<NarrativeRow & { company_id: string | null }>> {
-  const { data: narratives, error: nErr } = await supabase
-    .from('campaign_narratives')
+  const { data: narratives, error: nErr } = await ownedDbTable('campaign_narratives')
     .select('id, narrative_angle, narrative_summary, platform, opportunity_id')
     .order('created_at', { ascending: false })
     .limit(100);
@@ -65,8 +65,7 @@ async function loadNarrativesWithoutPosts(): Promise<Array<NarrativeRow & { comp
 
   if (narrs.length === 0) return [];
 
-  const { data: existing } = await supabase
-    .from('community_posts')
+  const { data: existing } = await ownedDbTable('community_posts')
     .select('narrative_id')
     .in('narrative_id', narrs.map((n) => n.id));
 
@@ -76,8 +75,7 @@ async function loadNarrativesWithoutPosts(): Promise<Array<NarrativeRow & { comp
   if (withoutPosts.length === 0) return [];
 
   const oppIds = [...new Set(withoutPosts.map((n) => n.opportunity_id))];
-  const { data: opps } = await supabase
-    .from('content_opportunities')
+  const { data: opps } = await ownedDbTable('content_opportunities')
     .select('id, company_id')
     .in('id', oppIds);
 
@@ -112,7 +110,7 @@ export async function generateCommunityPosts(): Promise<GenerateCommunityPostsRe
     }
 
     const platform = n.platform ?? 'LinkedIn';
-    const { error } = await supabase.from('community_posts').insert({
+    const { error } = await ownedDbTable('community_posts').insert({
       narrative_id: n.id,
       company_id: companyId,
       platform,

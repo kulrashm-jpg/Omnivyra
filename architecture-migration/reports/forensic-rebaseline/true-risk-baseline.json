@@ -1,0 +1,19 @@
+{
+  "runtimeDbWriteRisks": 44,
+  "apiAdapterDbWriteRisks": 431,
+  "repositoryOwnedWrites": 49,
+  "ignoredTestWrites": 0,
+  "trueDuplicateOrchestrationOwners": 0,
+  "runtimeDependencyCycles": 0,
+  "criticalUnsafeLeaks": 6133,
+  "mixedRuntimeOversizedFiles": 14,
+  "p0": {
+    "runtimeCycles": 0,
+    "directDbWritesOutsideRepositories": 44,
+    "duplicateOrchestrationOwners": 0,
+    "unsafeAnyPropagation": 5931,
+    "frontendBackendImports": 0,
+    "deprecatedRoutes": 0,
+    "variantContamination": 0
+  }
+}

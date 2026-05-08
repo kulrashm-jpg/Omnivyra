@@ -1,0 +1,1262 @@
+[
+  {
+    "file": "backend/domain/from-lib/post/runPostGeneration.ts",
+    "line": 2,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "buildPlatformVariantsFromMaster,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/post/runPostGeneration.ts",
+    "line": 3,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "generateMasterContentFromIntent,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/post/runPostGeneration.ts",
+    "line": 155,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "let master_content = await generateMasterContentFromIntent(masterItem);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/post/runPostGeneration.ts",
+    "line": 156,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "let [platform_variant] = await buildPlatformVariantsFromMaster({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/post/runPostGeneration.ts",
+    "line": 193,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const regenMaster = await generateMasterContentFromIntent(regenMasterItem);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/post/runPostGeneration.ts",
+    "line": 194,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "const [regenVariant] = await buildPlatformVariantsFromMaster({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/thread/runThreadGeneration.ts",
+    "line": 2,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "buildPlatformVariantsFromMaster,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/thread/runThreadGeneration.ts",
+    "line": 3,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "generateMasterContentFromIntent,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/thread/runThreadGeneration.ts",
+    "line": 95,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "let master_content = await generateMasterContentFromIntent(item);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/thread/runThreadGeneration.ts",
+    "line": 96,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "let [platform_variant] = await buildPlatformVariantsFromMaster({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/thread/runThreadGeneration.ts",
+    "line": 130,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const regenMaster = await generateMasterContentFromIntent(regenItem);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/domain/from-lib/thread/runThreadGeneration.ts",
+    "line": 131,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "const [regenVariant] = await buildPlatformVariantsFromMaster({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 13,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "import { runCampaignAiPlan } from './campaignAiOrchestrator';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 16,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "import { scheduleStructuredPlan } from './structuredPlanScheduler';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 329,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "async function runAiPlan(runId: string, campaignId: string, companyId: string, payload: BoltPayload, eligiblePlatforms?: string[], requiresMediaFlow?: boolean, isCombined?: boolean): Promise<{ plan: { weeks: unknown[] }; result: Awaited<ReturnType<typeof runCampaignAiPlan>> }> {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 522,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 780,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "// Omitting run_id forces scheduleStructuredPlan to use processBlockSchedule inline.",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 781,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "const result = await scheduleStructuredPlan(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltPipelineService.ts",
+    "line": 782,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "{ weeks: plan.weeks } as Parameters<typeof scheduleStructuredPlan>[0],",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/boltScheduleBlockProcessor.ts",
+    "line": 289,
+    "ownerSymbol": "processBlockSchedule",
+    "text": "export async function processBlockSchedule(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/campaignAiOrchestrator.ts",
+    "line": 477,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "export async function runCampaignAiPlan(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/CampaignExecutionOrchestrator.ts",
+    "line": 1,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "import { runCampaignAiPlan } from './campaignAiOrchestrator';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/CampaignExecutionOrchestrator.ts",
+    "line": 2,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "import { scheduleStructuredPlan } from './structuredPlanScheduler';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/CampaignExecutionOrchestrator.ts",
+    "line": 5,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/CampaignExecutionOrchestrator.ts",
+    "line": 6,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "scheduleStructuredPlan,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+    "line": 159,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "* Strict token-tracked variant of generateMasterContentFromIntent.",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+    "line": 171,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "* generateMasterContentFromIntent.",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/blueprintGenerator.ts",
+    "line": 372,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "export async function generateMasterContentFromIntent(item: DailyExecutionItemLike): Promise<MasterContentPayload> {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "line": 39,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "import { generateContentBlueprint, isBlueprintQualitySufficient, generateMasterContentFromIntent } from './blueprintGenerator';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "line": 574,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "export async function buildPlatformVariantsFromMaster(item: DailyExecutionItemLike): Promise<PlatformVariantPayload[]> {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "line": 835,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "item.master_content = await generateMasterContentFromIntent(item);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "line": 842,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "item.master_content = await generateMasterContentFromIntent(item);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "line": 843,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "item.platform_variants = await buildPlatformVariantsFromMaster(item);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/contentGeneration/platformVariantGenerator.ts",
+    "line": 891,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "item.platform_variants = await buildPlatformVariantsFromMaster(item);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/executionEngines/textExecutionEngine.ts",
+    "line": 1,
+    "ownerSymbol": "processBlockSchedule",
+    "text": "import { processBlockSchedule, type BlockDailyPlanRow } from '../boltScheduleBlockProcessor';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/executionEngines/textExecutionEngine.ts",
+    "line": 14,
+    "ownerSymbol": "processBlockSchedule",
+    "text": "return processBlockSchedule(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/intelligence/intelligenceOrchestrator.ts",
+    "line": 32,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { buildIntelligenceRecommendations } from './recommendations/generateRecommendations';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/intelligence/types.ts",
+    "line": 5,
+    "ownerSymbol": "generateRecommendations",
+    "text": "* module (analyzeAnomalies, generateInsights, generateRecommendations,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/intelligence/types.ts",
+    "line": 93,
+    "ownerSymbol": "generateRecommendations",
+    "text": "* Output of generateRecommendations (Phase 40-E).",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationCampaignBuilder.ts",
+    "line": 2,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "import { runCampaignAiPlan } from './campaignAiOrchestrator';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationCampaignBuilder.ts",
+    "line": 115,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const planResult = await runCampaignAiPlan({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationEngine/engine.ts",
+    "line": 128,
+    "ownerSymbol": "generateRecommendations",
+    "text": "export const generateRecommendations = async (",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationEngine.ts",
+    "line": 249,
+    "ownerSymbol": "generateRecommendations",
+    "text": "export async function generateRecommendations(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationScheduler.ts",
+    "line": 3,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from './recommendationEngine';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationScheduler.ts",
+    "line": 64,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const recommendations = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationScheduler.ts",
+    "line": 91,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const recommendations = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationSimulationService.ts",
+    "line": 4,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from './recommendationEngine';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationSimulationService.ts",
+    "line": 24,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const baseline = await generateRecommendations(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/recommendationSimulationService.ts",
+    "line": 35,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const draft = await generateRecommendations(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 4,
+    "ownerSymbol": "processBlockSchedule",
+    "text": "import { processBlockSchedule } from './boltScheduleBlockProcessor';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1543,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "export async function scheduleStructuredPlan(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1565,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "console.error('[scheduleStructuredPlan] Campaign lookup failed', {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 1777,
+    "ownerSymbol": "processBlockSchedule",
+    "text": "const blockResult = await processBlockSchedule(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/services/structuredPlanScheduler.ts",
+    "line": 2047,
+    "ownerSymbol": "createLegacyScheduledPost",
+    "text": "export async function createLegacyScheduledPost(input: {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_ai_plan_persist.test.ts",
+    "line": 9,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn().mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_ai_plan_platform_customize.test.ts",
+    "line": 9,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn().mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_ai_plan_refine_day.test.ts",
+    "line": 9,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn().mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_ai_plan_structured.test.ts",
+    "line": 6,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn().mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_ai_plan_theme_to_weekly_simulation.test.ts",
+    "line": 53,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: (...args: any[]) => mockRunCampaignAiPlan(...args),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_blueprint_immutability.test.ts",
+    "line": 20,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn().mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_finalization_guard.test.ts",
+    "line": 42,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn().mockResolvedValue({ plan: { weeks: [] } }),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_finalization_guard.test.ts",
+    "line": 54,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "scheduleStructuredPlan: jest.fn().mockResolvedValue({ scheduled_count: 2, skipped_count: 0, skipped_platforms: [] }),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_preplanning_gate.test.ts",
+    "line": 42,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn().mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 26,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "scheduleStructuredPlan: jest.fn(),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 49,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "import { scheduleStructuredPlan } from '../../services/structuredPlanScheduler';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 95,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "(scheduleStructuredPlan as jest.Mock).mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 136,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).not.toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 157,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).not.toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 178,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).not.toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 199,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).not.toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 214,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).toHaveBeenCalledWith(req.body.plan, CAMPAIGN_ID);",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 284,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "it('SCHEDULE_ABORTED emitted when scheduleStructuredPlan throws', async () => {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_integrity.test.ts",
+    "line": 290,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "(scheduleStructuredPlan as jest.Mock).mockRejectedValue(new Error('Insert failed'));",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_lock.test.ts",
+    "line": 15,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "scheduleStructuredPlan: jest.fn(),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_lock.test.ts",
+    "line": 51,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "import { scheduleStructuredPlan } from '../../services/structuredPlanScheduler';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_lock.test.ts",
+    "line": 114,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "(scheduleStructuredPlan as jest.Mock).mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_lock.test.ts",
+    "line": 149,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).not.toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_lock.test.ts",
+    "line": 161,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_scheduler_lock.test.ts",
+    "line": 179,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "(scheduleStructuredPlan as jest.Mock).mockRejectedValue(new Error('Insert failed'));",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_schedule_structured_plan.test.ts",
+    "line": 2,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "import { scheduleStructuredPlan } from '../../services/structuredPlanScheduler';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_schedule_structured_plan.test.ts",
+    "line": 11,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "scheduleStructuredPlan: jest.fn(),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_schedule_structured_plan.test.ts",
+    "line": 75,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "(scheduleStructuredPlan as jest.Mock).mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/campaign_schedule_structured_plan.test.ts",
+    "line": 108,
+    "ownerSymbol": "scheduleStructuredPlan",
+    "text": "expect(scheduleStructuredPlan).toHaveBeenCalledWith(req.body.plan, 'campaign-123');",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/company_context_contract.test.ts",
+    "line": 7,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngineService';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/company_context_contract.test.ts",
+    "line": 132,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/external_api_alignment.test.ts",
+    "line": 201,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const { generateRecommendations } = require('../../services/recommendationEngineService');",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/external_api_alignment.test.ts",
+    "line": 202,
+    "ownerSymbol": "generateRecommendations",
+    "text": "generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/external_api_company_scope.test.ts",
+    "line": 227,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const { generateRecommendations } = require('../../services/recommendationEngineService');",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/external_api_company_scope.test.ts",
+    "line": 228,
+    "ownerSymbol": "generateRecommendations",
+    "text": "generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/omnivyra_fallback_reasons.test.ts",
+    "line": 1,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngineService';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/omnivyra_fallback_reasons.test.ts",
+    "line": 110,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/omnivyra_learning_bridge.test.ts",
+    "line": 2,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngineService';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/omnivyra_learning_bridge.test.ts",
+    "line": 291,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/platform_strategy_filtering.test.ts",
+    "line": 1,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngine';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/platform_strategy_filtering.test.ts",
+    "line": 75,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const recs = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/platform_strategy_filtering.test.ts",
+    "line": 101,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const recs = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_audit.test.ts",
+    "line": 2,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngine';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_audit.test.ts",
+    "line": 50,
+    "ownerSymbol": "generateRecommendations",
+    "text": "await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_create_campaign.test.ts",
+    "line": 2,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "import { runCampaignAiPlan } from '../../services/campaignAiOrchestrator';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_create_campaign.test.ts",
+    "line": 8,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan: jest.fn(),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_create_campaign.test.ts",
+    "line": 96,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "(runCampaignAiPlan as jest.Mock).mockResolvedValue({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_create_campaign.test.ts",
+    "line": 113,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "expect(runCampaignAiPlan).toHaveBeenCalledWith(",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 3,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngineService';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 156,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 168,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 185,
+    "ownerSymbol": "generateRecommendations",
+    "text": "await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 195,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 205,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 223,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 263,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 286,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 307,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 327,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 347,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 369,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 391,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 412,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 430,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 463,
+    "ownerSymbol": "generateRecommendations",
+    "text": "await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 487,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 509,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 532,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 558,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 576,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 605,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_engine.test.ts",
+    "line": 629,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const fallbackResult = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_fusion_scoring.test.ts",
+    "line": 1,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngine';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_fusion_scoring.test.ts",
+    "line": 37,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const recs = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_fusion_scoring.test.ts",
+    "line": 53,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const recs = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_fusion_scoring.test.ts",
+    "line": 62,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const recs = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_policy.test.ts",
+    "line": 2,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngine';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_policy.test.ts",
+    "line": 99,
+    "ownerSymbol": "generateRecommendations",
+    "text": "await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_scheduler.test.ts",
+    "line": 4,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngine';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_scheduler.test.ts",
+    "line": 15,
+    "ownerSymbol": "generateRecommendations",
+    "text": "generateRecommendations: jest.fn(),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_scheduler.test.ts",
+    "line": 47,
+    "ownerSymbol": "generateRecommendations",
+    "text": "(generateRecommendations as jest.Mock).mockResolvedValue([",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_scheduler.test.ts",
+    "line": 78,
+    "ownerSymbol": "generateRecommendations",
+    "text": "expect(generateRecommendations).toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/integration/recommendation_scheduler.test.ts",
+    "line": 84,
+    "ownerSymbol": "generateRecommendations",
+    "text": "expect(generateRecommendations).toHaveBeenCalled();",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/boltContentGenerationForSchedule.test.ts",
+    "line": 12,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "generateMasterContentFromIntent: jest.fn(),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/boltContentGenerationForSchedule.test.ts",
+    "line": 13,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "buildPlatformVariantsFromMaster: jest.fn(),",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/boltContentGenerationForSchedule.test.ts",
+    "line": 19,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "generateMasterContentFromIntent,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/boltContentGenerationForSchedule.test.ts",
+    "line": 20,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "buildPlatformVariantsFromMaster,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/boltContentGenerationForSchedule.test.ts",
+    "line": 28,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const mockedGenerateMasterContentFromIntent = generateMasterContentFromIntent as jest.MockedFunction<typeof generateMasterContentFromIntent>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/boltContentGenerationForSchedule.test.ts",
+    "line": 29,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "const mockedBuildPlatformVariantsFromMaster = buildPlatformVariantsFromMaster as jest.MockedFunction<typeof buildPlatformVariantsFromMaster>;",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 8,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "buildPlatformVariantsFromMaster,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 9,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "generateMasterContentFromIntent,",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 56,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const master = await generateMasterContentFromIntent({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 109,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "const variants = await buildPlatformVariantsFromMaster({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 211,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const master = await generateMasterContentFromIntent({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 277,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const master = await generateMasterContentFromIntent({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 325,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "const variants = await buildPlatformVariantsFromMaster({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 352,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "const variants = await buildPlatformVariantsFromMaster({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 379,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const master = await generateMasterContentFromIntent({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 439,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const masterA = await generateMasterContentFromIntent({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/contentGenerationPipeline.test.ts",
+    "line": 447,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const masterB = await generateMasterContentFromIntent({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/recommendationFallbackSignal.test.ts",
+    "line": 2,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../services/recommendationEngineService';",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/recommendationFallbackSignal.test.ts",
+    "line": 94,
+    "ownerSymbol": "generateRecommendations",
+    "text": "describe('generateRecommendations fallback signals', () => {",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/recommendationFallbackSignal.test.ts",
+    "line": 157,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "backend/tests/unit/recommendationFallbackSignal.test.ts",
+    "line": 169,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations({",
+    "severity": "warn"
+  },
+  {
+    "file": "lib/shared/accountContext.ts",
+    "line": 70,
+    "ownerSymbol": "generateRecommendations",
+    "text": "export function generateRecommendations(platforms: PlatformMetrics[], maturityStage: MaturityStage): string[] {",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 4,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "buildPlatformVariantsFromMaster,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 5,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "generateMasterContentFromIntent,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 640,
+    "ownerSymbol": "generateMasterContentFromIntent",
+    "text": "const generatedMaster = await generateMasterContentFromIntent(item);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/activity-workspace/content.ts",
+    "line": 664,
+    "ownerSymbol": "buildPlatformVariantsFromMaster",
+    "text": "const variants = await buildPlatformVariantsFromMaster(itemWithMaster);",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 50,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "runCampaignAiPlan,",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 540,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "// Merge extracted/conversation-derived context into finalCollectedPlanningContext so runCampaignAiPlan has full info for week plan (not superficial).",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/ai/plan.ts",
+    "line": 708,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const result = await runCampaignAiPlan({",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/regenerate-blueprint.ts",
+    "line": 314,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const { runCampaignAiPlan } = await import('../../../backend/services/campaignAiOrchestrator');",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/campaigns/regenerate-blueprint.ts",
+    "line": 316,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const aiResult = await runCampaignAiPlan({",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/create-campaign-from-group.ts",
+    "line": 155,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const { runCampaignAiPlan } = await import('../../../backend/services/campaignAiOrchestrator');",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/create-campaign-from-group.ts",
+    "line": 157,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const planResult = await runCampaignAiPlan({",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/detected-opportunities.ts",
+    "line": 3,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../../backend/services/recommendationEngineService';",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/detected-opportunities.ts",
+    "line": 229,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations(",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/generate.ts",
+    "line": 3,
+    "ownerSymbol": "generateRecommendations",
+    "text": "import { generateRecommendations } from '../../../backend/services/recommendationEngineService';",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/generate.ts",
+    "line": 110,
+    "ownerSymbol": "generateRecommendations",
+    "text": "const result = await generateRecommendations(",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/[id]/create-campaign.ts",
+    "line": 265,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const { runCampaignAiPlan } = await import('../../../../backend/services/campaignAiOrchestrator');",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/recommendations/[id]/create-campaign.ts",
+    "line": 267,
+    "ownerSymbol": "runCampaignAiPlan",
+    "text": "const planResult = await runCampaignAiPlan({",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/schedule/posts.ts",
+    "line": 8,
+    "ownerSymbol": "createLegacyScheduledPost",
+    "text": "import { createLegacyScheduledPost, listLegacyScheduledPosts } from '@/backend/services/structuredPlanScheduler';",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/schedule/posts.ts",
+    "line": 71,
+    "ownerSymbol": "createLegacyScheduledPost",
+    "text": "const scheduledPost = await createLegacyScheduledPost({",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/social/post.ts",
+    "line": 6,
+    "ownerSymbol": "createLegacyScheduledPost",
+    "text": "import { createLegacyScheduledPost } from '@/backend/services/structuredPlanScheduler';",
+    "severity": "warn"
+  },
+  {
+    "file": "pages/api/social/post.ts",
+    "line": 53,
+    "ownerSymbol": "createLegacyScheduledPost",
+    "text": "const scheduledPost = await createLegacyScheduledPost({",
+    "severity": "warn"
+  }
+]

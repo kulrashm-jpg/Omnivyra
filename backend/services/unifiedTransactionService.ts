@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Unified Transactions Service — single writer for the consolidated ledger.
  *
@@ -27,8 +28,7 @@ async function getCreditRateUsd(orgId: string): Promise<number> {
     return cached.rate;
   }
   try {
-    const { data } = await supabase
-      .from('organization_credits')
+    const { data } = await ownedDbTable('organization_credits')
       .select('credit_rate_usd')
       .eq('organization_id', orgId)
       .maybeSingle();
@@ -147,7 +147,7 @@ export async function recordUnifiedTransaction(input: UnifiedTransactionInput): 
       metadata:          input.metadata ?? {},
     };
 
-    const { error } = await supabase.from('unified_transactions').insert(row);
+    const { error } = await ownedDbTable('unified_transactions').insert(row);
     if (error) {
       // CHECK violations manifest as 23514; rethink and emit anomaly, not a
       // fatal log. Anything else is an insert-level problem (network, etc.).

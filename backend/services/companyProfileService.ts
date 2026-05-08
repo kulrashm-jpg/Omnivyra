@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * companyProfileService.ts — orchestration only.
  * All helpers/types live in ./companyProfile/* sub-modules.
@@ -112,6 +113,7 @@ import {
   type RankedCompetitor,
 } from './competitorEngineService';
 import {
+
   discoverCompetitorDomainsFromSerp,
   domainToName,
   generateDiscoveryKeywords,
@@ -1253,8 +1255,7 @@ async function upsertCompanyProfilePayload(
       console.warn(`Filtered company profile fields before ${context}:`, skippedFields.join(', '));
     }
 
-    const { data, error } = await supabase
-      .from(COMPANY_PROFILES_TABLE)
+    const { data, error } = await ownedDbTable(COMPANY_PROFILES_TABLE)
       .upsert(safePayload, { onConflict: 'company_id' })
       .select('*')
       .single();
@@ -1301,8 +1302,7 @@ export const shouldRefineProfile = (lastRefinedAt?: string | null): boolean => {
 };
 
 const fetchProfileRaw = async (companyId: string): Promise<CompanyProfile | null> => {
-  const { data, error } = await supabase
-    .from('company_profiles')
+  const { data, error } = await ownedDbTable('company_profiles')
     .select('*')
     .eq('company_id', companyId)
     .single();
@@ -1317,8 +1317,7 @@ const fetchProfileRaw = async (companyId: string): Promise<CompanyProfile | null
 };
 
 export const getLatestProfile = async (): Promise<CompanyProfile | null> => {
-  const { data, error } = await supabase
-    .from('company_profiles')
+  const { data, error } = await ownedDbTable('company_profiles')
     .select('*')
     .order('updated_at', { ascending: false })
     .limit(1)
@@ -1333,7 +1332,7 @@ export const getLatestProfile = async (): Promise<CompanyProfile | null> => {
 
 const storeRefinementAudit = async (details: CompanyProfileRefinementDetails) => {
   try {
-    const { error } = await supabase.from('company_profile_refinements').insert({
+    const { error } = await ownedDbTable('company_profile_refinements').insert({
       company_id: details.company_id,
       before_profile: details.before_profile,
       after_profile: details.after_profile,

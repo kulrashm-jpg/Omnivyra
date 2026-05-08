@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Governance Service
  * Get and update engagement system controls per organization.
@@ -28,8 +29,7 @@ const DEFAULTS: EngagementControls = {
 export async function getControls(organizationId: string): Promise<EngagementControls> {
   if (!organizationId) return DEFAULTS;
 
-  const { data, error } = await supabase
-    .from('engagement_system_controls')
+  const { data, error } = await ownedDbTable('engagement_system_controls')
     .select('*')
     .eq('organization_id', organizationId)
     .maybeSingle();
@@ -66,8 +66,7 @@ export async function updateControls(
   if (typeof controls.response_strategy_learning_enabled === 'boolean') payload.response_strategy_learning_enabled = controls.response_strategy_learning_enabled;
   if (typeof controls.digest_generation_enabled === 'boolean') payload.digest_generation_enabled = controls.digest_generation_enabled;
 
-  const { data, error } = await supabase
-    .from('engagement_system_controls')
+  const { data, error } = await ownedDbTable('engagement_system_controls')
     .upsert(payload, { onConflict: 'organization_id' })
     .select()
     .single();

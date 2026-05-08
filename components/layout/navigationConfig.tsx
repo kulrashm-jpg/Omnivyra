@@ -76,6 +76,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       '/campaign-planner',
       '/campaign-details',
       '/campaign-planning',
+      '/command-center/bolt-text',
       '/command-center/bolt-text-strategy',
       '/command-center/bolt-creator-strategy',
       '/command-center/intelligent-mix-strategy',
@@ -91,7 +92,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       {
         label: 'Create Quick Posts',
         description: 'Launch a lightweight text-first campaign fast.',
-        href: '/command-center/bolt-text-strategy',
+        href: '/command-center/bolt-text',
         icon: Sparkles,
       },
       {

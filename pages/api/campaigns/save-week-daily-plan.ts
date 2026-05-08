@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { updateActivity } from '../../../backend/services/executionPlannerService';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -54,6 +55,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!campaignId || !Number.isFinite(weekNumber) || weekNumber < 1 || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'campaignId, weekNumber, and non-empty items array are required' });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     const { data: campaign } = await supabase
       .from('campaigns')

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Portfolio Decision Engine — Step 7
  *
@@ -164,7 +165,7 @@ export async function evaluatePortfolioDecision(companyId: string): Promise<Port
 
   // ── Persist decision ──────────────────────────────────────────────────────
   try {
-    await supabase.from('portfolio_decision_log').insert({
+    await ownedDbTable('portfolio_decision_log').insert({
       company_id:        companyId,
       campaign_ids:      portfolioItems.map(c => c.campaign_id),
       budget_allocations: budgetAllocations,

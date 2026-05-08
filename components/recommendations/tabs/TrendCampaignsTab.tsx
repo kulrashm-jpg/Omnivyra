@@ -245,7 +245,7 @@ export default function TrendCampaignsTab(props: OpportunityTabProps) {
           </div>
           <button
             type="button"
-            onClick={() => router.push('/command-center/bolt-text-strategy')}
+            onClick={() => router.push('/command-center/bolt-text')}
             className="shrink-0 text-xs text-amber-700 hover:text-amber-900 underline"
           >
             Change setup

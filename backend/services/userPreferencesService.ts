@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * User Preferences Service
  * 
@@ -23,8 +24,7 @@ export interface UserPreferences {
  */
 export async function getUserPreferences(userId: string): Promise<UserPreferences | null> {
   try {
-    const { data, error } = await supabase
-      .from('user_preferences')
+    const { data, error } = await ownedDbTable('user_preferences')
       .select('*')
       .eq('user_id', userId)
       .maybeSingle();
@@ -50,8 +50,7 @@ export async function upsertUserPreferences(
   updates: Partial<Omit<UserPreferences, 'id' | 'user_id' | 'created_at' | 'updated_at'>>,
 ): Promise<UserPreferences | null> {
   try {
-    const { data, error } = await supabase
-      .from('user_preferences')
+    const { data, error } = await ownedDbTable('user_preferences')
       .upsert(
         {
           user_id: userId,

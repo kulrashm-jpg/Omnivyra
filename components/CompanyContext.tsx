@@ -70,6 +70,15 @@ type CompanyContextValue = {
    *  Consumers should show a loading/blank state until this is true to prevent
    *  a flash of protected or unauthenticated content. */
   authChecked: boolean;
+  /**
+   * true once `/api/company-profile?mode=list` has actually completed a fetch
+   * for the current auth session (success OR explicit empty). Distinguishes
+   * "we haven't asked the server yet" from "we asked and the user has 0
+   * companies". Consumers gating onboarding redirects MUST wait for this to
+   * avoid the race where `isLoading` flips back to false (e.g., on auth-flow
+   * pages) before companies have been resolved.
+   */
+  companiesResolved: boolean;
   isAdmin: boolean;
   setSelectedCompanyId: (companyId: string) => void;
   refreshCompanies: () => Promise<void>;
@@ -98,9 +107,24 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
-  // Track whether we've already fetched company data for the current auth session,
-  // so re-navigating between pages doesn't trigger repeated refreshCompanies() calls.
-  const companiesLoadedRef = useRef(false);
+  // True once the companies fetch has actually completed for the current
+  // auth session. Distinguishes "not yet queried" from "queried and empty".
+  // Reset to false on signout (see auth subscription effect below).
+  // Also acts as the canonical re-fire gate for the effect that triggers
+  // refreshCompanies — we don't have a separate "loaded" ref any more
+  // because the ref-based gate could leave the app stuck on a spinner
+  // forever if a refresh failed transiently.
+  const [companiesResolved, setCompaniesResolved] = useState(false);
+  // Single-flight guard for refreshCompanies — ensures concurrent effect
+  // fires (e.g. pathname + auth-state changing in the same tick) do not
+  // launch overlapping fetches. NOT a "loaded" cache — the only authority
+  // for "we already fetched" is companiesResolved.
+  const refreshInFlightRef = useRef(false);
+  // Counter the effect watches so transient-failure retries (e.g. dev-mode
+  // 404 before the API route compiles) re-fire the gating effect with
+  // fresh state — avoids the stale-closure pitfall of reading
+  // companiesResolved from inside refreshCompanies' setTimeout callback.
+  const [transientRetryTick, setTransientRetryTick] = useState(0);
 
   const selectedCompanyName = useMemo(() => {
     const match = companies.find((company) => company.company_id === selectedCompanyId);
@@ -129,6 +153,11 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const refreshCompanies = async () => {
     setIsLoading(true);
+    // Track whether the fetch reached a resolved state (success OR explicit
+    // failure). Distinct from `isLoading=false` which fires regardless.
+    // Transient failures (404 / 5xx after retries) should leave this false
+    // so consumers don't treat the spinner-state as a real "no companies".
+    let resolved = false;
     try {
       if (!isAuthenticated) {
         setUser(null);
@@ -136,12 +165,25 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setSelectedCompanyIdInternal('');
         setUserRole(null);
         setRolesByCompany({});
+        resolved = true;
         return;
       }
 
-      const fbToken = await getAuthToken();
+      // getAuthToken may transiently return null when multiple components
+      // race for the Supabase auth lock. Retry once with a short delay
+      // before treating it as a true "no token" state — otherwise we'd
+      // wrongly clear `user` to null and leave the spinner stuck even
+      // though a valid session is present.
+      let fbToken = await getAuthToken();
       if (!fbToken) {
-        // No session — may be content-architect cookie path
+        await new Promise((r) => setTimeout(r, 250));
+        fbToken = await getAuthToken();
+      }
+      if (!fbToken) {
+        // No bearer token — may be content-architect cookie path. Cookie-
+        // based Supabase sessions are also handled by the API route via
+        // `credentials: 'include'`, but we only reach this branch after
+        // two failed token fetches, so try the architect path.
         const asArchitect = await loadContentArchitectContext();
         if (!asArchitect) {
           setUser(null);
@@ -151,13 +193,58 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setUserRole(null);
           setRolesByCompany({});
         }
+        resolved = true;
         return;
       }
 
-      const listRes = await fetch('/api/company-profile?mode=list', {
-        credentials: 'include',
-        headers: { Authorization: `Bearer ${fbToken}` },
-      });
+      // Retry up to 3 times on transient errors (404 / 5xx). The 404 case
+      // is common in `next dev` when the API route hasn't been compiled
+      // yet on the first hit. Each request is bounded by an 8s timeout
+      // so the refresh can never hang on a stalled API route. After all
+      // retries fail, we leave companiesResolved=false (so the gating
+      // effect can re-fire) AND schedule a delayed retry — this prevents
+      // the user from being stuck on a buffering spinner if the path
+      // never changes.
+      const fetchWithTimeout = async (url: string, init: RequestInit, ms: number) => {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), ms);
+        try {
+          return await fetch(url, { ...init, signal: ctrl.signal });
+        } finally {
+          clearTimeout(t);
+        }
+      };
+      let listRes: Response | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          listRes = await fetchWithTimeout(
+            '/api/company-profile?mode=list',
+            {
+              credentials: 'include',
+              headers: { Authorization: `Bearer ${fbToken}` },
+            },
+            8000,
+          );
+        } catch {
+          // Network/abort error — treat as transient and retry.
+          listRes = null;
+        }
+        if (listRes && listRes.status !== 404 && listRes.status < 500) break;
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+
+      if (!listRes) {
+        // All retries exhausted with transient errors (404 / 5xx / abort).
+        // Don't clear cached state — the dev server is likely still
+        // compiling the API route. Leave companiesResolved=false so the
+        // next effect fire (auth state change, pathname change, or the
+        // transientRetryTick bump below) re-fires refreshCompanies.
+        // Bump the tick after a delay so a user sitting on a static page
+        // still recovers without a manual reload — the effect re-runs
+        // with fresh state values, avoiding stale-closure issues.
+        setTimeout(() => setTransientRetryTick((t) => t + 1), 2000);
+        return;
+      }
 
       if (!listRes.ok) {
         // Parse the error body once for AUTH_001 detection.
@@ -187,6 +274,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setSelectedCompanyIdInternal('');
         setUserRole(null);
         setRolesByCompany({});
+        resolved = true;
         return;
       }
 
@@ -202,6 +290,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setSelectedCompanyIdInternal('');
         setUserRole(null);
         setRolesByCompany({});
+        resolved = true;
         return;
       }
 
@@ -244,10 +333,18 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           window.localStorage.setItem('company_id', resolvedId);
         }
       }
+      resolved = true;
     } catch {
       console.warn('Failed to load company context');
     } finally {
       setIsLoading(false);
+      // Only mark resolved when the fetch actually reached a definitive
+      // outcome (success, empty result, real auth failure, no-token, or
+      // unauthenticated). Transient failures (404 / 5xx after retries)
+      // leave `resolved=false` so consumers don't treat the empty
+      // companies array as a real "no companies" result and prematurely
+      // redirect to /onboarding/company.
+      if (resolved) setCompaniesResolved(true);
     }
   };
 
@@ -346,8 +443,9 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     if (!authChecked) return;
     if (!isAuthenticated) {
-      companiesLoadedRef.current = false; // reset so next login re-fetches
+      refreshInFlightRef.current = false;
       setIsLoading(false);
+      setCompaniesResolved(false); // reset for next auth session
       setUser(null);
       setUserName('');
       setCompanies([]);
@@ -358,10 +456,9 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
     // Don't fetch company data while on auth/onboarding pages.
     // The callback page needs to finish sync-supabase-user before the
-    // company-profile API can find the user.  Fetching prematurely
+    // company-profile API can find the user. Fetching prematurely
     // returns 401 → clears company data → stale context on /dashboard.
-    // Instead, delay until the user navigates to a real protected page
-    // (like /dashboard) — at which point the DB row and company exist.
+    // Instead, delay until the user navigates to a real protected page.
     const p = router.pathname;
     const isAuthFlowPage =
       p.startsWith('/auth/') ||
@@ -373,15 +470,19 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setIsLoading(false);
       return;
     }
-    // Only fetch once per auth session. Subsequent pathname changes (normal
-    // in-app navigation) must not re-run refreshCompanies() — that would set
-    // isLoading=true on every route transition and cause the loading spinner
-    // to flash on every page change.
-    if (companiesLoadedRef.current) return;
-    companiesLoadedRef.current = true;
-    refreshCompanies();
+    // Skip if we already have a definitive answer for this auth session.
+    // companiesResolved becomes true on success / empty / auth-fail (terminal
+    // outcomes only), and stays false on transient failures so this effect
+    // — re-firing on pathname / auth-state changes — naturally retries.
+    if (companiesResolved) return;
+    // Single-flight guard. If a refresh is already in flight, skip.
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    refreshCompanies().finally(() => {
+      refreshInFlightRef.current = false;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, authChecked, router.pathname]);
+  }, [isAuthenticated, authChecked, router.pathname, companiesResolved, transientRetryTick]);
 
   const value = useMemo(
     () => ({
@@ -394,12 +495,13 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isLoading,
       isAuthenticated,
       authChecked,
+      companiesResolved,
       isAdmin: userRole === 'SUPER_ADMIN' || userRole === 'COMPANY_ADMIN',
       setSelectedCompanyId,
       refreshCompanies,
       hasPermission: (action: PermissionAction) => hasPermissionForRole(userRole, action),
     }),
-    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked]
+    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked, companiesResolved]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;

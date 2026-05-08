@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Earn-more credits service.
  *
@@ -40,8 +41,7 @@ export async function grantEarnCredit(params: {
   const refId  = referenceId ?? actionType;
 
   // Idempotency: never grant twice for same org + action + reference
-  const { data: existing } = await supabase
-    .from('earn_credit_actions')
+  const { data: existing } = await ownedDbTable('earn_credit_actions')
     .select('id')
     .eq('organization_id', orgId)
     .eq('action_type', actionType)
@@ -62,7 +62,7 @@ export async function grantEarnCredit(params: {
       idempotencyKey: makeIdempotencyKey(orgId, actionType, refId),
     });
 
-    await supabase.from('earn_credit_actions').insert({
+    await ownedDbTable('earn_credit_actions').insert({
       organization_id: orgId,
       user_id:         userId,
       action_type:     actionType,
@@ -91,8 +91,7 @@ export async function notifyEarnProgress(params: {
   const action = EARN_ACTIONS[actionType];
 
   // Don't nudge if already earned
-  const { data: existing } = await supabase
-    .from('earn_credit_actions')
+  const { data: existing } = await ownedDbTable('earn_credit_actions')
     .select('id')
     .eq('organization_id', orgId)
     .eq('action_type', actionType)
@@ -103,7 +102,7 @@ export async function notifyEarnProgress(params: {
   const userIds = await getOrgAdminUserIds(orgId);
   if (!userIds.length) return;
 
-  await supabase.from('notifications').insert(
+  await ownedDbTable('notifications').insert(
     userIds.map(uid => ({
       user_id:  uid,
       type:     'earn_credits_nudge',
@@ -128,8 +127,7 @@ export async function getEarnProgress(orgId: string): Promise<{
   total_earned:    number;
   total_available: number;
 }> {
-  const { data: granted } = await supabase
-    .from('earn_credit_actions')
+  const { data: granted } = await ownedDbTable('earn_credit_actions')
     .select('action_type, granted_at')
     .eq('organization_id', orgId);
 
@@ -160,14 +158,12 @@ export async function checkAndGrantSetupCredits(
   orgId:  string,
   userId: string,
 ): Promise<{ setup_credits: number; website_credits: number }> {
-  const { data: setupRow } = await supabase
-    .from('company_setup_progress')
+  const { data: setupRow } = await ownedDbTable('company_setup_progress')
     .select('profile_complete, external_api_connected, social_accounts_connected, website_blog_connected, lead_capture_connected')
     .eq('company_id', orgId)
     .maybeSingle();
 
-  const { count: socialCount } = await supabase
-    .from('social_accounts')
+  const { count: socialCount } = await ownedDbTable('social_accounts')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', orgId);
 
@@ -202,8 +198,7 @@ export async function checkAndGrantSetupCredits(
 
 /** Only COMPANY_ADMIN manages credits — notifications go to them only. */
 async function getOrgAdminUserIds(orgId: string): Promise<string[]> {
-  const { data } = await supabase
-    .from('user_company_roles')
+  const { data } = await ownedDbTable('user_company_roles')
     .select('user_id')
     .eq('company_id', orgId)
     .eq('status', 'active')
@@ -220,7 +215,7 @@ async function notifyEarnCreditsGranted(
   const userIds = await getOrgAdminUserIds(orgId);
   if (!userIds.length) return;
 
-  await supabase.from('notifications').insert(
+  await ownedDbTable('notifications').insert(
     userIds.map(uid => ({
       user_id:  uid,
       type:     'earn_credits_granted',

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Strategy Comparison Engine
  * Phase 7: Ranks strategies/recommendations by predicted impact.
@@ -62,8 +63,7 @@ export async function rankStrategies(
 
   let runId: string | null = null;
   if (options?.persistRun) {
-    const { data } = await supabase
-      .from('intelligence_simulation_runs')
+    const { data } = await ownedDbTable('intelligence_simulation_runs')
       .insert({
         company_id: companyId,
         run_type: 'strategy_comparison',
@@ -97,8 +97,7 @@ export async function getSimulationRuns(
     created_at: string;
   }>
 > {
-  let query = supabase
-    .from('intelligence_simulation_runs')
+  let query = ownedDbTable('intelligence_simulation_runs')
     .select('id, run_type, scenario_type, result_summary, created_at')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })

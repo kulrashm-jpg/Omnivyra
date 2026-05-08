@@ -3,6 +3,7 @@ import { supabase } from '../db/supabaseClient';
 import { isConversionEvent } from './conversionRegistry';
 import { ensureCanonicalDomain, hashKey, normalizeUrl, resolveCompanyWebsite, safeInteger, safeNumber, todayIsoDate } from './ingestionUtils';
 import { resolveGa4IngestionContext } from './analyticsIntegrationService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface Ga4SessionRow {
   sessionDate: string;
@@ -263,8 +264,7 @@ async function upsertPage(companyId: string, domainId: string, baseUrl: string, 
   const url = normalizeUrl(new URL(normalizePath(pagePath), baseUrl).toString());
   const pageType = url.endsWith('/') || new URL(url).pathname === '/' ? 'home' : 'landing';
 
-  const { data, error } = await supabase
-    .from('canonical_pages')
+  const { data, error } = await ownedDbTable('canonical_pages')
     .upsert(
       {
         company_id: companyId,
@@ -313,8 +313,7 @@ async function upsertSession(input: {
     },
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('canonical_sessions')
+  const { data: existing, error: existingError } = await ownedDbTable('canonical_sessions')
     .select('id')
     .eq('company_id', input.companyId)
     .eq('external_session_id', input.sessionKey)
@@ -325,14 +324,14 @@ async function upsertSession(input: {
   }
 
   if (existing?.id) {
-    const { error } = await supabase.from('canonical_sessions').update(payload).eq('id', existing.id);
+    const { error } = await ownedDbTable('canonical_sessions').update(payload).eq('id', existing.id);
     if (error) {
       throw new Error(`Failed to update GA4 session: ${error.message}`);
     }
     return existing.id;
   }
 
-  const { data, error } = await supabase.from('canonical_sessions').insert(payload).select('id').single();
+  const { data, error } = await ownedDbTable('canonical_sessions').insert(payload).select('id').single();
   if (error) {
     throw new Error(`Failed to insert GA4 session: ${error.message}`);
   }
@@ -358,8 +357,7 @@ async function upsertUser(input: {
     },
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('canonical_users')
+  const { data: existing, error: existingError } = await ownedDbTable('canonical_users')
     .select('id')
     .eq('company_id', input.companyId)
     .eq('external_user_key', input.userKey)
@@ -370,14 +368,14 @@ async function upsertUser(input: {
   }
 
   if (existing?.id) {
-    const { error } = await supabase.from('canonical_users').update(payload).eq('id', existing.id);
+    const { error } = await ownedDbTable('canonical_users').update(payload).eq('id', existing.id);
     if (error) {
       throw new Error(`Failed to update GA4 user: ${error.message}`);
     }
     return existing.id;
   }
 
-  const { data, error } = await supabase.from('canonical_users').insert(payload).select('id').single();
+  const { data, error } = await ownedDbTable('canonical_users').insert(payload).select('id').single();
   if (error || !data) {
     throw new Error(`Failed to insert GA4 user: ${error.message}`);
   }
@@ -573,8 +571,7 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
     // PARTIAL (WHERE page_url IS NOT NULL), so supabase-js .upsert()'s
     // onConflict cannot bind to it. Mirror the existence-check pattern used
     // by upsertSession() above instead of relying on ON CONFLICT.
-    const { data: existingView, error: existingViewError } = await supabase
-      .from('canonical_page_views')
+    const { data: existingView, error: existingViewError } = await ownedDbTable('canonical_page_views')
       .select('id')
       .eq('company_id', input.companyId)
       .eq('page_url', pageUrl)
@@ -587,7 +584,7 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
     }
 
     if (!existingView) {
-      const { error: viewError } = await supabase.from('canonical_page_views').insert({
+      const { error: viewError } = await ownedDbTable('canonical_page_views').insert({
         company_id: input.companyId,
         page_id: pageId,
         page_url: pageUrl,

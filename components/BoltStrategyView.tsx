@@ -16,7 +16,7 @@ import type { BOLTProgress } from './BOLTProgressModal';
 import { UpgradePrompt } from './monetization';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
-import { PLATFORM_LABELS } from '../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../lib/shared/platforms';
 
 type ContentFormat = 'post' | 'tweet' | 'short_story' | 'article' | 'poll';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -1236,3 +1236,4 @@ export default function BoltStrategyView({ d }: { d: S }) {
     </>
   );
 }
+

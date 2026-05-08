@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Action Pricing Apply Service
  *
@@ -33,8 +34,7 @@ export async function applyActionPricingChange(
 ): Promise<ApplyActionPricingResult> {
   const effective = opts.effectiveFrom ?? new Date().toISOString();
 
-  const { error: deactivateErr } = await supabase
-    .from('action_pricing_config')
+  const { error: deactivateErr } = await ownedDbTable('action_pricing_config')
     .update({ is_active: false })
     .eq('action_key', opts.actionKey)
     .eq('is_active', true);
@@ -43,8 +43,7 @@ export async function applyActionPricingChange(
     throw new Error(`Failed to deactivate prior row: ${deactivateErr.message}`);
   }
 
-  const { data, error: insertErr } = await supabase
-    .from('action_pricing_config')
+  const { data, error: insertErr } = await ownedDbTable('action_pricing_config')
     .insert({
       action_key:      opts.actionKey,
       cost_multiplier: opts.costMultiplier,

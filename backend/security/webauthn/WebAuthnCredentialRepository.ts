@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * Persistence for `webauthn_credentials`.
  *
@@ -70,8 +71,7 @@ function rowToStored(row: CredentialRow): StoredWebAuthnCredential {
 }
 
 export async function listForUser(userId: string): Promise<ReadonlyArray<StoredWebAuthnCredential>> {
-  const { data } = await db
-    .from('webauthn_credentials')
+  const { data } = await ownedDbTable('webauthn_credentials')
     .select('*')
     .eq('user_id', userId)
     .is('revoked_at', null)
@@ -82,8 +82,7 @@ export async function listForUser(userId: string): Promise<ReadonlyArray<StoredW
 export async function findByCredentialId(
   credentialId: string,
 ): Promise<StoredWebAuthnCredential | null> {
-  const { data } = await db
-    .from('webauthn_credentials')
+  const { data } = await ownedDbTable('webauthn_credentials')
     .select('*')
     .eq('credential_id', credentialId)
     .maybeSingle();
@@ -92,8 +91,7 @@ export async function findByCredentialId(
 }
 
 export async function findById(id: string): Promise<StoredWebAuthnCredential | null> {
-  const { data } = await db
-    .from('webauthn_credentials')
+  const { data } = await ownedDbTable('webauthn_credentials')
     .select('*')
     .eq('id', id)
     .maybeSingle();
@@ -119,8 +117,7 @@ export async function insertCredential(
 ): Promise<StoredWebAuthnCredential> {
   // Encode publicKey for bytea: hex literal `\\x...`
   const hex = Buffer.from(input.publicKey).toString('hex');
-  const { data, error } = await db
-    .from('webauthn_credentials')
+  const { data, error } = await ownedDbTable('webauthn_credentials')
     .insert({
       user_id:              input.userId,
       credential_id:        input.credentialId,
@@ -157,8 +154,7 @@ export async function bumpCounter(
   newCounter: number | bigint,
 ): Promise<StoredWebAuthnCredential | null> {
   const candidate = typeof newCounter === 'bigint' ? newCounter.toString() : String(newCounter);
-  const { data } = await db
-    .from('webauthn_credentials')
+  const { data } = await ownedDbTable('webauthn_credentials')
     .update({ counter: candidate, last_used_at: new Date().toISOString() })
     .eq('credential_id', credentialId)
     .lt('counter', candidate)
@@ -174,8 +170,7 @@ export async function bumpCounter(
  * passkeys); we still record use but skip the monotonic check.
  */
 export async function touchLastUsed(credentialId: string): Promise<void> {
-  await db
-    .from('webauthn_credentials')
+  await ownedDbTable('webauthn_credentials')
     .update({ last_used_at: new Date().toISOString() })
     .eq('credential_id', credentialId);
 }
@@ -185,8 +180,7 @@ export async function revokeCredential(
   userId: string,
   reason: string,
 ): Promise<boolean> {
-  const { data } = await db
-    .from('webauthn_credentials')
+  const { data } = await ownedDbTable('webauthn_credentials')
     .update({ revoked_at: new Date().toISOString(), revocation_reason: reason })
     .eq('id', credentialDbId)
     .eq('user_id', userId)

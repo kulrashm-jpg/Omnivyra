@@ -1,6 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -8,7 +10,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:community-ai-metrics', 20, 60))) return;
 
-  if (!(await requireSuperAdminUser(req, res))) return;
+  // Phase: Platform Authority Hard Enforcement.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'community-AI metrics dashboard',
+  });
+  if (guard.ok !== true) return;
 
   try {
     const [actionsCount, executedCount, playbooksCount, autoRulesCount, tenantRows] =

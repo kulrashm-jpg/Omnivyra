@@ -605,7 +605,7 @@ export function buildCreatorCard(
 
   const topicStr = typeof item?.topicTitle === 'string' ? item.topicTitle.trim() : '';
   const contentType = String(item?.contentType || enrichedItem?.content_type || enrichedItem?.contentType || '').toLowerCase();
-  const isCreatorType = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts', 'tiktok'].includes(contentType);
+  const requiresMediaBrief = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts', 'tiktok'].includes(contentType);
 
   // Keywords: enrich from topic + objective
   const keywords: string[] = Array.isArray(enrichedItem?.keywords)
@@ -639,31 +639,31 @@ export function buildCreatorCard(
       : [];
 
   // ── TEXT enrichment ────────────────────────────────────────────────────
-  const hook = !isCreatorType
+  const hook = !requiresMediaBrief
     ? (typeof (intent as any)?.hook === 'string' && (intent as any).hook.trim()
         ? String((intent as any).hook).trim()
         : deriveTextHook(topicStr, contentType))
     : undefined;
-  const key_points = !isCreatorType
+  const key_points = !requiresMediaBrief
     ? (Array.isArray((intent as any)?.key_points) && (intent as any).key_points.length > 0
         ? ((intent as any).key_points as unknown[]).filter((k): k is string => typeof k === 'string')
         : deriveKeyPoints(topicStr, objective, contentType))
     : undefined;
-  const seo_focus = !isCreatorType
+  const seo_focus = !requiresMediaBrief
     ? (typeof (intent as any)?.seo_focus === 'string' && (intent as any).seo_focus.trim()
         ? String((intent as any).seo_focus).trim()
         : deriveSEOFocus(topicStr, objective))
     : undefined;
-  const repurpose_angles = !isCreatorType
+  const repurpose_angles = !requiresMediaBrief
     ? deriveRepurposeAngles(topicStr, contentType)
     : undefined;
 
   // ── CREATOR enrichment ─────────────────────────────────────────────────
   const itemPlatforms = Array.isArray(item?.platformTargets) ? item.platformTargets : [];
-  const visual_hook = isCreatorType ? deriveVisualHook(topicStr, contentType) : undefined;
-  const image_prompt = isCreatorType ? deriveImagePrompt(topicStr, contentType, itemPlatforms) : undefined;
-  const video_prompt = (isCreatorType && contentType !== 'carousel') ? deriveVideoPrompt(topicStr, contentType, itemPlatforms) : undefined;
-  const scene_direction = isCreatorType ? deriveSceneDirection(topicStr, contentType) : undefined;
+  const visual_hook = requiresMediaBrief ? deriveVisualHook(topicStr, contentType) : undefined;
+  const image_prompt = requiresMediaBrief ? deriveImagePrompt(topicStr, contentType, itemPlatforms) : undefined;
+  const video_prompt = (requiresMediaBrief && contentType !== 'carousel') ? deriveVideoPrompt(topicStr, contentType, itemPlatforms) : undefined;
+  const scene_direction = requiresMediaBrief ? deriveSceneDirection(topicStr, contentType) : undefined;
 
   // ── Creator instructions block (rich) ──────────────────────────────────
   const instructionsParts: string[] = [];
@@ -674,7 +674,7 @@ export function buildCreatorCard(
     instructionsParts.push(`CTA: ${String(item?.desiredAction || intent?.cta_type || '').trim() || '—'}`);
   }
   if (item?.narrativeStyle) instructionsParts.push(`Tone: ${item.narrativeStyle}`);
-  if (isCreatorType) {
+  if (requiresMediaBrief) {
     if (visual_hook) instructionsParts.push(`Visual hook (0–3s): ${visual_hook}`);
     if (scene_direction) instructionsParts.push(`\nScene direction:\n${scene_direction}`);
     if (image_prompt) instructionsParts.push(`\nImage prompt: ${image_prompt}`);
@@ -956,12 +956,12 @@ export interface GenerateWeeklyStructureInput {
   distribution_mode?: string;
   eligible_platforms?: string[];
   posts_per_week?: number;
-  bolt_run_id?: string;
+  variantMetadata?: Record<string, unknown>;
   adaptive_performance_insights?: Record<string, unknown>;
   /** When provided (e.g. from BOLT executionConfig.tentative_start), used when campaign lacks start_date. */
   campaign_start_date?: string;
   /** When true (BOLT), restrict to text content only: post, blog, article, story, thread, poll. Exclude video, carousel, reels, etc. */
-  bolt_text_only?: boolean;
+  boltTextOnly?: boolean;
   /** Per-format post count from user selection e.g. { article: 2, newsletter: 1 }. Overrides equal-distribution fallback. */
   format_frequency?: Record<string, number>;
   /** Whether content is shared across platforms (same_day_per_topic) or unique per platform (staggered). */

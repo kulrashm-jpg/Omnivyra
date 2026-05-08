@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Influencer Intelligence Service
  *
@@ -93,8 +94,7 @@ export async function calculateInfluencers(organizationId: string): Promise<{
   const cutoff = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
   // Get threads for this org
-  const { data: threads, error: thrError } = await supabase
-    .from('engagement_threads')
+  const { data: threads, error: thrError } = await ownedDbTable('engagement_threads')
     .select('id')
     .eq('organization_id', organizationId)
     .not('organization_id', 'is', null);
@@ -108,8 +108,7 @@ export async function calculateInfluencers(organizationId: string): Promise<{
   }
 
   // Messages: author_id, thread_id, platform, parent_message_id, created_at
-  const { data: messages, error: msgError } = await supabase
-    .from('engagement_messages')
+  const { data: messages, error: msgError } = await ownedDbTable('engagement_messages')
     .select('id, author_id, thread_id, platform, parent_message_id, created_at, platform_created_at')
     .in('thread_id', threadIds)
     .gte('created_at', cutoff)
@@ -135,8 +134,7 @@ export async function calculateInfluencers(organizationId: string): Promise<{
   const authorIds = [...new Set(rows.map((r) => r.author_id))];
 
   // Fetch author names
-  const { data: authors } = await supabase
-    .from('engagement_authors')
+  const { data: authors } = await ownedDbTable('engagement_authors')
     .select('id, username, display_name')
     .in('id', authorIds);
   const authorByName = new Map<string, string>();
@@ -173,8 +171,7 @@ export async function calculateInfluencers(organizationId: string): Promise<{
   // Engagement opportunities: recommendation_mentions, question_answers
   const recByKey = new Map<string, number>();
   const qaByKey = new Map<string, number>();
-  const { data: oppRows } = await supabase
-    .from('engagement_opportunities')
+  const { data: oppRows } = await ownedDbTable('engagement_opportunities')
     .select('author_id, opportunity_type, platform')
     .in('source_thread_id', threadIds)
     .gte('detected_at', cutoff)
@@ -251,7 +248,7 @@ export async function calculateInfluencers(organizationId: string): Promise<{
     });
 
     const authorName = authorByName.get(c.author_id) ?? null;
-    const { error: upsertError } = await supabase.from('influencer_intelligence').upsert(
+    const { error: upsertError } = await ownedDbTable('influencer_intelligence').upsert(
       {
         organization_id: organizationId,
         author_id: c.author_id,
@@ -290,8 +287,7 @@ export async function getTopInfluencers(
   organizationId: string,
   limit = 10
 ): Promise<InfluencerSummary[]> {
-  const { data, error } = await supabase
-    .from('influencer_intelligence')
+  const { data, error } = await ownedDbTable('influencer_intelligence')
     .select('id, author_id, author_name, platform, message_count, thread_count, reply_count, recommendation_mentions, question_answers, influence_score, last_active_at')
     .eq('organization_id', organizationId)
     .order('influence_score', { ascending: false })
@@ -323,8 +319,7 @@ export async function getInfluencersByPlatform(
   organizationId: string,
   platform: string
 ): Promise<InfluencerSummary[]> {
-  const { data, error } = await supabase
-    .from('influencer_intelligence')
+  const { data, error } = await ownedDbTable('influencer_intelligence')
     .select('id, author_id, author_name, platform, message_count, thread_count, reply_count, recommendation_mentions, question_answers, influence_score, last_active_at')
     .eq('organization_id', organizationId)
     .eq('platform', platform)

@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { applyDefaultRetention } from '../../../backend/services/contentRetentionLifecycle';
 import { buildDailyExecutionMetadata } from '../../../lib/dailyExecutionMetadata';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 function warnDailyNormalizationIssue(input: { execution_id?: string; source_type?: string; platform?: string; content_type?: string }, context: string): void {
   if (!String(input.execution_id ?? '').trim()) {
@@ -29,6 +30,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!campaignId || !dailyPlan) {
       return res.status(400).json({ error: 'Campaign ID and daily plan are required' });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     const dailyExecutionRaw = dailyPlan?.dailyExecutionItem && typeof dailyPlan.dailyExecutionItem === 'object'
       ? dailyPlan.dailyExecutionItem

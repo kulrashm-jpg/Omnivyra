@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Activity Logger Service
  * 
@@ -60,8 +61,7 @@ export async function logActivity(
   } = {}
 ): Promise<void> {
   // Check if activity_feed table exists, if not, create logs in notifications or create the table
-  const { error } = await supabase
-    .from('activity_feed')
+  const { error } = await ownedDbTable('activity_feed')
     .insert({
       user_id: userId,
       action_type: actionType,
@@ -99,8 +99,7 @@ export async function getActivityFeed(
     offset?: number;
   } = {}
 ): Promise<ActivityLog[]> {
-  let query = supabase
-    .from('activity_feed')
+  let query = ownedDbTable('activity_feed')
     .select('*')
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
@@ -157,8 +156,7 @@ export async function getActivityFeed(
  * Get activity count for a campaign
  */
 export async function getCampaignActivityCount(campaignId: string): Promise<number> {
-  const { count, error } = await supabase
-    .from('activity_feed')
+  const { count, error } = await ownedDbTable('activity_feed')
     .select('*', { count: 'exact', head: true })
     .eq('campaign_id', campaignId);
 

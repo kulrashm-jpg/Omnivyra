@@ -1,7 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { requireCapability } from '../../../../backend/security/requireCapability';
-import { BILLING_MANAGE } from '../../../../shared/contracts/security';
+import { BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 
 const RESOURCE_KEYS = [
   'llm_tokens',
@@ -22,10 +22,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Wave 2C-C: capability + step-up gate. Platform pricing-plan creation
-  // is billing.manage scope; bridge principals are rejected.
+  // Phase: Platform Authority Isolation. billing.plan.manage is a
+  // SUPER_ADMIN-only platform-tier capability; replaces the previous
+  // BILLING_MANAGE gate (per-tenant) which COMPANY_ADMINs would have
+  // satisfied for plan creation that affects ALL orgs.
   const guard = await requireCapability(req, res, {
-    capability: BILLING_MANAGE,
+    capability: BILLING_PLAN_MANAGE,
     reason: 'super-admin creates / updates a pricing plan',
   });
   if (guard.ok !== true) return;

@@ -41,9 +41,9 @@ export default function FlowController({ userState, displayName, companyName }: 
       case 'no_data':
         return <AnalyzeStep onAction={() => navigate('/reports')} />;
       case 'has_report':
-        return <CreateStep onAction={() => navigate('/blogs')} />;
+        return <CreateStep onAction={() => navigate('/blogs/create')} />;
       case 'has_content':
-        return <LaunchStep onAction={() => navigate('/command-center/bolt-text-strategy')} />;
+        return <LaunchStep onAction={() => navigate('/command-center/bolt-text')} />;
       case 'has_campaign':
         return <EngageStep onAction={() => navigate('/community-ai/actions')} />;
       case 'has_engagement':

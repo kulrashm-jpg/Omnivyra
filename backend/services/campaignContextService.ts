@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Context Service
  *
@@ -95,8 +96,7 @@ export async function saveCampaignContextSnapshot(
 
   const now = new Date().toISOString();
 
-  const { error } = await supabase
-    .from('campaign_context')
+  const { error } = await ownedDbTable('campaign_context')
     .upsert(
       {
         campaign_id: campaignId,
@@ -138,8 +138,7 @@ export async function updateCampaignMemory(
 
   const now = new Date().toISOString();
 
-  const { error } = await supabase
-    .from('campaign_context')
+  const { error } = await ownedDbTable('campaign_context')
     .upsert(
       {
         campaign_id: campaignId,
@@ -171,8 +170,7 @@ export async function getCampaignContext(
 ): Promise<CampaignContextRecord | null> {
   if (!campaignId) return null;
 
-  const { data, error } = await supabase
-    .from('campaign_context')
+  const { data, error } = await ownedDbTable('campaign_context')
     .select(
       'campaign_id, company_id, account_context, validation, paid_recommendation, context_created_at, performance_insights, memory_updated_at'
     )
@@ -207,8 +205,7 @@ export async function getLatestCampaignContextForCompany(
 ): Promise<PreviousCampaignContext | null> {
   if (!companyId) return null;
 
-  let query = supabase
-    .from('campaign_context')
+  let query = ownedDbTable('campaign_context')
     .select('validation, paid_recommendation, performance_insights, context_created_at')
     .eq('company_id', companyId)
     .not('context_created_at', 'is', null) // only rows with a proper snapshot

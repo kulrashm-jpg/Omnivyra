@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Credit Expiry Service
  *
@@ -46,8 +47,7 @@ interface WalletSnapshot {
 }
 
 async function getWalletSnapshot(orgId: string): Promise<WalletSnapshot | null> {
-  const { data } = await supabase
-    .from('organization_credits')
+  const { data } = await ownedDbTable('organization_credits')
     .select('free_balance, paid_balance, incentive_balance')
     .eq('organization_id', orgId)
     .maybeSingle();
@@ -70,8 +70,7 @@ async function findExpiredProfiles(): Promise<Array<{
 }>> {
   const now = new Date().toISOString();
 
-  const { data, error } = await supabase
-    .from('free_credit_profiles')
+  const { data, error } = await ownedDbTable('free_credit_profiles')
     .select('user_id, organization_id, initial_credits, credit_expiry_at')
     .not('organization_id', 'is', null)
     .lt('credit_expiry_at', now);
@@ -97,8 +96,7 @@ interface IncentiveExpiryConfig {
 }
 
 async function getIncentiveExpiryConfig(): Promise<IncentiveExpiryConfig> {
-  const { data } = await supabase
-    .from('free_credit_config')
+  const { data } = await ownedDbTable('free_credit_config')
     .select('is_active, expiry_days')
     .eq('category', 'incentive_expiry')
     .maybeSingle();
@@ -135,8 +133,7 @@ async function expireOrgFreeCredits(
     .digest('hex')
     .slice(0, 32);
 
-  const { data: existing } = await supabase
-    .from('credit_transactions')
+  const { data: existing } = await ownedDbTable('credit_transactions')
     .select('id')
     .eq('idempotency_key', idempotencyKey)
     .maybeSingle();
@@ -189,7 +186,7 @@ async function expireOrgFreeCredits(
 
   const expired = toExpire;
 
-  await supabase.from('credit_expiry_log').insert({
+  await ownedDbTable('credit_expiry_log').insert({
     organization_id: orgId,
     user_id:         userId,
     amount_expired:  expired,
@@ -218,8 +215,7 @@ async function expireOrgIncentiveCredits(
     .digest('hex')
     .slice(0, 32);
 
-  const { data: existing } = await supabase
-    .from('credit_transactions')
+  const { data: existing } = await ownedDbTable('credit_transactions')
     .select('id')
     .eq('idempotency_key', idempotencyKey)
     .maybeSingle();
@@ -229,8 +225,7 @@ async function expireOrgIncentiveCredits(
   // Compute how many incentive credits were granted before the expiry window
   const cutoff = new Date(Date.now() - expiryDays * 86400_000).toISOString();
 
-  const { data: grantRows } = await supabase
-    .from('credit_transactions')
+  const { data: grantRows } = await ownedDbTable('credit_transactions')
     .select('incentive_delta')
     .eq('organization_id', orgId)
     .eq('execution_phase', 'grant')
@@ -275,7 +270,7 @@ async function expireOrgIncentiveCredits(
     throw new Error(msg);
   }
 
-  await supabase.from('credit_expiry_log').insert({
+  await ownedDbTable('credit_expiry_log').insert({
     organization_id: orgId,
     user_id:         null,
     amount_expired:  toExpire,

@@ -1,10 +1,19 @@
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import { useRef } from 'react';
 import { AlertTriangle, ArrowRight, BarChart2, Bot, Lightbulb, Loader2, RefreshCw, Sparkles, TrendingUp } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
 import AIBlogCardModal from '../../components/blog/AIBlogCardModal';
 import { useBlogIntelligence } from '../../components/blog/intelligence/useBlogIntelligence';
+import StepTracker, { type StepDef } from '../../components/progress/StepTracker';
+
+const INTEL_LOAD_STAGES: StepDef[] = [
+  { key: 'coverage',    label: 'Reading existing blog coverage', etaSeconds: 3 },
+  { key: 'gaps',        label: 'Detecting topic gaps',           etaSeconds: 4 },
+  { key: 'ranking',     label: 'Ranking opportunities',          etaSeconds: 3 },
+  { key: 'positioning', label: 'Enriching with positioning',     etaSeconds: 4 },
+];
 
 const PRIORITY_BADGES: Record<string, string> = {
   high: 'bg-red-100 text-red-700',
@@ -71,6 +80,8 @@ export default function BlogIntelligencePage() {
     suggestionCount,
   });
 
+  const loadStartedAtRef = useRef<number>(Date.now());
+
   const handleAICardCreated = (card: { topic: string }) => {
     setIsAICardModalOpen(false);
     void router.push({
@@ -84,8 +95,17 @@ export default function BlogIntelligencePage() {
 
   if (authLoading || loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <Loader2 className="h-10 w-10 animate-spin text-slate-500" />
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+        <div className="w-full max-w-md">
+          <StepTracker
+            stages={INTEL_LOAD_STAGES}
+            startedAt={loadStartedAtRef.current}
+            accent="sky"
+            title="Analyzing your blog opportunity"
+            subLabel="Comparing your coverage to market signals"
+            variant="card"
+          />
+        </div>
       </div>
     );
   }

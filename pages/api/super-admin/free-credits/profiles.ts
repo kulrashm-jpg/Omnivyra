@@ -8,17 +8,19 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
-import { isContentArchitectSession } from '@/backend/services/contentArchitectService';
-
+import { requireCapability } from '@/backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '@/shared/contracts/security';
 
 async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'Forbidden' });
-  return false;
+  // Phase 2: bridge cookie + content-architect cookie + Supabase fallback
+  // collapsed into a single canonical capability gate. Bridge principal
+  // and (post-Phase-1) canonical content-architect role both satisfy
+  // SUPER_ADMIN_DASHBOARD_VIEW for this read-only listing.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'free-credits profiles list',
+  });
+  return guard.ok === true;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Stage 29 — Governance Lockdown Mode.
  * Global guard layer. Only 1 row in governance_lockdown (enforced in service).
@@ -29,8 +30,7 @@ async function emitLockEvent(eventType: string, metadata: Record<string, unknown
  */
 export async function isGovernanceLocked(): Promise<boolean> {
   try {
-    const { data, error } = await supabase
-      .from('governance_lockdown')
+    const { data, error } = await ownedDbTable('governance_lockdown')
       .select('locked')
       .limit(1)
       .maybeSingle();
@@ -48,15 +48,13 @@ export async function isGovernanceLocked(): Promise<boolean> {
 export async function triggerGovernanceLock(reason: string, userId: string): Promise<void> {
   const now = new Date().toISOString();
 
-  const { data: existing } = await supabase
-    .from('governance_lockdown')
+  const { data: existing } = await ownedDbTable('governance_lockdown')
     .select('id')
     .limit(1)
     .maybeSingle();
 
   if (existing) {
-    const { error } = await supabase
-      .from('governance_lockdown')
+    const { error } = await ownedDbTable('governance_lockdown')
       .update({
         locked: true,
         reason,
@@ -69,8 +67,7 @@ export async function triggerGovernanceLock(reason: string, userId: string): Pro
 
     if (error) throw new Error(`Failed to trigger governance lock: ${error.message}`);
   } else {
-    const { error } = await supabase
-      .from('governance_lockdown')
+    const { error } = await ownedDbTable('governance_lockdown')
       .insert({
         id: LOCKDOWN_SINGLETON_ID,
         locked: true,
@@ -93,8 +90,7 @@ export async function triggerGovernanceLock(reason: string, userId: string): Pro
 export async function releaseGovernanceLock(userId: string): Promise<void> {
   const now = new Date().toISOString();
 
-  const { data: existing } = await supabase
-    .from('governance_lockdown')
+  const { data: existing } = await ownedDbTable('governance_lockdown')
     .select('id')
     .limit(1)
     .maybeSingle();
@@ -104,8 +100,7 @@ export async function releaseGovernanceLock(userId: string): Promise<void> {
     return;
   }
 
-  const { error } = await supabase
-    .from('governance_lockdown')
+  const { error } = await ownedDbTable('governance_lockdown')
     .update({
       locked: false,
       resolved_at: now,

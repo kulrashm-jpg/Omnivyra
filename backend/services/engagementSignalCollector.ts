@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Signal Collector
  * Collects engagement signals (comments, replies, mentions, etc.) from campaign activities.
@@ -36,8 +37,7 @@ async function resolveActivityToExternalPost(activityId: string): Promise<{
   platform: string;
   organization_id?: string | null;
 } | null> {
-  const { data: plan } = await supabase
-    .from('daily_content_plans')
+  const { data: plan } = await ownedDbTable('daily_content_plans')
     .select('id, campaign_id, platform, external_post_id, scheduled_post_id')
     .or(`id.eq.${activityId},execution_id.eq.${activityId}`)
     .limit(1)
@@ -47,8 +47,7 @@ async function resolveActivityToExternalPost(activityId: string): Promise<{
 
   let platformPostId = (plan as { external_post_id?: string }).external_post_id;
   if (!platformPostId && (plan as { scheduled_post_id?: string }).scheduled_post_id) {
-    const { data: sp } = await supabase
-      .from('scheduled_posts')
+    const { data: sp } = await ownedDbTable('scheduled_posts')
       .select('platform_post_id')
       .eq('id', (plan as { scheduled_post_id: string }).scheduled_post_id)
       .maybeSingle();
@@ -81,7 +80,7 @@ async function insertSignals(signals: EngagementSignalInsert[]): Promise<void> {
       engagement_score: s.engagement_score,
       organization_id: s.organization_id ?? null,
     };
-    const { error } = await supabase.from('campaign_activity_engagement_signals').insert(row);
+    const { error } = await ownedDbTable('campaign_activity_engagement_signals').insert(row);
     if (error && error.code !== '23505') {
       console.warn('[engagementSignalCollector] insert:', error.message);
     }
@@ -95,8 +94,7 @@ export async function collectLinkedInSignals(activityId: string): Promise<number
   const ctx = await resolveActivityToExternalPost(activityId);
   if (!ctx) return 0;
 
-  const { data: threads } = await supabase
-    .from('engagement_threads')
+  const { data: threads } = await ownedDbTable('engagement_threads')
     .select('id, platform, source_id, platform_thread_id')
     .eq('platform', 'linkedin')
     .or(`source_id.ilike.%${ctx.external_post_id}%,source_id.eq.${ctx.external_post_id}`);
@@ -104,8 +102,7 @@ export async function collectLinkedInSignals(activityId: string): Promise<number
   if (!threads?.length) return 0;
 
   const threadIds = threads.map((t: { id: string }) => t.id);
-  const { data: messages } = await supabase
-    .from('engagement_messages')
+  const { data: messages } = await ownedDbTable('engagement_messages')
     .select('id, thread_id, content, platform_created_at')
     .in('thread_id', threadIds)
     .order('platform_created_at', { ascending: false });
@@ -141,8 +138,7 @@ export async function collectTwitterSignals(activityId: string): Promise<number>
   const ctx = await resolveActivityToExternalPost(activityId);
   if (!ctx) return 0;
 
-  const { data: threads } = await supabase
-    .from('engagement_threads')
+  const { data: threads } = await ownedDbTable('engagement_threads')
     .select('id, platform, source_id')
     .in('platform', ['twitter', 'x'])
     .or(`source_id.ilike.%${ctx.external_post_id}%,source_id.eq.${ctx.external_post_id}`);
@@ -150,8 +146,7 @@ export async function collectTwitterSignals(activityId: string): Promise<number>
   if (!threads?.length) return 0;
 
   const threadIds = threads.map((t: { id: string }) => t.id);
-  const { data: messages } = await supabase
-    .from('engagement_messages')
+  const { data: messages } = await ownedDbTable('engagement_messages')
     .select('id, thread_id, content')
     .in('thread_id', threadIds);
 
@@ -181,8 +176,7 @@ export async function collectCommunitySignals(activityId: string): Promise<numbe
 
   for (const platform of platforms) {
     if (!(await checkRateLimit(platform))) continue;
-    const { data: threads } = await supabase
-      .from('engagement_threads')
+    const { data: threads } = await ownedDbTable('engagement_threads')
       .select('id, source_id')
       .eq('platform', platform)
       .or(`source_id.ilike.%${ctx.external_post_id}%,source_id.eq.${ctx.external_post_id}`);
@@ -190,8 +184,7 @@ export async function collectCommunitySignals(activityId: string): Promise<numbe
     if (!threads?.length) continue;
 
     const threadIds = threads.map((t: { id: string }) => t.id);
-    const { data: messages } = await supabase
-      .from('engagement_messages')
+    const { data: messages } = await ownedDbTable('engagement_messages')
       .select('id, thread_id, content')
       .in('thread_id', threadIds);
 

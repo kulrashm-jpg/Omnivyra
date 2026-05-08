@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Community Signal Service
  *
@@ -7,6 +8,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import {
+
   writeLeadSignal,
 } from './canonicalLeadSignalService';
 
@@ -93,8 +95,7 @@ export async function storeOpportunity(input: {
   confidence_score: number;
   priority_score: number;
 }): Promise<string | null> {
-  const { error, data } = await supabase
-    .from('engagement_opportunities')
+  const { error, data } = await ownedDbTable('engagement_opportunities')
     .insert({
       organization_id: input.organization_id,
       platform: input.platform,

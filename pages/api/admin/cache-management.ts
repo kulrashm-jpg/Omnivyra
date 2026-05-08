@@ -10,17 +10,17 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import IORedis from 'ioredis';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 import { getCacheStats as getExtApiStats } from '../../../backend/services/redisExternalApiCache';
 import { invalidateCacheByPrefix } from '../../../backend/services/aiResponseCache';
 
 const requireSuperAdmin = async (req: NextApiRequest, res: NextApiResponse): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'cache management',
+  });
+  return guard.ok === true;
 };
 
 function getRedisClient(): IORedis | null {

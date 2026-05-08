@@ -7,7 +7,7 @@
 
 import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle, ChevronDown, ChevronUp, TrendingUp, Zap } from 'lucide-react';
-import type { CampaignValidation } from '../../backend/lib/validation/campaignValidator';
+import type { CampaignValidation } from '../../lib/validation/campaignValidator';
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -191,3 +191,4 @@ export function CampaignValidationCard({ validation }: CampaignValidationCardPro
     </div>
   );
 }
+

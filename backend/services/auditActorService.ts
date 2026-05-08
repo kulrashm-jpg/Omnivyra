@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * auditActorService.ts
  *
@@ -71,7 +72,7 @@ export async function insertAuditLogStrict(input: AuditLogStrictInput): Promise<
     ...meta,
   };
 
-  const { error } = await supabase.from('audit_logs').insert({
+  const { error } = await ownedDbTable('audit_logs').insert({
     actor_user_id:  actor,
     action:         input.action,
     target_user_id: input.targetUserId ?? null,

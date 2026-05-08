@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface StrategyTemplate {
   id: string;
@@ -42,8 +43,7 @@ export async function listStrategyTemplates(
   userId: string,
   options: { company_id?: string; is_public?: boolean; tags?: string[] } = {}
 ): Promise<StrategyTemplate[]> {
-  let query = supabase
-    .from('strategy_templates')
+  let query = ownedDbTable('strategy_templates')
     .select('*')
     .or(`user_id.eq.${userId},is_public.eq.true`);
 
@@ -64,8 +64,7 @@ export async function listStrategyTemplates(
 export async function getStrategyTemplate(
   templateId: string
 ): Promise<StrategyTemplate | null> {
-  const { data, error } = await supabase
-    .from('strategy_templates')
+  const { data, error } = await ownedDbTable('strategy_templates')
     .select('*')
     .eq('id', templateId)
     .single();
@@ -90,8 +89,7 @@ export async function createStrategyTemplate(
     is_public?: boolean;
   }
 ): Promise<StrategyTemplate> {
-  const { data, error } = await supabase
-    .from('strategy_templates')
+  const { data, error } = await ownedDbTable('strategy_templates')
     .insert({
       user_id: userId,
       company_id: template.company_id ?? null,
@@ -132,8 +130,7 @@ export async function updateStrategyTemplate(
     is_public?: boolean;
   }
 ): Promise<StrategyTemplate> {
-  const { data, error } = await supabase
-    .from('strategy_templates')
+  const { data, error } = await ownedDbTable('strategy_templates')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', templateId)
     .select('*')
@@ -146,7 +143,7 @@ export async function updateStrategyTemplate(
 }
 
 export async function deleteStrategyTemplate(templateId: string): Promise<void> {
-  const { error } = await supabase.from('strategy_templates').delete().eq('id', templateId);
+  const { error } = await ownedDbTable('strategy_templates').delete().eq('id', templateId);
   if (error) {
     throw new Error(`Failed to delete strategy template: ${error.message}`);
   }

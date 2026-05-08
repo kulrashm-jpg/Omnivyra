@@ -6,12 +6,21 @@
  * On submit, triggers the existing report generation API.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { CheckCircle2, Loader2, Zap } from 'lucide-react';
 import { useCompanyContext } from '@/components/CompanyContext';
 import { getAuthToken } from '@/utils/getAuthToken';
+import StepTracker, { type StepDef } from '@/components/progress/StepTracker';
+
+const SNAPSHOT_GEN_STAGES: StepDef[] = [
+  { key: 'crawl',    label: 'Crawling your domain',      etaSeconds: 30 },
+  { key: 'social',   label: 'Reading social signals',    etaSeconds: 30 },
+  { key: 'score',    label: 'Scoring digital authority', etaSeconds: 45 },
+  { key: 'insights', label: 'Drafting insights',         etaSeconds: 30 },
+  { key: 'finalize', label: 'Finalizing report',         etaSeconds: 15 },
+];
 
 interface FormData {
   domain: string;
@@ -134,6 +143,7 @@ export default function DigitalAuthoritySnapshotPage() {
   const [errors, setErrors] = useState<Partial<FormData>>({});
   const [step, setStep] = useState<Step>('form');
   const [apiError, setApiError] = useState<string | null>(null);
+  const submittingStartedAt = useRef<number>(0);
 
   // Pre-fill company name when context loads
   useEffect(() => {
@@ -228,6 +238,7 @@ export default function DigitalAuthoritySnapshotPage() {
     if (!validate()) return;
 
     setStep('submitting');
+    submittingStartedAt.current = Date.now();
     setApiError(null);
 
     try {
@@ -530,6 +541,20 @@ export default function DigitalAuthoritySnapshotPage() {
                         <p className="text-xs text-green-700">No credits, no payment, no strings attached</p>
                       </div>
                     </div>
+
+                    {/* Generation Progress */}
+                    {step === 'submitting' && submittingStartedAt.current > 0 && (
+                      <StepTracker
+                        stages={SNAPSHOT_GEN_STAGES}
+                        startedAt={submittingStartedAt.current}
+                        status={apiError ? 'failed' : 'running'}
+                        errorMessage={apiError ?? undefined}
+                        accent="emerald"
+                        title="Generating your snapshot"
+                        subLabel={`Building report for ${formData.domain}`}
+                        variant="card"
+                      />
+                    )}
 
                     {/* Submit */}
                     <button

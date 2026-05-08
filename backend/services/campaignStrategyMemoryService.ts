@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Strategy Memory Service
  * Lightweight company-level strategic preferences: brand voice, tone, platforms, content types.
@@ -34,8 +35,7 @@ function parseJsonArray(val: unknown): string[] {
  */
 export async function getStrategyMemory(companyId: string): Promise<StrategyMemory | null> {
   if (!companyId?.trim()) return null;
-  const { data, error } = await supabase
-    .from('campaign_strategy_memory')
+  const { data, error } = await ownedDbTable('campaign_strategy_memory')
     .select('id, company_id, preferred_tone, preferred_platforms, preferred_content_types, last_updated')
     .eq('company_id', companyId.trim())
     .maybeSingle();
@@ -80,8 +80,7 @@ export async function updateStrategyMemory(
     last_updated: new Date().toISOString(),
   };
 
-  const { data, error } = await supabase
-    .from('campaign_strategy_memory')
+  const { data, error } = await ownedDbTable('campaign_strategy_memory')
     .upsert(row, { onConflict: 'company_id', ignoreDuplicates: false })
     .select('id, company_id, preferred_tone, preferred_platforms, preferred_content_types, last_updated')
     .single();
@@ -116,8 +115,7 @@ export async function updateStrategyMemoryFromSignals(
   if (!companyId?.trim()) return;
 
   try {
-    let query = supabase
-      .from('campaign_performance_signals')
+    let query = ownedDbTable('campaign_performance_signals')
       .select('platform, content_type, engagement, impressions')
       .eq('company_id', companyId.trim());
 

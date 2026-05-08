@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export const PRIORITIZATION_MODEL_VERSION = 'global-v2-strategic';
 export type PrioritizationMode = 'growth' | 'efficiency' | 'risk';
@@ -515,8 +516,7 @@ async function loadOpenDecisions(params: {
   reportTier?: 'snapshot' | 'growth' | 'deep';
   limit: number;
 }): Promise<DecisionRow[]> {
-  let query = supabase
-    .from('decision_objects')
+  let query = ownedDbTable('decision_objects')
     .select(DECISION_SELECT_FIELDS)
     .eq('company_id', params.companyId)
     .eq('status', 'open')
@@ -539,8 +539,7 @@ async function persistDecisionPriorityScores(entries: PriorityComputation[]): Pr
   for (const group of chunk(entries, 100)) {
     await Promise.all(
       group.map(async (entry) => {
-        const { error } = await supabase
-          .from('decision_objects')
+        const { error } = await ownedDbTable('decision_objects')
           .update({
             priority_score: entry.priority_score,
             last_changed_by: 'system',
@@ -578,8 +577,7 @@ async function upsertPriorityQueue(entries: PriorityComputation[]): Promise<void
     scored_at: entry.scored_at,
   }));
 
-  const { error } = await supabase
-    .from('decision_priority_queue')
+  const { error } = await ownedDbTable('decision_priority_queue')
     .upsert(payload, { onConflict: 'company_id,decision_id' });
 
   if (error) {
@@ -592,8 +590,7 @@ async function pruneStaleQueueRows(params: {
   reportTier?: 'snapshot' | 'growth' | 'deep';
   activeDecisionIds: string[];
 }): Promise<void> {
-  let query = supabase
-    .from('decision_priority_queue')
+  let query = ownedDbTable('decision_priority_queue')
     .select('id, decision_id')
     .eq('company_id', params.companyId);
 
@@ -614,8 +611,7 @@ async function pruneStaleQueueRows(params: {
   if (staleIds.length === 0) return;
 
   for (const group of chunk(staleIds, 200)) {
-    const { error: deleteError } = await supabase
-      .from('decision_priority_queue')
+    const { error: deleteError } = await ownedDbTable('decision_priority_queue')
       .delete()
       .in('id', group);
 
@@ -708,8 +704,7 @@ export async function listPrioritizedDecisions(params: {
   mode?: PrioritizationMode;
   limit?: number;
 }): Promise<PrioritizedDecision[]> {
-  let query = supabase
-    .from('decision_priority_queue')
+  let query = ownedDbTable('decision_priority_queue')
     .select([
       'decision_id',
       'company_id',
@@ -747,8 +742,7 @@ export async function listPrioritizedDecisions(params: {
   const decisionIds = (queueRows ?? []).map((row) => (row as unknown as { decision_id: string }).decision_id);
   if (decisionIds.length === 0) return [];
 
-  const { data: decisions, error: decisionError } = await supabase
-    .from('decision_objects')
+  const { data: decisions, error: decisionError } = await ownedDbTable('decision_objects')
     .select(DECISION_SELECT_FIELDS)
     .eq('company_id', params.companyId)
     .in('id', decisionIds);

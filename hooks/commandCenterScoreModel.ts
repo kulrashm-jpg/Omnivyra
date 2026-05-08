@@ -1,5 +1,5 @@
 import { READINESS_FEATURES } from '../config/readinessFeatures';
-import type { FeatureStatus } from '../backend/services/commandCenterReadinessService';
+import type { FeatureStatus } from '../lib/shared/commandCenterReadinessService';
 
 export interface ScoreActivity {
   key: string;
@@ -168,3 +168,5 @@ export function summarizeSections(sections: ScoreSection[]): ScoreSummary {
     totalCount: all.length,
   };
 }
+
+

@@ -1,0 +1,11 @@
+{
+  "frontendBackendImports": 0,
+  "dependencyCycles": 27,
+  "directDbWrites": 982,
+  "duplicateExecutionOwners": 180,
+  "deprecatedRoutes": 0,
+  "oversizedFiles": 290,
+  "variantContamination": 0,
+  "anyUnknownLeaks": 343,
+  "duplicateRoutes": 0
+}

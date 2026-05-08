@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export interface EngagementPlatformPreference {
   id: string;
@@ -15,8 +16,7 @@ export async function getEngagementPlatformPreferences(
   userId: string
 ): Promise<EngagementPlatformPreference[]> {
   try {
-    const { data, error } = await supabase
-      .from('engagement_platform_preferences')
+    const { data, error } = await ownedDbTable('engagement_platform_preferences')
       .select('*')
       .eq('company_id', companyId)
       .eq('user_id', userId)
@@ -41,8 +41,7 @@ export async function upsertEngagementPlatformPreference(input: {
   enabled: boolean;
 }): Promise<EngagementPlatformPreference | null> {
   try {
-    const { data, error } = await supabase
-      .from('engagement_platform_preferences')
+    const { data, error } = await ownedDbTable('engagement_platform_preferences')
       .upsert(
         {
           company_id: input.companyId,

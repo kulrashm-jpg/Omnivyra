@@ -1,8 +1,8 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Recommendations Extension — Expert consultation to improve existing plans.
  * Generates stage-aware suggestions per week; stored in campaign_recommendation_weeks.
  */
-
 
 import { supabase } from '../db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from './campaignBlueprintService';
@@ -31,8 +31,7 @@ export async function generateCampaignRecommendations(input: {
   const sessionId = crypto.randomUUID();
 
   const blueprint = await getUnifiedCampaignBlueprint(campaignId);
-  const { data: campaign } = await supabase
-    .from('campaigns')
+  const { data: campaign } = await ownedDbTable('campaigns')
     .select('id, name, description, current_stage, duration_weeks')
     .eq('id', campaignId)
     .maybeSingle();
@@ -108,14 +107,13 @@ Generate improvement suggestions for each week.`;
     }));
   }
 
-  await supabase
-    .from('campaign_recommendation_weeks')
+  await ownedDbTable('campaign_recommendation_weeks')
     .delete()
     .eq('campaign_id', campaignId)
     .eq('session_id', sessionId);
 
   for (const rec of resultWeeks) {
-    await supabase.from('campaign_recommendation_weeks').insert({
+    await ownedDbTable('campaign_recommendation_weeks').insert({
       campaign_id: campaignId,
       week_number: rec.week_number,
       session_id: sessionId,
@@ -141,8 +139,7 @@ export async function fetchRecommendationWeeks(input: {
   sessionId?: string;
   status?: 'pending' | 'agreed' | 'applied';
 }): Promise<any[]> {
-  let query = supabase
-    .from('campaign_recommendation_weeks')
+  let query = ownedDbTable('campaign_recommendation_weeks')
     .select('*')
     .eq('campaign_id', input.campaignId)
     .order('week_number');
@@ -157,8 +154,7 @@ export async function markWeeksAgreed(input: {
   sessionId: string;
   weekNumbers: number[];
 }): Promise<void> {
-  await supabase
-    .from('campaign_recommendation_weeks')
+  await ownedDbTable('campaign_recommendation_weeks')
     .update({ status: 'agreed', agreed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('campaign_id', input.campaignId)
     .eq('session_id', input.sessionId)
@@ -170,8 +166,7 @@ export async function mergeRecommendationsIntoPlan(input: {
   sessionId: string;
   weekNumbers: number[];
 }): Promise<{ merged: number }> {
-  const { data: recs } = await supabase
-    .from('campaign_recommendation_weeks')
+  const { data: recs } = await ownedDbTable('campaign_recommendation_weeks')
     .select('*')
     .eq('campaign_id', input.campaignId)
     .eq('session_id', input.sessionId)
@@ -206,8 +201,7 @@ export async function mergeRecommendationsIntoPlan(input: {
     };
   });
 
-  let { data: planRow } = await supabase
-    .from('campaign_week_plan')
+  let { data: planRow } = await ownedDbTable('campaign_week_plan')
     .select('id')
     .eq('campaign_id', input.campaignId)
     .in('status', ['edited_committed', 'committed'])
@@ -215,8 +209,7 @@ export async function mergeRecommendationsIntoPlan(input: {
     .limit(1)
     .maybeSingle();
   if (!planRow?.id) {
-    const { data: anyPlan } = await supabase
-      .from('campaign_week_plan')
+    const { data: anyPlan } = await ownedDbTable('campaign_week_plan')
       .select('id')
       .eq('campaign_id', input.campaignId)
       .order('updated_at', { ascending: false })
@@ -240,8 +233,7 @@ export async function mergeRecommendationsIntoPlan(input: {
     week_extras: w.week_extras,
   }));
 
-  const { error } = await supabase
-    .from('campaign_week_plan')
+  const { error } = await ownedDbTable('campaign_week_plan')
     .update({
       weeks: weeksForDb,
       blueprint: { campaign_id: input.campaignId, duration_weeks: mergedWeeks.length, weeks: mergedWeeks },
@@ -252,8 +244,7 @@ export async function mergeRecommendationsIntoPlan(input: {
 
   if (error) throw new Error(`Failed to merge: ${error.message}`);
 
-  await supabase
-    .from('campaign_recommendation_weeks')
+  await ownedDbTable('campaign_recommendation_weeks')
     .update({
       status: 'applied',
       applied_at: new Date().toISOString(),

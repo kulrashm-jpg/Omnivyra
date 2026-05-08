@@ -7,6 +7,7 @@ import { evaluateAutoRules } from './communityAiAutoRuleService';
 import { listPlaybooks } from './playbooks/playbookService';
 import { evaluatePlaybookForEvent } from './playbooks/playbookEvaluator';
 import { validateActionAgainstPlaybook } from './playbooks/playbookValidator';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type CommunityAiOmnivyraInput = {
   tenant_id: string;
@@ -53,8 +54,7 @@ const loadHistoryMetrics = async (
     dayStart.setHours(0, 0, 0, 0);
     const dayStartIso = dayStart.toISOString();
 
-    const { data: replyRows } = await supabase
-      .from('community_ai_actions')
+    const { data: replyRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -63,8 +63,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'reply')
       .gte('updated_at', hourAgo);
 
-    const { data: followRows } = await supabase
-      .from('community_ai_actions')
+    const { data: followRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -73,8 +72,7 @@ const loadHistoryMetrics = async (
       .eq('action_type', 'follow')
       .gte('updated_at', dayStartIso);
 
-    const { data: actionRows } = await supabase
-      .from('community_ai_actions')
+    const { data: actionRows } = await ownedDbTable('community_ai_actions')
       .select('id')
       .eq('tenant_id', tenantId)
       .eq('organization_id', organizationId)
@@ -223,8 +221,7 @@ export const evaluateEngagement = async (
           action.target;
 
         if (targetId) {
-          const { data: existing } = await supabase
-            .from('community_ai_actions')
+          const { data: existing } = await ownedDbTable('community_ai_actions')
             .select('id')
             .eq('tenant_id', input.tenant_id)
             .eq('organization_id', input.organization_id)
@@ -234,7 +231,7 @@ export const evaluateEngagement = async (
             .in('status', ['pending', 'approved'])
             .limit(1);
           if (!existing || existing.length === 0) {
-            await supabase.from('community_ai_actions').insert({
+            await ownedDbTable('community_ai_actions').insert({
               tenant_id: input.tenant_id,
               organization_id: input.organization_id,
               platform,

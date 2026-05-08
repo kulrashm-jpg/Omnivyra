@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import { DollarSign, TrendingUp, TrendingDown, RefreshCw, BarChart3, ChevronDown, ChevronRight } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -65,8 +66,11 @@ export default function RevenueAnalyticsPanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/revenue-analytics?year=${period.year}&month=${period.month}`);
-      if (res.ok) setData(await res.json());
+      const result = await safeFetchJson(
+        `/api/admin/revenue-analytics?year=${period.year}&month=${period.month}`,
+        { credentials: 'same-origin' },
+      );
+      if (result.ok === true) setData(result.data as any);
     } catch (e) {
       console.error('[RevenueAnalytics] load failed', e);
     } finally {

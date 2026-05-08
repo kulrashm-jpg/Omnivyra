@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * resolveAuthenticatedUser — the canonical identity-spine auth resolver.
  *
@@ -171,8 +172,7 @@ async function resolveUserRow(
   supabaseUid: string,
   email: string | null,
 ): Promise<ResolvedUserRow | null> {
-  const { data: byUid } = await db
-    .from('users')
+  const { data: byUid } = await ownedDbTable('users')
     .select('id, email, is_deleted')
     .eq('supabase_uid', supabaseUid)
     .maybeSingle();
@@ -187,8 +187,7 @@ async function resolveUserRow(
 
   if (!email) return null;
 
-  const { data: byEmail } = await db
-    .from('users')
+  const { data: byEmail } = await ownedDbTable('users')
     .select('id, email, is_deleted')
     .eq('email', email.toLowerCase())
     .maybeSingle();
@@ -199,8 +198,7 @@ async function resolveUserRow(
   // Skipped for soft-deleted rows so the auth flow surfaces ACCOUNT_DELETED
   // before any state mutation.
   if (!(byEmail as any).is_deleted) {
-    await db
-      .from('users')
+    await ownedDbTable('users')
       .update({ supabase_uid: supabaseUid })
       .eq('id', (byEmail as any).id);
   }

@@ -1,0 +1,62 @@
+{
+  "rawCounts": {
+    "frontendBackendImports": 0,
+    "dependencyCycles": 27,
+    "directDbWrites": 1053,
+    "duplicateExecutionOwners": 205,
+    "deprecatedRoutes": 0,
+    "oversizedFiles": 291,
+    "variantContamination": 0,
+    "anyUnknownLeaks": 207,
+    "duplicateRoutes": 0
+  },
+  "trueRiskCounts": {
+    "runtimeDbWriteRisks": 44,
+    "apiAdapterDbWriteRisks": 431,
+    "repositoryOwnedWrites": 49,
+    "ignoredTestWrites": 0,
+    "trueDuplicateOrchestrationOwners": 0,
+    "runtimeDependencyCycles": 0,
+    "criticalUnsafeLeaks": 6133,
+    "mixedRuntimeOversizedFiles": 14,
+    "p0": {
+      "runtimeCycles": 0,
+      "directDbWritesOutsideRepositories": 44,
+      "duplicateOrchestrationOwners": 0,
+      "unsafeAnyPropagation": 5931,
+      "frontendBackendImports": 0,
+      "deprecatedRoutes": 0,
+      "variantContamination": 0
+    }
+  },
+  "directDbWritesBySeverity": {
+    "safe": 49,
+    "high": 30,
+    "critical": 14,
+    "medium": 431
+  },
+  "duplicateOwnershipByClass": {
+    "queue-entrypoint": 1,
+    "adapter/delegator": 1,
+    "canonical-owner": 8
+  },
+  "cyclesByClass": {
+    "type-only-cycle": 21,
+    "barrel/export-cycle": 3
+  },
+  "oversizedByClass": {
+    "mixed-runtime-ownership": 14,
+    "render-only-ui": 101,
+    "isolated-large-single-purpose": 163,
+    "tooling-script": 8,
+    "type-or-schema-aggregation": 4
+  },
+  "leaksByClass": {
+    "serialization-or-schema-bridge": 2565,
+    "safe-narrowed-unknown": 1244,
+    "unsafe-any-propagation": 6766,
+    "unsafe-unknown-mutation": 204,
+    "schema-validated-json-parse": 422,
+    "unsafe-json-parse": 3
+  }
+}

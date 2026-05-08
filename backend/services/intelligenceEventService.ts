@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Intelligence Event Service
  * Emits events to intelligence_events for timeline visualization.
@@ -92,8 +93,7 @@ export async function emitIntelligenceEvent(
   const dataObj = event_data && typeof event_data === 'object' ? event_data : {};
   const eventHash = computeEventHash(companyId, eventType, dataObj);
 
-  const { data, error } = await supabase
-    .from('intelligence_events')
+  const { data, error } = await ownedDbTable('intelligence_events')
     .insert({
       company_id: companyId,
       event_type: eventType,

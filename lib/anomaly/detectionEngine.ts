@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../backend/db/writeOwner';
 /**
  * Anomaly Detection Engine — v2
  *
@@ -70,8 +71,7 @@ async function getRecentDbCount(dbEventType: string, windowMins: number): Promis
 
   try {
     const since = new Date(now - windowMins * 60 * 1_000).toISOString();
-    const { count, error } = await getDb()
-      .from('auth_audit_logs')
+    const { count, error } = await ownedDbTable('auth_audit_logs')
       .select('*', { count: 'exact', head: true })
       .eq('event', dbEventType)
       .gte('created_at', since);
@@ -150,8 +150,7 @@ export async function evaluateAnomalyCount(
       alerted_at:   config.severity === 'CRITICAL' ? now : null,
       created_at:   now,
     };
-    getDb()
-      .from('system_anomalies')
+    ownedDbTable('system_anomalies')
       .insert(row as any)
       .then(({ error }) => {
         if (error) console.warn('[detectionEngine] persist failed:', error.message);

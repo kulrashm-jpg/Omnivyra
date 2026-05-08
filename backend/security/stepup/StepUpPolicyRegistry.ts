@@ -17,10 +17,14 @@ import {
   AUTOMATION_TRANSFER,
   BILLING_MANAGE,
   BILLING_PURCHASE,
+  BILLING_PLATFORM_MANAGE,
+  BILLING_PLAN_MANAGE,
+  BILLING_GRANT_FREE_CREDITS,
   IDENTITY_ADMIN,
   IDENTITY_ADMIN_ASSIGN,
   IDENTITY_ADMIN_DELETE,
   IDENTITY_ADMIN_REVOKE,
+  INTEGRATION_PLATFORM_OAUTH_MANAGE,
   INTEGRATION_SECRETS_READ,
   MFA_REVOKE,
   ORGANIZATION_DELETE,
@@ -69,6 +73,15 @@ const POLICIES: ReadonlyArray<StepUpRequirement> = [
   // (subscription updates are reversible on dispute).
   { ...PHISHING_RESISTANT_TENMIN,         capability: BILLING_MANAGE,        reason: 'Confirm with a passkey to manage billing.' },
   { ...PHISHING_RESISTANT_TENMIN,         capability: BILLING_PURCHASE,      reason: 'Confirm with a passkey to authorize a purchase.' },
+
+  // Phase: Platform Authority Isolation — platform-tier billing capabilities
+  // require trusted-device step-up (these affect all tenants on the platform).
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: BILLING_PLATFORM_MANAGE,    reason: 'Confirm with a passkey on a trusted device to change platform billing.' },
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: BILLING_PLAN_MANAGE,        reason: 'Confirm with a passkey on a trusted device to manage pricing plans.' },
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: BILLING_GRANT_FREE_CREDITS, reason: 'Confirm with a passkey on a trusted device to grant free credits.' },
+
+  // Platform-wide OAuth credentials.
+  { ...PHISHING_RESISTANT_TRUSTED_TENMIN, capability: INTEGRATION_PLATFORM_OAUTH_MANAGE, reason: 'Confirm with a passkey on a trusted device to change platform OAuth credentials.' },
 
   // API keys + integration secrets — phishing-resistant.
   { ...PHISHING_RESISTANT_TENMIN,         capability: API_KEY_MANAGE,        reason: 'Confirm with a passkey to manage API keys.' },

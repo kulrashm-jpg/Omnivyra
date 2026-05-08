@@ -8,22 +8,19 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-  if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
-
-  // Verify super-admin
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('is_super_admin')
-    .eq('id', user.id)
-    .maybeSingle();
-
-  if (!profile?.is_super_admin) return res.status(403).json({ error: 'Forbidden' });
+  // Read-only listing of access requests. Drops the dead profiles.is_super_admin
+  // lookup (Phase 1 audit P0-4) in favor of the capability gate.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'access requests list',
+  });
+  if (guard.ok !== true) return;
 
   const { status = 'pending', page = '1', limit = '50' } = req.query as Record<string, string>;
   const pageNum = Math.max(1, parseInt(page, 10));

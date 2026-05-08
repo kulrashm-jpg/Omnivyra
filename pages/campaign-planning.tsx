@@ -30,6 +30,14 @@ import WeeklyRefinementInterface from '../components/WeeklyRefinementInterface';
 
 import { useCampaignPlanningState } from '../hooks/useCampaignPlanningState';
 import CampaignPlanningContent from '../components/CampaignPlanningContent';
+import StepTracker, { type StepDef } from '../components/progress/StepTracker';
+
+const PLAN_GEN_STAGES: StepDef[] = [
+  { key: 'context',    label: 'Loading campaign context',  etaSeconds: 3 },
+  { key: 'themes',     label: 'Drafting weekly themes',    etaSeconds: 8 },
+  { key: 'activities', label: 'Generating daily activities', etaSeconds: 12 },
+  { key: 'save',       label: 'Saving plan',               etaSeconds: 3 },
+];
 
 export default function CampaignPlanning() {
   const d = useCampaignPlanningState();
@@ -102,6 +110,8 @@ export default function CampaignPlanning() {
     optimizationError,
     organizeProgramIntoGoals,
     planDescription,
+    planGenerationError,
+    planGenerationStartedAt,
     platformAccuracyEntries,
     platformAdvice,
     platformAdviceEntries,
@@ -196,6 +206,21 @@ export default function CampaignPlanning() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+      {planGenerationStartedAt && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm" role="dialog" aria-modal="true">
+          <div className="mx-4 w-full max-w-md">
+            <StepTracker
+              stages={PLAN_GEN_STAGES}
+              startedAt={planGenerationStartedAt}
+              status={planGenerationError ? 'failed' : 'running'}
+              errorMessage={planGenerationError ?? undefined}
+              accent="indigo"
+              title="Generating campaign plan"
+              variant="card"
+            />
+          </div>
+        </div>
+      )}
       {notice && (
         <div className="max-w-7xl mx-auto px-6 pt-4">
           <div

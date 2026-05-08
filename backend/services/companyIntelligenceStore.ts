@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Company Intelligence Signal Store
  * Phase 2: Persists company-specific signals derived from global intelligence_signals.
@@ -6,6 +7,7 @@
 import { supabase } from '../db/supabaseClient';
 import type { CompanySignalOutput } from './companyIntelligenceEngine';
 import {
+
   computeSignalPriority,
   type RankedSignalOutput,
 } from './companySignalRankingEngine';
@@ -36,8 +38,7 @@ export async function insertCompanyIntelligenceSignals(
     signal_type: s.company_signal_type,
   }));
 
-  const { data, error } = await supabase
-    .from('company_intelligence_signals')
+  const { data, error } = await ownedDbTable('company_intelligence_signals')
     .upsert(rows, {
       onConflict: 'company_id,signal_id',
       ignoreDuplicates: true,
@@ -88,8 +89,7 @@ export async function insertRankedCompanyIntelligenceSignals(
     };
   });
 
-  const { data, error } = await supabase
-    .from('company_intelligence_signals')
+  const { data, error } = await ownedDbTable('company_intelligence_signals')
     .upsert(rows, {
       onConflict: 'company_id,signal_id',
       ignoreDuplicates: true,
@@ -140,8 +140,7 @@ export async function fetchSignalsByIds(
 ): Promise<Array<{ id: string; topic: string | null; relevance_score: number | null; primary_category: string | null; tags: string[] | null; normalized_payload: Record<string, unknown> | null; detected_at: string | null }>> {
   if (signalIds.length === 0) return [];
 
-  const { data, error } = await supabase
-    .from('intelligence_signals')
+  const { data, error } = await ownedDbTable('intelligence_signals')
     .select('id, topic, relevance_score, primary_category, tags, normalized_payload, detected_at')
     .in('id', signalIds);
 

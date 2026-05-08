@@ -16,6 +16,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import {
   RefreshCw, TrendingUp, Clock, Zap, AlertTriangle, AlertCircle,
   ChevronDown, ChevronRight, BarChart2, Settings, Lightbulb,
@@ -67,10 +68,9 @@ export default function RailwayEfficiencyPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/railway-efficiency?hours=${hours}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      setData(json);
+      const result = await safeFetchJson(`/api/admin/railway-efficiency?hours=${hours}`, { credentials: 'same-origin' });
+      if (result.ok !== true) throw new Error(result.message || `HTTP ${result.status}`);
+      setData(result.data as any);
     } catch (err) {
       setError(`Failed to load metrics: ${(err as Error).message}`);
     } finally {

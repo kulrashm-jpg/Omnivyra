@@ -59,7 +59,7 @@ import { ENABLE_UNIFIED_CAMPAIGN_WIZARD } from '../config/featureFlags';
 import { useCampaignWizard, createCampaignWizardStore } from '../store/campaignWizardStore';
 import { hydrateWizardFromSnapshot, exportWizardToSaveWizardStatePayload, exportWizardToPlanningContext } from '../lib/wizard/campaignWizardAdapter';
 import { useCampaignResume } from '../hooks/useCampaignResume';
-import { PLATFORM_LABELS } from '../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../lib/shared/platforms';
 
 import type { useCampaignDetailsState } from '../hooks/useCampaignDetailsState';
 type S = ReturnType<typeof useCampaignDetailsState>;
@@ -1522,3 +1522,4 @@ export default function WeekCard({ weekNumber, d }: { weekNumber: number; d: S }
                     </div>
                   );
 }
+

@@ -1,9 +1,11 @@
 import { supabase } from '../../db/supabaseClient';
 import {
+
   extractPatternTypes,
   siblingPatterns,
   type PatternType,
 } from './patternFeatures';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Pattern-learning worker. Periodic aggregation over the last 7 days
@@ -48,8 +50,7 @@ function tallyKey(t: Omit<Tally, 'success' | 'failure'>): string {
 async function listActiveOrgs(): Promise<string[]> {
   const since = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   try {
-    const { data } = await supabase
-      .from('community_ai_actions')
+    const { data } = await ownedDbTable('community_ai_actions')
       .select('organization_id')
       .in('status', ['executed', 'sent_unverified', 'failed'])
       .gte('updated_at', since)
@@ -68,8 +69,7 @@ async function tallyPatternsForOrg(orgId: string): Promise<Map<string, Tally>> {
   const since = new Date(Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const tallies = new Map<string, Tally>();
   try {
-    const { data } = await supabase
-      .from('community_ai_actions')
+    const { data } = await ownedDbTable('community_ai_actions')
       .select('platform, action_type, status, final_text, suggested_text')
       .eq('organization_id', orgId)
       .in('status', ['executed', 'sent_unverified', 'failed'])
@@ -163,8 +163,7 @@ async function upsertPatterns(tallies: Map<string, Tally>): Promise<number> {
     });
   }
   try {
-    const { error } = await supabase
-      .from('intelligence_patterns')
+    const { error } = await ownedDbTable('intelligence_patterns')
       .upsert(rows, { onConflict: 'organization_id,platform,action_type,pattern_type' });
     if (error) {
       console.warn('[patternLearning] upsert failed:', error.message);

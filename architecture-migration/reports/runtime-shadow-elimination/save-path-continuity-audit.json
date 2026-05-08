@@ -1,0 +1,12 @@
+{
+  "canonicalContentSavePaths": [
+    {
+      "route": "/content-creation",
+      "canonicalRoute": "/posts/create",
+      "aiGenerateApi": "/api/ai/generate-content",
+      "saveApi": "/api/campaigns type=content-plan",
+      "retryContinuity": "canonical UI exposes generate-and-save retry through surfaced mutation errors",
+      "parityGaps": []
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { supabase } from '../../db/supabaseClient';
+
 import type {
   ExternalApiSource,
   ExternalApiUserAccess,
@@ -10,6 +10,7 @@ import { isApiSourceExecutable, getEnabledApiIdsFromCompanyConfig } from './acce
 import { computeFreshnessScore, computeReliabilityScore } from './responseMapping';
 import { normalizeRecord } from './requestValidation';
 import { DEFAULT_RETRY_COUNT, DEFAULT_TIMEOUT_MS, DEFAULT_RATE_LIMIT_PER_MIN } from './requestValidation';
+import { ownedDbTable } from '../../db/writeOwner';
 
 // ── Usage ID builders ─────────────────────────────────────────────────────────
 export const buildUsageUserId = (userId?: string | null, companyId?: string | null) =>
@@ -31,8 +32,7 @@ export async function recordApiHealth(
   input: { success: boolean; payload?: any }
 ): Promise<{ freshness_score: number; reliability_score: number } | null> {
   try {
-    const { data, error } = await supabase
-      .from('external_api_health')
+    const { data, error } = await ownedDbTable('external_api_health')
       .select('*')
       .eq('api_source_id', source.id)
       .single();
@@ -53,7 +53,7 @@ export async function recordApiHealth(
       ? computePayloadHash(input.payload)
       : data?.last_payload_hash ?? null;
 
-    const { error: upsertError } = await supabase.from('external_api_health').upsert(
+    const { error: upsertError } = await ownedDbTable('external_api_health').upsert(
       {
         api_source_id: source.id,
         last_success_at: lastSuccessAt,
@@ -90,8 +90,7 @@ export async function fetchHealthMapForApiIds(
   apiIds: string[]
 ): Promise<Record<string, ExternalApiHealth>> {
   if (apiIds.length === 0) return {};
-  const { data: healthData, error: healthError } = await supabase
-    .from('external_api_health')
+  const { data: healthData, error: healthError } = await ownedDbTable('external_api_health')
     .select('*')
     .in('api_source_id', apiIds);
   if (healthError || !healthData) return {};
@@ -111,8 +110,7 @@ export async function getHealthForSource(
 ): Promise<{ freshness_score: number; reliability_score: number } | null> {
   try {
     if (accountId) {
-      const { data: acctData, error: acctError } = await supabase
-        .from('external_api_health')
+      const { data: acctData, error: acctError } = await ownedDbTable('external_api_health')
         .select('freshness_score, reliability_score')
         .eq('account_id', accountId)
         .maybeSingle();
@@ -123,8 +121,7 @@ export async function getHealthForSource(
         };
       }
     }
-    const { data, error } = await supabase
-      .from('external_api_health')
+    const { data, error } = await ownedDbTable('external_api_health')
       .select('freshness_score, reliability_score')
       .eq('api_source_id', source.id)
       .maybeSingle();
@@ -154,8 +151,7 @@ export async function logExternalApiUsage(input: {
   try {
     const usageDate = resolveUsageDate();
     const nowIso = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('external_api_usage')
+    const { data, error } = await ownedDbTable('external_api_usage')
       .select('*')
       .eq('api_source_id', input.apiSourceId)
       .eq('user_id', input.userId)
@@ -176,7 +172,7 @@ export async function logExternalApiUsage(input: {
     const lastErrorAt = input.success ? data?.last_error_at ?? null : nowIso;
     const lastSuccessAt = input.success ? nowIso : data?.last_success_at ?? null;
 
-    const { error: upsertError } = await supabase.from('external_api_usage').upsert(
+    const { error: upsertError } = await ownedDbTable('external_api_usage').upsert(
       {
         api_source_id: input.apiSourceId,
         user_id: input.userId,
@@ -212,7 +208,7 @@ export async function logExternalApiUsage(input: {
 
     if (input.feature && input.companyId) {
       const featureUserId = buildFeatureUsageUserId(input.feature, input.companyId);
-      await supabase.from('external_api_usage').upsert(
+      await ownedDbTable('external_api_usage').upsert(
         {
           api_source_id: input.apiSourceId,
           user_id: featureUserId,
@@ -250,8 +246,7 @@ export async function addSignalsGenerated(input: {
   try {
     const usageDate = resolveUsageDate();
     const nowIso = new Date().toISOString();
-    const { data, error: selectError } = await supabase
-      .from('external_api_usage')
+    const { data, error: selectError } = await ownedDbTable('external_api_usage')
       .select('signals_generated, request_count, success_count, failure_count, last_used_at')
       .eq('api_source_id', input.apiSourceId)
       .eq('user_id', input.userId)
@@ -271,7 +266,7 @@ export async function addSignalsGenerated(input: {
     }
 
     const current = (data?.signals_generated ?? 0) + input.count;
-    await supabase.from('external_api_usage').upsert(
+    await ownedDbTable('external_api_usage').upsert(
       {
         api_source_id: input.apiSourceId,
         user_id: input.userId,
@@ -288,15 +283,14 @@ export async function addSignalsGenerated(input: {
 
     if (input.feature && input.companyId) {
       const featureUserId = buildFeatureUsageUserId(input.feature, input.companyId);
-      const { data: featureData } = await supabase
-        .from('external_api_usage')
+      const { data: featureData } = await ownedDbTable('external_api_usage')
         .select('signals_generated, request_count, success_count, failure_count, last_used_at')
         .eq('api_source_id', input.apiSourceId)
         .eq('user_id', featureUserId)
         .eq('usage_date', usageDate)
         .maybeSingle();
       const featureCurrent = (featureData?.signals_generated ?? 0) + input.count;
-      await supabase.from('external_api_usage').upsert(
+      await ownedDbTable('external_api_usage').upsert(
         {
           api_source_id: input.apiSourceId,
           user_id: featureUserId,
@@ -323,7 +317,7 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
     return [];
   }
   const createQuery = () =>
-    supabase.from('external_api_sources').select('*').eq('is_active', true).order('created_at', { ascending: true });
+    ownedDbTable('external_api_sources').select('*').eq('is_active', true).order('created_at', { ascending: true });
 
   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
   const sources: ExternalApiSource[] = scopedResult.error ? [] : (scopedResult.data || []);
@@ -355,7 +349,7 @@ export async function getAvailableApis(companyId?: string | null): Promise<Exter
   if (!companyId) return [];
   console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   const baseQuery = () =>
-    supabase.from('external_api_sources').select('*').eq('is_active', true).order('created_at', { ascending: true });
+    ownedDbTable('external_api_sources').select('*').eq('is_active', true).order('created_at', { ascending: true });
 
   const scoped = await baseQuery().or(`company_id.eq.${companyId},company_id.is.null`);
   if (!scoped.error) {
@@ -372,7 +366,7 @@ export async function getAvailableApis(companyId?: string | null): Promise<Exter
 }
 
 export async function getUserApiAccess(userId: string): Promise<ExternalApiUserAccess[]> {
-  const { data, error } = await supabase.from('external_api_user_access').select('*').eq('user_id', userId);
+  const { data, error } = await ownedDbTable('external_api_user_access').select('*').eq('user_id', userId);
   if (error) {
     console.warn('getUserApiAccess failed', { userId, message: error.message });
     return [];
@@ -381,8 +375,7 @@ export async function getUserApiAccess(userId: string): Promise<ExternalApiUserA
 }
 
 export async function getExternalApiSourceById(apiSourceId: string): Promise<ExternalApiSource | null> {
-  const { data, error } = await supabase
-    .from('external_api_sources')
+  const { data, error } = await ownedDbTable('external_api_sources')
     .select('*')
     .eq('id', apiSourceId)
     .eq('is_active', true)
@@ -402,7 +395,7 @@ export async function getPlatformConfigs(
 ): Promise<PlatformConfig[]> {
   if (!companyId) return [];
   const createQuery = () =>
-    supabase.from('external_api_sources').select('*').order('created_at', { ascending: true });
+    ownedDbTable('external_api_sources').select('*').order('created_at', { ascending: true });
 
   const scopedResult = await createQuery().or(`company_id.eq.${companyId},company_id.is.null`);
   let sources: any[] = scopedResult.error ? [] : (scopedResult.data || []);
@@ -428,8 +421,7 @@ export async function getPlatformConfigs(
   let selectedPresets = globalPresets.filter((preset: any) => enabledSet.has(preset.id));
 
   if (enabledIds.length > 0 && selectedPresets.length === 0) {
-    const { data: enabledSources } = await supabase
-      .from('external_api_sources')
+    const { data: enabledSources } = await ownedDbTable('external_api_sources')
       .select('*')
       .eq('is_active', true)
       .in('id', enabledIds);
@@ -441,8 +433,7 @@ export async function getPlatformConfigs(
 
   let data = [...companySpecific, ...selectedPresets];
   if (companyId && data.length === 0 && enabledIds.length > 0) {
-    const { data: fallbackSources } = await supabase
-      .from('external_api_sources')
+    const { data: fallbackSources } = await ownedDbTable('external_api_sources')
       .select('*')
       .eq('is_active', true)
       .in('id', enabledIds);
@@ -494,21 +485,20 @@ export async function savePlatformConfig(input: Partial<ExternalApiSource>): Pro
     return next;
   };
 
-  let initial = await supabase.from('external_api_sources').insert(payloadWithCompany).select('*').single();
+  let initial = await ownedDbTable('external_api_sources').insert(payloadWithCompany).select('*').single();
   if (!initial.error) return initial.data as ExternalApiSource;
 
   const message = initial.error.message || '';
   const sanitized = sanitizePayload(payloadWithCompany, message);
   if (Object.keys(sanitized).length !== Object.keys(payloadWithCompany).length) {
-    initial = await supabase.from('external_api_sources').insert(sanitized).select('*').single();
+    initial = await ownedDbTable('external_api_sources').insert(sanitized).select('*').single();
     if (!initial.error) return initial.data as ExternalApiSource;
   }
   if (!message.toLowerCase().includes('company_id')) {
     throw new Error(`Failed to save platform config: ${message}`);
   }
 
-  const fallback = await supabase
-    .from('external_api_sources')
+  const fallback = await ownedDbTable('external_api_sources')
     .insert(sanitizePayload(basePayload, message))
     .select('*')
     .single();
@@ -521,14 +511,14 @@ export async function saveTenantPlatformConfig(
 ): Promise<ExternalApiSource> {
   if (!input.company_id) throw new Error('company_id is required for tenant-scoped API');
   const payload = { ...buildPlatformPayload(input), company_id: input.company_id };
-  let result = await supabase.from('external_api_sources').insert(payload).select('*').single();
+  let result = await ownedDbTable('external_api_sources').insert(payload).select('*').single();
 
   if (result.error) {
     const message = result.error.message || '';
     if (message.toLowerCase().includes('is_preset')) {
       const sanitized = { ...payload };
       delete (sanitized as any).is_preset;
-      result = await supabase.from('external_api_sources').insert(sanitized).select('*').single();
+      result = await ownedDbTable('external_api_sources').insert(sanitized).select('*').single();
       if (!result.error) return result.data as ExternalApiSource;
     }
     if (message.toLowerCase().includes('company_id')) {
@@ -543,8 +533,7 @@ export async function checkCompanyApiLimitsForPolling(
   companyId: string,
   apiSourceId: string
 ): Promise<{ allowed: boolean; reason?: string }> {
-  const { data: configRow, error: configErr } = await supabase
-    .from('company_api_configs')
+  const { data: configRow, error: configErr } = await ownedDbTable('company_api_configs')
     .select('daily_limit, signal_limit')
     .eq('company_id', companyId)
     .eq('api_source_id', apiSourceId)
@@ -558,8 +547,7 @@ export async function checkCompanyApiLimitsForPolling(
 
   const today = new Date().toISOString().slice(0, 10);
   const featureUserId = buildFeatureUsageUserId('intelligence_polling', companyId);
-  const { data: usageRow } = await supabase
-    .from('external_api_usage')
+  const { data: usageRow } = await ownedDbTable('external_api_usage')
     .select('request_count, signals_generated')
     .eq('api_source_id', apiSourceId)
     .eq('user_id', featureUserId)

@@ -341,7 +341,7 @@ export interface SnapshotReport {
       };
     };
   };
-  signal_availability: Record<SnapshotSignalKey, SignalAvailabilityLevel>;
+  // signal_availability removed in Phase 2 — replaced by canonical pillar/dimension states.
   company_context: {
     company_name: string | null;
     domain: string | null;

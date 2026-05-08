@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { OAUTH_PLATFORMS } from '@/pages/super-admin.types';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 import {
   AlertCircle,
   BarChart3,
@@ -219,9 +220,9 @@ export default function SocialPlatformsSection() {
     setCheckingPlatform(platformKey);
     try {
       const response = await fetchWithAuth(`/api/social-accounts/verify-config?platform=${platformKey}`);
-      if (response.ok) {
-        const data = await response.json();
-        setPlatformCheckResults((prev) => ({ ...prev, [platformKey]: data }));
+      const parsed = await parseJsonResponse(response, '/api/social-accounts/verify-config');
+      if (parsed.ok === true) {
+        setPlatformCheckResults((prev) => ({ ...prev, [platformKey]: parsed.data as any }));
       }
     } catch (error) {
       console.error('Check failed', error);
@@ -251,11 +252,9 @@ export default function SocialPlatformsSection() {
       configuredEnabledPlatforms.map(async (platform) => {
         try {
           const response = await fetchWithAuth(`/api/social-accounts/verify-config?platform=${platform.platform_key}`);
-          if (!response.ok) {
-            return [platform.platform_key, null] as const;
-          }
-          const data = await response.json();
-          return [platform.platform_key, data] as const;
+          const parsed = await parseJsonResponse(response, '/api/social-accounts/verify-config');
+          if (parsed.ok !== true) return [platform.platform_key, null] as const;
+          return [platform.platform_key, parsed.data] as const;
         } catch (error) {
           console.error(`Failed to verify ${platform.platform_key}`, error);
           return [
@@ -279,9 +278,9 @@ export default function SocialPlatformsSection() {
     setLoadingSocialPlatforms(true);
     try {
       const response = await fetchWithAuth('/api/super-admin/platform-oauth-configs');
-      if (response.ok) {
-        const data = await response.json();
-        const apiPlatforms: any[] = data.platforms || [];
+      const parsed = await parseJsonResponse<{ platforms?: any[] }>(response, '/api/super-admin/platform-oauth-configs');
+      if (parsed.ok === true) {
+        const apiPlatforms: any[] = parsed.data.platforms || [];
         if (apiPlatforms.length > 0) {
           const mergedPlatforms = OAUTH_PLATFORMS.map((platform) => {
             const fromApi = apiPlatforms.find((item: any) => item.platform_key === platform.platform_key);
@@ -361,12 +360,12 @@ export default function SocialPlatformsSection() {
   const loadAnalyticsProvider = async () => {
     try {
       const response = await fetchWithAuth('/api/super-admin/analytics-provider-config');
-      if (!response.ok) {
-        if (response.status === 403) window.location.href = '/super-admin/login';
+      const parsed = await parseJsonResponse<{ config?: AnalyticsProviderConfigSummary }>(response, '/api/super-admin/analytics-provider-config');
+      if (parsed.ok !== true) {
+        if (parsed.status === 403) window.location.href = '/super-admin/login';
         return;
       }
-      const data = await response.json();
-      const config = data?.config as AnalyticsProviderConfigSummary | undefined;
+      const config = parsed.data?.config;
       if (!config) return;
       setAnalyticsProvider(config);
       setAnalyticsProviderForm({

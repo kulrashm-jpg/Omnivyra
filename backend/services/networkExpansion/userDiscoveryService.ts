@@ -1,6 +1,7 @@
 import { supabase } from '../../db/supabaseClient';
 import type { DiscoveredUser } from './discoveredUserTypes';
 import { discoverUsersFromRedditRpa } from './rpaDiscoveryHandlers/redditDiscoveryRpa';
+import { ownedDbTable } from '../../db/writeOwner';
 
 type DiscoveryInput = {
   tenant_id: string;
@@ -97,8 +98,7 @@ const upsertDiscoveredUsers = async (records: Partial<DiscoveredUser>[]) => {
     return { upserted: [] };
   }
 
-  const { data, error } = await supabase
-    .from('community_ai_discovered_users')
+  const { data, error } = await ownedDbTable('community_ai_discovered_users')
     .upsert(records, {
       onConflict: 'tenant_id,organization_id,platform,profile_url',
     })

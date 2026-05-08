@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Content Opportunity Engine
  * Transforms strategic themes into structured content opportunities.
@@ -91,8 +92,7 @@ export type GenerateContentOpportunitiesResult = {
  */
 async function loadRecentThemes(): Promise<ThemeRow[]> {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('strategic_themes')
+  const { data, error } = await ownedDbTable('strategic_themes')
     .select('id, theme_title, theme_description, momentum_score')
     .gte('created_at', since)
     .order('momentum_score', { ascending: false, nullsFirst: false });
@@ -109,8 +109,7 @@ async function getRelevanceForThemeCompany(
   themeId: string,
   companyId: string
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from('theme_company_relevance')
+  const { data, error } = await ownedDbTable('theme_company_relevance')
     .select('relevance_score')
     .eq('theme_id', themeId)
     .eq('company_id', companyId)
@@ -138,7 +137,7 @@ export async function generateContentOpportunities(): Promise<GenerateContentOpp
   const companyIds = await getActiveCompanyIds();
 
   if (companyIds.length === 0) {
-    const fallback = await supabase.from('companies').select('id').eq('status', 'active').limit(10);
+    const fallback = await ownedDbTable('companies').select('id').eq('status', 'active').limit(10);
     companyIds.push(...((fallback.data ?? []).map((r: { id: string }) => r.id)));
   }
 
@@ -168,7 +167,7 @@ export async function generateContentOpportunities(): Promise<GenerateContentOpp
           oppType
         );
 
-        const { error } = await supabase.from('content_opportunities').insert({
+        const { error } = await ownedDbTable('content_opportunities').insert({
           theme_id: theme.id,
           company_id: companyId,
           opportunity_title: title,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Block Template Service
  *
@@ -55,8 +56,7 @@ export async function listBlockTemplates(
   companyId: string,
   options: { content_type?: string; format_type?: string } = {},
 ): Promise<BlockTemplate[]> {
-  let query = supabase
-    .from('block_templates')
+  let query = ownedDbTable('block_templates')
     .select('*')
     .or(`company_id.eq.${companyId},is_default.eq.true`);
 
@@ -75,8 +75,7 @@ export async function listBlockTemplates(
 // ── Get ──────────────────────────────────────────────────────────────────────
 
 export async function getBlockTemplate(id: string): Promise<BlockTemplate | null> {
-  const { data, error } = await supabase
-    .from('block_templates')
+  const { data, error } = await ownedDbTable('block_templates')
     .select('*')
     .eq('id', id)
     .single();
@@ -99,8 +98,7 @@ export async function createBlockTemplate(
     is_public?: boolean;
   },
 ): Promise<BlockTemplate> {
-  const { data, error } = await supabase
-    .from('block_templates')
+  const { data, error } = await ownedDbTable('block_templates')
     .insert({
       company_id: companyId,
       created_by: userId,
@@ -124,8 +122,7 @@ export async function updateBlockTemplate(
   id: string,
   updates: Partial<Pick<BlockTemplate, 'name' | 'description' | 'content_blocks' | 'tags' | 'is_public'>>,
 ): Promise<BlockTemplate> {
-  const { data, error } = await supabase
-    .from('block_templates')
+  const { data, error } = await ownedDbTable('block_templates')
     .update({ ...updates, updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('is_default', false) // cannot update system defaults
@@ -138,8 +135,7 @@ export async function updateBlockTemplate(
 // ── Delete ───────────────────────────────────────────────────────────────────
 
 export async function deleteBlockTemplate(id: string): Promise<void> {
-  const { error } = await supabase
-    .from('block_templates')
+  const { error } = await ownedDbTable('block_templates')
     .delete()
     .eq('id', id)
     .eq('is_default', false); // cannot delete system defaults
@@ -154,8 +150,7 @@ export async function incrementTemplateUsage(id: string): Promise<void> {
     // Fallback: manual increment
     const tpl = await getBlockTemplate(id);
     if (tpl) {
-      await supabase
-        .from('block_templates')
+      await ownedDbTable('block_templates')
         .update({ usage_count: tpl.usage_count + 1 })
         .eq('id', id);
     }

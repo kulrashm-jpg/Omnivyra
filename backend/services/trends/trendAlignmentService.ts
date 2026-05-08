@@ -1,6 +1,6 @@
-import { TrendSignal, fetchTrendsFromApis } from '../externalApiService';
-import { CompanyProfile } from '../companyProfileService';
-import { DailyPlan, WeeklyPlan } from '../campaignRecommendationService';
+import { fetchTrendsFromApis, type TrendSignal } from '../externalApiService';
+import type { CompanyProfile } from '../companyProfileService';
+import type { DailyPlan, WeeklyPlan } from '../campaignRecommendationService';
 
 export type TrendItem = {
   topic: string;

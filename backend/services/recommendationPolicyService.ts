@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type RecommendationPolicyWeights = {
   trend_score: number;
@@ -57,8 +58,7 @@ const sanitizeWeights = (weights: RecommendationPolicyWeights): RecommendationPo
 });
 
 export const getActivePolicy = async (): Promise<RecommendationPolicy | null> => {
-  const { data, error } = await supabase
-    .from('recommendation_policies')
+  const { data, error } = await ownedDbTable('recommendation_policies')
     .select('*')
     .eq('is_active', true)
     .order('updated_at', { ascending: false })
@@ -75,8 +75,7 @@ export const updatePolicy = async (
 ): Promise<RecommendationPolicy> => {
   const sanitized = sanitizeWeights(weights);
 
-  const { data, error } = await supabase
-    .from('recommendation_policies')
+  const { data, error } = await ownedDbTable('recommendation_policies')
     .update({
       weights: sanitized,
       updated_at: new Date().toISOString(),

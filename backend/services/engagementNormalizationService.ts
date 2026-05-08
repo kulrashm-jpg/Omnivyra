@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Normalization Service
  *
@@ -51,8 +52,7 @@ export async function resolveSource(
   const p = normalizePlatform(platform);
   if (!p) return null;
 
-  const { data: existing, error: fetchError } = await supabase
-    .from('engagement_sources')
+  const { data: existing, error: fetchError } = await ownedDbTable('engagement_sources')
     .select('id')
     .eq('platform', p)
     .maybeSingle();
@@ -63,8 +63,7 @@ export async function resolveSource(
   }
   if (existing?.id) return existing.id;
 
-  const { data: inserted, error: insertError } = await supabase
-    .from('engagement_sources')
+  const { data: inserted, error: insertError } = await ownedDbTable('engagement_sources')
     .insert({ platform: p, source_type: sourceType })
     .select('id')
     .single();
@@ -85,8 +84,7 @@ export async function resolveAuthor(input: NormalizedAuthorInput): Promise<strin
   const platformUserId = (input.platform_user_id || '').toString().trim();
   if (!platform || !platformUserId) return null;
 
-  const { data: existing, error: fetchError } = await supabase
-    .from('engagement_authors')
+  const { data: existing, error: fetchError } = await ownedDbTable('engagement_authors')
     .select('id')
     .eq('platform', platform)
     .eq('platform_user_id', platformUserId)
@@ -99,8 +97,7 @@ export async function resolveAuthor(input: NormalizedAuthorInput): Promise<strin
   if (existing?.id) return existing.id;
 
   const now = new Date().toISOString();
-  const { data: inserted, error: insertError } = await supabase
-    .from('engagement_authors')
+  const { data: inserted, error: insertError } = await ownedDbTable('engagement_authors')
     .insert({
       platform,
       platform_user_id: platformUserId,
@@ -140,8 +137,7 @@ export async function resolveThread(input: ResolveThreadInput): Promise<string |
 
   const orgId = input.organization_id?.trim() || null;
 
-  let query = supabase
-    .from('engagement_threads')
+  let query = ownedDbTable('engagement_threads')
     .select('id')
     .eq('platform', platform)
     .eq('platform_thread_id', platformThreadId);
@@ -161,8 +157,7 @@ export async function resolveThread(input: ResolveThreadInput): Promise<string |
   if (existing?.id) return existing.id;
 
   const now = new Date().toISOString();
-  const { data: inserted, error: insertError } = await supabase
-    .from('engagement_threads')
+  const { data: inserted, error: insertError } = await ownedDbTable('engagement_threads')
     .insert({
       platform,
       platform_thread_id: platformThreadId,
@@ -224,8 +219,7 @@ export async function syncFromPostComments(
     return { synced: 0, errors: rows.length };
   }
 
-  const { data: postComments } = await supabase
-    .from('post_comments')
+  const { data: postComments } = await ownedDbTable('post_comments')
     .select('id, platform_comment_id')
     .eq('scheduled_post_id', context.scheduled_post_id)
     .in('platform_comment_id', rows.map((r) => r.platform_comment_id));
@@ -423,8 +417,7 @@ export async function insertMessage(input: NormalizedMessageInput): Promise<stri
     post_comment_id: input.post_comment_id ?? null,
   };
 
-  const { data: inserted, error } = await supabase
-    .from('engagement_messages')
+  const { data: inserted, error } = await ownedDbTable('engagement_messages')
     .upsert(row, {
       onConflict: 'thread_id,platform_message_id',
       ignoreDuplicates: false,
@@ -434,8 +427,7 @@ export async function insertMessage(input: NormalizedMessageInput): Promise<stri
 
   if (error) {
     console.warn('[engagementNormalization] insertMessage error', error.message);
-    const { data: existing, error: existingError } = await supabase
-      .from('engagement_messages')
+    const { data: existing, error: existingError } = await ownedDbTable('engagement_messages')
       .select('id')
       .eq('thread_id', thread_id)
       .eq('platform_message_id', platform_message_id)
@@ -457,13 +449,11 @@ export async function insertMessage(input: NormalizedMessageInput): Promise<stri
   const platformCreatedAt = input.platform_created_at ?? new Date().toISOString();
   void (async () => {
     try {
-      const { data: thread } = await supabase
-        .from('engagement_threads')
+      const { data: thread } = await ownedDbTable('engagement_threads')
         .select('organization_id')
         .eq('id', thread_id)
         .maybeSingle();
-      await supabase
-        .from('conversation_memory_rebuild_queue')
+      await ownedDbTable('conversation_memory_rebuild_queue')
         .upsert(
           {
             thread_id,

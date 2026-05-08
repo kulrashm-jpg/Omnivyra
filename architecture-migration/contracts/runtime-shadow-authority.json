@@ -1,0 +1,611 @@
+{
+  "version": 1,
+  "scope": "runtime-shadow-elimination",
+  "canonicalAuthorities": {
+    "dashboard": {
+      "canonicalPage": "/dashboard",
+      "canonicalLayout": "components/layout/AppLayout.tsx",
+      "canonicalNavigationSource": "components/layout/GlobalHeader.tsx",
+      "runtimeOwner": "components/DashboardPage.tsx",
+      "compatibilityOwner": "components/DashboardPage.tsx",
+      "temporaryBridgeOwner": null,
+      "sunsetConditions": [],
+      "runtimeRiskLevel": "low",
+      "compatibilityRoutes": ["/home", "/command-center"],
+      "deprecatedRuntimeSurfaces": [],
+      "ownershipConflicts": []
+    },
+    "content": {
+      "canonicalPage": "/command-center/content",
+      "canonicalLayout": "components/layout/AppLayout.tsx",
+      "canonicalNavigationSource": "components/layout/navigationConfig.tsx",
+      "runtimeOwner": "components/content",
+      "compatibilityOwner": "pages/content-creation.tsx",
+      "temporaryBridgeOwner": "next.config.js redirects + page-local getServerSideProps redirects",
+      "sunsetConditions": [
+        "external /content-creation deep-link usage is below retirement threshold",
+        "monitoring window confirms no compatibility-only content-plan save/retry traffic"
+      ],
+      "runtimeRiskLevel": "medium",
+      "compatibilityRoutes": ["/content-studio/[format]", "/content-creation"],
+      "deprecatedRuntimeSurfaces": ["/content-studio", "/content-studio/post"],
+      "ownershipConflicts": []
+    },
+    "blogContent": {
+      "canonicalPage": "/blogs/create",
+      "canonicalLayout": "components/layout/AppLayout.tsx",
+      "canonicalApi": "/api/blogs/generate",
+      "canonicalNavigationSource": "components/layout/navigationConfig.tsx",
+      "runtimeOwner": "pages/blogs/create.tsx",
+      "compatibilityOwner": "pages/admin/blog",
+      "temporaryBridgeOwner": "pages/api/admin/blog/generate.ts",
+      "sunsetConditions": [
+        "super-admin blog management no longer needs separate privileged editorial workflow",
+        "company-admin generation remains exclusively on /api/blogs/generate"
+      ],
+      "runtimeRiskLevel": "medium",
+      "compatibilityRoutes": ["/blogs"],
+      "deprecatedRuntimeSurfaces": ["/admin/blog/generate for company-admin generation"],
+      "ownershipConflicts": ["company-admin blogs and super-admin blog management intentionally remain separate"]
+    },
+    "threads": {
+      "canonicalPage": "/threads/intelligence",
+      "canonicalLayout": "components/layout/AppLayout.tsx",
+      "canonicalApi": "/api/threads/generate",
+      "canonicalNavigationSource": "lib/thread/threadLinks.ts",
+      "runtimeOwner": "components/thread",
+      "compatibilityOwner": "next.config.js redirects",
+      "temporaryBridgeOwner": "next.config.js redirects",
+      "sunsetConditions": [
+        "legacy /threads/generate, /threads/template, and /threads/suggestions links are absent from external communications"
+      ],
+      "runtimeRiskLevel": "low",
+      "compatibilityRoutes": ["/threads/create", "/threads/continue"],
+      "deprecatedRuntimeSurfaces": ["/threads/generate", "/threads/template", "/threads/suggestions"],
+      "ownershipConflicts": []
+    },
+    "campaigns": {
+      "canonicalPage": "/campaigns",
+      "canonicalLayout": "components/layout/AppLayout.tsx",
+      "canonicalApi": "/api/campaigns",
+      "canonicalNavigationSource": "components/layout/navigationConfig.tsx",
+      "runtimeOwner": "backend/services/boltPipelineService.ts",
+      "compatibilityOwner": "pages/command-center/bolt-text-strategy.tsx",
+      "temporaryBridgeOwner": "next.config.js redirects + page-local getServerSideProps redirects",
+      "sunsetConditions": [
+        "BOLT state restoration no longer references bolt-text-strategy-state",
+        "external links to /command-center/bolt-text-strategy are aged out"
+      ],
+      "runtimeRiskLevel": "medium",
+      "compatibilityRoutes": ["/campaign-planner", "/campaign-details/[id]"],
+      "deprecatedRuntimeSurfaces": [],
+      "ownershipConflicts": ["/command-center/bolt-text-strategy remains as a deprecated physical page with canonical-only redirects"]
+    },
+    "engagement": {
+      "canonicalPage": "/command-center/engagement",
+      "canonicalLayout": "components/layout/AppLayout.tsx",
+      "canonicalApi": "/api/engagement",
+      "canonicalNavigationSource": "components/layout/navigationConfig.tsx",
+      "runtimeOwner": "backend/services/engagementOpportunityService.ts",
+      "compatibilityOwner": "pages/engagement",
+      "temporaryBridgeOwner": null,
+      "sunsetConditions": [],
+      "runtimeRiskLevel": "low",
+      "compatibilityRoutes": ["/engagement"],
+      "deprecatedRuntimeSurfaces": [],
+      "ownershipConflicts": []
+    },
+    "adminSettings": {
+      "canonicalPage": "/settings/company-admin-access",
+      "canonicalLayout": "components/layout/AppLayout.tsx",
+      "canonicalApi": "/api/settings",
+      "canonicalAuthFlow": "backend/security/SessionAuthorityService.ts",
+      "canonicalNavigationSource": "components/layout/GlobalHeader.tsx",
+      "runtimeOwner": "backend/security/capabilityRegistry.ts",
+      "compatibilityOwner": "pages/super-admin",
+      "temporaryBridgeOwner": "backend/security/legacyCookieSuperAdminBridge.ts",
+      "sunsetConditions": [
+        "Wave 3B bridge retirement completed",
+        "super-admin routes require capability-based session authority only"
+      ],
+      "runtimeRiskLevel": "medium",
+      "compatibilityRoutes": ["/super-admin/consumption"],
+      "deprecatedRuntimeSurfaces": ["/admin/* legacy admin-only surfaces where super-admin capability is required"],
+      "ownershipConflicts": ["super-admin routes remain cookie-capable until Wave 3B bridge retirement"]
+    },
+    "authSession": {
+      "canonicalPage": "/login",
+      "canonicalApi": "/api/auth/session",
+      "canonicalAuthFlow": "backend/security/SessionAuthorityService.ts",
+      "canonicalLayout": "pages/_app.tsx AuthGate",
+      "runtimeOwner": "backend/security/SessionAuthorityService.ts",
+      "compatibilityOwner": "backend/security/legacyCookieSuperAdminBridge.ts",
+      "temporaryBridgeOwner": "proxy.ts content_architect_session scoped bridge",
+      "sunsetConditions": [
+        "content architect sessions migrate to canonical Supabase-backed session authority",
+        "legacy super-admin cookie bridge is retired"
+      ],
+      "runtimeRiskLevel": "medium",
+      "compatibilityRoutes": ["/super-admin/login", "content_architect_session scoped bridge"],
+      "deprecatedRuntimeSurfaces": ["legacy super-admin cookie bridge"],
+      "ownershipConflicts": ["proxy.ts documents content_architect_session bridge authority"]
+    }
+  },
+  "deprecatedRouteAliases": {
+    "/blogs": "/blogs/create",
+    "/content-creation": "/posts/create",
+    "/content-studio": "/posts/create",
+    "/content-studio/post": "/posts/create",
+    "/threads/generate": "/threads/intelligence",
+    "/threads/template": "/threads/intelligence",
+    "/threads/suggestions": "/threads/intelligence",
+    "/command-center/bolt-text-strategy": "/command-center/bolt-text"
+  },
+  "compatibilityOnlyApis": [
+    "/api/admin/blog/generate",
+    "/api/super-admin/login",
+    "/api/super-admin/session",
+    "/api/community-ai/connectors/*/callback"
+  ],
+  "compatibilityBridgeGovernance": {
+    "/blogs": {
+      "classification": "C. operationally permanent alias",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "medium",
+      "authorityIsolationLevel": "redirect-only, non-primary-navigation",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "low",
+      "permanence": "permanent compatibility",
+      "dependencies": ["route matchers", "assistant/path context", "external link preservation"],
+      "architectureImplication": "does not indicate unresolved architecture"
+    },
+    "/content-creation": {
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "page-local redirect + noindex + non-primary-navigation",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "high",
+      "permanence": "temporary compatibility",
+      "dependencies": ["external/deep-link preservation"],
+      "architectureImplication": "canonical /posts/create owns campaignId, content-plan mutation, AI save, edit, retry, delete, and schedule continuation"
+    },
+    "/content-studio": {
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "medium",
+      "operationalDependencyLevel": "medium",
+      "authorityIsolationLevel": "matcher-only compatibility",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "high",
+      "permanence": "temporary compatibility",
+      "dependencies": ["legacy content-studio matcher"],
+      "architectureImplication": "canonical post flow now owns campaign and scheduler handoff continuity"
+    },
+    "/content-studio/post": {
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "mostly complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": ["deep-link preservation"],
+      "architectureImplication": "does not currently indicate active duplicate architecture"
+    },
+    "/threads/generate": {
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": ["external/shared-link preservation"],
+      "architectureImplication": "does not indicate unresolved architecture"
+    },
+    "/threads/template": {
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": ["external/shared-link preservation"],
+      "architectureImplication": "does not indicate unresolved architecture"
+    },
+    "/threads/suggestions": {
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "low",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "redirect-only + noindex",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "medium",
+      "permanence": "temporary compatibility",
+      "dependencies": ["external/shared-link preservation"],
+      "architectureImplication": "does not indicate unresolved architecture"
+    },
+    "/command-center/bolt-text-strategy": {
+      "classification": "B. long-tail compatibility bridge",
+      "canonicalReplacementMaturity": "complete",
+      "rollbackCriticality": "medium",
+      "operationalDependencyLevel": "low",
+      "authorityIsolationLevel": "page-local redirect + noindex + non-primary-navigation",
+      "migrationCompleteness": "complete",
+      "sunsetConfidence": "high",
+      "permanence": "temporary compatibility",
+      "dependencies": ["external strategy deep links"],
+      "architectureImplication": "canonical /command-center/bolt-text owns BOLT strategy-state lifecycle"
+    }
+  },
+  "duplicateAuthorityGovernance": {
+    "blogContent": {
+      "classification": "A. valid isolated compatibility authority",
+      "reason": "company-admin blog generation and super-admin editorial workflow have separate role boundaries",
+      "dualWriteBehavior": "not detected",
+      "mutationOverlap": "isolated by API and role",
+      "sessionOverlap": "none detected",
+      "rollbackDependence": "medium",
+      "authorityBoundary": "company-admin uses /api/blogs/generate; super-admin uses /api/admin/blog/*"
+    },
+    "campaigns": {
+      "classification": "B. temporary migration authority",
+      "reason": "BOLT strategy physical page remains redirect-contained while state restoration key still exists",
+      "dualWriteBehavior": "not detected",
+      "mutationOverlap": "canonical backend/services/boltPipelineService.ts owns mutations",
+      "sessionOverlap": "none detected",
+      "rollbackDependence": "medium",
+      "authorityBoundary": "deprecated page cannot own primary navigation or mutation authority"
+    },
+    "adminSettings": {
+      "classification": "B. temporary migration authority",
+      "reason": "super-admin cookie bridge remains until Wave 3B capability-only session retirement",
+      "dualWriteBehavior": "not detected by route audit",
+      "mutationOverlap": "admin pages remain capability-scoped or bridge-scoped",
+      "sessionOverlap": "legacy cookie bridge intentionally overlaps with session authority until Wave 3B",
+      "rollbackDependence": "high",
+      "authorityBoundary": "backend/security/capabilityRegistry.ts remains canonical; legacyCookieSuperAdminBridge is compatibility-only"
+    }
+  },
+  "ownershipLifecycleGovernance": {
+    "content": {
+      "conflictClass": "A. governance-only",
+      "canonicalAuthorityOwner": "components/content",
+      "compatibilityAuthorityOwner": "pages/content-creation.tsx",
+      "operationalOwner": "components/content",
+      "migrationOwner": "content runtime migration",
+      "sunsetOwner": "runtime authority governance",
+      "actualUnresolvedDependency": "none after canonical content-plan save/retry parity; bridge remains for monitored external deep-link compatibility"
+    },
+    "blogContent": {
+      "conflictClass": "E. safe coexistence",
+      "canonicalAuthorityOwner": "pages/blogs/create.tsx",
+      "compatibilityAuthorityOwner": "pages/admin/blog",
+      "operationalOwner": "blog content owners by role",
+      "migrationOwner": "super-admin editorial governance",
+      "sunsetOwner": "admin workflow governance",
+      "actualUnresolvedDependency": "privileged editorial workflow remains separate from company-admin creation"
+    },
+    "campaigns": {
+      "conflictClass": "B. migration-only",
+      "canonicalAuthorityOwner": "backend/services/boltPipelineService.ts",
+      "compatibilityAuthorityOwner": "pages/command-center/bolt-text-strategy.tsx",
+      "operationalOwner": "campaign runtime",
+      "migrationOwner": "BOLT route consolidation",
+      "sunsetOwner": "runtime authority governance",
+      "actualUnresolvedDependency": "bolt-text-strategy-state and external deep links"
+    },
+    "adminSettings": {
+      "conflictClass": "C. runtime-risking",
+      "canonicalAuthorityOwner": "backend/security/capabilityRegistry.ts",
+      "compatibilityAuthorityOwner": "backend/security/legacyCookieSuperAdminBridge.ts",
+      "operationalOwner": "admin settings/security",
+      "migrationOwner": "Wave 3B bridge retirement",
+      "sunsetOwner": "security authority governance",
+      "actualUnresolvedDependency": "super-admin routes still accept cookie-capable bridge"
+    },
+    "authSession": {
+      "conflictClass": "C. runtime-risking",
+      "canonicalAuthorityOwner": "backend/security/SessionAuthorityService.ts",
+      "compatibilityAuthorityOwner": "backend/security/legacyCookieSuperAdminBridge.ts",
+      "operationalOwner": "auth/session runtime",
+      "migrationOwner": "content architect session migration",
+      "sunsetOwner": "security authority governance",
+      "actualUnresolvedDependency": "content_architect_session bridge and legacy super-admin cookie bridge"
+    }
+  },
+  "migrationParityGovernance": {
+    "/content-creation": {
+      "canonicalRoute": "/posts/create",
+      "compatibilityBridge": "/content-creation",
+      "classification": "E. compatibility no longer necessary",
+      "canonicalFunctionalityStatus": "parity complete",
+      "runtimeOwnershipStatus": "canonical",
+      "sessionContinuity": "campaignId query continuity is carried by /posts/create",
+      "onboardingContinuity": "primary onboarding CTAs already use /blogs/create or /posts/create paths",
+      "ctaContinuity": "primary CTAs no longer navigate to /content-creation",
+      "deepLinkContinuity": "campaignId deep links land on canonical /posts/create and expose schedule-review continuation",
+      "analyticsContinuity": "no dedicated bridge analytics owner detected",
+      "featureCompleteness": "canonical /posts/create owns campaignId continuation, content-plan load, AI generate-and-save, edit, delete, retry, mutation recovery errors, and schedule-review handoff",
+      "retentionReason": ["D. deep-link continuity required"],
+      "parityGaps": [],
+      "safeRemediation": "retain redirect only through monitoring window for external/deep-link confidence"
+    },
+    "/content-studio": {
+      "canonicalRoute": "/posts/create",
+      "compatibilityBridge": "/content-studio",
+      "classification": "E. compatibility no longer necessary",
+      "canonicalFunctionalityStatus": "parity complete",
+      "runtimeOwnershipStatus": "canonical",
+      "sessionContinuity": "not session-backed; route/matcher continuity only",
+      "onboardingContinuity": "primary onboarding CTAs avoid /content-studio",
+      "ctaContinuity": "primary navigation points to canonical content surfaces",
+      "deepLinkContinuity": "legacy matcher still recognizes content-studio family",
+      "analyticsContinuity": "no dedicated bridge analytics owner detected",
+      "featureCompleteness": "/posts/create now owns canonical campaign and scheduler handoff continuity; legacy brief-builder route can remain as long-tail compatibility only",
+      "retentionReason": ["D. deep-link continuity required"],
+      "parityGaps": [],
+      "safeRemediation": "retain only as long-tail redirect/matcher compatibility until external/deep-link confidence is sufficient"
+    },
+    "/command-center/bolt-text-strategy": {
+      "canonicalRoute": "/command-center/bolt-text",
+      "compatibilityBridge": "/command-center/bolt-text-strategy",
+      "classification": "E. compatibility no longer necessary",
+      "canonicalFunctionalityStatus": "parity complete",
+      "runtimeOwnershipStatus": "canonical",
+      "sessionContinuity": "bolt-text-strategy-state is owned by canonical /command-center/bolt-text through useBoltStrategy/BoltStrategyView",
+      "onboardingContinuity": "campaign cards and global navigation use /command-center/bolt-text",
+      "ctaContinuity": "primary CTAs use canonical /command-center/bolt-text",
+      "deepLinkContinuity": "external strategy links redirect to canonical setup route",
+      "analyticsContinuity": "no dedicated bridge analytics owner detected",
+      "featureCompleteness": "canonical /command-center/bolt-text now renders the full BOLT strategy workflow and owns strategy-state restoration",
+      "retentionReason": ["D. deep-link continuity required"],
+      "parityGaps": [],
+      "safeRemediation": "retain compatibility redirect only for external strategy links"
+    }
+  },
+  "duplicateAuthorityDependencyGovernance": {
+    "blogContent": {
+      "classification": "A. safely isolatable",
+      "dependencyReason": "role-isolated admin/editorial workflow; no company-admin mutation overlap detected",
+      "rollbackCriticality": "medium",
+      "parityStatus": "canonical company-admin flow has parity for company generation; super-admin workflow remains operationally separate",
+      "futureConsolidationViability": "candidate after privileged editorial workflow is intentionally retained or moved behind explicit admin tooling"
+    },
+    "campaigns": {
+      "classification": "E. candidate for future consolidation",
+      "dependencyReason": "BOLT route/state ownership is canonicalized; compatibility route remains redirect-only",
+      "rollbackCriticality": "medium",
+      "parityStatus": "canonical route owns full strategy-state parity",
+      "futureConsolidationViability": "candidate after external/deep-link confidence is sufficient"
+    },
+    "adminSettings": {
+      "classification": "C. rollback-critical",
+      "dependencyReason": "legacy super-admin cookie bridge remains until Wave 3B retirement",
+      "rollbackCriticality": "high",
+      "parityStatus": "capability authority exists but legacy session bridge remains operational",
+      "futureConsolidationViability": "blocked until capability-only session authority is complete"
+    }
+  },
+  "bridgeSunsetReadiness": {
+    "/content-creation": {
+      "classification": "B. retireable after monitoring window",
+      "sunsetReadinessLevel": "high",
+      "migrationConfidence": "high",
+      "rollbackRisk": "low",
+      "operationalDependency": "low",
+      "externalDependency": "medium",
+      "analyticsDependency": "unknown",
+      "remainingBlockers": ["deep-link usage evidence"]
+    },
+    "/content-studio": {
+      "classification": "B. retireable after monitoring window",
+      "sunsetReadinessLevel": "high",
+      "migrationConfidence": "high",
+      "rollbackRisk": "low",
+      "operationalDependency": "low",
+      "externalDependency": "low",
+      "analyticsDependency": "unknown",
+      "remainingBlockers": []
+    },
+    "/command-center/bolt-text-strategy": {
+      "classification": "B. retireable after monitoring window",
+      "sunsetReadinessLevel": "high",
+      "migrationConfidence": "high",
+      "rollbackRisk": "low",
+      "operationalDependency": "low",
+      "externalDependency": "medium",
+      "analyticsDependency": "unknown",
+      "remainingBlockers": ["external deep-link usage evidence"]
+    }
+  },
+  "compatibilityBridgeObservability": {
+    "/content-creation": {
+      "observabilityState": "active",
+      "decommissionPhase": "Phase 2: soft retirement",
+      "monitoringWindow": "30 days",
+      "inactivityThreshold": "zero bridge hits for 30 consecutive days",
+      "rollbackThreshold": "any compatibility-only mutation, runtime-restoration, or sustained external deep-link traffic above monitoring baseline",
+      "retirementConfidence": "high",
+      "analyticsEventOwnership": "proxy.ts compatibility-bridge-observed structured event",
+      "trackedSignals": [
+        "route access frequency",
+        "deep-link entry frequency",
+        "onboarding continuation usage",
+        "redirect frequency",
+        "runtime restoration frequency",
+        "external referrer presence"
+      ],
+      "monitoringClassification": "B. monitor-before-retirement",
+      "fallbackRestorationPlan": "restore page-local redirect bridge and retain next.config redirect if bridge traffic exceeds rollback threshold",
+      "decommissionSequence": [
+        "Phase 1 observe + isolate",
+        "Phase 2 soft retirement redirect-only + telemetry",
+        "Phase 3 hard retirement remove physical bridge after inactivity threshold",
+        "Phase 4 cleanup residual governance metadata"
+      ],
+      "restorationProtocol": "re-enable compatibility route declaration and keep canonical mutation ownership; do not restore legacy runtime authority"
+    },
+    "/content-studio": {
+      "observabilityState": "active",
+      "decommissionPhase": "Phase 2: soft retirement",
+      "monitoringWindow": "30 days",
+      "inactivityThreshold": "zero content-studio family hits for 30 consecutive days",
+      "rollbackThreshold": "any compatibility-only persistence, runtime-restoration, or onboarding continuation evidence",
+      "retirementConfidence": "medium-high",
+      "analyticsEventOwnership": "proxy.ts compatibility-bridge-observed structured event",
+      "trackedSignals": [
+        "route access frequency",
+        "deep-link entry frequency",
+        "onboarding continuation usage",
+        "runtime restoration frequency",
+        "fallback execution frequency",
+        "external referrer presence"
+      ],
+      "monitoringClassification": "B. monitor-before-retirement",
+      "fallbackRestorationPlan": "restore observe-only matcher compatibility if redirect-first mode exposes compatibility-only dependency evidence",
+      "decommissionSequence": [
+        "Phase 1 observe + isolate",
+        "Phase 2 soft retirement redirect-only + telemetry",
+        "Phase 3 hard retirement remove physical bridge after inactivity threshold",
+        "Phase 4 cleanup residual governance metadata"
+      ],
+      "restorationProtocol": "restore matcher-only compatibility without restoring primary navigation or mutation authority"
+    },
+    "/command-center/bolt-text-strategy": {
+      "observabilityState": "active",
+      "decommissionPhase": "Phase 2: soft retirement",
+      "monitoringWindow": "30 days",
+      "inactivityThreshold": "zero bridge hits and zero strategy-restoration bridge hits for 30 consecutive days",
+      "rollbackThreshold": "any compatibility-only BOLT state restoration or repeated external deep-link traffic above monitoring baseline",
+      "retirementConfidence": "high",
+      "analyticsEventOwnership": "proxy.ts compatibility-bridge-observed structured event",
+      "trackedSignals": [
+        "route access frequency",
+        "deep-link entry frequency",
+        "redirect frequency",
+        "runtime restoration frequency",
+        "fallback execution frequency",
+        "external referrer presence"
+      ],
+      "monitoringClassification": "B. monitor-before-retirement",
+      "fallbackRestorationPlan": "restore redirect bridge only; canonical /command-center/bolt-text remains strategy-state owner",
+      "decommissionSequence": [
+        "Phase 1 observe + isolate",
+        "Phase 2 soft retirement redirect-only + telemetry",
+        "Phase 3 hard retirement remove physical bridge after inactivity threshold",
+        "Phase 4 cleanup residual governance metadata"
+      ],
+      "restorationProtocol": "restore compatibility redirect and block any legacy strategy page from owning persistence"
+    }
+  },
+  "compatibilityBridgeSoftRetirement": {
+    "/content-creation": {
+      "activationState": "soft-retired",
+      "redirectMode": "redirect-first",
+      "canonicalAuthority": "/posts/create",
+      "queryPreservation": "all query params preserved by proxy redirect clone",
+      "telemetryPreserved": true,
+      "runtimeOwnershipAllowed": false,
+      "mutationOwnershipAllowed": false,
+      "schedulerOwnershipAllowed": false,
+      "orchestrationOwnershipAllowed": false,
+      "canonicalArrivalTracing": "short-lived compat_bridge_pending_arrival cookie",
+      "rollbackSafeBehavior": "restore compatibility redirect only; do not restore legacy content-plan runtime ownership"
+    },
+    "/content-studio": {
+      "activationState": "soft-retired",
+      "redirectMode": "redirect-first for /content-studio and /content-studio/*",
+      "canonicalAuthority": "/posts/create",
+      "queryPreservation": "all query params preserved by proxy redirect clone",
+      "telemetryPreserved": true,
+      "runtimeOwnershipAllowed": false,
+      "mutationOwnershipAllowed": false,
+      "schedulerOwnershipAllowed": false,
+      "orchestrationOwnershipAllowed": false,
+      "canonicalArrivalTracing": "short-lived compat_bridge_pending_arrival cookie",
+      "rollbackSafeBehavior": "restore observe-only matcher compatibility only if dependency evidence appears"
+    },
+    "/command-center/bolt-text-strategy": {
+      "activationState": "soft-retired",
+      "redirectMode": "redirect-first",
+      "canonicalAuthority": "/command-center/bolt-text",
+      "queryPreservation": "all query params preserved by proxy redirect clone",
+      "telemetryPreserved": true,
+      "runtimeOwnershipAllowed": false,
+      "mutationOwnershipAllowed": false,
+      "schedulerOwnershipAllowed": false,
+      "orchestrationOwnershipAllowed": false,
+      "canonicalArrivalTracing": "short-lived compat_bridge_pending_arrival cookie",
+      "rollbackSafeBehavior": "restore compatibility redirect only; canonical BOLT strategy state remains authoritative"
+    }
+  },
+  "retiredRuntimeSurfaces": [
+    {
+      "file": "pages/activity-workspace/ActivityWorkspaceCreatorInstruction.tsx",
+      "route": "/activity-workspace/ActivityWorkspaceCreatorInstruction",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/activity-workspace/ActivityWorkspaceInsightsPanels.tsx",
+      "route": "/activity-workspace/ActivityWorkspaceInsightsPanels",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/activity-workspace/ActivityWorkspacePlatformCard.tsx",
+      "route": "/activity-workspace/ActivityWorkspacePlatformCard",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/activity-workspace/ActivityWorkspacePlatformHeader.tsx",
+      "route": "/activity-workspace/ActivityWorkspacePlatformHeader",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/activity-workspace/ActivityWorkspacePrimaryBrief.tsx",
+      "route": "/activity-workspace/ActivityWorkspacePrimaryBrief",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/activity-workspace/ActivityWorkspaceShell.tsx",
+      "route": "/activity-workspace/ActivityWorkspaceShell",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/campaign-details/GovernanceTab.tsx",
+      "route": "/campaign-details/GovernanceTab",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/campaign-details/PerformanceTab.tsx",
+      "route": "/campaign-details/PerformanceTab",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    },
+    {
+      "file": "pages/campaign-details/WeeklyContentSection.tsx",
+      "route": "/campaign-details/WeeklyContentSection",
+      "retiredInPhase": "dead-runtime-retirement",
+      "proof": "non-navigable, non-indexed, no static import consumer, not a declared compatibility or rollback bridge"
+    }
+  ],
+  "quarantineRules": {
+    "doNotNavigateToDeprecatedAliases": true,
+    "compatibilityRoutesMustRemainOutOfPrimaryNavigation": true,
+    "campaignStatefulContentCreationLinksRequireManualReview": true
+  }
+}

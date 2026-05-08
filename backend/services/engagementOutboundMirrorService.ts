@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 type ThreadCandidate = {
   id: string;
@@ -68,8 +69,7 @@ async function loadThreadsByFilter(input: {
   column: string;
   value: string;
 }): Promise<ThreadCandidate[]> {
-  const { data, error } = await supabase
-    .from('engagement_threads')
+  const { data, error } = await ownedDbTable('engagement_threads')
     .select('id, platform_thread_id, raw_payload, updated_at')
     .eq('organization_id', input.organizationId)
     .eq('platform', input.platform)
@@ -170,8 +170,7 @@ async function writeOutboundDmToThread(input: {
     },
   };
 
-  const { error: upsertError } = await supabase
-    .from('engagement_messages')
+  const { error: upsertError } = await ownedDbTable('engagement_messages')
     .upsert(messageRow, { onConflict: 'thread_id,platform_message_id' });
   if (upsertError) {
     return { mirrored: false, thread_id: input.thread.id, error: upsertError.message };
@@ -184,8 +183,7 @@ async function writeOutboundDmToThread(input: {
     last_message_self: true,
     unread_count: 0,
   };
-  const { error: threadError } = await supabase
-    .from('engagement_threads')
+  const { error: threadError } = await ownedDbTable('engagement_threads')
     .update({
       raw_payload: nextRawPayload,
       unread_count: 0,
@@ -205,8 +203,7 @@ async function writeOutboundDmToThread(input: {
 
   const staleTargets = threadTargetValues(input.thread);
   if (staleTargets.length > 0) {
-    const { error: supersedeError } = await supabase
-      .from('community_ai_actions')
+    const { error: supersedeError } = await ownedDbTable('community_ai_actions')
       .update({
         status: 'failed',
         execution_result: {

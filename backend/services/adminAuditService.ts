@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { getRequestContext } from './requestContext';
+import { ownedDbTable } from '../db/writeOwner';
 
 export async function recordAdminAudit(input: {
   actorUserId: string;
@@ -10,7 +11,7 @@ export async function recordAdminAudit(input: {
   idempotencyKey?: string | null;
 }): Promise<void> {
   const ctx = getRequestContext();
-  const { error } = await supabase.from('super_admin_audit_logs').insert({
+  const { error } = await ownedDbTable('super_admin_audit_logs').insert({
     actor_user_id: input.actorUserId,
     action: input.action,
     target_type: input.targetType,

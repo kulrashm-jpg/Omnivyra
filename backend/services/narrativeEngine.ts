@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Narrative Engine
  * Converts content opportunities into story-driven campaign angles.
@@ -63,8 +64,7 @@ export type GenerateCampaignNarrativesResult = {
  * Load content opportunities (recent, not yet converted to narratives).
  */
 async function loadOpportunitiesWithoutNarratives(): Promise<OpportunityRow[]> {
-  const { data: opportunities, error: oppError } = await supabase
-    .from('content_opportunities')
+  const { data: opportunities, error: oppError } = await ownedDbTable('content_opportunities')
     .select('id, opportunity_title, opportunity_description, opportunity_type')
     .order('created_at', { ascending: false })
     .limit(100);
@@ -74,8 +74,7 @@ async function loadOpportunitiesWithoutNarratives(): Promise<OpportunityRow[]> {
 
   if (opps.length === 0) return [];
 
-  const { data: existing } = await supabase
-    .from('campaign_narratives')
+  const { data: existing } = await ownedDbTable('campaign_narratives')
     .select('opportunity_id')
     .in('opportunity_id', opps.map((o) => o.id));
 
@@ -99,7 +98,7 @@ export async function generateCampaignNarratives(): Promise<GenerateCampaignNarr
       const { angle: narrativeAngle, summary } = generateNarrativeForAngle(title, angle);
 
       for (const platform of PLATFORMS) {
-        const { error } = await supabase.from('campaign_narratives').insert({
+        const { error } = await ownedDbTable('campaign_narratives').insert({
           opportunity_id: opp.id,
           narrative_angle: narrativeAngle,
           narrative_summary: summary,

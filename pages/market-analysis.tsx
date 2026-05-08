@@ -177,8 +177,8 @@ export default function MarketAnalysis() {
       });
 
       if (response.ok) {
-        // Navigate to content creation with campaign ID
-        window.location.href = `/content-creation?campaignId=${campaignId}`;
+        // Navigate to canonical post creation with campaign context.
+        window.location.href = `/posts/create?campaignId=${campaignId}`;
       }
     } catch (error) {
       console.error('Error transitioning stage:', error);

@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import { Brain, TrendingUp, TrendingDown, ArrowRight, Lightbulb, Target, RefreshCw, ChevronDown, ChevronRight, Zap, BarChart3, AlertCircle } from 'lucide-react';
 
 type Insight = {
@@ -71,9 +72,11 @@ export default function IntelligenceInsightsPanel({ companyId, token }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/companies/${companyId}/intelligence`, { headers });
-      const json = await res.json();
-      if (json.success) setData(json.data);
+      const result = await safeFetchJson<{ success?: boolean; data?: any }>(
+        `/api/companies/${companyId}/intelligence`,
+        { headers, credentials: 'same-origin' },
+      );
+      if (result.ok === true && result.data.success) setData(result.data.data);
     } finally {
       setLoading(false);
     }

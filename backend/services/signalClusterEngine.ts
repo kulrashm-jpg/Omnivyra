@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Signal Clustering Engine
  * Groups related intelligence signals by hybrid similarity (semantic + token).
@@ -7,6 +8,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import {
+
   generateTopicEmbedding,
   cosineSimilarity,
   embeddingToPgVector,
@@ -175,8 +177,7 @@ async function ensureSignalEmbedding(signal: SignalRow): Promise<SignalRow> {
       metadata:  { caller: 'signalClusterEngine.ensureSignalEmbedding', signal_id: signal.id },
     });
     const vecStr = embeddingToPgVector(emb);
-    await supabase
-      .from('intelligence_signals')
+    await ownedDbTable('intelligence_signals')
       .update({ topic_embedding: vecStr } as any)
       .eq('id', signal.id);
     return { ...signal, topic_embedding: emb };
@@ -189,8 +190,7 @@ async function ensureSignalEmbedding(signal: SignalRow): Promise<SignalRow> {
  * Fetch unclustered signals from the last 6 hours.
  */
 async function fetchUnclusteredSignals(): Promise<SignalRow[]> {
-  const { data, error } = await supabase
-    .from('intelligence_signals')
+  const { data, error } = await ownedDbTable('intelligence_signals')
     .select('id, company_id, topic, normalized_payload, detected_at, source_api_id, topic_embedding')
     .gt('detected_at', new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString())
     .is('cluster_id', null)
@@ -210,15 +210,13 @@ async function fetchUnclusteredSignals(): Promise<SignalRow[]> {
 async function fetchRecentClusters(): Promise<ClusterRow[]> {
   const since = new Date(Date.now() - WINDOW_HOURS * 60 * 60 * 1000).toISOString();
   const selectCols = 'cluster_id, cluster_topic, signal_count, created_at, last_updated, topic_embedding';
-  let result = await supabase
-    .from('signal_clusters')
+  let result = await ownedDbTable('signal_clusters')
     .select(selectCols)
     .gte('last_updated', since)
     .order('last_updated', { ascending: false });
 
   if (result.error && isSchemaError(result.error)) {
-    result = (await supabase
-      .from('signal_clusters')
+    result = (await ownedDbTable('signal_clusters')
       .select('cluster_id, cluster_topic, signal_count, created_at, last_updated')
       .gte('last_updated', since)
       .order('last_updated', { ascending: false })) as typeof result;
@@ -242,14 +240,12 @@ async function assignSignalsToCluster(
 ): Promise<void> {
   if (signalIds.length === 0) return;
   const now = new Date().toISOString();
-  const { error: updateSignals } = await supabase
-    .from('intelligence_signals')
+  const { error: updateSignals } = await ownedDbTable('intelligence_signals')
     .update({ cluster_id: clusterId })
     .in('id', signalIds);
   if (updateSignals) throw new Error(`Failed to update signals: ${updateSignals.message}`);
 
-  const { error: updateCluster } = await supabase
-    .from('signal_clusters')
+  const { error: updateCluster } = await ownedDbTable('signal_clusters')
     .update({ signal_count: newCount, last_updated: now })
     .eq('cluster_id', clusterId);
   if (updateCluster) throw new Error(`Failed to update cluster: ${updateCluster.message}`);
@@ -293,7 +289,7 @@ async function createClusterAndAssign(
     rowWithOptional.topic_embedding = embeddingToPgVector(topicEmbedding);
   }
 
-  let result = await supabase.from('signal_clusters').insert(rowWithOptional).select('cluster_id').single();
+  let result = await ownedDbTable('signal_clusters').insert(rowWithOptional).select('cluster_id').single();
 
   if (result.error && isSchemaError(result.error)) {
     if (!(globalThis as any).__signal_clusters_schema_hint_shown) {
@@ -302,15 +298,14 @@ async function createClusterAndAssign(
         'signal_clusters: source_api_id or topic_embedding column missing. Run database/signal_clusters_source_api_id.sql and database/add_signal_embeddings.sql. Clustering will continue with minimal schema.'
       );
     }
-    result = await supabase.from('signal_clusters').insert(baseRow).select('cluster_id').single();
+    result = await ownedDbTable('signal_clusters').insert(baseRow).select('cluster_id').single();
   }
 
   const { data: inserted, error: insertError } = result;
   if (insertError || !inserted) throw new Error(`Failed to create cluster: ${insertError?.message}`);
 
   const clusterId = inserted.cluster_id as string;
-  const { error: updateSignals } = await supabase
-    .from('intelligence_signals')
+  const { error: updateSignals } = await ownedDbTable('intelligence_signals')
     .update({ cluster_id: clusterId })
     .in('id', signalIds);
   if (updateSignals) throw new Error(`Failed to assign signals to new cluster: ${updateSignals.message}`);

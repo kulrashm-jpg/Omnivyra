@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type PerformanceMetricsInput = {
   campaign_id: string;
@@ -60,8 +61,7 @@ const normalizeMetrics = (input: PerformanceMetricsInput) => {
 export const recordPerformance = async (input: PerformanceMetricsInput): Promise<boolean> => {
   try {
     const normalized = normalizeMetrics(input);
-    const { error } = await supabase
-      .from('performance_feedback')
+    const { error } = await ownedDbTable('performance_feedback')
       .insert({
         campaign_id: input.campaign_id,
         recommendation_id: input.recommendation_id ?? null,
@@ -92,8 +92,7 @@ export const aggregateCampaignPerformance = async (
   campaignId: string
 ): Promise<AggregatedPerformance | null> => {
   try {
-    const { data: rows, error } = await supabase
-      .from('performance_feedback')
+    const { data: rows, error } = await ownedDbTable('performance_feedback')
       .select('*')
       .eq('campaign_id', campaignId);
 
@@ -135,8 +134,7 @@ export const aggregateCampaignPerformance = async (
         ? Number(((totals.likes + totals.shares + totals.comments + totals.clicks) / totals.impressions).toFixed(4))
         : 0;
 
-    const { data: recs } = await supabase
-      .from('recommendation_snapshots')
+    const { data: recs } = await ownedDbTable('recommendation_snapshots')
       .select('success_projection, confidence')
       .eq('campaign_id', campaignId);
 
@@ -161,8 +159,7 @@ export const compareWithPrediction = async (
   recommendationId: string,
   metrics: { impressions: number }
 ): Promise<number> => {
-  const { data: rec, error } = await supabase
-    .from('recommendation_snapshots')
+  const { data: rec, error } = await ownedDbTable('recommendation_snapshots')
     .select('success_projection')
     .eq('id', recommendationId)
     .single();
@@ -177,8 +174,7 @@ export const getHistoricalAccuracyScore = async (input: {
 }): Promise<number> => {
   try {
     const { trend_topic, company_id } = input;
-    let query = supabase
-      .from('recommendation_snapshots')
+    let query = ownedDbTable('recommendation_snapshots')
       .select('campaign_id, success_projection')
       .ilike('trend_topic', `%${trend_topic}%`);
     if (company_id) {
@@ -192,8 +188,7 @@ export const getHistoricalAccuracyScore = async (input: {
       .filter(Boolean);
     if (campaignIds.length === 0) return 0.5;
 
-    const { data: feedbackRows } = await supabase
-      .from('performance_feedback')
+    const { data: feedbackRows } = await ownedDbTable('performance_feedback')
       .select('campaign_id, impressions')
       .in('campaign_id', campaignIds);
 

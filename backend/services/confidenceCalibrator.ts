@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Confidence Calibrator — Edge Case Fix #3
  *
@@ -65,7 +66,7 @@ export async function recordOutcome(opts: {
   editCount?: number;
 }): Promise<void> {
   try {
-    await supabase.from('campaign_confidence_outcomes').insert({
+    await ownedDbTable('campaign_confidence_outcomes').insert({
       job_id:      opts.jobId,
       campaign_id: opts.campaignId,
       confidence:  opts.confidence,
@@ -94,8 +95,7 @@ export async function recordOutcome(opts: {
 export async function calibrateThresholds(): Promise<Record<string, number>> {
   const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: outcomes, error } = await supabase
-    .from('campaign_confidence_outcomes')
+  const { data: outcomes, error } = await ownedDbTable('campaign_confidence_outcomes')
     .select('confidence, plan_tier, industry, outcome')
     .gte('recorded_at', since);
 
@@ -150,7 +150,7 @@ export async function calibrateThresholds(): Promise<Record<string, number>> {
 
   // Persist calibrated thresholds for observability
   try {
-    await supabase.from('campaign_confidence_calibration').upsert(
+    await ownedDbTable('campaign_confidence_calibration').upsert(
       Object.entries(result).map(([key, value]) => ({
         segment_key:  key,
         threshold:    value,
@@ -182,8 +182,7 @@ export async function getRefinementThreshold(
 
   // Try to load from DB (latest calibration)
   try {
-    const { data } = await supabase
-      .from('campaign_confidence_calibration')
+    const { data } = await ownedDbTable('campaign_confidence_calibration')
       .select('threshold')
       .eq('segment_key', key)
       .maybeSingle();

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Active Leads Engine v1/v2 processor.
  * Modes: REACTIVE (explicit) / PREDICTIVE (latent). Dedupe by dedupe_hash, fail-soft per platform, confidence_index.
@@ -70,8 +71,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   try {
   console.info({ jobId, phase: 'STARTED' });
 
-  const { data: job, error: fetchError } = await supabase
-    .from('lead_jobs_v1')
+  const { data: job, error: fetchError } = await ownedDbTable('lead_jobs_v1')
     .select('id, company_id, status, mode, platforms, regions, keywords, context_payload')
     .eq('id', jobId)
     .single();
@@ -87,8 +87,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   }
 
   if (row.status === 'PENDING') {
-    await supabase
-      .from('lead_jobs_v1')
+    await ownedDbTable('lead_jobs_v1')
       .update({ status: 'RUNNING', progress_stage: 'INITIALIZING' })
       .eq('id', jobId);
   }
@@ -120,7 +119,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   });
 
   for (const platform of platforms) {
-    await supabase.from('lead_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
+    await ownedDbTable('lead_jobs_v1').update({ progress_stage: 'SCANNING' }).eq('id', jobId);
     const connector = getConnector(platform);
     if (!connector) {
       platformFailures++;
@@ -140,7 +139,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
         for (const post of posts) {
           if (shouldRejectPost(post.raw_text)) continue;
           if (!qualifyingStageSet) {
-            await supabase.from('lead_jobs_v1').update({ progress_stage: 'QUALIFYING' }).eq('id', jobId);
+            await ownedDbTable('lead_jobs_v1').update({ progress_stage: 'QUALIFYING' }).eq('id', jobId);
             qualifyingStageSet = true;
           }
 
@@ -153,8 +152,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
           const canonicalSourceId =
             (post.source_url ?? '').toString().trim() || dedupeHash;
 
-          const { data: existingDedupe } = await supabase
-            .from('lead_signals')
+          const { data: existingDedupe } = await ownedDbTable('lead_signals')
             .select('id')
             .eq('organization_id', companyId)
             .eq('source_type', 'listening')
@@ -297,8 +295,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
 
     console.info({ jobId, platform, phase: 'PLATFORM_DONE' });
 
-    await supabase
-      .from('lead_jobs_v1')
+    await ownedDbTable('lead_jobs_v1')
       .update({
         total_found: totalFound,
         total_qualified: totalQualified,
@@ -343,8 +340,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
 
   console.info({ jobId, finalStatus, phase: 'COMPLETING' });
 
-  const { data: updatedRow, error: updateError } = await supabase
-    .from('lead_jobs_v1')
+  const { data: updatedRow, error: updateError } = await ownedDbTable('lead_jobs_v1')
     .update({
       status: finalStatus,
       total_found: totalFound,
@@ -373,7 +369,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
   }
 
   if (finalStatus === 'COMPLETED' || finalStatus === 'COMPLETED_WITH_WARNINGS') {
-    await supabase.from('lead_jobs_v1').update({ progress_stage: 'CLUSTERING' }).eq('id', jobId);
+    await ownedDbTable('lead_jobs_v1').update({ progress_stage: 'CLUSTERING' }).eq('id', jobId);
     try {
       await generateIntentClusters(companyId);
     } catch {
@@ -397,8 +393,7 @@ export async function processLeadJobV1(jobId: string): Promise<void> {
       marker: 'PROCESSOR_CRASHED',
     });
     console.error('Lead Job Processor Error:', err);
-    await supabase
-      .from('lead_jobs_v1')
+    await ownedDbTable('lead_jobs_v1')
       .update({
         status: 'FAILED',
         error: message,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Outcome Tracking Service
  *
@@ -37,8 +38,7 @@ export type OutcomeScore = {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function getCampaignCreditsUsed(campaignId: string, companyId: string): Promise<{ used: number; saved: number }> {
-  const { data } = await supabase
-    .from('credit_transactions')
+  const { data } = await ownedDbTable('credit_transactions')
     .select('credits_delta')
     .eq('organization_id', companyId)
     .eq('reference_id', campaignId)
@@ -48,8 +48,7 @@ async function getCampaignCreditsUsed(campaignId: string, companyId: string): Pr
 
   // Credits saved = Smart Mode skipped transactions (no row exists = nothing to count)
   // Approximated as 20% of used for campaigns older than 1 week (dedup savings estimate)
-  const { data: campaignRow } = await supabase
-    .from('campaigns')
+  const { data: campaignRow } = await ownedDbTable('campaigns')
     .select('created_at')
     .eq('id', campaignId)
     .maybeSingle();
@@ -63,8 +62,7 @@ async function getCampaignCreditsUsed(campaignId: string, companyId: string): Pr
 }
 
 async function getEngagementQuality(campaignId: string): Promise<{ quality: number; topContentType: string | null }> {
-  const { data } = await supabase
-    .from('performance_feedback')
+  const { data } = await ownedDbTable('performance_feedback')
     .select('impressions, comments, shares, clicks, content_type')
     .eq('campaign_id', campaignId);
 
@@ -101,8 +99,7 @@ async function getEngagementQuality(campaignId: string): Promise<{ quality: numb
 }
 
 async function getSentimentShift(campaignId: string): Promise<number> {
-  const { data } = await supabase
-    .from('community_ai_actions')
+  const { data } = await ownedDbTable('community_ai_actions')
     .select('sentiment')
     .eq('campaign_id', campaignId)
     .not('sentiment', 'is', null);
@@ -122,8 +119,7 @@ async function getSentimentShift(campaignId: string): Promise<number> {
 
 async function getActualLeads(campaignId: string): Promise<{ leads: number; conversions: number }> {
   // Pull from prediction_accuracy_log if available
-  const { data: accRow } = await supabase
-    .from('prediction_accuracy_log')
+  const { data: accRow } = await ownedDbTable('prediction_accuracy_log')
     .select('actual_leads')
     .eq('campaign_id', campaignId)
     .order('evaluated_at', { ascending: false })
@@ -135,8 +131,7 @@ async function getActualLeads(campaignId: string): Promise<{ leads: number; conv
   }
 
   // Fallback: count community_ai_actions with signal_type='lead_signal'
-  const { count } = await supabase
-    .from('community_ai_actions')
+  const { count } = await ownedDbTable('community_ai_actions')
     .select('id', { count: 'exact', head: true })
     .eq('campaign_id', campaignId)
     .eq('signal_type', 'lead_signal');
@@ -206,7 +201,7 @@ export async function measureOutcomeScore(campaignId: string, companyId: string)
   };
 
   // Persist — upsert on campaign_id
-  void supabase.from('campaign_outcomes').upsert({
+  void ownedDbTable('campaign_outcomes').upsert({
     ...snapshot,
   }, { onConflict: 'campaign_id' });
 
@@ -217,8 +212,7 @@ export async function measureOutcomeScore(campaignId: string, companyId: string)
  * Return the most recent outcome snapshot for a campaign (DB read — no recompute).
  */
 export async function getOutcomeSnapshot(campaignId: string): Promise<OutcomeScore | null> {
-  const { data } = await supabase
-    .from('campaign_outcomes')
+  const { data } = await ownedDbTable('campaign_outcomes')
     .select('*')
     .eq('campaign_id', campaignId)
     .maybeSingle();
@@ -235,8 +229,7 @@ export async function getCompanyOutcomeStats(companyId: string): Promise<{
   total_credits_used: number;
   best_campaign_id: string | null;
 }> {
-  const { data } = await supabase
-    .from('campaign_outcomes')
+  const { data } = await ownedDbTable('campaign_outcomes')
     .select('campaign_id, leads_generated, credits_used, credits_per_outcome, outcome_score')
     .eq('company_id', companyId)
     .order('snapshot_at', { ascending: false })

@@ -15,6 +15,7 @@ import {
 import { recordAutomationDecision } from './automationLogger';
 import type { IntelligenceResponse } from '../intelligence/intelligenceService';
 import type { CommunityAiAction, ExecutionResult } from '../communityAiActionExecutor';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Automation decision engine + execution orchestrator.
@@ -190,8 +191,7 @@ export async function shouldAutoExecute(
   // Bump the counter back down to keep the limit honest.
   if (!log.ok) {
     try {
-      await supabase
-        .from('automation_usage')
+      await ownedDbTable('automation_usage')
         .update({
           actions_executed: Math.max(0, (newCount ?? 1) - 1),
           updated_at: new Date().toISOString(),

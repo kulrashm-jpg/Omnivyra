@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -12,8 +13,7 @@ type GenerationControlRow = {
 };
 
 export async function enforceDecisionGenerationThrottle(companyId: string, source: string): Promise<void> {
-  const { data, error } = await supabase
-    .from('decision_generation_controls')
+  const { data, error } = await ownedDbTable('decision_generation_controls')
     .select('company_id, min_refresh_interval_minutes, max_generations_per_hour, last_generation_at, generation_window_started_at, generation_count_in_window')
     .eq('company_id', companyId)
     .maybeSingle();
@@ -50,8 +50,7 @@ export async function enforceDecisionGenerationThrottle(companyId: string, sourc
     throw new Error(`${source} blocked by max_generations_per_hour for company ${companyId}.`);
   }
 
-  const { error: upsertError } = await supabase
-    .from('decision_generation_controls')
+  const { error: upsertError } = await ownedDbTable('decision_generation_controls')
     .upsert({
       company_id: companyId,
       min_refresh_interval_minutes: row.min_refresh_interval_minutes,

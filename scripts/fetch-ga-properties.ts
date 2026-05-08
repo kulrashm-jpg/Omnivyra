@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../backend/db/writeOwner';
 /**
  * Live probe + repair: GA property discovery using the saved token.
  *
@@ -35,8 +36,7 @@ async function tokenInfo(accessToken: string) {
 }
 
 async function main() {
-  const { data: integrations, error } = await supabase
-    .from('analytics_integrations')
+  const { data: integrations, error } = await ownedDbTable('analytics_integrations')
     .select('id, company_id, provider, status, created_at, updated_at')
     .eq('provider', 'GA4');
 
@@ -134,8 +134,7 @@ async function main() {
 
     if (appProps.length > 0) {
       const timestamp = new Date().toISOString();
-      const { error: upsertErr } = await supabase
-        .from('analytics_properties')
+      const { error: upsertErr } = await ownedDbTable('analytics_properties')
         .upsert(
           appProps.map((p) => ({
             integration_id: integration.id,
@@ -155,8 +154,7 @@ async function main() {
     }
   }
 
-  const { count: finalCount } = await supabase
-    .from('analytics_properties')
+  const { count: finalCount } = await ownedDbTable('analytics_properties')
     .select('id', { count: 'exact', head: true });
 
   console.log('\n=== summary ===');

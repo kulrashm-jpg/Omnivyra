@@ -14,14 +14,14 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { invalidateDomainCache } from '@/backend/services/domainEligibilityService';
 import { createCredit, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { requireCapability } from '@/backend/security/requireCapability';
-import { BILLING_MANAGE } from '@/shared/contracts/security';
+import { BILLING_GRANT_FREE_CREDITS } from '@/shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Wave 2C-C: capability + step-up gate. billing.manage covers
-  // approving/rejecting access requests (credit grants are downstream).
-  // Bridge principals are rejected.
+  // Phase: Platform Authority Isolation. billing.grant_free_credits is a
+  // SUPER_ADMIN-only platform-tier capability; replaces the previous
+  // BILLING_MANAGE gate which is per-tenant.
   const guard = await requireCapability(req, res, {
-    capability: BILLING_MANAGE,
+    capability: BILLING_GRANT_FREE_CREDITS,
     reason: `super-admin reviews free-credit access request (${req.method})`,
   });
   if (guard.ok !== true) return;

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Learning Decay Service — Step 5
  *
@@ -47,8 +48,7 @@ export function computeEffectiveScore(
  * Lifts decay_factor back toward 1.0 and increments reinforcement_score.
  */
 export async function reinforceLearning(learningId: string, impactBoost: number = 0.1): Promise<void> {
-  const { data } = await supabase
-    .from('campaign_learnings')
+  const { data } = await ownedDbTable('campaign_learnings')
     .select('decay_factor, reinforcement_score, times_reinforced')
     .eq('id', learningId)
     .maybeSingle();
@@ -59,7 +59,7 @@ export async function reinforceLearning(learningId: string, impactBoost: number 
   const newDecay = Math.min(1.0, d.decay_factor + 0.3); // partial lift
   const newReinforcement = parseFloat(Math.min(1.0, d.reinforcement_score + impactBoost).toFixed(4));
 
-  await supabase.from('campaign_learnings').update({
+  await ownedDbTable('campaign_learnings').update({
     decay_factor:         newDecay,
     reinforcement_score:  newReinforcement,
     times_reinforced:     d.times_reinforced + 1,
@@ -77,8 +77,7 @@ export async function runLearningDecay(companyId?: string): Promise<DecayRunResu
   const result: DecayRunResult = { updated: 0, pruned: 0, errors: [] };
 
   try {
-    let query = supabase
-      .from('campaign_learnings')
+    let query = ownedDbTable('campaign_learnings')
       .select('id, engagement_impact, confidence, updated_at, decay_factor, reinforcement_score');
 
     if (companyId) query = (query as any).eq('company_id', companyId);
@@ -105,10 +104,10 @@ export async function runLearningDecay(companyId?: string): Promise<DecayRunResu
 
         if (effectiveScore < PRUNE_THRESHOLD && row.reinforcement_score < 0.1) {
           // Pattern too stale and never reinforced — remove
-          await supabase.from('campaign_learnings').delete().eq('id', row.id);
+          await ownedDbTable('campaign_learnings').delete().eq('id', row.id);
           result.pruned++;
         } else {
-          await supabase.from('campaign_learnings')
+          await ownedDbTable('campaign_learnings')
             .update({ decay_factor: newDecay })
             .eq('id', row.id);
           result.updated++;
@@ -141,8 +140,7 @@ export async function getEffectiveLearnings(
   effective_score: number;
   times_reinforced: number;
 }>> {
-  let query = supabase
-    .from('campaign_learnings')
+  let query = ownedDbTable('campaign_learnings')
     .select('id, pattern, learning_type, platform, content_type, engagement_impact, confidence, decay_factor, reinforcement_score, times_reinforced')
     .eq('company_id', companyId);
 

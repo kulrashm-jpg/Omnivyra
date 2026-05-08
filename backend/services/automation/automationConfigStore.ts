@@ -1,5 +1,6 @@
 import { supabase } from '../../db/supabaseClient';
 import {
+
   AUTOMATABLE_ACTION_TYPES,
   DEFAULT_DAILY_LIMIT,
   isAutomatableActionType,
@@ -7,6 +8,7 @@ import {
   type AutomatableActionType,
   type ConfidenceFloor,
 } from './automationConstants';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Per-org automation configuration access layer. Reads are cached
@@ -74,8 +76,7 @@ export async function getAutomationConfig(orgId: string): Promise<AutomationConf
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
 
   try {
-    const { data } = await supabase
-      .from('automation_config')
+    const { data } = await ownedDbTable('automation_config')
       .select('*')
       .eq('organization_id', orgId)
       .maybeSingle();
@@ -151,8 +152,7 @@ export async function upsertAutomationConfig(
 
     // First write for this org needs created_at; subsequent rows already
     // have it. Using upsert with the table's default NOW() is correct.
-    const { error } = await supabase
-      .from('automation_config')
+    const { error } = await ownedDbTable('automation_config')
       .upsert(payload, { onConflict: 'organization_id' });
 
     if (error) {

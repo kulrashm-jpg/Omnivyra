@@ -31,6 +31,10 @@ import {
   shutdownIntentExecutionRedis,
 } from '../services/intentExecutionService';
 
+function formatCaughtError(error: unknown): string {
+  return error instanceof Error ? formatCaughtError(error) : String(error);
+}
+
 // Fail fast if required env vars are missing
 validateCronEnv();
 import { calibrateThresholds } from '../services/confidenceCalibrator';
@@ -289,9 +293,9 @@ function scheduleWorker(
           const parts = logFields.map((f) => `${f}=${result[f] ?? 0}`).join(' ');
           console.log(`[${label}] ${parts}`);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         hadError = true;
-        console.warn(`[${label}] worker error`, err?.message);
+        console.warn(`[${label}] worker error`, formatCaughtError(err));
       }
       cronInstr.workerExecuted(label, hadError);
       tick();
@@ -349,8 +353,8 @@ async function startCron() {
     try {
       const result = await enqueueIntelligencePolling();
       console.log(`[intelligence] polling jobs enqueued`, { count: result.enqueued });
-    } catch (error: any) {
-      console.error('❌ Intelligence polling enqueue error (startup):', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Intelligence polling enqueue error (startup):', formatCaughtError(error));
     }
   }
 
@@ -443,7 +447,7 @@ async function startCron() {
       const { data, error } = await db.rpc('reap_community_ai_action_leases');
       if (error) {
         // Surface as an errors counter so scheduleWorker's activity log fires.
-        console.warn('[communityAiLeaseReaper] rpc error:', error.message);
+        console.warn('[communityAiLeaseReaper] rpc error:', formatCaughtError(error));
         return { errors: 1 };
       }
       const row = (data || {}) as Record<string, number>;
@@ -496,8 +500,8 @@ async function startCron() {
           total_ingested: outcome.totalIngested,
           errors:         outcome.errors.length,
         };
-      } catch (err: any) {
-        console.warn('[recentPublishedPostsIngest] exception:', err?.message || err);
+      } catch (err: unknown) {
+        console.warn('[recentPublishedPostsIngest] exception:', formatCaughtError(err));
         return { processed: 0, total_ingested: 0, errors: 1 };
       }
     },
@@ -523,8 +527,8 @@ async function startCron() {
           orgs_ready:      agg.ready,
           errors:          agg.errors,
         };
-      } catch (err: any) {
-        console.warn('[rpaBackpressureObserver] exception:', err?.message || err);
+      } catch (err: unknown) {
+        console.warn('[rpaBackpressureObserver] exception:', formatCaughtError(err));
         return { errors: 1 };
       }
     },
@@ -553,8 +557,8 @@ async function startCron() {
           remaining:    result.remaining,
           errors:       result.errors,
         };
-      } catch (err: any) {
-        console.warn('[rpaRetryQueueFlush] exception:', err?.message || err);
+      } catch (err: unknown) {
+        console.warn('[rpaRetryQueueFlush] exception:', formatCaughtError(err));
         return { errors: 1 };
       }
     },
@@ -578,8 +582,8 @@ async function startCron() {
           patterns_upserted: result.patterns_upserted,
           errors:            result.errors,
         };
-      } catch (err: any) {
-        console.warn('[intelligencePatternLearner] exception:', err?.message || err);
+      } catch (err: unknown) {
+        console.warn('[intelligencePatternLearner] exception:', formatCaughtError(err));
         return { errors: 1 };
       }
     },
@@ -598,8 +602,8 @@ async function startCron() {
       try {
         const removed = await pruneRpaArtifacts(500);
         return { removed: removed.length, errors: 0 };
-      } catch (err: any) {
-        console.warn('[rpaArtifactPrune] exception:', err?.message || err);
+      } catch (err: unknown) {
+        console.warn('[rpaArtifactPrune] exception:', formatCaughtError(err));
         return { removed: 0, errors: 1 };
       }
     },
@@ -712,8 +716,8 @@ async function runSchedulerCycle() {
       `created ${result.created} new jobs, ` +
       `skipped ${result.skipped} posts`
     );
-  } catch (error: any) {
-    console.error('❌ Scheduler cycle error:', error.message);
+  } catch (error: unknown) {
+    console.error('❌ Scheduler cycle error:', formatCaughtError(error));
     // Don't throw - continue running on next interval
   }
 
@@ -729,8 +733,8 @@ async function runSchedulerCycle() {
       if (opp.errors.length) {
         opp.errors.forEach((e) => console.warn('Opportunity slots:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Opportunity slots scheduler error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Opportunity slots scheduler error:', formatCaughtError(error));
     }
   }
 
@@ -740,8 +744,8 @@ async function runSchedulerCycle() {
     try {
       await runAllCompanyAudits();
       console.log('✅ Governance audit completed');
-    } catch (error: any) {
-      console.error('❌ Governance audit error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Governance audit error:', formatCaughtError(error));
     }
   }
 
@@ -750,8 +754,8 @@ async function runSchedulerCycle() {
     lastAutoOptimizationRun = Date.now();
     try {
       await runAutoOptimizationForEligibleCampaigns();
-    } catch (error: any) {
-      console.error('❌ Auto-optimization error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Auto-optimization error:', formatCaughtError(error));
     }
   }
 
@@ -776,8 +780,8 @@ async function runSchedulerCycle() {
           result.errors.slice(0, 3).forEach((e) => console.warn('Scheduled lead:', e));
         }
       }
-    } catch (error: any) {
-      console.error('❌ Scheduled lead detection error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Scheduled lead detection error:', formatCaughtError(error));
     }
   } else if (currentHour !== 7 && currentHour !== 18) {
     lastScheduledLeadRunHour = -1;
@@ -791,8 +795,8 @@ async function runSchedulerCycle() {
       if (result.deleted > 0) {
         console.log(`[leadThreadRecompute] cleanup deleted ${result.deleted} orphan queue rows`);
       }
-    } catch (err: any) {
-      console.warn('[leadThreadRecompute] cleanup error', err?.message);
+    } catch (err: unknown) {
+      console.warn('[leadThreadRecompute] cleanup error', formatCaughtError(err));
     }
   }
 
@@ -801,8 +805,8 @@ async function runSchedulerCycle() {
     lastEngagementPollingEnqueue = Date.now();
     try {
       await enqueueEngagementPolling();
-    } catch (error: any) {
-      console.error('❌ Engagement polling enqueue error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Engagement polling enqueue error:', formatCaughtError(error));
     }
   }
 
@@ -815,8 +819,8 @@ async function runSchedulerCycle() {
       if (result.enqueued > 0) {
         console.log(`✅ Intelligence polling enqueued: ${result.enqueued} jobs`);
       }
-    } catch (error: any) {
-      console.error('❌ Intelligence polling enqueue error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Intelligence polling enqueue error:', formatCaughtError(error));
     }
   }
 
@@ -831,8 +835,8 @@ async function runSchedulerCycle() {
             `${result.clusters_created} created, ${result.clusters_updated} updated`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Signal clustering error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Signal clustering error:', formatCaughtError(error));
     }
   }
 
@@ -846,8 +850,8 @@ async function runSchedulerCycle() {
           `✅ Signal intelligence: ${result.clusters_processed} clusters, ${result.records_upserted} records`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Signal intelligence engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Signal intelligence engine error:', formatCaughtError(error));
     }
   }
 
@@ -861,8 +865,8 @@ async function runSchedulerCycle() {
           `✅ Strategic themes: ${result.themes_created} created, ${result.themes_skipped} skipped`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Strategic theme engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Strategic theme engine error:', formatCaughtError(error));
     }
   }
 
@@ -876,8 +880,8 @@ async function runSchedulerCycle() {
           `✅ Campaign opportunities: ${result.opportunities_created} created (${result.themes_processed} themes)`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Campaign opportunity engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Campaign opportunity engine error:', formatCaughtError(error));
     }
   }
 
@@ -891,8 +895,8 @@ async function runSchedulerCycle() {
           `✅ Content opportunities: ${result.opportunities_created} created (${result.themes_processed} themes)`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Content opportunity engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Content opportunity engine error:', formatCaughtError(error));
     }
   }
 
@@ -906,8 +910,8 @@ async function runSchedulerCycle() {
           `✅ Campaign narratives: ${result.narratives_created} created (${result.opportunities_processed} opportunities)`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Narrative engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Narrative engine error:', formatCaughtError(error));
     }
   }
 
@@ -921,8 +925,8 @@ async function runSchedulerCycle() {
           `✅ Community posts: ${result.posts_created} created (${result.narratives_processed} narratives)`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Community post engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Community post engine error:', formatCaughtError(error));
     }
   }
 
@@ -936,8 +940,8 @@ async function runSchedulerCycle() {
           `✅ Community threads: ${result.threads_created} created (${result.posts_processed} posts)`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Thread engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Thread engine error:', formatCaughtError(error));
     }
   }
 
@@ -951,8 +955,8 @@ async function runSchedulerCycle() {
           `✅ Engagement capture: ${result.signals_created} signals (${result.posts_processed} posts)`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Engagement capture error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Engagement capture error:', formatCaughtError(error));
     }
   }
 
@@ -966,8 +970,8 @@ async function runSchedulerCycle() {
           `✅ Feedback intelligence: ${result.decisions_created} decisions (${result.signals_analyzed} signals)`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Feedback intelligence engine error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Feedback intelligence engine error:', formatCaughtError(error));
     }
   }
 
@@ -984,8 +988,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         result.errors.slice(0, 5).forEach((e) => console.warn('Company trend relevance:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Company trend relevance error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Company trend relevance error:', formatCaughtError(error));
     }
   }
 
@@ -1002,8 +1006,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         result.errors.slice(0, 3).forEach((e) => console.warn('Performance ingestion:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Performance ingestion error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Performance ingestion error:', formatCaughtError(error));
     }
   }
 
@@ -1021,8 +1025,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         result.errors.slice(0, 3).forEach((e) => console.warn('Performance aggregation:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Performance aggregation error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Performance aggregation error:', formatCaughtError(error));
     }
   }
 
@@ -1039,8 +1043,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         result.errors.slice(0, 3).forEach((e) => console.warn('Campaign health evaluation:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Campaign health evaluation error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Campaign health evaluation error:', formatCaughtError(error));
     }
   }
 
@@ -1057,8 +1061,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         result.errors.slice(0, 3).forEach((e) => console.warn('Daily intelligence:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Daily intelligence error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Daily intelligence error:', formatCaughtError(error));
     }
   }
 
@@ -1076,8 +1080,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         result.errors.slice(0, 3).forEach((e) => console.warn('Intelligence event cleanup:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Intelligence event cleanup error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Intelligence event cleanup error:', formatCaughtError(error));
     }
   }
 
@@ -1096,8 +1100,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         result.errors.slice(0, 3).forEach((e) => console.warn('Weekly pricing analysis:', e));
       }
-    } catch (error: any) {
-      console.error('❌ Weekly pricing analysis error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Weekly pricing analysis error:', formatCaughtError(error));
     }
   }
 
@@ -1111,8 +1115,8 @@ async function runSchedulerCycle() {
           `✅ Engagement digest: processed=${result.processed} organizations, errors=${result.errors}`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Engagement digest error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Engagement digest error:', formatCaughtError(error));
     }
   }
 
@@ -1129,8 +1133,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         console.warn(`[engagementSignalScheduler] ${result.errors.length} errors`);
       }
-    } catch (error: any) {
-      console.error('❌ Engagement signal scheduler error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Engagement signal scheduler error:', formatCaughtError(error));
     }
   }
 
@@ -1148,8 +1152,8 @@ async function runSchedulerCycle() {
       if (scanResult.processing_errors.length > 0) {
         scanResult.processing_errors.slice(0, 3).forEach((e) => console.warn('[engagementOpportunityScanner]', e));
       }
-    } catch (error: any) {
-      console.error('❌ Engagement opportunity scanner error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Engagement opportunity scanner error:', formatCaughtError(error));
     }
   }
 
@@ -1167,8 +1171,8 @@ async function runSchedulerCycle() {
           `✅ Social account token refresh: companies=${result.companies} refreshed=${result.refreshed} skipped=${result.skipped} errors=${result.errors}`
         );
       }
-    } catch (error: any) {
-      console.error('❌ Social account token refresh error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Social account token refresh error:', formatCaughtError(error));
     }
   }
 
@@ -1193,8 +1197,8 @@ async function runSchedulerCycle() {
           );
         }
       }
-    } catch (error: any) {
-      console.error('❌ GA4 ingestion scheduler error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ GA4 ingestion scheduler error:', formatCaughtError(error));
     }
   }
 
@@ -1209,8 +1213,8 @@ async function runSchedulerCycle() {
       if (result.errors.length > 0) {
         console.warn(`[engagementSignalArchive] ${result.errors.join(', ')}`);
       }
-    } catch (error: any) {
-      console.error('❌ Engagement signal archive error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Engagement signal archive error:', formatCaughtError(error));
     }
   }
 
@@ -1220,8 +1224,8 @@ async function runSchedulerCycle() {
     try {
       const thresholds = await calibrateThresholds();
       console.log('[confidenceCalibrator] calibration complete', thresholds);
-    } catch (error: any) {
-      console.error('❌ Confidence calibration error:', error.message);
+    } catch (error: unknown) {
+      console.error('❌ Confidence calibration error:', formatCaughtError(error));
     }
   }
 

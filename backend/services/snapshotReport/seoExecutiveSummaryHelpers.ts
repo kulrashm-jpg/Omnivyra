@@ -5,6 +5,7 @@ import type { PublicAuditResult } from '../publicDomainAuditService';
 import type { buildReportScoreModel } from '../reportScoreModelService';
 import type {
   CompanyNarrativeContext,
+  ScoreState,
   SnapshotReport,
   SnapshotTopPriority,
   StrategicContext,
@@ -64,14 +65,21 @@ export function buildSeoExecutiveSummary(params: {
 
   const healthComponents = [technicalScore, visibilityScore, contentScore, authorityScore]
     .filter((value): value is number => typeof value === 'number');
-  const overallHealthScore = healthComponents.length > 0
+  // Canonical Trust Foundation: when no SEO axis is measured, the overall health score is null.
+  // We never substitute the model's value when the measured radar tells us we have no signal.
+  const overallHealthScore: number | null = healthComponents.length > 0
     ? Math.round(
         healthComponents.reduce((sum, value, index) => {
           const weight = [0.28, 0.3, 0.24, 0.18][index] ?? 0.25;
           return sum + value * weight;
         }, 0) / ([0.28, 0.3, 0.24, 0.18].slice(0, healthComponents.length).reduce((sum, value) => sum + value, 0))
       )
-    : params.score.value;
+    : null;
+  const overallHealthScoreState: ScoreState = healthComponents.length === 0
+    ? 'insufficient_signal'
+    : healthComponents.length < 3
+      ? 'inferred'
+      : 'measured';
 
   const sortedDecisions = [...params.decisions].sort((left, right) => impactScore(right) - impactScore(left));
   const topDecision = sortedDecisions[0];
@@ -259,6 +267,7 @@ export function buildSeoExecutiveSummary(params: {
 
   return {
     overall_health_score: overallHealthScore,
+    overall_health_score_state: overallHealthScoreState,
     primary_problem: primaryProblem,
     top_3_actions: topActions,
     growth_opportunity: growthOpportunity,

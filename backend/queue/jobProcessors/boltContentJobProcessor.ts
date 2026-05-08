@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../db/writeOwner';
 /**
  * BOLT Content Job Processor
  *
@@ -25,6 +26,7 @@
 import { Job } from 'bullmq';
 import { createHash } from 'crypto';
 import { supabase } from '../../db/supabaseClient';
+
 import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import {
   generateMasterContentFromIntent,
@@ -164,8 +166,7 @@ async function getCachedMaster(
   if (!companyId) return null;
   try {
     const hash = buildTopicHash(topic, companyId);
-    const { data } = await supabase
-      .from('master_content_cache')
+    const { data } = await ownedDbTable('master_content_cache')
       .select('master_content, expires_at')
       .eq('company_id', companyId)
       .eq('topic_hash', hash)
@@ -173,8 +174,7 @@ async function getCachedMaster(
     if (!data) return null;
     if (data.expires_at && new Date(data.expires_at) < new Date()) return null;
     // Increment hit count (fire-and-forget)
-    void supabase
-      .from('master_content_cache')
+    void ownedDbTable('master_content_cache')
       .update({ hit_count: (data as any).hit_count + 1 })
       .eq('company_id', companyId)
       .eq('topic_hash', hash);
@@ -192,7 +192,7 @@ async function cacheMaster(
   if (!companyId || !masterContent) return;
   try {
     const hash = buildTopicHash(topic, companyId);
-    await supabase.from('master_content_cache').upsert(
+    await ownedDbTable('master_content_cache').upsert(
       {
         company_id:     companyId,
         topic_hash:     hash,
@@ -217,8 +217,7 @@ async function updateJobStatus(
   extra: Record<string, unknown> = {}
 ): Promise<void> {
   try {
-    await supabase
-      .from('bolt_content_jobs')
+    await ownedDbTable('bolt_content_jobs')
       .update({ status, ...extra, updated_at: new Date().toISOString() })
       .eq('id', boltJobId);
   } catch { /* non-fatal */ }
@@ -246,8 +245,7 @@ async function updateRunProgress(
 async function markSlotsGenerating(boltJobId: string, dailyPlanIds: string[]): Promise<void> {
   if (!dailyPlanIds.length) return;
   try {
-    await supabase
-      .from('platform_content_slots')
+    await ownedDbTable('platform_content_slots')
       .update({ status: 'generating', updated_at: new Date().toISOString() })
       .eq('bolt_job_id', boltJobId)
       .in('daily_plan_id', dailyPlanIds);
@@ -261,8 +259,7 @@ async function markSlotReady(
   generatedContent: string
 ): Promise<void> {
   try {
-    await supabase
-      .from('platform_content_slots')
+    await ownedDbTable('platform_content_slots')
       .update({
         status:            'ready',
         generated_content: generatedContent,
@@ -310,8 +307,7 @@ export async function processBoltContentJob(job: Job): Promise<void> {
   let masterId: string;
 
   // Check if a previous attempt already generated master (stored in job row)
-  const existingJobRow = await supabase
-    .from('bolt_content_jobs')
+  const existingJobRow = await ownedDbTable('bolt_content_jobs')
     .select('master_content, master_id')
     .eq('id', bolt_job_id)
     .maybeSingle()
@@ -383,8 +379,7 @@ export async function processBoltContentJob(job: Job): Promise<void> {
       const firstPlanId = daily_plan_ids[0];
       let datePart = '';
       if (firstPlanId) {
-        const { data: dp } = await supabase
-          .from('daily_content_plans')
+        const { data: dp } = await ownedDbTable('daily_content_plans')
           .select('date')
           .eq('id', firstPlanId)
           .maybeSingle();
@@ -394,7 +389,7 @@ export async function processBoltContentJob(job: Job): Promise<void> {
         ? new Date(`${datePart}T09:00:00Z`).toISOString()
         : new Date().toISOString();
       const category = content_type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-      const { error: blogErr } = await supabase.from('blogs').insert({
+      const { error: blogErr } = await ownedDbTable('blogs').insert({
         company_id:       companyId,
         title:            topic,
         slug:             buildBlogSlug(topic),
@@ -481,8 +476,7 @@ export async function processBoltContentJob(job: Job): Promise<void> {
   const scheduledPostIds: string[] = [];
 
   // Fetch daily_content_plans rows for date/time/repurpose info
-  const { data: planRows } = await supabase
-    .from('daily_content_plans')
+  const { data: planRows } = await ownedDbTable('daily_content_plans')
     .select('id, platform, content_type, date, scheduled_time, content, week_number')
     .in('id', daily_plan_ids);
 
@@ -546,8 +540,7 @@ export async function processBoltContentJob(job: Job): Promise<void> {
     const dbPlatform    = toDbPlatform(canonicalPlatform);
     const dbContentType = toDbContentType(dbPlatform, target.content_type, type_map_by_platform);
 
-    const { data: inserted, error: insertError } = await supabase
-      .from('scheduled_posts')
+    const { data: inserted, error: insertError } = await ownedDbTable('scheduled_posts')
       .insert({
         user_id:           userId,
         social_account_id: socialAccountId,
@@ -606,8 +599,7 @@ export async function processBoltContentJob(job: Job): Promise<void> {
           sequence_index:       i + 1,
           total_distributions:  totalDistributions,
         };
-        await supabase
-          .from('daily_content_plans')
+        await ownedDbTable('daily_content_plans')
           .update({ content: JSON.stringify(finalizedJson), updated_at: new Date().toISOString() })
           .eq('id', dailyPlanId);
       } catch { /* non-fatal */ }

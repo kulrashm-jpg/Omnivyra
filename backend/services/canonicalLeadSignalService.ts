@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { logLeadSignalEvent } from '../utils/leadSignalLogger';
+import { ownedDbTable } from '../db/writeOwner';
 
 /**
  * Enforcement rule:
@@ -212,8 +213,7 @@ async function resolveContactId(input: CanonicalLeadSignalInput): Promise<string
         : null;
   const profileUrl = typeof metadata.profile_url === 'string' ? metadata.profile_url : null;
 
-  const { data, error } = await supabase
-    .from('contacts')
+  const { data, error } = await ownedDbTable('contacts')
     .upsert(
       {
         organization_id: input.organization_id,
@@ -242,8 +242,7 @@ async function resolveContactId(input: CanonicalLeadSignalInput): Promise<string
 async function syncThreadContact(threadId: string | null | undefined, contactId: string | null): Promise<void> {
   if (!threadId || !contactId) return;
 
-  const { error } = await supabase
-    .from('engagement_threads')
+  const { error } = await ownedDbTable('engagement_threads')
     .update({ contact_id: contactId })
     .eq('id', threadId)
     .is('contact_id', null);
@@ -284,8 +283,7 @@ export async function upsertCanonicalLeadSignal(
     metadata: input.metadata ?? {},
   };
 
-  const { data: existing, error: existingError } = await supabase
-    .from('lead_signals')
+  const { data: existing, error: existingError } = await ownedDbTable('lead_signals')
     .select('id, total_score, confidence_score')
     .eq('organization_id', input.organization_id)
     .eq('source_type', input.source_type)
@@ -313,8 +311,7 @@ export async function upsertCanonicalLeadSignal(
     return { id: existingRow?.id ?? null, inserted: false };
   }
 
-  const { data, error } = await supabase
-    .from('lead_signals')
+  const { data, error } = await ownedDbTable('lead_signals')
     .upsert(payload, { onConflict: 'organization_id,source_type,source_id' })
     .select('id')
     .single();

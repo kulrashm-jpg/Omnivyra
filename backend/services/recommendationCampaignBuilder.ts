@@ -3,6 +3,7 @@ import { runCampaignAiPlan } from './campaignAiOrchestrator';
 import { getProfile } from './companyProfileService';
 import { getCampaignPlanningInputs } from './campaignPlanningInputsService';
 import { buildStrategyInstructions, extractStrategyProfile } from '../../lib/content/companyStrategyPerspective';
+import { ownedDbTable } from '../db/writeOwner';
 
 type RecommendationSnapshot = {
   id: string;
@@ -57,8 +58,7 @@ export async function buildCampaignFromRecommendation(input: {
 }): Promise<{ campaign_id: string; plan: any; recommendation_used: RecommendationSnapshot }> {
   const { recommendationId, durationWeeks } = input;
 
-  const { data: recommendation, error: recError } = await supabase
-    .from('recommendation_snapshots')
+  const { data: recommendation, error: recError } = await ownedDbTable('recommendation_snapshots')
     .select('*')
     .eq('id', recommendationId)
     .single();
@@ -69,8 +69,7 @@ export async function buildCampaignFromRecommendation(input: {
 
   const profile = await getProfile(recommendation.company_id, { autoRefine: true });
 
-  const { data: campaign, error: campaignError } = await supabase
-    .from('campaigns')
+  const { data: campaign, error: campaignError } = await ownedDbTable('campaigns')
     .insert({
       name: `Trend: ${recommendation.trend_topic}`,
       description: `Auto-generated from recommendation ${recommendation.id}`,
@@ -120,8 +119,7 @@ export async function buildCampaignFromRecommendation(input: {
     collectedPlanningContext: finalCollectedPlanningContext,
   });
 
-  const { error: linkError } = await supabase
-    .from('recommendation_snapshots')
+  const { error: linkError } = await ownedDbTable('recommendation_snapshots')
     .update({ campaign_id: campaign.id })
     .eq('id', recommendation.id);
 

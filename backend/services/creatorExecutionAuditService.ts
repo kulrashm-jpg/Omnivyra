@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type CreatorExecutionAuditStage =
   | 'intent'
@@ -43,8 +44,7 @@ export async function logCreatorExecutionAudit(input: {
 
   const retentionDays = logLevel === 'debug' ? 7 : 30;
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString();
-  const { error } = await supabase
-    .from('creator_execution_audit_logs')
+  const { error } = await ownedDbTable('creator_execution_audit_logs')
     .insert({
       campaign_id: input.campaignId,
       daily_plan_id: input.dailyPlanId,

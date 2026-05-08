@@ -12,6 +12,7 @@
 
 import { startAuthentication } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialRequestOptionsJSON } from '@simplewebauthn/types';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 
 export interface StepUpRequiredError {
   /** True iff the response was a 401 with code STEP_UP_REQUIRED. */
@@ -70,36 +71,41 @@ export async function triggerWebAuthnStepUp(opts: {
   scopedCapability?: string | null;
 }): Promise<WebAuthnStepUpResult> {
   // 1. Begin authentication.
-  const beginRes = await fetch('/api/auth/passkeys/begin-authentication', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({}),
-  });
-  if (!beginRes.ok) {
-    throw new Error(`step-up begin failed: ${beginRes.status}`);
+  const beginResult = await safeFetchJson<PublicKeyCredentialRequestOptionsJSON>(
+    '/api/auth/passkeys/begin-authentication',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({}),
+    },
+  );
+  if (beginResult.ok !== true) {
+    throw new Error(`step-up begin failed (${beginResult.status}, ${beginResult.reason}): ${beginResult.message}`);
   }
-  const options = await beginRes.json() as PublicKeyCredentialRequestOptionsJSON;
+  const options = beginResult.data;
 
   // 2. WebAuthn assertion (browser).
   const assertion = await startAuthentication({ optionsJSON: options });
 
   // 3. Mint step-up session via the orchestrator.
-  const verifyRes = await fetch('/api/auth/step-up/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({
-      factor: 'webauthn',
-      response: assertion,
-      scopedCapability: opts.scopedCapability ?? null,
-    }),
-  });
-  if (!verifyRes.ok) {
-    throw new Error(`step-up verify failed: ${verifyRes.status}`);
+  const verifyResult = await safeFetchJson<WebAuthnStepUpResult>(
+    '/api/auth/step-up/verify',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        factor: 'webauthn',
+        response: assertion,
+        scopedCapability: opts.scopedCapability ?? null,
+      }),
+    },
+  );
+  if (verifyResult.ok !== true) {
+    throw new Error(`step-up verify failed (${verifyResult.status}, ${verifyResult.reason}): ${verifyResult.message}`);
   }
-  const body = await verifyRes.json() as WebAuthnStepUpResult;
-  return body;
+  return verifyResult.data;
 }
 
 // ── TOTP step-up challenge ───────────────────────────────────────────────────
@@ -116,20 +122,23 @@ export async function triggerTotpStepUp(opts: {
   token: string;
   scopedCapability?: string | null;
 }): Promise<WebAuthnStepUpResult> {
-  const r = await fetch('/api/auth/step-up/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({
-      factor: 'totp',
-      token: opts.token,
-      scopedCapability: opts.scopedCapability ?? null,
-    }),
-  });
-  if (!r.ok) {
-    throw new Error(`step-up totp verify failed: ${r.status}`);
+  const result = await safeFetchJson<WebAuthnStepUpResult>(
+    '/api/auth/step-up/verify',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        factor: 'totp',
+        token: opts.token,
+        scopedCapability: opts.scopedCapability ?? null,
+      }),
+    },
+  );
+  if (result.ok !== true) {
+    throw new Error(`step-up totp verify failed (${result.status}, ${result.reason}): ${result.message}`);
   }
-  return await r.json() as WebAuthnStepUpResult;
+  return result.data;
 }
 
 // ── withStepUp: orchestrated retry wrapper ────────────────────────────────────

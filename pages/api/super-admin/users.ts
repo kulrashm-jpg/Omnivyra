@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { Role, ALL_ROLES } from '../../../backend/services/rbacService';
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
 import { logger } from '../../../backend/services/logger';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
@@ -13,6 +13,7 @@ import { requireCapability } from '../../../backend/security/requireCapability';
 import {
   IDENTITY_ADMIN_ASSIGN,
   IDENTITY_ADMIN_DELETE,
+  SUPER_ADMIN_DASHBOARD_VIEW,
 } from '../../../shared/contracts/security';
 
 const ALLOWED_OVERRIDE_TYPES = ['no_website', 'domain_exception', 'manual_assignment'] as const;
@@ -21,18 +22,22 @@ const isAllowedOverrideType = (value: unknown): value is OverrideType =>
   typeof value === 'string'
   && (ALLOWED_OVERRIDE_TYPES as readonly string[]).includes(value);
 
+// Phase: Platform Authority Legacy Facade Elimination.
+// Replaces the previous `requireSuperAdminUser` (Bearer-only DB-backed)
+// access helper with the canonical capability gate. SUPER_ADMIN_DASHBOARD_VIEW
+// is the platform-tier read capability — bridge principals satisfy this
+// (compatibility) but cannot pass the inner mutation gates (which require
+// IDENTITY_ADMIN_ASSIGN / IDENTITY_ADMIN_DELETE + step-up).
 const requireSuperAdminAccess = async (
   req: NextApiRequest,
   res: NextApiResponse
-): Promise<boolean> => {
-  return !!(await requireSuperAdminUser(req, res));
-};
-
-const resolveSuperAdminActor = async (
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<{ id: string; email?: string | null } | null> => {
-  return requireSuperAdminUser(req, res);
+): Promise<{ id: string; email: string | null } | null> => {
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: `super-admin users (${req.method})`,
+  });
+  if (guard.ok !== true) return null;
+  return { id: guard.principal.userId, email: guard.principal.email ?? null };
 };
 
 const allowedRoles = ALL_ROLES.filter((role) => role !== Role.SUPER_ADMIN);
@@ -255,7 +260,8 @@ const insertAuditLog = async (input: {
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:users', 30, 60))) return;
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  const topGuard = await requireSuperAdminAccess(req, res);
+  if (!topGuard) return;
 
   if (req.method === 'GET') {
     const { data, error } = await supabase
@@ -412,11 +418,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         });
       }
 
-      // Resolve actor up-front so audit_log writes never fall back to NULL and
-      // we never risk a second res.* call after side effects have run.
-      const superAdminActor = await resolveSuperAdminActor(req, res);
-      if (!superAdminActor) return;
-      const actorUserId: string = superAdminActor.id || SYSTEM_USER_ID;
+      // Phase: Platform Authority Legacy Facade Elimination.
+      // Reuse the principal from the IDENTITY_ADMIN_ASSIGN guard above —
+      // we already authoritatively resolved them. Avoids a second pass
+      // through the legacy `requireSuperAdminUser` Bearer-only check.
+      const actorUserId: string = guard.principal.userId || SYSTEM_USER_ID;
 
       const normalizedEmail = String(email).trim().toLowerCase();
       const desiredRole = String(role || Role.COMPANY_ADMIN).toUpperCase();

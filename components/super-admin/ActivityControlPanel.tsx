@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { safeFetchJson } from '@/lib/utils/safeFetchJson';
 import {
   SlidersHorizontal, Database, Cpu, Zap, MemoryStick,
   Globe, FileText, MessageSquare, Radio, Send, RefreshCw,
@@ -133,9 +134,12 @@ function InfraLimitsSection({ companyId }: { companyId?: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/super-admin/activity-control?type=infra_limits', { credentials: 'include' });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const result = await safeFetchJson<{ config: any; effective: any }>(
+        '/api/super-admin/activity-control?type=infra_limits',
+        { credentials: 'include' },
+      );
+      if (result.ok !== true) return;
+      const data = result.data;
       setConfig(data.config);
       setEff(data.effective);
       setRedisCmds(data.config.redis.maxCommandsPerDay);
@@ -152,23 +156,29 @@ function InfraLimitsSection({ companyId }: { companyId?: string }) {
   async function save() {
     setSaving(true); setStatus('idle'); setErrMsg('');
     try {
-      const res = await fetch('/api/super-admin/activity-control', {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update_infra_limits',
-          limits: {
-            redis: {
-              maxCommandsPerDay: redisCmds,
-              maxMemoryBytes:    redisMem * 1024 * 1024,
+      const result = await safeFetchJson(
+        '/api/super-admin/activity-control',
+        {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update_infra_limits',
+            limits: {
+              redis: {
+                maxCommandsPerDay: redisCmds,
+                maxMemoryBytes:    redisMem * 1024 * 1024,
+              },
+              db:  { maxReadsPerDay: dbReads, maxWritesPerDay: dbWrites },
+              llm: { maxTokensPerDay: llmTokens },
             },
-            db:  { maxReadsPerDay: dbReads, maxWritesPerDay: dbWrites },
-            llm: { maxTokensPerDay: llmTokens },
-          },
-        }),
-      });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error ?? 'Save failed'); }
+          }),
+        },
+      );
+      if (result.ok !== true) {
+        setStatus('err'); setErrMsg(result.message);
+        return;
+      }
       setStatus('ok'); setDirty(false);
       await load();
     } catch (err: any) {
@@ -368,13 +378,16 @@ function ActivityRowEditor({
         body.job_type   = row.job_type;
         body.company_id = companyId;
       }
-      const res = await fetch('/api/super-admin/activity-control', {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.error ?? 'Save failed'); }
+      const result = await safeFetchJson(
+        '/api/super-admin/activity-control',
+        {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      );
+      if (result.ok !== true) { setStatus('err'); return; }
       setStatus('ok');
       onSaved();
     } catch { setStatus('err'); }
@@ -522,10 +535,9 @@ function ActivityConfigSection({
       const url = scopeMode === 'global'
         ? '/api/super-admin/activity-control?type=global_activities'
         : `/api/super-admin/activity-control?type=company_activities&company_id=${companyId}`;
-      const res = await fetch(url, { credentials: 'include' });
-      if (!res.ok) throw new Error('Failed to load');
-      const data = await res.json();
-      setActivities(data.activities ?? []);
+      const result = await safeFetchJson<{ activities?: ActivityRow[] }>(url, { credentials: 'include' });
+      if (result.ok !== true) return;
+      setActivities(result.data.activities ?? []);
     } catch { /* non-fatal */ }
     finally { setLoading(false); }
   }, [scopeMode, companyId]);

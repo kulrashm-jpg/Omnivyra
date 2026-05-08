@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../db/supabaseClient';
 import { getOrCreateRequestId, runWithRequestContext } from '../services/requestContext';
+import { ownedDbTable } from '../db/writeOwner';
 
 type IdempotencyRecord = {
   id: string;
@@ -46,8 +47,7 @@ function buildRequestHash(req: NextApiRequest, scope: string): string {
 }
 
 async function loadExisting(scope: string, key: string): Promise<IdempotencyRecord | null> {
-  const { data, error } = await supabase
-    .from('api_idempotency_keys')
+  const { data, error } = await ownedDbTable('api_idempotency_keys')
     .select('id, idempotency_key, status, request_hash, response_status, response_body')
     .eq('scope', scope)
     .eq('idempotency_key', key)
@@ -58,7 +58,7 @@ async function loadExisting(scope: string, key: string): Promise<IdempotencyReco
 }
 
 async function createRecord(scope: string, key: string, requestHash: string, requestId: string): Promise<void> {
-  const { error } = await supabase.from('api_idempotency_keys').insert({
+  const { error } = await ownedDbTable('api_idempotency_keys').insert({
     scope,
     idempotency_key: key,
     request_hash: requestHash,
@@ -81,8 +81,7 @@ async function markRecord(
     last_error: string | null;
   }>,
 ): Promise<void> {
-  const { error } = await supabase
-    .from('api_idempotency_keys')
+  const { error } = await ownedDbTable('api_idempotency_keys')
     .update({
       ...patch,
       updated_at: new Date().toISOString(),
@@ -148,8 +147,7 @@ export function withIdempotency(
       }
 
       if (existing.status === 'failed') {
-        const { data: updated, error } = await supabase
-          .from('api_idempotency_keys')
+        const { data: updated, error } = await ownedDbTable('api_idempotency_keys')
           .update({
             status: 'processing',
             request_id: requestId,

@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Evaluation Service
  *
@@ -63,8 +64,7 @@ async function actionExists(
   action_type: string,
   suggested_text: string | null
 ): Promise<boolean> {
-  let query = supabase
-    .from('community_ai_actions')
+  let query = ownedDbTable('community_ai_actions')
     .select('id')
     .eq('tenant_id', tenant_id)
     .eq('organization_id', organization_id)
@@ -81,8 +81,7 @@ async function actionExists(
 }
 
 async function getCommentsForScheduledPost(scheduled_post_id: string): Promise<any[]> {
-  const { data, error } = await supabase
-    .from('post_comments')
+  const { data, error } = await ownedDbTable('post_comments')
     .select('*')
     .eq('scheduled_post_id', scheduled_post_id)
     .order('platform_created_at', { ascending: true });
@@ -123,7 +122,7 @@ async function persistAction(
     suggested_text != null ? String(suggested_text) : null
   );
   if (exists) return false;
-  const { error } = await supabase.from('community_ai_actions').insert({
+  const { error } = await ownedDbTable('community_ai_actions').insert({
     tenant_id,
     organization_id,
     platform,

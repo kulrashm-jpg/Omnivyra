@@ -15,7 +15,12 @@ import type {
   ReportViewTimelineComparison,
   ReportViewTopPriority,
   ReportViewUnifiedIntelligenceSummary,
+  ScoreState,
+  SystemMaturityClass,
 } from './reportViewTypes';
+import type { CanonicalReport } from '../../../backend/services/canonicalReport/canonicalReportTypes';
+
+export type CanonicalReportPayload = CanonicalReport;
 
 export type ReportViewPayload = {
   reportId: string;
@@ -53,6 +58,13 @@ export type ReportViewPayload = {
   diagnosis: string;
   summary: string;
   overallScore: number;
+  overallScoreState: ScoreState;
+  systemMaturity: SystemMaturityClass;
+  // Canonical Architecture Consolidation (Phase 2): single source of truth that
+  // replaces the seo_executive_summary / geo_aeo_executive_summary /
+  // unified_intelligence_summary / competitor_intelligence_summary / decision_snapshot
+  // surfaces. New UI consumes only `canonical`.
+  canonical: CanonicalReportPayload | null;
   scoreExplanation?: {
     dimensions: Array<{ key: string; label: string; value: number; explanation: string }>;
     weakestDimensions: Array<{ key: string; label: string; value: number }>;

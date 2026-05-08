@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { supabase } from '../db/supabaseClient';
 import { getGoogleAnalyticsStatus, type GoogleAnalyticsConnectionStatus } from './analyticsIntegrationService';
 import { sendDeterministicIntelligenceAlert } from './intelligenceAlertService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type GrowthGuidanceAlertType =
   | 'critical_attention'
@@ -181,7 +182,7 @@ export function buildGuidanceActionKey(alert: Pick<GrowthGuidanceAlert, 'type' |
 
 async function fetchRows(table: string, select: string, build?: (query: any) => any): Promise<Record<string, unknown>[]> {
   try {
-    let query = supabase.from(table).select(select);
+    let query = ownedDbTable(table).select(select);
     if (build) query = build(query);
     const { data, error } = await query;
     if (error) return [];
@@ -282,8 +283,7 @@ function isIntentResolved(intent: GuidanceActionIntent, signals: GrowthSignalSna
 }
 
 async function loadGuidanceActions(companyId: string): Promise<GuidanceActionRow[]> {
-  const { data, error } = await supabase
-    .from('intelligence_actions')
+  const { data, error } = await ownedDbTable('intelligence_actions')
     .select('id, recommendation_key, action_status, updated_at, created_at')
     .eq('company_id', companyId)
     .eq('source', 'guidance_alert')
@@ -1017,8 +1017,7 @@ async function ensureGuidanceActions(
   }
 
   const actionKeys = actionableAlerts.map((alert) => buildGuidanceActionKey(alert));
-  const { data: existingRows, error: existingError } = await supabase
-    .from('intelligence_actions')
+  const { data: existingRows, error: existingError } = await ownedDbTable('intelligence_actions')
     .select('id, recommendation_key, action_status, updated_at, created_at')
     .eq('company_id', companyId)
     .eq('source', 'guidance_alert')
@@ -1063,8 +1062,7 @@ async function ensureGuidanceActions(
     }));
 
   if (rowsToInsert.length > 0) {
-    const { data: insertedRows, error: insertError } = await supabase
-      .from('intelligence_actions')
+    const { data: insertedRows, error: insertError } = await ownedDbTable('intelligence_actions')
       .insert(rowsToInsert)
       .select('id, recommendation_key, action_status, updated_at, created_at');
 
@@ -1084,8 +1082,7 @@ async function ensureGuidanceActions(
 
 async function loadValidationFeedbackMap(companyId: string): Promise<Map<string, string>> {
   const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await supabase
-    .from('intelligence_actions')
+  const { data, error } = await ownedDbTable('intelligence_actions')
     .select('recommendation_key, updated_at, manual_override')
     .eq('company_id', companyId)
     .eq('source', 'guidance_alert')

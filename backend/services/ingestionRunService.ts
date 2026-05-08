@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { supabase } from '../db/supabaseClient';
 import type { UnifiedSource } from './sourceNormalizationService';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type IngestionSource = 'crawler' | 'ga4' | 'gsc' | 'crm' | 'ads';
 export type IngestionRunStatus = 'running' | 'completed' | 'failed' | 'partial' | 'skipped';
@@ -57,8 +58,7 @@ export async function beginIngestionRun(params: {
     ...(params.unifiedSource ? { unified_source: params.unifiedSource } : {}),
   };
 
-  const { data, error } = await supabase
-    .from('ingestion_runs')
+  const { data, error } = await ownedDbTable('ingestion_runs')
     .upsert(payload, { onConflict: 'company_id,source,idempotency_key' })
     .select('*')
     .single();
@@ -75,8 +75,7 @@ export async function findIngestionRunByKey(params: {
   source: IngestionSource;
   idempotencyKey: string;
 }): Promise<IngestionRunRecord | null> {
-  const { data, error } = await supabase
-    .from('ingestion_runs')
+  const { data, error } = await ownedDbTable('ingestion_runs')
     .select('*')
     .eq('company_id', params.companyId)
     .eq('source', params.source)
@@ -96,8 +95,7 @@ export async function completeIngestionRun(params: {
   counts: IngestionRunCounts;
   errorMessage?: string | null;
 }): Promise<void> {
-  const { error } = await supabase
-    .from('ingestion_runs')
+  const { error } = await ownedDbTable('ingestion_runs')
     .update({
       status: params.status,
       completed_at: new Date().toISOString(),
@@ -124,8 +122,7 @@ export async function setDataSourceStatus(params: {
   errorMessage?: string | null;
   unifiedSource?: UnifiedSource;
 }): Promise<void> {
-  const { error } = await supabase
-    .from('data_source_status')
+  const { error } = await ownedDbTable('data_source_status')
     .upsert(
       {
         company_id: params.companyId,
@@ -144,8 +141,7 @@ export async function setDataSourceStatus(params: {
 }
 
 export async function hasRunningIngestion(companyId: string, source: IngestionSource): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('ingestion_runs')
+  const { data, error } = await ownedDbTable('ingestion_runs')
     .select('id')
     .eq('company_id', companyId)
     .eq('source', source)
@@ -163,8 +159,7 @@ export async function getLatestCompletedRun(
   companyId: string,
   source: IngestionSource
 ): Promise<IngestionRunRecord | null> {
-  const { data, error } = await supabase
-    .from('ingestion_runs')
+  const { data, error } = await ownedDbTable('ingestion_runs')
     .select('*')
     .eq('company_id', companyId)
     .eq('source', source)
@@ -184,8 +179,7 @@ export async function getLatestRun(
   companyId: string,
   source: IngestionSource
 ): Promise<IngestionRunRecord | null> {
-  const { data, error } = await supabase
-    .from('ingestion_runs')
+  const { data, error } = await ownedDbTable('ingestion_runs')
     .select('*')
     .eq('company_id', companyId)
     .eq('source', source)
@@ -205,8 +199,7 @@ export async function getRetryableFailedRuns(params: {
   source?: IngestionSource;
   maxRetries: number;
 }): Promise<IngestionRunRecord[]> {
-  let query = supabase
-    .from('ingestion_runs')
+  let query = ownedDbTable('ingestion_runs')
     .select('*')
     .eq('company_id', params.companyId)
     .eq('status', 'failed')

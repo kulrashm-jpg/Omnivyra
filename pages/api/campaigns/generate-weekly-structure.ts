@@ -97,16 +97,16 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
     distribution_mode,
     eligible_platforms: eligiblePlatformsBody,
     posts_per_week: postsPerWeekBody,
-    bolt_run_id: boltRunId,
+    variantMetadata,
     adaptive_performance_insights: adaptiveInsightsBody,
     campaign_start_date: campaignStartDateFromInput,
-    bolt_text_only: boltTextOnlyBody,
+    boltTextOnly: boltTextOnlyBody,
     format_frequency: formatFrequencyBody,
     cross_platform_sharing: crossPlatformSharingBody,
   } = body || {};
-  // Only default to text-only when bolt_text_only is explicitly passed.
-  // Do NOT default to true just because bolt_run_id is set — creator campaigns run via BOLT too.
+  // Only default to text-only when the adapter explicitly passes that setting.
   const boltTextOnly = boltTextOnlyBody != null ? Boolean(boltTextOnlyBody) : false;
+  void variantMetadata;
     const eligiblePlatforms: string[] | undefined =
       Array.isArray(eligiblePlatformsBody) && eligiblePlatformsBody.length > 0
         ? eligiblePlatformsBody.map((p: unknown) => String(p).toLowerCase().replace(/^twitter$/i, 'x'))
@@ -261,9 +261,9 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       const distributionStrategy = (weekBlueprint as any).distribution_strategy as string | undefined;
       const fromStrategy =
         distributionStrategy === 'QUICK_LAUNCH'
-          ? { campaignMode: 'QUICK_LAUNCH' as const, distributionMode: 'same_day_per_topic' as const }
+          ? { distributionProfile: 'QUICK_LAUNCH' as const, distributionMode: 'same_day_per_topic' as const }
           : distributionStrategy === 'STAGGERED'
-            ? { campaignMode: 'STRATEGIC' as const, distributionMode: 'staggered' as const }
+            ? { distributionProfile: 'STRATEGIC' as const, distributionMode: 'staggered' as const }
             : null;
       const distributionMode =
         fromStrategy?.distributionMode ??
@@ -472,7 +472,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           const baseTopic = topics[globalTopicIdx % topics.length]!;
           const topic = deriveSubTopic(baseTopic, contentType, k, synthTargetAudience);
           globalTopicIdx++;
-          const isCreatorCt = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts'].includes(contentType);
+          const requiresMediaBrief = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts'].includes(contentType);
           topic_slots.push({
             topic,
             global_progression_index: synthGlobalIdx,
@@ -484,7 +484,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
               pain_point: deriveSynthPainPoint(topic),
               outcome_promise: deriveSynthOutcomePromise(topic, contentType),
               // Text enrichment (non-creator types)
-              ...(!isCreatorCt ? {
+              ...(!requiresMediaBrief ? {
                 hook: deriveTextHook(topic, contentType),
                 key_points: deriveKeyPoints(topic, objective, contentType),
                 seo_focus: deriveSEOFocus(topic, objective),
@@ -493,7 +493,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
                 repurpose_angles: deriveRepurposeAngles(topic, contentType),
               } : {}),
               // Creator enrichment
-              ...(isCreatorCt ? {
+              ...(requiresMediaBrief ? {
                 visual_hook: deriveVisualHook(topic, contentType),
                 image_prompt: deriveImagePrompt(topic, contentType, platforms),
                 video_prompt: contentType !== 'carousel' ? deriveVideoPrompt(topic, contentType, platforms) : undefined,
@@ -890,7 +890,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // so the block processor generates format-appropriate content.
         const contentType = String(item.contentType || 'post');
         const normalizedContentType = contentType.toLowerCase().trim();
-        const isCreatorIntent = ['video', 'reel', 'short', 'carousel', 'image', 'story', 'podcast'].includes(normalizedContentType);
+        const requiresMediaIntent = ['video', 'reel', 'short', 'carousel', 'image', 'story', 'podcast'].includes(normalizedContentType);
         const execCategory = getExecutionCategoryForContentType(contentType);
         const aiGenerated = executionCategoryToAiGenerated(execCategory);
 
@@ -910,7 +910,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         if (creatorCardForRow) {
           (enriched as any).creator_card = creatorCardForRow;
         }
-        const derivedAssetType = isCreatorIntent ? deriveCreatorAssetTypeFromIntent({
+        const derivedAssetType = requiresMediaIntent ? deriveCreatorAssetTypeFromIntent({
           contentType: normalizedContentType,
           targetPlatforms: [normalizePlatformKey(platform)],
         }) : null;
@@ -936,15 +936,15 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           priority: 'medium',
           ai_generated: aiGenerated,
           target_audience: item.whoAreWeWritingFor,
-          intent_type: isCreatorIntent ? 'creator' : 'text',
-          asset_type: isCreatorIntent
+          intent_type: requiresMediaIntent ? 'creator' : 'text',
+          asset_type: requiresMediaIntent
             ? (
                 typeof creatorCardForRow?.asset_type === 'string' && creatorCardForRow.asset_type.trim()
                   ? creatorCardForRow.asset_type.trim()
                   : derivedAssetType
               )
             : null,
-          template_id: isCreatorIntent
+          template_id: requiresMediaIntent
             ? (
                 typeof creatorCardForRow?.template_id === 'string' && creatorCardForRow.template_id.trim()
                   ? creatorCardForRow.template_id.trim()

@@ -72,11 +72,14 @@ import {
   ensureSectionFloor,
   SNAPSHOT_SECTION_DEFINITIONS,
 } from './snapshotReport/sectionAssemblyHelpers';
+import { signalAvailabilityFromDecisions } from './snapshotReport/signalAvailability';
 import {
-  ensureSnapshotDecisionFloor as ensureSnapshotDecisionFloorInternal,
-  signalAvailabilityFromDecisions,
-} from './snapshotReport/floorHelpers';
-export { ensureSnapshotDecisionFloor } from './snapshotReport/floorHelpers';
+  classifySystemMaturity,
+  emptyEnvelope,
+  measuredEnvelope,
+} from './snapshotReport/canonicalScoreState';
+import { buildCanonicalReport } from './canonicalReport/canonicalReportBuilder';
+import type { CanonicalReport } from './canonicalReport/canonicalReportTypes';
 import {
   buildGeoAeoExecutiveSummary,
   buildGeoAeoVisuals,
@@ -106,9 +109,6 @@ import {
   type StrategicContext,
 } from './snapshotReportTypes';
 
-const SNAPSHOT_MIN_INSIGHTS = 3;
-const SNAPSHOT_MIN_ACTIONS = 2;
-
 function mapIssueToExecutiveArea(issueType: string): 'technical_seo' | 'content' | 'keywords' | 'backlinks' | 'visibility' {
   if (/(backlink|authority)/.test(issueType)) return 'backlinks';
   if (/(keyword|ranking|impression_click_gap)/.test(issueType)) return 'keywords';
@@ -135,7 +135,7 @@ function executivePriorityBand(score: number): 'high' | 'medium' | 'low' {
   return 'low';
 }
 
-export function composeSnapshotReportFromDecisions(params: {
+export async function composeSnapshotReportFromDecisions(params: {
   companyId: string;
   snapshotDecisions: PersistedDecisionObject[];
   supplementalGrowthDecisions?: PersistedDecisionObject[];
@@ -143,7 +143,7 @@ export function composeSnapshotReportFromDecisions(params: {
   readiness?: ReportReadinessResult | null;
   publicAudit?: Awaited<ReturnType<typeof buildPublicDomainAuditDecisions>> | null;
   competitorIntelligenceOverride?: CompetitorIntelligenceResult | null;
-}): SnapshotReport {
+}): Promise<SnapshotReport> {
   const supplementalGrowthDecisions = params.supplementalGrowthDecisions ?? [];
   const baseCombined = uniqueById([...params.snapshotDecisions, ...supplementalGrowthDecisions]);
   const competitorIntelligence = enforceFinalCompetitorIntelligenceSync({
@@ -158,18 +158,17 @@ export function composeSnapshotReportFromDecisions(params: {
     gaps: competitorIntelligence.generated_gaps,
     reportTier: 'snapshot',
   });
-  const combined = uniqueById([...baseCombined, ...competitorDecisions]);
-  const floor = ensureSnapshotDecisionFloorInternal({
-    companyId: params.companyId,
-    decisions: combined,
-    resolvedInput: params.resolvedInput,
-    minInsights: SNAPSHOT_MIN_INSIGHTS,
-  });
-  const finalDecisions = floor.decisions;
-  const signalAvailability = signalAvailabilityFromDecisions({
+  // Canonical Trust Foundation: no synthetic decision floor. We use real evidence only.
+  const finalDecisions = uniqueById([...baseCombined, ...competitorDecisions]);
+  // Internal helper: derive a count of weak/missing signal channels for the narrative
+  // helpers. This replaces the previously-public signal_availability field on the report.
+  const _weakSignalSnapshot = signalAvailabilityFromDecisions({
     decisions: finalDecisions,
     resolvedInput: params.resolvedInput,
   });
+  const weakSignalChannels = Object.entries(_weakSignalSnapshot)
+    .filter(([, status]) => status !== 'NORMAL')
+    .map(([key]) => key.replace(/_/g, ' '));
   const companyContext = extractCompanyNarrativeContext({
     resolvedInput: params.resolvedInput,
   });
@@ -246,74 +245,15 @@ export function composeSnapshotReportFromDecisions(params: {
     };
   });
 
-  let totalInsights = sections.reduce((sum, section) => sum + section.insights.length, 0);
-  let totalActions = sections.reduce((sum, section) => sum + section.actions.length, 0);
-
-  if (totalInsights < SNAPSHOT_MIN_INSIGHTS && sections.length > 0) {
-    const existingIds = new Set(sections.flatMap((section) => section.insights.map((item) => item.decision_id)));
-    const signalCounts = new Map<string, number>();
-    for (const section of sections) {
-      for (const insight of section.insights) {
-        const key = signalKeyFromIssueType(insight.issue_type);
-        signalCounts.set(key, (signalCounts.get(key) ?? 0) + 1);
-      }
-    }
-    for (const decision of finalDecisions) {
-      if (existingIds.has(decision.id)) continue;
-      const signalKey = signalKeyFromIssueType(decision.issue_type);
-      if ((signalCounts.get(signalKey) ?? 0) >= 2) continue;
-      sections[0].insights.push(toInsight(decision, companyContext));
-      existingIds.add(decision.id);
-      signalCounts.set(signalKey, (signalCounts.get(signalKey) ?? 0) + 1);
-      totalInsights += 1;
-      if (totalInsights >= SNAPSHOT_MIN_INSIGHTS) break;
-    }
-  }
-
-  if (totalActions < SNAPSHOT_MIN_ACTIONS && sections.length > 0) {
-    const existingIds = new Set(sections.flatMap((section) => section.actions.map((item) => item.decision_id)));
-    for (const decision of finalDecisions) {
-      if (existingIds.has(decision.id)) continue;
-      sections[0].actions.push(toAction(decision, companyContext, strategicContext, recommendationContext));
-      existingIds.add(decision.id);
-      totalActions += 1;
-      if (totalActions >= SNAPSHOT_MIN_ACTIONS) break;
-    }
-    sections[0].actions = sortSectionActions(sections[0].actions);
-  }
-
+  // Canonical Trust Foundation: no min-insight/min-action backfill loops. Sections render
+  // exactly what their evidence supports — empty sections are honest sections.
   sections = capSignalReuseAcrossSections(sections, signalKeyFromIssueType, 2);
   sections = capActionMentionsAcrossSections(sections, 1);
-  totalInsights = sections.reduce((sum, section) => sum + section.insights.length, 0);
-  totalActions = sections.reduce((sum, section) => sum + section.actions.length, 0);
-
-  if (totalInsights < SNAPSHOT_MIN_INSIGHTS && sections.length > 0) {
-    const existingIds = new Set(sections.flatMap((section) => section.insights.map((item) => item.decision_id)));
-    for (const decision of finalDecisions) {
-      if (existingIds.has(decision.id)) continue;
-      sections[0].insights.push(toInsight(decision, companyContext));
-      existingIds.add(decision.id);
-      totalInsights += 1;
-      if (totalInsights >= SNAPSHOT_MIN_INSIGHTS) break;
-    }
-  }
-
-  if (totalActions < SNAPSHOT_MIN_ACTIONS && sections.length > 0) {
-    const existingIds = new Set(sections.flatMap((section) => section.actions.map((item) => item.decision_id)));
-    for (const decision of finalDecisions) {
-      if (existingIds.has(decision.id)) continue;
-      sections[0].actions.push(toAction(decision, companyContext, strategicContext, recommendationContext));
-      existingIds.add(decision.id);
-      totalActions += 1;
-      if (totalActions >= SNAPSHOT_MIN_ACTIONS) break;
-    }
-    sections[0].actions = sortSectionActions(sections[0].actions);
-  }
 
   const topPriorities = buildTopPriorities(sections);
   const summary = buildSummary({
     sections,
-    signalAvailability,
+    weakSignalChannels,
     competitorIntelligence,
     narrative,
     readiness: params.readiness,
@@ -340,10 +280,39 @@ export function composeSnapshotReportFromDecisions(params: {
     inferStructuredActionTrack,
     buildActionPlan,
   });
+  // Canonical Trust Foundation: classify system maturity from measured foundation vs authority signals.
+  // This distinguishes structurally-weak systems (broken fundamentals) from early-stage brands
+  // (good fundamentals, immature market authority) so narratives don't punish new companies.
+  const technicalRadarValue = visualIntelligence.seo_capability_radar.technical_seo_score;
+  const contentQualityValue = visualIntelligence.seo_capability_radar.content_quality_score;
+  const backlinksValue = visualIntelligence.seo_capability_radar.backlinks_score;
+  const competitorIntelValue = visualIntelligence.seo_capability_radar.competitor_intelligence_score;
+  const foundationEnvelopes = [
+    typeof technicalRadarValue === 'number'
+      ? measuredEnvelope({ value: technicalRadarValue, evidence_count: 1, evidence_sources: ['crawler'] })
+      : emptyEnvelope(),
+    typeof contentQualityValue === 'number'
+      ? measuredEnvelope({ value: contentQualityValue, evidence_count: 1, evidence_sources: ['decisions'] })
+      : emptyEnvelope(),
+  ];
+  const authorityEnvelopes = [
+    typeof backlinksValue === 'number'
+      ? measuredEnvelope({ value: backlinksValue, evidence_count: 1, evidence_sources: ['decisions'] })
+      : emptyEnvelope('unavailable'),
+    typeof competitorIntelValue === 'number'
+      ? measuredEnvelope({ value: competitorIntelValue, evidence_count: 1, evidence_sources: ['competitor_intelligence'] })
+      : emptyEnvelope(),
+  ];
+  const systemMaturity = classifySystemMaturity({
+    foundationEnvelopes,
+    authorityEnvelopes,
+  });
+
   const unifiedIntelligenceSummary = buildUnifiedIntelligenceSummary({
     coreProblem,
     seoSummary: seoExecutiveSummary,
     geoAeoSummary: geoAeoExecutiveSummary,
+    systemMaturity,
     narrativeContext,
   });
   const competitorVisuals = buildCompetitorVisuals({
@@ -363,7 +332,7 @@ export function composeSnapshotReportFromDecisions(params: {
     coreProblem,
     companyContext,
     strategicContext,
-    signalAvailability,
+    weakSignalChannelCount: weakSignalChannels.length,
     unifiedSummary: unifiedIntelligenceSummary,
     seoSummary: seoExecutiveSummary,
     geoAeoSummary: geoAeoExecutiveSummary,
@@ -372,13 +341,19 @@ export function composeSnapshotReportFromDecisions(params: {
     topPriorities,
   });
 
-  return {
+  // Build the canonical (Phase 2) report layer over the snapshot. The canonical layer
+  // becomes the source of truth for executive surface, radar, pillars, action playbook,
+  // and evidence trace. The legacy fields below remain so trend/PDF/comparison consumers
+  // can be migrated in dedicated passes; new UI surfaces consume `canonical` only.
+  const canonicalSnapshotShape: SnapshotReport = {
     report_type: 'snapshot',
     score,
     diagnosis,
     summary,
     primary_problem: coreProblem,
     secondary_problems: narrative.secondary_problems.slice(0, 2),
+    system_maturity: systemMaturity,
+    canonical: undefined as unknown as CanonicalReport,
     seo_executive_summary: seoExecutiveSummary,
     geo_aeo_visuals: geoAeoVisuals,
     geo_aeo_executive_summary: geoAeoExecutiveSummary,
@@ -387,7 +362,6 @@ export function composeSnapshotReportFromDecisions(params: {
     competitor_intelligence_summary: competitorIntelligenceSummary,
     competitive_snapshot: competitiveSnapshot,
     visual_intelligence: visualIntelligence,
-    signal_availability: signalAvailability,
     company_context: {
       company_name: companyContext.companyName,
       domain: companyContext.domain,
@@ -418,13 +392,26 @@ export function composeSnapshotReportFromDecisions(params: {
       snapshot_decisions: params.snapshotDecisions.length,
       supplemental_growth_decisions: supplementalGrowthDecisions.length,
       competitor_gap_decisions_added: competitorDecisions.length,
-      fallback_decisions_added: floor.fallbackAdded,
+      fallback_decisions_added: 0,
       final_decisions: finalDecisions.length,
       final_insights: sections.reduce((sum, section) => sum + section.insights.length, 0),
       final_actions: sections.reduce((sum, section) => sum + section.actions.length, 0),
     },
     sections,
   };
+  // Phase 3: canonical builder is async because it queries the provider registry
+  // (LLM citation matrix, knowledge graph, authority inflow, trust, benchmark,
+  // trajectory). Every provider returns `state: 'unavailable'` by default — no
+  // synthetic data is introduced.
+  canonicalSnapshotShape.canonical = await buildCanonicalReport(canonicalSnapshotShape, {
+    brandName: companyContext.companyName,
+    domain: companyContext.domain,
+    category: params.resolvedInput?.resolved.businessType ?? null,
+    competitors: (params.resolvedInput?.resolved.competitors ?? []).map((c) => String(c)),
+    productServices: companyContext.productServices,
+    companyId: params.companyId,
+  });
+  return canonicalSnapshotShape;
 }
 
 export async function composeSnapshotReport(
@@ -470,17 +457,5 @@ export async function composeSnapshotReport(
   });
 }
 
-export function createSnapshotInsightsFromComposition(insights: ComposedDecisionInsight[]): SnapshotInsight[] {
-  return insights.map((insight) => ({
-    decision_id: insight.decision_id,
-    title: insight.title,
-    description: insight.description,
-    why_it_matters: '',
-    issue_type: insight.issue_type,
-    confidence_score: insight.confidence_score,
-    impact_score: insight.impact_score,
-    recommendation: insight.recommendation,
-    action_type: insight.action_type,
-    business_impact: insight.business_impact || '',
-  }));
-}
+// Phase 2 deletion: createSnapshotInsightsFromComposition was dead code (no callers).
+// Snapshot insights now flow through the canonical pillar/dimension structure.

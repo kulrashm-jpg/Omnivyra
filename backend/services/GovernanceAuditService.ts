@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Stage 28 — Autonomous Governance Audit & Drift Scanner.
  * Orchestration + automation only. No evaluation, replay, or campaign mutation.
@@ -74,7 +75,7 @@ export async function runGovernanceAudit(companyId: string): Promise<GovernanceA
       auditStatus,
     };
 
-    const { error: insertError } = await supabase.from('governance_audit_runs').insert({
+    const { error: insertError } = await ownedDbTable('governance_audit_runs').insert({
       company_id: companyId,
       campaigns_scanned: campaignsScanned,
       drifted_campaigns: driftedCampaigns,

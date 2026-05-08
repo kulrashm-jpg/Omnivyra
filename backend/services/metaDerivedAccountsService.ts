@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { encryptTokenColumns, setToken, type TokenObject } from '../auth/tokenStore';
+import { ownedDbTable } from '../db/writeOwner';
 
 type MetaInstagramAccount = {
   id: string;
@@ -89,8 +90,7 @@ async function deactivateLegacyThreadsRows(input: {
     refresh_token: null,
     updated_at: new Date().toISOString(),
   };
-  let query = supabase
-    .from('social_accounts')
+  let query = ownedDbTable('social_accounts')
     .update(payload)
     .eq('user_id', input.userId)
     .eq('platform', 'threads')
@@ -99,8 +99,7 @@ async function deactivateLegacyThreadsRows(input: {
 
   const { error } = await query;
   if (error && missingColumn(error)) {
-    let fallback = supabase
-      .from('social_accounts')
+    let fallback = ownedDbTable('social_accounts')
       .update({
         is_active: false,
         access_token: null,
@@ -130,8 +129,7 @@ async function upsertSocialAccount(input: {
   extraColumns: Record<string, unknown>;
   fallbackMetrics: Record<string, unknown>;
 }) {
-  const baseQuery = supabase
-    .from('social_accounts')
+  const baseQuery = ownedDbTable('social_accounts')
     .select('id')
     .eq('user_id', input.userId)
     .eq('platform', input.platform)
@@ -171,14 +169,12 @@ async function upsertSocialAccount(input: {
   let accountId = existing?.id as string | undefined;
 
   if (accountId) {
-    const { error } = await supabase
-      .from('social_accounts')
+    const { error } = await ownedDbTable('social_accounts')
       .update(withExtra)
       .eq('id', accountId);
 
     if (error && missingColumn(error)) {
-      const { error: fallbackError } = await supabase
-        .from('social_accounts')
+      const { error: fallbackError } = await ownedDbTable('social_accounts')
         .update({
           ...common,
           account_metrics: input.fallbackMetrics,
@@ -189,15 +185,13 @@ async function upsertSocialAccount(input: {
       throw error;
     }
   } else {
-    const { data, error } = await supabase
-      .from('social_accounts')
+    const { data, error } = await ownedDbTable('social_accounts')
       .insert({ ...withExtra, created_at: new Date().toISOString() })
       .select('id')
       .single();
 
     if (error && missingColumn(error)) {
-      const { data: fallbackData, error: fallbackError } = await supabase
-        .from('social_accounts')
+      const { data: fallbackData, error: fallbackError } = await ownedDbTable('social_accounts')
         .insert({
           ...common,
           account_metrics: input.fallbackMetrics,
@@ -290,8 +284,7 @@ async function upsertInstagramAndThreads(input: DerivedAccountInput): Promise<{
     },
   });
 
-  let verificationQuery = supabase
-    .from('social_accounts')
+  let verificationQuery = ownedDbTable('social_accounts')
     .select('*')
     .eq('platform', 'threads')
     .eq('platform_user_id', threadsAccount.id)

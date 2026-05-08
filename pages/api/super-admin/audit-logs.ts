@@ -1,6 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { requireAdminRateLimit, requireSuperAdminUser } from '../../../backend/services/requestAccessService';
+import { requireAdminRateLimit } from '../../../backend/services/requestAccessService';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -8,7 +10,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   if (!(await requireAdminRateLimit(req, res, 'rl:super-admin:audit-logs', 20, 60))) return;
 
-  if (!(await requireSuperAdminUser(req, res))) return;
+  // Phase: Platform Authority Hard Enforcement. SUPER_ADMIN_DASHBOARD_VIEW
+  // is a platform-tier capability — replaces the legacy `requireSuperAdminUser`
+  // Bearer-only check with canonical capability gate + audit linkage.
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'super-admin audit log read',
+  });
+  if (guard.ok !== true) return;
 
   const { data, error: dbError } = await supabase
     .from('super_admin_audit_logs')

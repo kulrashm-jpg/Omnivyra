@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Content Opportunity Storage Service
  * Persists content opportunities and manages status updates.
@@ -47,8 +48,7 @@ export async function getStoredContentOpportunity(
   id: string,
   organizationId: string
 ): Promise<StoredContentOpportunity | null> {
-  const { data, error } = await supabase
-    .from('engagement_content_opportunities')
+  const { data, error } = await ownedDbTable('engagement_content_opportunities')
     .select('*')
     .eq('id', id)
     .eq('organization_id', organizationId)
@@ -79,8 +79,7 @@ export async function storeContentOpportunity(
 ): Promise<StoredContentOpportunity | null> {
   const cutoff = new Date(Date.now() - DUPLICATE_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: candidates } = await supabase
-    .from('engagement_content_opportunities')
+  const { data: candidates } = await ownedDbTable('engagement_content_opportunities')
     .select('id, organization_id, topic, opportunity_type, suggested_title, confidence_score, signal_summary, source_topic, status, created_at, updated_at')
     .eq('organization_id', organizationId)
     .eq('topic', opportunity.topic)
@@ -97,8 +96,7 @@ export async function storeContentOpportunity(
   }
 
   const now = new Date().toISOString();
-  const { data: inserted, error } = await supabase
-    .from('engagement_content_opportunities')
+  const { data: inserted, error } = await ownedDbTable('engagement_content_opportunities')
     .insert({
       organization_id: organizationId,
       topic: opportunity.topic,
@@ -126,8 +124,7 @@ export async function updateContentOpportunityStatus(
   status: ContentOpportunityStatus,
   organizationId: string
 ): Promise<boolean> {
-  const { error } = await supabase
-    .from('engagement_content_opportunities')
+  const { error } = await ownedDbTable('engagement_content_opportunities')
     .update({ status, updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('organization_id', organizationId);

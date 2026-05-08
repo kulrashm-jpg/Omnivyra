@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Usage threshold alerting: record when org crosses 80%, 95%, or 100% of plan limit.
  * Does not block execution. Does not modify meter or ledger. Signal only.
@@ -28,8 +29,7 @@ export async function evaluateUsageThresholds(organizationId: string): Promise<v
   try {
     const { year, month } = currentYearMonth();
 
-    const { data: meterRow } = await supabase
-      .from('usage_meter_monthly')
+    const { data: meterRow } = await ownedDbTable('usage_meter_monthly')
       .select('llm_total_tokens, external_api_calls, automation_executions')
       .eq('organization_id', organizationId)
       .eq('year', year)
@@ -68,8 +68,7 @@ export async function evaluateUsageThresholds(organizationId: string): Promise<v
       const threshold = thresholdForPercent(percent);
       if (threshold == null) continue;
 
-      const { data: existing } = await supabase
-        .from('usage_threshold_alerts')
+      const { data: existing } = await ownedDbTable('usage_threshold_alerts')
         .select('id')
         .eq('organization_id', organizationId)
         .eq('resource_key', resource_key)
@@ -80,7 +79,7 @@ export async function evaluateUsageThresholds(organizationId: string): Promise<v
 
       if (existing?.id) continue;
 
-      await supabase.from('usage_threshold_alerts').insert({
+      await ownedDbTable('usage_threshold_alerts').insert({
         organization_id: organizationId,
         resource_key,
         year,

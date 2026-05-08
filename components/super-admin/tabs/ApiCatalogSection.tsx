@@ -1,6 +1,7 @@
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
 import React, { useState, useEffect } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 import { KNOWN_APIS } from '@/pages/super-admin.types';
 import {
   RefreshCw,
@@ -67,9 +68,9 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
     setLoadingCatalogApis(true);
     try {
       const r = await fetchWithAuth('/api/external-apis?scope=platform');
-      if (!r.ok) return;
-      const d = await r.json();
-      const apis: any[] = d.apis || [];
+      const parsed = await parseJsonResponse<{ apis?: any[] }>(r, '/api/external-apis?scope=platform');
+      if (parsed.ok !== true) return;
+      const apis: any[] = parsed.data.apis || [];
       setCatalogApis(apis);
 
       // Auto-fix any stored entries whose base_url is outdated (e.g. /v1 → /v1/models)
@@ -186,9 +187,9 @@ export default function ApiCatalogSection({ categoryKey }: ApiCatalogSectionProp
     setAccountsLoadingId(apiId);
     try {
       const res = await fetchWithAuth(`/api/provider-accounts?api_source_id=${apiId}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setAccountsByApiId((prev) => ({ ...prev, [apiId]: data.accounts || [] }));
+      const parsed = await parseJsonResponse<{ accounts?: any[] }>(res, '/api/provider-accounts');
+      if (parsed.ok !== true) return;
+      setAccountsByApiId((prev) => ({ ...prev, [apiId]: parsed.data.accounts || [] }));
     } catch { /* non-critical */ } finally { setAccountsLoadingId(null); }
   };
 

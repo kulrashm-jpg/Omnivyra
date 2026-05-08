@@ -1,4 +1,5 @@
 import { supabase } from '../../db/supabaseClient';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Durable RPA artifact storage. Screenshots are uploaded to Supabase
@@ -78,7 +79,7 @@ export async function saveRpaArtifact(input: SaveArtifactInput): Promise<SavedAr
   // Index row regardless of upload outcome — operators can cross-check
   // failures against rpa_artifacts to identify lost screenshots.
   try {
-    await supabase.from('rpa_artifacts').insert({
+    await ownedDbTable('rpa_artifacts').insert({
       action_id: input.action_id,
       correlation_id: input.correlation_id ?? null,
       organization_id: input.organization_id,

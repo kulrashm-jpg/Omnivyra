@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import type { EngagementPlaybook } from '../../backend/services/playbooks/playbookTypes';
+import type { EngagementPlaybook } from '../../lib/shared/playbookTypes';
 
 type PlaybookEditorProps = {
   playbook?: EngagementPlaybook | null;
@@ -316,3 +316,4 @@ export default function PlaybookEditor({ playbook, onSave, onCancel }: PlaybookE
 }
 
 export { defaultPlaybook };
+

@@ -1,4 +1,7 @@
 import type { PriorityType } from '../../../backend/services/actionPriorityService';
+import type { ScoreState, SystemMaturityClass } from '../../../backend/services/snapshotReport/canonicalScoreState';
+
+export type { ScoreState, SystemMaturityClass } from '../../../backend/services/snapshotReport/canonicalScoreState';
 
 export type ReportViewInsight = {
   text: string;
@@ -83,6 +86,22 @@ export type ReportViewSeoVisuals = {
       competitor_intelligence_score: string[] | null;
       content_quality_score: string[] | null;
     };
+    axis_states?: {
+      technical_seo_score: ScoreState;
+      keyword_research_score: ScoreState;
+      rank_tracking_score: ScoreState;
+      backlinks_score: ScoreState;
+      competitor_intelligence_score: ScoreState;
+      content_quality_score: ScoreState;
+    };
+    benchmark?: {
+      technical_seo_score: number | null;
+      keyword_research_score: number | null;
+      rank_tracking_score: number | null;
+      backlinks_score: number | null;
+      competitor_intelligence_score: number | null;
+      content_quality_score: number | null;
+    };
     tooltips: Record<string, string>;
     insightSentence: string;
   };
@@ -131,7 +150,8 @@ export type ReportViewSeoVisuals = {
 };
 
 export type ReportViewSeoExecutiveSummary = {
-  overallHealthScore: number;
+  overallHealthScore: number | null;
+  overallHealthScoreState: ScoreState;
   primaryProblem: {
     title: string;
     impactedArea: 'technical_seo' | 'content' | 'keywords' | 'backlinks' | 'visibility';
@@ -176,6 +196,22 @@ export type ReportViewGeoAeoVisuals = {
     confidence: 'high' | 'medium' | 'low';
     data_source_strength: 'strong' | 'inferred' | 'weak' | 'missing';
     source_tags: string[] | null;
+    axis_states?: {
+      answer_coverage_score: ScoreState;
+      entity_clarity_score: ScoreState;
+      topical_authority_score: ScoreState;
+      citation_readiness_score: ScoreState;
+      content_structure_score: ScoreState;
+      freshness_score: ScoreState;
+    };
+    benchmark?: {
+      answer_coverage_score: number | null;
+      entity_clarity_score: number | null;
+      topical_authority_score: number | null;
+      citation_readiness_score: number | null;
+      content_structure_score: number | null;
+      freshness_score: number | null;
+    };
   };
   queryAnswerCoverageMap: {
     queries: Array<{
@@ -208,7 +244,8 @@ export type ReportViewGeoAeoVisuals = {
 };
 
 export type ReportViewGeoAeoExecutiveSummary = {
-  overallAiVisibilityScore: number;
+  overallAiVisibilityScore: number | null;
+  overallAiVisibilityScoreState: ScoreState;
   primaryGap: {
     title: string;
     type: 'answer_gap' | 'entity_gap' | 'structure_gap';
@@ -233,7 +270,9 @@ export type ReportViewGeoAeoExecutiveSummary = {
 };
 
 export type ReportViewUnifiedIntelligenceSummary = {
-  unifiedScore: number;
+  unifiedScore: number | null;
+  unifiedScoreState: ScoreState;
+  systemMaturity: SystemMaturityClass;
   marketContextSummary: string;
   dominantGrowthChannel: 'seo' | 'geo_aeo' | 'balanced';
   primaryConstraint: {

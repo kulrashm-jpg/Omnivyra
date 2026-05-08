@@ -1,5 +1,6 @@
 import { supabase } from '../../db/supabaseClient';
 import { composeSnapshotReport } from '../../services/snapshotReportService';
+import { ownedDbTable } from '../../db/writeOwner';
 
 type GeneratedRow = {
   id: string;
@@ -99,8 +100,7 @@ describe('manual snapshot activation validation', () => {
   it(
     'generates fresh snapshots and validates activation signals',
     async () => {
-      const baseRowsRes = await supabase
-        .from('reports')
+      const baseRowsRes = await ownedDbTable('reports')
         .select('id, report_type, metadata, data, created_at')
         .eq('report_type', 'content_readiness')
         .order('created_at', { ascending: false })
@@ -126,8 +126,7 @@ describe('manual snapshot activation validation', () => {
         ? Number((beforeNullSignals / beforeSnapshots.length).toFixed(2))
         : null;
 
-      const membershipRes = await supabase
-        .from('user_company_roles')
+      const membershipRes = await ownedDbTable('user_company_roles')
         .select('company_id, user_id')
         .eq('status', 'active')
         .limit(1)
@@ -162,8 +161,7 @@ describe('manual snapshot activation validation', () => {
         });
 
         const createdAt = new Date(now + index * 2000).toISOString();
-        const insertRes = await supabase
-          .from('reports')
+        const insertRes = await ownedDbTable('reports')
           .insert({
             company_id: companyId,
             user_id: userId,
@@ -208,8 +206,7 @@ describe('manual snapshot activation validation', () => {
         });
 
         const createdAt = new Date(now + (targets.length + rerun) * 2000).toISOString();
-        const insertRes = await supabase
-          .from('reports')
+        const insertRes = await ownedDbTable('reports')
           .insert({
             company_id: companyId,
             user_id: userId,
@@ -261,8 +258,7 @@ describe('manual snapshot activation validation', () => {
         ? Number((afterNullSignals / generatedReports.length).toFixed(2))
         : null;
 
-      const calendlyRowsRes = await supabase
-        .from('reports')
+      const calendlyRowsRes = await ownedDbTable('reports')
         .select('id, created_at, report_type, metadata')
         .eq('company_id', companyId)
         .eq('domain', 'calendly.com')
@@ -316,6 +312,4 @@ describe('manual snapshot activation validation', () => {
     240000,
   );
 });
-
-
 

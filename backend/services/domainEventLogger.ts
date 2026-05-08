@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * domainEventLogger.ts
  *
@@ -46,7 +47,7 @@ export interface LogDomainEventInput {
  */
 export async function logDomainEvent(input: LogDomainEventInput): Promise<boolean> {
   try {
-    const { error } = await supabase.from('domain_events').insert({
+    const { error } = await ownedDbTable('domain_events').insert({
       event_type:   input.event_type,
       company_id:   input.company_id   ?? null,
       final_domain: input.final_domain ?? null,

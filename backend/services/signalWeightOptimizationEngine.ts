@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Signal Weight Optimization Engine
  * Phase 6: Adjusts weights for signal relevance, opportunity detection, correlation scoring.
@@ -32,8 +33,7 @@ async function loadLastWeights(companyId: string): Promise<Record<string, number
   const types = ['signal_relevance_weight', 'opportunity_detection_weight', 'correlation_scoring_weight'];
   const weights: Record<string, number> = { ...DEFAULT_WEIGHTS };
   for (const t of types) {
-    const { data } = await supabase
-      .from('intelligence_optimization_metrics')
+    const { data } = await ownedDbTable('intelligence_optimization_metrics')
       .select('metric_value')
       .eq('company_id', companyId)
       .eq('metric_type', t)
@@ -53,14 +53,12 @@ export async function computeOptimizedWeights(
 ): Promise<SignalWeightResult> {
   const [weights, outcomes, feedback] = await Promise.all([
     loadLastWeights(companyId),
-    supabase
-      .from('intelligence_outcomes')
+    ownedDbTable('intelligence_outcomes')
       .select('success_score')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(200),
-    supabase
-      .from('recommendation_feedback')
+    ownedDbTable('recommendation_feedback')
       .select('feedback_score')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
@@ -109,7 +107,7 @@ export async function persistOptimizedWeights(
   weights: SignalWeightResult['updated_signal_weights']
 ): Promise<void> {
   for (const [metricType, value] of Object.entries(weights)) {
-    await supabase.from('intelligence_optimization_metrics').upsert(
+    await ownedDbTable('intelligence_optimization_metrics').upsert(
       {
         company_id: companyId,
         metric_type: metricType,

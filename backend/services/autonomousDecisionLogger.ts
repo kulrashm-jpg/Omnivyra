@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Autonomous Decision Logger
  *
@@ -30,7 +31,7 @@ export type AutonomousDecision = {
 
 export async function logDecision(decision: AutonomousDecision): Promise<void> {
   try {
-    await supabase.from('autonomous_decision_logs').insert({
+    await ownedDbTable('autonomous_decision_logs').insert({
       company_id:    decision.company_id,
       campaign_id:   decision.campaign_id ?? null,
       decision_type: decision.decision_type,
@@ -58,8 +59,7 @@ export async function getDecisionLog(
   outcome: string | null;
   created_at: string;
 }>> {
-  let query = supabase
-    .from('autonomous_decision_logs')
+  let query = ownedDbTable('autonomous_decision_logs')
     .select('*')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })

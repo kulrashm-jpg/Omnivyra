@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../../backend/db/writeOwner';
 /**
  * Auth audit log — structured, fire-and-forget writes to auth_audit_logs.
  *
@@ -57,7 +58,7 @@ export async function logAuthEvent(
   } = {},
 ): Promise<void> {
   try {
-    await getAuditClient().from('auth_audit_logs').insert({
+    await ownedDbTable('auth_audit_logs').insert({
       event,
       user_id:  opts.userId   ?? null,
       metadata: opts.metadata ?? null,

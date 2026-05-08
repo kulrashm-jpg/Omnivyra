@@ -1,5 +1,6 @@
 import { supabase } from '../../db/supabaseClient';
 import { createHash } from 'crypto';
+import { ownedDbTable } from '../../db/writeOwner';
 
 /**
  * Recommendation tracking service.
@@ -53,8 +54,7 @@ export async function recordRecommendationShown(input: RecordShownInput): Promis
   try {
     // Upsert-style: check if a row already exists under this shown-id
     // in metadata; if not, insert.
-    const { data: existing } = await supabase
-      .from('intelligence_recommendations')
+    const { data: existing } = await ownedDbTable('intelligence_recommendations')
       .select('id')
       .eq('organization_id', input.organization_id)
       .eq('pattern_type', input.pattern_type)
@@ -64,7 +64,7 @@ export async function recordRecommendationShown(input: RecordShownInput): Promis
       .maybeSingle();
     if (existing) return { shown_id: shownId, recorded: false };
 
-    const { error } = await supabase.from('intelligence_recommendations').insert({
+    const { error } = await ownedDbTable('intelligence_recommendations').insert({
       organization_id: input.organization_id,
       platform: input.platform ?? null,
       action_type: input.action_type ?? null,
@@ -98,8 +98,7 @@ export async function recordRecommendationOutcome(input: {
   execution_correlation_id?: string | null;
 }): Promise<{ updated: boolean; row_id?: string; error?: string }> {
   try {
-    let q = supabase
-      .from('intelligence_recommendations')
+    let q = ownedDbTable('intelligence_recommendations')
       .select('id, accepted_at, rejected_at')
       .eq('organization_id', input.organization_id)
       .eq('pattern_type', input.pattern_type)
@@ -121,8 +120,7 @@ export async function recordRecommendationOutcome(input: {
       patch.execution_correlation_id = input.execution_correlation_id;
     }
 
-    const { error } = await supabase
-      .from('intelligence_recommendations')
+    const { error } = await ownedDbTable('intelligence_recommendations')
       .update(patch)
       .eq('id', (row as any).id);
     if (error) return { updated: false, error: error.message };

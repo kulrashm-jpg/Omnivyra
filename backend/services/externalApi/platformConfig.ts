@@ -8,10 +8,12 @@ import type {
 import { isApiSourceExecutable, getEnabledApiIdsFromCompanyConfig } from './accessChecks';
 import { validatePlatformConfig } from './requestValidation';
 import {
+
   DEFAULT_RETRY_COUNT,
   DEFAULT_TIMEOUT_MS,
   DEFAULT_RATE_LIMIT_PER_MIN,
 } from './requestValidation';
+import { ownedDbTable } from '../../db/writeOwner';
 
 // ── Re-export validatePlatformConfig so callers can import from here ──────────
 export { validatePlatformConfig } from './requestValidation';
@@ -21,8 +23,7 @@ async function fetchHealthMapForApiIds(
   apiIds: string[]
 ): Promise<Record<string, ExternalApiHealth>> {
   if (apiIds.length === 0) return {};
-  const { data: healthData, error: healthError } = await supabase
-    .from('external_api_health')
+  const { data: healthData, error: healthError } = await ownedDbTable('external_api_health')
     .select('*')
     .in('api_source_id', apiIds);
   if (healthError || !healthData) return {};
@@ -81,8 +82,7 @@ export async function savePlatformConfig(input: Partial<ExternalApiSource>): Pro
     return next;
   };
 
-  let initial = await supabase
-    .from('external_api_sources')
+  let initial = await ownedDbTable('external_api_sources')
     .insert(payloadWithCompany)
     .select('*')
     .single();
@@ -93,8 +93,7 @@ export async function savePlatformConfig(input: Partial<ExternalApiSource>): Pro
   const message = initial.error.message || '';
   const sanitized = sanitizePayload(payloadWithCompany, message);
   if (Object.keys(sanitized).length !== Object.keys(payloadWithCompany).length) {
-    initial = await supabase
-      .from('external_api_sources')
+    initial = await ownedDbTable('external_api_sources')
       .insert(sanitized)
       .select('*')
       .single();
@@ -106,8 +105,7 @@ export async function savePlatformConfig(input: Partial<ExternalApiSource>): Pro
     throw new Error(`Failed to save platform config: ${message}`);
   }
 
-  const fallback = await supabase
-    .from('external_api_sources')
+  const fallback = await ownedDbTable('external_api_sources')
     .insert(sanitizePayload(basePayload, message))
     .select('*')
     .single();
@@ -124,8 +122,7 @@ export async function saveTenantPlatformConfig(
     throw new Error('company_id is required for tenant-scoped API');
   }
   const payload = { ...buildPlatformPayload(input), company_id: input.company_id };
-  let result = await supabase
-    .from('external_api_sources')
+  let result = await ownedDbTable('external_api_sources')
     .insert(payload)
     .select('*')
     .single();
@@ -135,8 +132,7 @@ export async function saveTenantPlatformConfig(
     if (message.toLowerCase().includes('is_preset')) {
       const sanitized = { ...payload };
       delete (sanitized as any).is_preset;
-      result = await supabase
-        .from('external_api_sources')
+      result = await ownedDbTable('external_api_sources')
         .insert(sanitized)
         .select('*')
         .single();
@@ -161,8 +157,7 @@ export async function getPlatformConfigs(
     return [];
   }
   const createQuery = () =>
-    supabase
-      .from('external_api_sources')
+    ownedDbTable('external_api_sources')
       .select('*')
       .order('created_at', { ascending: true });
 
@@ -191,8 +186,7 @@ export async function getPlatformConfigs(
   let selectedPresets = globalPresets.filter((preset: any) => enabledSet.has(preset.id));
 
   if (enabledIds.length > 0 && selectedPresets.length === 0) {
-    const { data: enabledSources } = await supabase
-      .from('external_api_sources')
+    const { data: enabledSources } = await ownedDbTable('external_api_sources')
       .select('*')
       .eq('is_active', true)
       .in('id', enabledIds);
@@ -204,8 +198,7 @@ export async function getPlatformConfigs(
 
   let data = [...companySpecific, ...selectedPresets];
   if (companyId && data.length === 0 && enabledIds.length > 0) {
-    const { data: fallbackSources } = await supabase
-      .from('external_api_sources')
+    const { data: fallbackSources } = await ownedDbTable('external_api_sources')
       .select('*')
       .eq('is_active', true)
       .in('id', enabledIds);
@@ -231,8 +224,7 @@ export async function getSocialPostingConfigs(
   options?: { skipCache?: boolean; platformScope?: boolean }
 ): Promise<PlatformConfig[]> {
   if (options?.platformScope) {
-    const { data, error } = await supabase
-      .from('external_api_sources')
+    const { data, error } = await ownedDbTable('external_api_sources')
       .select('*')
       .in('platform_type', ['social', 'community'])
       .neq('purpose', 'trends')
@@ -301,8 +293,7 @@ export async function getPlatformConfigByPlatform(
     return null;
   }
   const createQuery = () =>
-    supabase
-      .from('external_api_sources')
+    ownedDbTable('external_api_sources')
       .select('*')
       .or(`category.eq.${platform},name.ilike.%${platform}%`)
       .order('created_at', { ascending: true })
@@ -351,8 +342,7 @@ export async function getApiConfigByPlatform(
     return null;
   }
   console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
-  const { data, error } = await supabase
-    .from('external_api_sources')
+  const { data, error } = await ownedDbTable('external_api_sources')
     .select('*')
     .eq('company_id', companyId)
     .or(`category.eq.${platform},name.ilike.%${platform}%`)
@@ -384,8 +374,7 @@ export async function getApiHealthByPlatform(
 ): Promise<ExternalApiHealth | null> {
   const config = await getApiConfigByPlatform(companyId, platform);
   if (!config) return null;
-  const { data, error } = await supabase
-    .from('external_api_health')
+  const { data, error } = await ownedDbTable('external_api_health')
     .select('*')
     .eq('api_source_id', config.id)
     .single();

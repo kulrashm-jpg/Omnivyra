@@ -1,0 +1,19 @@
+{
+  "migrationBridges": [
+    {
+      "route": "/content-creation",
+      "analyticsContinuity": "no dedicated bridge analytics owner detected",
+      "analyticsGap": true
+    },
+    {
+      "route": "/content-studio",
+      "analyticsContinuity": "no dedicated bridge analytics owner detected",
+      "analyticsGap": true
+    },
+    {
+      "route": "/command-center/bolt-text-strategy",
+      "analyticsContinuity": "no dedicated bridge analytics owner detected",
+      "analyticsGap": true
+    }
+  ]
+}

@@ -25,21 +25,17 @@ import {
   type GlobalConfig,
   type CompanyOverride,
 } from '../../../../backend/services/intelligenceConfigService';
-
-function isSuperAdmin(req: NextApiRequest): boolean {
-  return req.cookies?.super_admin_session === '1';
-}
-
-async function resolveUser(req: NextApiRequest): Promise<string> {
-  const { getSupabaseUserFromRequest } = await import('../../../../backend/services/supabaseAuthService');
-  const { user } = await getSupabaseUserFromRequest(req);
-  return user?.email ?? user?.id ?? 'super_admin';
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { SUPER_ADMIN_DASHBOARD_VIEW, INTELLIGENCE_OVERRIDE_MANAGE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!isSuperAdmin(req)) {
-    return res.status(403).json({ error: 'Super admin access required' });
-  }
+  const cap = req.method === 'GET' ? SUPER_ADMIN_DASHBOARD_VIEW : INTELLIGENCE_OVERRIDE_MANAGE;
+  const guard = await requireCapability(req, res, {
+    capability: cap,
+    reason: `intelligence scheduler-overrides (${req.method})`,
+  });
+  if (guard.ok !== true) return;
+  const resolveUser = async () => guard.principal.email || guard.principal.userId;
 
   // ── GET ───────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
@@ -93,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      const updatedBy = await resolveUser(req);
+      const updatedBy = await resolveUser();
       const override = await upsertCompanyOverride(company_id, job_type, fields as Parameters<typeof upsertCompanyOverride>[2], updatedBy);
       return res.status(200).json({ override });
     } catch (err) {

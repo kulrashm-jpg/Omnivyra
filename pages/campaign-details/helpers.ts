@@ -1,5 +1,5 @@
 // Pure utility helpers for Campaign Details — no React state dependencies
-import { PLATFORM_LABELS } from '../../backend/constants/platforms';
+import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import { truncateMeaningfulTitle } from '../../lib/ui/truncateMeaningfulTitle';
 import type { GateResponse, DiagnosticSummary } from './types';
 
@@ -69,7 +69,7 @@ export function getStageColor(stage: string): string {
 
 export function getStageLabel(stage: string, durationWeeks?: number | null): string {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { getStageLabelWithDuration } = require('../../backend/types/CampaignStage');
+  const { getStageLabelWithDuration } = require('../../lib/shared/CampaignStage');
   return getStageLabelWithDuration(stage, durationWeeks);
 }
 
@@ -136,3 +136,4 @@ export function getConfidenceBadgeColor(confidence?: DiagnosticSummary['diagnost
 export default function CampaignDetailsHelpersPage() {
   return null;
 }
+

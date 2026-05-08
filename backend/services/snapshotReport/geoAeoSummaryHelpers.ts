@@ -1,10 +1,17 @@
 import type { buildPublicDomainAuditDecisions } from '../publicDomainAuditService';
 import type { SnapshotReport } from '../snapshotReportTypes';
+import type { ScoreState } from './canonicalScoreState';
 
 function severityLabel(score: number): 'critical' | 'moderate' | 'low' {
   if (score >= 75) return 'critical';
   if (score >= 45) return 'moderate';
   return 'low';
+}
+
+function axisStateFromValue(value: number | null | undefined, hasContext: boolean): ScoreState {
+  if (typeof value === 'number') return 'measured';
+  if (hasContext) return 'inferred';
+  return 'insufficient_signal';
 }
 
 export function buildGeoAeoVisuals(params: {
@@ -25,6 +32,7 @@ export function buildGeoAeoVisuals(params: {
         ? 'medium'
         : 'low';
 
+  const hasContext = Boolean(context);
   return {
     ai_answer_presence_radar: {
       answer_coverage_score: context?.answer_coverage_score ?? null,
@@ -42,6 +50,23 @@ export function buildGeoAeoVisuals(params: {
             : 'weak'
         : 'missing',
       source_tags: context ? ['crawler', 'content', 'structure'] : null,
+      axis_states: {
+        answer_coverage_score: axisStateFromValue(context?.answer_coverage_score, hasContext),
+        entity_clarity_score: axisStateFromValue(context?.entity_clarity_score, hasContext),
+        topical_authority_score: axisStateFromValue(context?.topical_authority_score, hasContext),
+        citation_readiness_score: axisStateFromValue(context?.citation_readiness_score, hasContext),
+        content_structure_score: axisStateFromValue(context?.content_structure_score, hasContext),
+        freshness_score: axisStateFromValue(context?.freshness_score, hasContext),
+      },
+      // Phase 1 ships the benchmark slot; Phase 2 will populate vertical median data.
+      benchmark: {
+        answer_coverage_score: null,
+        entity_clarity_score: null,
+        topical_authority_score: null,
+        citation_readiness_score: null,
+        content_structure_score: null,
+        freshness_score: null,
+      },
     },
     query_answer_coverage_map: {
       queries: context?.queries ?? [],
@@ -75,17 +100,21 @@ export function buildGeoAeoExecutiveSummary(params: {
   const missingQueries = params.geoAeoVisuals.query_answer_coverage_map.queries.filter(
     (item) => item.coverage === 'missing',
   );
-  const overallAiVisibilityScore = Math.round(
-    [
-      radar.answer_coverage_score,
-      radar.entity_clarity_score,
-      radar.topical_authority_score,
-      radar.citation_readiness_score,
-      radar.content_structure_score,
-    ]
-      .filter((value): value is number => typeof value === 'number')
-      .reduce((sum, value, _, arr) => sum + value / arr.length, 0) || 0,
-  );
+  const measuredAxisValues = [
+    radar.answer_coverage_score,
+    radar.entity_clarity_score,
+    radar.topical_authority_score,
+    radar.citation_readiness_score,
+    radar.content_structure_score,
+  ].filter((value): value is number => typeof value === 'number');
+  const overallAiVisibilityScore = measuredAxisValues.length === 0
+    ? null
+    : Math.round(measuredAxisValues.reduce((sum, value) => sum + value, 0) / measuredAxisValues.length);
+  const overallAiVisibilityScoreState: ScoreState = measuredAxisValues.length === 0
+    ? 'insufficient_signal'
+    : measuredAxisValues.length < 3
+      ? 'inferred'
+      : 'measured';
 
   const primaryGap =
     (funnel.drop_off_reason_distribution.answer_gap_pct ?? 0) >=
@@ -163,6 +192,7 @@ export function buildGeoAeoExecutiveSummary(params: {
 
   return {
     overall_ai_visibility_score: overallAiVisibilityScore,
+    overall_ai_visibility_score_state: overallAiVisibilityScoreState,
     primary_gap: primaryGap,
     top_3_actions: top3Actions,
     visibility_opportunity: topQuery

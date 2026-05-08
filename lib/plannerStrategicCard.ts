@@ -1,4 +1,42 @@
-import type { StrategicThemeEntry, StrategyContext, IdeaSpine, TrendContext } from '../components/planner/plannerSessionStore';
+type StrategyContext = {
+  duration_weeks: number;
+  platforms: string[];
+  posting_frequency: Record<string, number>;
+  content_mix: string[];
+  campaign_goal: string;
+  target_audience: string | string[];
+  planned_start_date?: string;
+  key_message?: string;
+  selected_aspects?: string[];
+  selected_offerings?: string[];
+};
+
+type IdeaSpine = {
+  title: string;
+  description: string;
+  origin: 'direct' | 'recommendation' | 'opportunity';
+  source_id?: string | null;
+  raw_input?: string | null;
+  refined_title?: string | null;
+  refined_description?: string | null;
+  selected_angle?: string | null;
+};
+
+type TrendContext = {
+  recommendation_id?: string | null;
+  trend_topic?: string | null;
+  trend_source?: string | null;
+  [key: string]: unknown;
+};
+
+type StrategicThemeEntry = {
+  week: number;
+  title: string;
+  phase_label?: string;
+  objective?: string;
+  content_focus?: string;
+  cta_focus?: string;
+};
 
 export type PlannerStrategicSourceMode = 'ai' | 'trend' | 'both' | 'blog';
 

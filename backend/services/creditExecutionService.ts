@@ -20,7 +20,6 @@
  */
 
 import { createHash } from 'crypto';
-import { supabase } from '../db/supabaseClient';
 import {
   type CreditAction,
   type DeductOptions,
@@ -40,6 +39,12 @@ import {
   recordCostAnomaly,
   type ResolvedLlmCost,
 } from './pricingService';
+import {
+  callCreditPartialConfirm,
+  callCreditReservation,
+  findCreditTransaction,
+  loadCreditHoldSplit,
+} from '../repositories/creditExecutionRepository';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 function fireAlerts(orgId: string): void {
@@ -174,49 +179,6 @@ export function makeIdempotencyKey(
 
 // ── DB helpers ─────────────────────────────────────────────────────────────────
 
-interface ReservationParams {
-  orgId:          string;
-  phase:          'hold' | 'confirm' | 'release' | 'grant' | 'expire';
-  split:          CategorySplit;
-  idempotencyKey: string;
-  referenceType:  string;
-  referenceId?:   string;
-  note:           string;
-  performedBy:    string;
-  parentId?:      string;
-}
-
-async function callReservation(p: ReservationParams): Promise<{
-  error: Error | null;
-  transactionId: string | null;
-}> {
-  const { error, data } = await supabase.rpc('apply_credit_reservation', {
-    p_org_id:           p.orgId,
-    p_phase:            p.phase,
-    p_free_amount:      p.split.free,
-    p_incentive_amount: p.split.incentive,
-    p_paid_amount:      p.split.paid,
-    p_idempotency_key:  p.idempotencyKey,
-    p_reference_type:   p.referenceType,
-    p_reference_id:     p.referenceId ?? null,
-    p_note:             p.note,
-    p_performed_by:     p.performedBy,
-    p_parent_id:        p.parentId ?? null,
-  });
-
-  const txId = (data as any)?.id ?? null;
-  return { error: error as any, transactionId: txId };
-}
-
-async function findTransaction(key: string): Promise<{ id: string; execution_phase?: string } | null> {
-  const { data } = await supabase
-    .from('credit_transactions')
-    .select('id, execution_phase')
-    .eq('idempotency_key', key)
-    .maybeSingle();
-  return data as { id: string; execution_phase?: string } | null;
-}
-
 /**
  * Scale a HOLD split down (or up) to match an actual credit amount, keeping
  * per-category proportions. Used to feed apply_credit_partial_confirm when
@@ -229,47 +191,6 @@ function scaleSplitToActual(held: CategorySplit, actual: number): CategorySplit 
   const paidA       = Math.floor((held.paid      * actual) / total);
   const incentiveA  = Math.max(0, actual - freeA - paidA);   // remainder bucket
   return { free: freeA, incentive: incentiveA, paid: paidA };
-}
-
-async function callPartialConfirm(p: {
-  orgId:          string;
-  holdTxnId:      string;
-  actualSplit:    CategorySplit;
-  idempotencyKey: string;
-  referenceType:  string;
-  referenceId?:   string;
-  note:           string;
-  performedBy:    string;
-}): Promise<{ error: Error | null; data: any }> {
-  const { error, data } = await supabase.rpc('apply_credit_partial_confirm', {
-    p_org_id:           p.orgId,
-    p_hold_txn_id:      p.holdTxnId,
-    p_actual_free:      p.actualSplit.free,
-    p_actual_incentive: p.actualSplit.incentive,
-    p_actual_paid:      p.actualSplit.paid,
-    p_idempotency_key:  p.idempotencyKey,
-    p_reference_type:   p.referenceType,
-    p_reference_id:     p.referenceId ?? null,
-    p_note:             p.note,
-    p_performed_by:     p.performedBy,
-  });
-  return { error: error as any, data };
-}
-
-async function loadHoldSplit(holdId: string): Promise<CategorySplit | null> {
-  const { data } = await supabase
-    .from('credit_transactions')
-    .select('free_delta, paid_delta, incentive_delta')
-    .eq('id', holdId)
-    .maybeSingle();
-  if (!data) return null;
-  const d = data as any;
-  // HOLD deltas are stored as negative (deductions); flip sign for release/confirm
-  return {
-    free:      Math.abs(d.free_delta      ?? 0),
-    incentive: Math.abs(d.incentive_delta ?? 0),
-    paid:      Math.abs(d.paid_delta      ?? 0),
-  };
 }
 
 // ── Core: executeWithCredits ───────────────────────────────────────────────────
@@ -380,8 +301,8 @@ export async function executeWithCredits<T>(
 
   // ── 2. Idempotency: check for settled phases ───────────────────────────────
   const [existingConfirm, existingRelease] = await Promise.all([
-    findTransaction(confirmKey),
-    findTransaction(releaseKey),
+    findCreditTransaction(confirmKey),
+    findCreditTransaction(releaseKey),
   ]);
 
   if (existingConfirm) {
@@ -397,13 +318,13 @@ export async function executeWithCredits<T>(
   let holdId: string | null = null;
   let usedSplit: CategorySplit;
 
-  const existingHold = await findTransaction(holdKey);
+  const existingHold = await findCreditTransaction(holdKey);
 
   if (existingHold) {
     // Resume from existing HOLD
     holdId = existingHold.id;
     logger.info('credit_reusing_hold', { holdId, idempotencyKey: baseKey });
-    const loadedSplit = await loadHoldSplit(holdId);
+    const loadedSplit = await loadCreditHoldSplit(holdId);
     if (!loadedSplit) {
       // Corrupted hold — treat as fresh
       holdId = null;
@@ -432,7 +353,7 @@ export async function executeWithCredits<T>(
 
     usedSplit = split;
 
-    const { error: holdErr, transactionId } = await callReservation({
+    const { error: holdErr, transactionId } = await callCreditReservation({
       orgId,
       phase:          'hold',
       split:          usedSplit,
@@ -540,7 +461,7 @@ export async function executeWithCredits<T>(
     // ── 4b. RELEASE — executor failed, restore reserved credits ──────────────
     logger.error('credit_executor_failed', { orgId, action, idempotencyKey: baseKey, message: execErr?.message ?? 'unknown' });
 
-    const releaseResult = await callReservation({
+    const releaseResult = await callCreditReservation({
       orgId,
       phase:          'release',
       split:          usedSplit,
@@ -572,7 +493,7 @@ export async function executeWithCredits<T>(
     const actualCredits = Math.max(0, resolvedFinalPricing.credits);
     const actualSplit   = scaleSplitToActual(usedSplit, actualCredits);
 
-    const { error: partialErr, data: partialData } = await callPartialConfirm({
+    const { error: partialErr, data: partialData } = await callCreditPartialConfirm({
       orgId,
       holdTxnId:      holdId,
       actualSplit,
@@ -586,7 +507,7 @@ export async function executeWithCredits<T>(
     if (partialErr) {
       const msg = (partialErr as any).message ?? '';
       logger.error('credit_partial_confirm_failed', { orgId, action, idempotencyKey: baseKey, message: msg });
-      const releaseResult = await callReservation({
+      const releaseResult = await callCreditReservation({
         orgId,
         phase:          'release',
         split:          usedSplit,
@@ -638,7 +559,7 @@ export async function executeWithCredits<T>(
       });
     }
   } else {
-    const { error: confirmErr, transactionId } = await callReservation({
+    const { error: confirmErr, transactionId } = await callCreditReservation({
       orgId,
       phase:          'confirm',
       split:          usedSplit,
@@ -653,7 +574,7 @@ export async function executeWithCredits<T>(
     if (confirmErr) {
       const msg = (confirmErr as any).message ?? '';
       logger.error('credit_confirm_failed', { orgId, action, idempotencyKey: baseKey, message: msg });
-      const releaseResult = await callReservation({
+      const releaseResult = await callCreditReservation({
         orgId,
         phase:          'release',
         split:          usedSplit,
@@ -825,7 +746,7 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
     paid:      opts.category === 'paid'      ? opts.amount : 0,
   };
 
-  const { error } = await callReservation({
+  const { error } = await callCreditReservation({
     orgId:          opts.orgId,
     phase:          'grant',
     split,
@@ -834,6 +755,11 @@ export async function createCredit(opts: CreateCreditOptions): Promise<void> {
     referenceId:    opts.referenceId,
     note:           opts.note ?? `${opts.category} credit grant`,
     performedBy:    opts.performedBy,
+    // Pass the caller's declared category through. The RPC defaults to 'paid'
+    // when this is missing, which silently mislabeled every free/incentive
+    // grant. createCredit's amount is single-category by construction so we
+    // can trust opts.category as the source of truth.
+    category:       opts.category,
   });
 
   if (error) {

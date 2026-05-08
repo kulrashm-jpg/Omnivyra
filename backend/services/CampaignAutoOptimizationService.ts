@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Stage 37 — Controlled Auto-Optimization Execution.
  * Orchestrates existing APIs only. No direct DB mutation. Never throws.
@@ -79,8 +80,7 @@ export async function runAutoOptimization(campaignId: string): Promise<AutoOptim
       };
     }
 
-    const { error: updateError } = await supabase
-      .from('campaigns')
+    const { error: updateError } = await ownedDbTable('campaigns')
       .update({
         duration_weeks: weeksToApply,
         blueprint_status: 'INVALIDATED',

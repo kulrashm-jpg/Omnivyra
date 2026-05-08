@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Seed platform_oauth_configs from environment variables.
  *
@@ -88,7 +89,7 @@ async function seed() {
       const oauth_client_id_encrypted = encryptCredential(clientId);
       const oauth_client_secret_encrypted = encryptCredential(clientSecret);
 
-      const { error } = await supabase.from('platform_oauth_configs').upsert(
+      const { error } = await ownedDbTable('platform_oauth_configs').upsert(
         {
           platform: p.platform,
           oauth_client_id_encrypted,

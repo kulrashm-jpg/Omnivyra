@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Usage Tracking Service
  *
@@ -35,7 +36,7 @@ export interface TrackUsageParams {
  * a retry will produce a unique_violation which is swallowed — safe.
  */
 export async function trackUsage(params: TrackUsageParams): Promise<void> {
-  const { error } = await supabase.from('credit_usage_log').insert({
+  const { error } = await ownedDbTable('credit_usage_log').insert({
     organization_id:        params.orgId,
     user_id:                params.userId,
     action:                 params.action,

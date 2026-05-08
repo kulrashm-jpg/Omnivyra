@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Purchase Service
  *
@@ -48,8 +49,7 @@ export async function completePurchase(
   // If the gateway already delivered this event and it was processed, return
   // success immediately. This is the primary guard against retry double-credits.
   if (referenceId) {
-    const { data: existing } = await sb
-      .from('credit_purchases')
+    const { data: existing } = await ownedDbTable('credit_purchases')
       .select('id, credits, status')
       .eq('reference_id', referenceId)
       .maybeSingle();
@@ -71,8 +71,7 @@ export async function completePurchase(
   }
 
   // ── 2. Fetch and validate the purchase by ID ───────────────────────────────
-  const { data: purchase, error: fetchErr } = await sb
-    .from('credit_purchases')
+  const { data: purchase, error: fetchErr } = await ownedDbTable('credit_purchases')
     .select('id, organization_id, credits, status, amount_paid, currency')
     .eq('id', purchaseId)
     .maybeSingle();
@@ -115,8 +114,7 @@ export async function completePurchase(
   const updateFields: Record<string, any> = { status: 'completed' };
   if (referenceId) updateFields.reference_id = referenceId;
 
-  const { error: updateErr } = await sb
-    .from('credit_purchases')
+  const { error: updateErr } = await ownedDbTable('credit_purchases')
     .update(updateFields)
     .eq('id', purchaseId)
     .eq('status', 'pending');
@@ -145,5 +143,5 @@ export async function failPurchase(
   const sb = serviceSupabase();
   const fields: Record<string, any> = { status: 'failed' };
   if (referenceId) fields.reference_id = referenceId;
-  await sb.from('credit_purchases').update(fields).eq('id', purchaseId).eq('status', 'pending');
+  await ownedDbTable('credit_purchases').update(fields).eq('id', purchaseId).eq('status', 'pending');
 }

@@ -1,0 +1,198 @@
+[
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/linkedinadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/xadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/instagramadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/facebookadapter.ts",
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/facebookadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/youtubeadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/tiktokadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/spotifyadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/starmakeradapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/sunoadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/adapters/platformadapter.ts",
+                      "backend/adapters/pinterestadapter.ts",
+                      "backend/adapters/platformadapter.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/services/companyprofileservice.ts",
+                      "backend/services/companyprofile/businessclassification.ts",
+                      "backend/services/competitorengineservice.ts",
+                      "backend/services/reportinputresolver.ts",
+                      "backend/services/companyprofileservice.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/services/competitorengineservice.ts",
+                      "backend/services/reportinputresolver.ts",
+                      "backend/services/competitorengineservice.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/services/competitorengineservice.ts",
+                      "backend/services/competitorfeedbackservice.ts",
+                      "backend/services/competitorengineservice.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/services/rbacservice.ts",
+                      "backend/services/usercontextservice.ts",
+                      "backend/services/contentarchitectservice.ts",
+                      "backend/services/rbacservice.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "backend/services/campaignaiorchestrator.ts",
+                      "backend/services/campaignaiorchestrator/runwithcontextguards.ts",
+                      "backend/services/campaignaiorchestrator.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "lib/content/longformplanningengine.ts",
+                      "lib/content/longformseointelligence.ts",
+                      "lib/content/longformplanningengine.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "lib/content/longformplanningengine.ts",
+                      "lib/content/longformseointelligence.ts",
+                      "lib/content/longformperformancelearning.ts",
+                      "lib/content/longformplanningengine.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "lib/content/longformplanningengine.ts",
+                      "lib/content/longformseointelligence.ts",
+                      "lib/content/longformperformancelearning.ts",
+                      "lib/content/longformdifferentiationintelligence.ts",
+                      "lib/content/longformplanningengine.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    },
+    {
+        "chain":  [
+                      "components/planner/plannersessionstore.ts",
+                      "lib/plannerstrategiccard.ts",
+                      "components/planner/plannersessionstore.ts"
+                  ],
+        "runtimeImpact":  "runtime import cycle",
+        "introducedBy":  "baseline/worktree drift",
+        "rollbackSafeExtractionPath":  "restore stable imports or extract shared type/port outside both modules"
+    }
+]

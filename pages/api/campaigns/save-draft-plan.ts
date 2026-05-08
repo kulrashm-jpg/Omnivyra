@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { fromStructuredPlan } from '../../../backend/services/campaignBlueprintAdapter';
 import { saveDraftBlueprint } from '../../../backend/db/campaignPlanStore';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 /**
  * POST /api/campaigns/save-draft-plan
@@ -20,6 +21,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         error: 'campaignId and structuredPlan.weeks are required',
       });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     const blueprint = fromStructuredPlan({
       weeks: structuredPlan.weeks,

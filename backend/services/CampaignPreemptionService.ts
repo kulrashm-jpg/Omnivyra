@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Controlled Preemption Execution Service.
  * Safely executes PREEMPT_LOWER_PRIORITY_CAMPAIGN when explicitly requested.
@@ -8,6 +9,7 @@
 import { supabase } from '../db/supabaseClient';
 import { recordGovernanceEvent } from './GovernanceEventService';
 import {
+
   assertValidExecutionTransition,
   normalizeExecutionState,
   InvalidExecutionTransitionError,
@@ -70,8 +72,7 @@ async function createApprovalRequest(
   preemptedCampaignId: string,
   companyId?: string
 ): Promise<ApprovalRequiredResult> {
-  const { data: requestRow, error } = await supabase
-    .from('campaign_preemption_requests')
+  const { data: requestRow, error } = await ownedDbTable('campaign_preemption_requests')
     .insert({
       initiator_campaign_id: initiatorCampaignId,
       target_campaign_id: preemptedCampaignId,
@@ -118,8 +119,7 @@ async function performPreemption(
   }
   const fromApproved = !!options?.fromApprovedRequest;
 
-  const { data: campaigns, error: fetchError } = await supabase
-    .from('campaigns')
+  const { data: campaigns, error: fetchError } = await ownedDbTable('campaigns')
     .select('id, priority_level, execution_status, blueprint_status, last_preempted_at')
     .in('id', [initiatorCampaignId, preemptedCampaignId]);
 
@@ -203,8 +203,7 @@ async function performPreemption(
   assertValidExecutionTransition(fromState, 'PREEMPTED');
 
   const nowIso = new Date().toISOString();
-  const { error: updateError } = await supabase
-    .from('campaigns')
+  const { error: updateError } = await ownedDbTable('campaigns')
     .update({
       execution_status: 'PREEMPTED',
       blueprint_status: 'INVALIDATED',
@@ -241,8 +240,7 @@ async function performPreemption(
     });
   }
 
-  const { data: logRow, error: logError } = await supabase
-    .from('campaign_preemption_log')
+  const { data: logRow, error: logError } = await ownedDbTable('campaign_preemption_log')
     .insert({
       initiator_campaign_id: initiatorCampaignId,
       preempted_campaign_id: preemptedCampaignId,
@@ -300,8 +298,7 @@ export async function executeCampaignPreemption(
 ): Promise<PreemptionAttemptResult> {
   const { initiatorCampaignId, preemptedCampaignId } = params;
 
-  const { data: campaigns, error: fetchError } = await supabase
-    .from('campaigns')
+  const { data: campaigns, error: fetchError } = await ownedDbTable('campaigns')
     .select('id, priority_level, execution_status, blueprint_status, is_protected')
     .in('id', [initiatorCampaignId, preemptedCampaignId]);
 
@@ -382,8 +379,7 @@ export async function executePreemptionFromRequest(
   justification: string,
   companyId?: string
 ): Promise<ExecutePreemptionResult> {
-  const { data: request, error: fetchError } = await supabase
-    .from('campaign_preemption_requests')
+  const { data: request, error: fetchError } = await ownedDbTable('campaign_preemption_requests')
     .select('id, initiator_campaign_id, target_campaign_id, status')
     .eq('id', requestId)
     .maybeSingle();
@@ -406,8 +402,7 @@ export async function executePreemptionFromRequest(
     { fromApprovedRequest: true }
   );
 
-  const { error: updateError } = await supabase
-    .from('campaign_preemption_requests')
+  const { error: updateError } = await ownedDbTable('campaign_preemption_requests')
     .update({
       status: 'EXECUTED',
       approved_at: new Date().toISOString(),
@@ -425,8 +420,7 @@ export async function executePreemptionFromRequest(
  * Reject a pending preemption request.
  */
 export async function rejectPreemptionRequest(requestId: string): Promise<void> {
-  const { data: request, error: fetchError } = await supabase
-    .from('campaign_preemption_requests')
+  const { data: request, error: fetchError } = await ownedDbTable('campaign_preemption_requests')
     .select('id, status')
     .eq('id', requestId)
     .maybeSingle();
@@ -439,8 +433,7 @@ export async function rejectPreemptionRequest(requestId: string): Promise<void> 
     throw new PreemptionValidationError(`Request is not pending. Current status: ${request.status}`);
   }
 
-  const { error: updateError } = await supabase
-    .from('campaign_preemption_requests')
+  const { error: updateError } = await ownedDbTable('campaign_preemption_requests')
     .update({
       status: 'REJECTED',
       rejected_at: new Date().toISOString(),

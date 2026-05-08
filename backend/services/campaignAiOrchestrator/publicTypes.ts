@@ -37,7 +37,7 @@ export interface CampaignAiPlanInput {
   vetScope?: { selectedWeeks: number[]; areasByWeek?: Record<number, string[]> };
   collectedPlanningContext?: Record<string, unknown>;
   autopilot?: boolean;
-  bolt_run_id?: string | null;
+  variantMetadata?: Record<string, unknown>;
   account_context?: import('./../../types/accountContext').AccountContext | null;
   previous_performance_insights?: import('./../../lib/performance/performanceAnalyzer').PerformanceInsight | null;
   previous_campaign_context?: {

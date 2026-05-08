@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Engagement Ingestion Service
  *
@@ -364,8 +365,7 @@ function toDbRow(row: IngestCommentRow): Record<string, unknown> {
 async function persistComments(rows: IngestCommentRow[]): Promise<void> {
   if (rows.length === 0) return;
   const dbRows = rows.map(toDbRow);
-  const { error } = await supabase
-    .from('post_comments')
+  const { error } = await ownedDbTable('post_comments')
     .upsert(dbRows, {
       onConflict: 'scheduled_post_id,platform_comment_id',
       ignoreDuplicates: false,
@@ -454,8 +454,7 @@ export async function ingestComments(scheduled_post_id: string): Promise<IngestC
         organizationId = version?.company_id ? String(version.company_id) : null;
       }
       if (!organizationId && post.user_id) {
-        const { data: role } = await supabase
-          .from('user_company_roles')
+        const { data: role } = await ownedDbTable('user_company_roles')
           .select('company_id')
           .eq('user_id', post.user_id)
           .eq('status', 'active')
@@ -495,8 +494,7 @@ export async function ingestRecentPublishedPosts(): Promise<{
   totalIngested: number;
   errors: { scheduled_post_id: string; error: string }[];
 }> {
-  const { data: posts, error } = await supabase
-    .from('scheduled_posts')
+  const { data: posts, error } = await ownedDbTable('scheduled_posts')
     .select('id')
     .eq('status', 'published')
     .not('platform_post_id', 'is', null);
@@ -575,8 +573,7 @@ export async function ingestCommunityChannel(
  * Return comments from DB for a scheduled post (after ingestion).
  */
 export async function getCommentsForScheduledPost(scheduled_post_id: string): Promise<any[]> {
-  const { data, error } = await supabase
-    .from('post_comments')
+  const { data, error } = await ownedDbTable('post_comments')
     .select('*')
     .eq('scheduled_post_id', scheduled_post_id)
     .order('platform_created_at', { ascending: true });

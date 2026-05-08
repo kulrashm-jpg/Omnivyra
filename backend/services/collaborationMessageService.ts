@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export type MessageSource = 'activity' | 'calendar' | 'campaign';
 
@@ -63,7 +64,7 @@ export async function markMessagesRead(
     read_at: readAt,
   }));
 
-  const { error } = await supabase.from('message_reads').upsert(rows, {
+  const { error } = await ownedDbTable('message_reads').upsert(rows, {
     onConflict: 'message_id,message_source,user_id',
     ignoreDuplicates: false,
   });
@@ -74,7 +75,7 @@ export async function markMessagesRead(
 }
 
 export async function listMessages(options: ListMessagesOptions): Promise<MessageResponse[]> {
-  let query = supabase.from(options.table).select(options.select);
+  let query = ownedDbTable(options.table).select(options.select);
   if (options.applyFilters) {
     query = options.applyFilters(query);
   }
@@ -95,8 +96,7 @@ export async function listMessages(options: ListMessagesOptions): Promise<Messag
 }
 
 export async function createMessage(options: CreateMessageOptions): Promise<MessageResponse> {
-  const { data, error } = await supabase
-    .from(options.table)
+  const { data, error } = await ownedDbTable(options.table)
     .insert(options.insert)
     .select(options.select)
     .single();
@@ -118,7 +118,7 @@ export async function getMessageCounts(options: MessageCountsOptions): Promise<R
     return counts;
   }
 
-  let query = supabase.from(options.table).select(options.select);
+  let query = ownedDbTable(options.table).select(options.select);
   if (options.applyFilters) {
     query = options.applyFilters(query);
   }
@@ -133,8 +133,7 @@ export async function getMessageCounts(options: MessageCountsOptions): Promise<R
   const readMessageIds = new Set<string>();
 
   if (options.userId && messageIds.length > 0) {
-    const { data: readRows, error: readError } = await supabase
-      .from('message_reads')
+    const { data: readRows, error: readError } = await ownedDbTable('message_reads')
       .select('message_id')
       .eq('message_source', options.source)
       .eq('user_id', options.userId)

@@ -7,6 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { saveWeekPlans } from '../../../backend/services/executionPlannerService';
+import { requireCampaignTenantAccess } from '../../../backend/security/TenantGuard';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -51,6 +52,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         error: 'campaignId, weekNumber, and non-empty plans array are required',
       });
     }
+
+    const access = await requireCampaignTenantAccess(req, res, campaignId);
+    if (!access) return;
 
     const { data: campaign } = await supabase
       .from('campaigns')

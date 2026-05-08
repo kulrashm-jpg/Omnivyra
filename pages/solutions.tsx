@@ -3,1072 +3,1474 @@
 import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-import Footer from '../components/landing/Footer';
 
-// ── Inline visual components ──────────────────────────────────────────────────
+const BLUE_FIELD = 'linear-gradient(150deg, #071D3A 0%, #0A3770 54%, #0A66C2 100%)';
 
-function SparkLine({ vals, color = '#0A66C2' }: { vals: number[]; color?: string }) {
-  const w = 120, h = 40;
-  const max = Math.max(...vals);
-  const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * w},${h - (v / max) * (h - 4) - 2}`).join(' ');
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} fill="none" className="w-full h-full">
-      <polyline points={pts} stroke={color} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity={0.9} />
-      <circle
-        cx={(vals.length - 1) / (vals.length - 1) * w}
-        cy={h - (vals[vals.length - 1] / max) * (h - 4) - 2}
-        r="3" fill={color}
-      />
-    </svg>
-  );
-}
+type RoleId = 'founder' | 'marketing' | 'growth' | 'creator' | 'agency' | 'solo';
+type StepId = 'challenge' | 'visibility' | 'intelligence' | 'outcomes' | 'actions';
+type SignalState = 'good' | 'watch' | 'build';
 
-function BarRow({ label, pct, color }: { label: string; pct: number; color: string }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-20 shrink-0 text-[10px] text-[#6B7C93]">{label}</span>
-      <div className="flex-1 rounded-full bg-gray-100 h-1.5">
-        <div className="h-1.5 rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
-      </div>
-      <span className="text-[10px] font-bold text-[#0B1F33]">{pct}%</span>
-    </div>
-  );
-}
+type StepContent = {
+  title: string;
+  summary: string;
+  pain: string;
+  connects: string[];
+  changes: string[];
+  metrics: { value: string; label: string }[];
+  recommendations: string[];
+};
 
-// ── Section visual panels ─────────────────────────────────────────────────────
+type Role = {
+  id: RoleId;
+  label: string;
+  badge: string;
+  identity: string;
+  headline: string;
+  subhead: string;
+  dashboardTitle: string;
+  dashboardStatus: string;
+  signals: { label: string; value: string; state: SignalState }[];
+  cta: string;
+  steps: Record<StepId, StepContent>;
+};
 
-const MARKETER_VISUALS: React.ReactNode[] = [
-  // 0 — Challenge: scattered tools chaos
-  <div className="rounded-2xl border border-gray-100 bg-[#F5F9FF] p-4">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#6B7C93]">Your typical Tuesday</p>
-    <div className="flex flex-wrap gap-2 mb-4">
-      {['Google Ads', 'HubSpot', 'LinkedIn Ads', 'Metabase', 'Looker', 'Salesforce', 'Mailchimp', 'Agency deck'].map((t, i) => (
-        <span key={t} className="rounded-lg bg-white border border-gray-200 px-2.5 py-1 text-[10px] font-medium text-[#6B7C93] shadow-sm"
-          style={{ transform: `rotate(${(i % 2 === 0 ? 1 : -1) * (i % 3 + 1)}deg)` }}>
-          {t}
-        </span>
-      ))}
-    </div>
-    <div className="flex items-center gap-2 rounded-xl bg-red-50 border border-red-100 px-3 py-2">
-      <svg className="h-4 w-4 text-red-400 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
-      </svg>
-      <span className="text-[10px] font-semibold text-red-600">No single source of truth</span>
-    </div>
-  </div>,
-
-  // 1 — What Omnivyra does: unified signal
-  <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
-    <div className="mb-3 flex items-center justify-between">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Omnivyra Signal Layer</p>
-      <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-600">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />Live
-      </span>
-    </div>
-    <div className="space-y-2">
-      {[
-        { ch: 'LinkedIn', status: 'Converting', c: 'bg-emerald-100 text-emerald-700', pct: 82 },
-        { ch: 'Email', status: 'Optimise', c: 'bg-amber-100 text-amber-700', pct: 54 },
-        { ch: 'Google Ads', status: 'Underperforming', c: 'bg-red-100 text-red-700', pct: 31 },
-      ].map((r) => (
-        <div key={r.ch} className="flex items-center gap-2 rounded-lg bg-white p-2 shadow-sm">
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] font-semibold text-[#0B1F33]">{r.ch}</span>
-              <span className={`rounded-full px-1.5 py-0.5 text-[8px] font-bold ${r.c}`}>{r.status}</span>
-            </div>
-            <div className="h-1 rounded-full bg-gray-100">
-              <div className="h-1 rounded-full bg-[#0A66C2]" style={{ width: `${r.pct}%` }} />
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>,
-
-  // 2 — Signal not noise: 17→1 dashboards
-  <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-    <div className="grid grid-cols-2 gap-3 mb-3">
-      <div className="rounded-xl bg-red-50 border border-red-100 p-3 text-center">
-        <p className="text-2xl font-bold text-red-400">17</p>
-        <p className="text-[9px] text-red-400">dashboards before</p>
-        <div className="mt-1.5 flex flex-wrap gap-1 justify-center">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="h-2 w-4 rounded-sm bg-red-200" style={{ opacity: 0.4 + i * 0.1 }} />
-          ))}
-        </div>
-      </div>
-      <div className="rounded-xl bg-[#F0F7FF] border border-[#0A66C2]/15 p-3 text-center">
-        <p className="text-2xl font-bold text-[#0A66C2]">1</p>
-        <p className="text-[9px] text-[#0A66C2]">decision layer now</p>
-        <div className="mt-2 flex items-center justify-center">
-          <div className="h-8 w-8 rounded-xl bg-[#0A66C2]/10 flex items-center justify-center">
-            <svg className="h-4 w-4 text-[#0A66C2]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
-            </svg>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div className="rounded-xl bg-[#F5F9FF] p-2.5">
-      <p className="text-[9px] text-[#6B7C93]">Every alert includes <span className="font-semibold text-[#0B1F33]">context</span> and a <span className="font-semibold text-[#0B1F33]">clear next step</span></p>
-    </div>
-  </div>,
-
-  // 3 — Campaign planning: skeleton
-  <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
-    <div className="mb-3 flex items-center justify-between">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Campaign Skeleton</p>
-      <span className="rounded-full bg-[#0A66C2] px-2 py-0.5 text-[9px] font-bold text-white">Built in &lt;10 min</span>
-    </div>
-    <div className="space-y-1.5">
-      {[
-        { week: 'Wk 1', task: 'Audience brief + creative', ch: 'LinkedIn', done: true },
-        { week: 'Wk 2', task: 'Launch awareness push', ch: 'LinkedIn + Email', done: true },
-        { week: 'Wk 3', task: 'Retargeting & nurture', ch: 'Email + Display', done: false },
-        { week: 'Wk 4', task: 'Review + optimise', ch: 'All channels', done: false },
-      ].map((r) => (
-        <div key={r.week} className={`flex items-start gap-2 rounded-lg p-2 ${r.done ? 'bg-white shadow-sm' : 'bg-white/50 border border-dashed border-[#0A66C2]/20'}`}>
-          <span className="mt-0.5 text-[9px] font-bold text-[#0A66C2] w-8 shrink-0">{r.week}</span>
-          <div className="flex-1">
-            <p className="text-[10px] font-semibold text-[#0B1F33]">{r.task}</p>
-            <p className="text-[9px] text-[#6B7C93]">{r.ch}</p>
-          </div>
-          {r.done && (
-            <svg className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-            </svg>
-          )}
-        </div>
-      ))}
-    </div>
-  </div>,
-
-  // 4 — Reporting done: performance narrative
-  <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-    <div className="mb-3 flex items-center gap-2">
-      <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#0A66C2]/10">
-        <svg className="h-4 w-4 text-[#0A66C2]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-        </svg>
-      </div>
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Performance Summary</p>
-    </div>
-    <div className="h-16 mb-3">
-      <SparkLine vals={[18, 22, 19, 28, 24, 33, 30, 38, 36, 44]} color="#0A66C2" />
-    </div>
-    <div className="grid grid-cols-3 gap-2 mb-3">
-      {[['Leads', '↑ 34%', 'text-emerald-600'], ['CAC', '↓ 18%', 'text-emerald-600'], ['ROAS', '3.2×', 'text-[#0A66C2]']].map(([l, v, c]) => (
-        <div key={l} className="rounded-lg bg-[#F5F9FF] p-2 text-center">
-          <p className={`text-sm font-bold ${c}`}>{v}</p>
-          <p className="text-[9px] text-[#6B7C93]">{l}</p>
-        </div>
-      ))}
-    </div>
-    <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2">
-      <p className="text-[10px] font-semibold text-emerald-700">Review prep: 2 min instead of a weekend</p>
-    </div>
-  </div>,
+const STEPS: { id: StepId; label: string }[] = [
+  { id: 'challenge', label: 'Operational Challenges' },
+  { id: 'visibility', label: 'Missing Visibility' },
+  { id: 'intelligence', label: 'Operational Intelligence' },
+  { id: 'outcomes', label: 'Outcomes' },
+  { id: 'actions', label: 'Recommended Actions' },
 ];
 
-const FOUNDER_VISUALS: React.ReactNode[] = [
-  // 0 — Challenge: time scattered
-  <div className="rounded-2xl border border-gray-100 bg-[#F5F9FF] p-4">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#6B7C93]">Your week looks like this</p>
-    <div className="space-y-2">
-      {[
-        { task: 'Operations & customer support', pct: 45, c: '#6B7C93' },
-        { task: 'Sales calls & follow-ups', pct: 30, c: '#6B7C93' },
-        { task: 'Product & team', pct: 18, c: '#6B7C93' },
-        { task: 'Marketing', pct: 7, c: '#DC2626' },
-      ].map((r) => (
-        <div key={r.task}>
-          <div className="flex items-center justify-between mb-0.5">
-            <span className="text-[10px] text-[#6B7C93]">{r.task}</span>
-            <span className="text-[10px] font-bold" style={{ color: r.c }}>{r.pct}%</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-gray-200">
-            <div className="h-1.5 rounded-full" style={{ width: `${r.pct}%`, backgroundColor: r.c }} />
-          </div>
-        </div>
-      ))}
-    </div>
-    <p className="mt-3 text-[10px] text-red-500 font-semibold">Marketing always slides to the bottom</p>
-  </div>,
-
-  // 1 — What Omnivyra does: action list
-  <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
-    <div className="mb-3 flex items-center justify-between">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Your next 30 minutes</p>
-      <span className="rounded-full bg-[#0A66C2] px-2 py-0.5 text-[9px] font-bold text-white">3 actions</span>
-    </div>
-    <div className="space-y-2">
-      {[
-        { priority: '1', action: 'Post LinkedIn update on new feature', time: '8 min', tag: 'Content' },
-        { priority: '2', action: 'Respond to 4 warm leads in inbox', time: '12 min', tag: 'Engagement' },
-        { priority: '3', action: 'Review ad spend — pause underperformer', time: '5 min', tag: 'Campaign' },
-      ].map((a) => (
-        <div key={a.action} className="flex items-start gap-2.5 rounded-xl bg-white p-2.5 shadow-sm">
-          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#0A66C2] text-[9px] font-bold text-white">{a.priority}</div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-semibold text-[#0B1F33] leading-tight">{a.action}</p>
-            <div className="mt-1 flex items-center gap-1.5">
-              <span className="rounded bg-[#0A66C2]/10 px-1.5 py-0.5 text-[8px] font-semibold text-[#0A66C2]">{a.tag}</span>
-              <span className="text-[8px] text-[#6B7C93]">{a.time}</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>,
-
-  // 2 — A plan you can follow: weekly skeleton
-  <div className="rounded-2xl border border-[#0A66C2]/10 bg-white p-4 shadow-sm">
-    <div className="mb-3 flex items-center justify-between">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Your weekly plan</p>
-      <span className="text-[9px] text-[#6B7C93]">Adjusted to 4h/week</span>
-    </div>
-    <div className="grid grid-cols-5 gap-1 mb-2">
-      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((d, i) => (
-        <div key={d} className="text-center">
-          <p className="text-[8px] text-[#6B7C93] mb-1">{d}</p>
-          <div className={`rounded-lg p-1.5 ${i === 1 || i === 3 ? 'bg-[#0A66C2]' : i === 0 ? 'bg-[#0A66C2]/20' : 'bg-gray-100'}`}>
-            <p className="text-[8px] font-semibold leading-tight text-center" style={{ color: i === 1 || i === 3 ? 'white' : i === 0 ? '#0A66C2' : '#6B7C93' }}>
-              {['Plan', 'Post', 'Rest', 'Engage', 'Review'][i]}
-            </p>
-          </div>
-        </div>
-      ))}
-    </div>
-    <div className="space-y-1">
-      {[
-        { day: 'Tue', task: '1× LinkedIn post + 1× story', done: true },
-        { day: 'Thu', task: 'Reply to comments + 3 DMs', done: true },
-        { day: 'Fri', task: 'Check metrics — 10 min review', done: false },
-      ].map((r) => (
-        <div key={r.task} className="flex items-center gap-2 rounded-lg bg-[#F5F9FF] px-2.5 py-1.5">
-          <div className={`h-3.5 w-3.5 shrink-0 rounded-full flex items-center justify-center ${r.done ? 'bg-[#0A66C2]' : 'border border-gray-300'}`}>
-            {r.done && <svg className="h-2 w-2 text-white" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>}
-          </div>
-          <span className="text-[9px] text-[#0B1F33]"><span className="font-bold text-[#0A66C2]">{r.day}:</span> {r.task}</span>
-        </div>
-      ))}
-    </div>
-  </div>,
-
-  // 3 — Know what is working: channel breakdown
-  <div className="rounded-2xl border border-gray-100 bg-[#F5F9FF] p-4">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#6B7C93]">What's actually driving results</p>
-    <div className="space-y-2.5">
-      <BarRow label="LinkedIn" pct={62} color="#0A66C2" />
-      <BarRow label="Email" pct={24} color="#3FA9F5" />
-      <BarRow label="Instagram" pct={10} color="#60B5FF" />
-      <BarRow label="Twitter/X" pct={4} color="#93C5FD" />
-    </div>
-    <div className="mt-3 rounded-xl bg-[#0A66C2]/8 border border-[#0A66C2]/15 px-3 py-2">
-      <p className="text-[10px] font-semibold text-[#0A66C2]">→ Double down on LinkedIn. Pause Twitter.</p>
-    </div>
-  </div>,
-
-  // 4 — Grow without hiring: value comparison
-  <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#6B7C93]">What you get vs. what you pay</p>
-    <div className="grid grid-cols-2 gap-3 mb-3">
-      <div className="rounded-xl bg-red-50 border border-red-100 p-3">
-        <p className="text-[9px] text-red-400 font-semibold mb-1">Marketing hire</p>
-        <p className="text-xl font-bold text-red-500">£4–6k</p>
-        <p className="text-[8px] text-red-400">per month</p>
-        <div className="mt-2 space-y-1">
-          {['Strategy', 'Execution', 'Reporting'].map((i) => (
-            <div key={i} className="flex items-center gap-1">
-              <svg className="h-3 w-3 text-red-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-              <span className="text-[8px] text-red-400">{i}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="rounded-xl bg-[#F0F7FF] border border-[#0A66C2]/15 p-3">
-        <p className="text-[9px] text-[#0A66C2] font-semibold mb-1">Omnivyra</p>
-        <p className="text-xl font-bold text-[#0A66C2]">Fraction</p>
-        <p className="text-[8px] text-[#0A66C2]/70">of that cost</p>
-        <div className="mt-2 space-y-1">
-          {['Strategy', 'Execution', 'Reporting', 'Intelligence'].map((i) => (
-            <div key={i} className="flex items-center gap-1">
-              <svg className="h-3 w-3 text-[#0A66C2]" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
-              <span className="text-[8px] text-[#0A66C2]">{i}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-    <div className="rounded-xl bg-[#F5F9FF] px-3 py-2">
-      <p className="text-[10px] font-semibold text-[#0B1F33]">The thinking of a team. The cost of a tool.</p>
-    </div>
-  </div>,
-];
-
-const CREATOR_VISUALS: React.ReactNode[] = [
-  // 0 — Challenge: inconsistent growth
-  <div className="rounded-2xl border border-gray-100 bg-[#F5F9FF] p-4">
-    <div className="mb-2 flex items-center justify-between">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-[#6B7C93]">Your growth — last 10 posts</p>
-    </div>
-    <div className="h-20 mb-3">
-      <SparkLine vals={[40, 12, 380, 22, 14, 210, 18, 44, 8, 195]} color="#0A66C2" />
-    </div>
-    <div className="flex gap-2">
-      <div className="flex-1 rounded-xl bg-emerald-50 border border-emerald-100 p-2 text-center">
-        <p className="text-sm font-bold text-emerald-600">3</p>
-        <p className="text-[9px] text-emerald-500">Posts hit</p>
-      </div>
-      <div className="flex-1 rounded-xl bg-red-50 border border-red-100 p-2 text-center">
-        <p className="text-sm font-bold text-red-500">7</p>
-        <p className="text-[9px] text-red-400">Landed flat</p>
-      </div>
-      <div className="flex-1 rounded-xl bg-amber-50 border border-amber-100 p-2 text-center">
-        <p className="text-sm font-bold text-amber-600">?</p>
-        <p className="text-[9px] text-amber-500">Reason unknown</p>
-      </div>
-    </div>
-  </div>,
-
-  // 1 — What Omnivyra does: content patterns
-  <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">What performs for your audience</p>
-    <div className="space-y-2">
-      {[
-        { topic: 'Behind-the-scenes', format: 'Short video', score: 94 },
-        { topic: 'Industry opinion', format: 'Long-form post', score: 87 },
-        { topic: 'Tutorial / how-to', format: 'Carousel', score: 76 },
-        { topic: 'Personal story', format: 'Text post', score: 61 },
-      ].map((r) => (
-        <div key={r.topic} className="flex items-center gap-2 rounded-lg bg-white p-2 shadow-sm">
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] font-semibold text-[#0B1F33]">{r.topic}</span>
-              <span className="text-[10px] font-bold text-[#0A66C2]">{r.score}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="flex-1 h-1 rounded-full bg-gray-100">
-                <div className="h-1 rounded-full bg-[#0A66C2]" style={{ width: `${r.score}%` }} />
-              </div>
-              <span className="text-[8px] text-[#6B7C93]">{r.format}</span>
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>,
-
-  // 2 — Strategy: content map
-  <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#6B7C93]">Your content map</p>
-    <div className="grid grid-cols-3 gap-2 mb-3">
-      {[
-        { theme: 'Education', posts: 3, c: 'bg-[#0A66C2]/10 text-[#0A66C2] border-[#0A66C2]/20' },
-        { theme: 'Inspiration', posts: 2, c: 'bg-purple-50 text-purple-600 border-purple-100' },
-        { theme: 'Promotion', posts: 1, c: 'bg-amber-50 text-amber-600 border-amber-100' },
-      ].map((t) => (
-        <div key={t.theme} className={`rounded-xl border p-2.5 text-center ${t.c}`}>
-          <p className="text-lg font-bold">{t.posts}×</p>
-          <p className="text-[9px] font-semibold">{t.theme}</p>
-          <p className="text-[8px] opacity-70">per week</p>
-        </div>
-      ))}
-    </div>
-    <div className="space-y-1">
-      {['LinkedIn post — Mon & Wed', 'Instagram reel — Tue', 'Newsletter — Thu', 'Story + poll — Fri'].map((s) => (
-        <div key={s} className="flex items-center gap-2 rounded-lg bg-[#F5F9FF] px-2.5 py-1.5">
-          <div className="h-1.5 w-1.5 rounded-full bg-[#0A66C2] shrink-0" />
-          <span className="text-[10px] text-[#0B1F33]">{s}</span>
-        </div>
-      ))}
-    </div>
-  </div>,
-
-  // 3 — Channel intelligence: platform breakdown
-  <div className="rounded-2xl border border-gray-100 bg-[#F5F9FF] p-4">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#6B7C93]">Where your audience actually is</p>
-    <div className="space-y-2.5">
-      {[
-        { platform: 'LinkedIn', strength: 'Reach + authority', score: 88, c: '#0A66C2' },
-        { platform: 'Instagram', strength: 'Engagement + discovery', score: 72, c: '#E1306C' },
-        { platform: 'YouTube', strength: 'Long-form watch time', score: 45, c: '#FF0000' },
-        { platform: 'Twitter/X', strength: 'Conversation + trends', score: 33, c: '#14171A' },
-      ].map((r) => (
-        <div key={r.platform}>
-          <div className="flex items-center justify-between mb-1">
-            <div>
-              <span className="text-[10px] font-semibold text-[#0B1F33]">{r.platform}</span>
-              <span className="ml-2 text-[9px] text-[#6B7C93]">{r.strength}</span>
-            </div>
-            <span className="text-[10px] font-bold" style={{ color: r.c }}>{r.score}</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-gray-200">
-            <div className="h-1.5 rounded-full" style={{ width: `${r.score}%`, backgroundColor: r.c }} />
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>,
-
-  // 4 — From creator to brand: profile card
-  <div className="rounded-2xl border border-[#0A66C2]/10 bg-[#F0F7FF] p-4">
-    <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-[#0A66C2]">Your creator profile</p>
-    <div className="grid grid-cols-2 gap-2 mb-3">
-      {[
-        { label: 'Avg. engagement', val: '4.8%', trend: '↑', c: 'text-emerald-600' },
-        { label: 'Posting consistency', val: '91%', trend: '↑', c: 'text-emerald-600' },
-        { label: 'Audience growth', val: '+340/mo', trend: '↑', c: 'text-emerald-600' },
-        { label: 'Top content', val: 'Education', trend: '', c: 'text-[#0A66C2]' },
-      ].map((m) => (
-        <div key={m.label} className="rounded-xl bg-white p-2.5 shadow-sm">
-          <p className="text-[8px] text-[#6B7C93]">{m.label}</p>
-          <p className={`text-sm font-bold ${m.c}`}>{m.val} <span className="text-xs">{m.trend}</span></p>
-        </div>
-      ))}
-    </div>
-    <div className="rounded-xl bg-[#0A66C2] px-3 py-2 text-center">
-      <p className="text-[10px] font-semibold text-white">Ready to pitch to brands & investors</p>
-    </div>
-  </div>,
-];
-
-const PERSONA_VISUALS = [MARKETER_VISUALS, FOUNDER_VISUALS, CREATOR_VISUALS];
-
-// ── Persona data ──────────────────────────────────────────────────────────────
-
-const PERSONAS = [
-  {
-    id: 'marketer',
-    tab: 'I run marketing',
-    initials: 'MK',
-    role: 'Marketing Manager / Director',
-    intro: 'You are responsible for results across channels, teams, and budgets. You need clarity — not more reports.',
-    sections: [
-      {
-        title: 'The challenge you live with',
-        body: 'You are juggling five platforms, two agencies, a spreadsheet from finance, and a VP who wants weekly updates. You know your campaigns are running — you just cannot tell which ones are actually working and why.',
-        bullets: [
-          'Five or more platforms with no shared context',
-          'Reporting takes hours and still misses the story',
-          'Teams misaligned — each channel works in isolation',
-          'Budget decisions made on incomplete signals',
-        ],
-        metrics: [
-          { val: '5+', label: 'Platforms juggled' },
-          { val: '3h', label: 'Weekly reporting' },
-          { val: '0', label: 'Clear source of truth' },
-        ],
-      },
-      {
-        title: 'What Omnivyra does for you',
-        body: 'It surfaces the decisions that matter: which channel is underperforming, which segment is converting, which content is being ignored. No setup, no data engineering — just intelligence ready when you open it.',
-        bullets: [
-          'Underperforming channels flagged instantly with context',
-          'Converting segments identified, not just reported',
-          'Ignored content rises to the surface automatically',
-          'Zero setup — intelligence ready from day one',
-        ],
-        metrics: [
-          { val: '1', label: 'Unified platform' },
-          { val: '<1 min', label: 'To clarity' },
-          { val: '100%', label: 'Signal confidence' },
-        ],
-      },
-      {
-        title: 'The signal, not the noise',
-        body: 'Instead of seventeen dashboards you never fully trust, you get a single decision layer. When something changes — good or bad — you know immediately, with context and a clear next step.',
-        bullets: [
-          'Single decision layer replaces 17+ dashboards',
-          'Every alert includes context, not just a number',
-          'Changes surface with a clear next action',
-          'Nothing important falls through the cracks',
-        ],
-        metrics: [
-          { val: '17→1', label: 'Dashboards reduced' },
-          { val: 'Always', label: 'Context included' },
-          { val: '∞', label: 'Signal coverage' },
-        ],
-      },
-      {
-        title: 'Campaign planning without the chaos',
-        body: 'Build a full campaign skeleton in minutes. Define your strategy, let AI map it to a weekly execution plan, then refine it with your team. Every activity connects to the goal — not just a calendar slot.',
-        bullets: [
-          'Full campaign skeleton generated in under 10 minutes',
-          'AI maps strategy to a weekly execution plan',
-          'Team can collaborate and refine inside the platform',
-          'Every activity is goal-linked, not just scheduled',
-        ],
-        metrics: [
-          { val: '<10 min', label: 'Campaign plan' },
-          { val: '100%', label: 'Goal aligned' },
-          { val: '0', label: 'Missed connections' },
-        ],
-      },
-      {
-        title: 'Your reporting, done',
-        body: 'Stop assembling slide decks. Omnivyra compiles the story of your marketing performance — what worked, what did not, and what you did about it — so your next review takes minutes, not a weekend.',
-        bullets: [
-          'Performance narrative auto-compiled across channels',
-          'Covers what worked, what didn\'t, and the reasons why',
-          'Stakeholder-ready without manual assembly',
-          'Next review: 2 minutes, not a full weekend',
-        ],
-        metrics: [
-          { val: '90%', label: 'Time saved' },
-          { val: '2 min', label: 'Review prep' },
-          { val: '0', label: 'Manual slide decks' },
-        ],
-      },
-    ],
-  },
+const ROLES: Role[] = [
   {
     id: 'founder',
-    tab: 'I do everything myself',
-    initials: 'FD',
-    role: 'Founder / Solo Operator',
-    intro: 'You wear every hat. Marketing is important but it is not the only thing on your plate — you need it to work without consuming your day.',
-    sections: [
-      {
-        title: 'The challenge you live with',
-        body: 'You post when you remember to. You boost ads without a clear strategy. You know you should be more consistent but between operations, sales, and everything else, marketing slides to the bottom of the list.',
-        bullets: [
-          'Marketing only happens when everything else is done',
-          'No clear strategy — boosting posts without direction',
-          'Inconsistent output means inconsistent growth',
-          'No time to analyse what is or isn\'t working',
-        ],
-        metrics: [
-          { val: '7%', label: 'Time on marketing' },
-          { val: '0', label: 'Clear strategy' },
-          { val: '∞', label: 'Other priorities' },
-        ],
-      },
-      {
-        title: 'What Omnivyra does for you',
-        body: 'It tells you exactly what to do, when to do it, and why — so you spend less time wondering and more time executing. Even 30 minutes a week becomes productive when you know where to focus.',
-        bullets: [
-          'Exact next actions — no guessing required',
-          'Tells you what to do and why it matters now',
-          '30 minutes a week becomes genuinely productive',
-          'Focus replaces scattered effort instantly',
-        ],
-        metrics: [
-          { val: '30 min', label: 'Per week needed' },
-          { val: '3', label: 'Clear next actions' },
-          { val: '100%', label: 'Time well spent' },
-        ],
-      },
-      {
-        title: 'A plan you can actually follow',
-        body: 'Answer a few questions about your goals and audience. Omnivyra builds a realistic weekly marketing plan — content types, channels, timing — tailored to how much time you actually have.',
-        bullets: [
-          'Realistic plan built around your actual available time',
-          'Content types, channels, and timing all decided for you',
-          'Adjusts automatically as your schedule changes',
-          'You follow a plan — not a vague set of good intentions',
-        ],
-        metrics: [
-          { val: '5 min', label: 'Setup time' },
-          { val: '1 week', label: 'Plan horizon' },
-          { val: '100%', label: 'Tailored to you' },
-        ],
-      },
-      {
-        title: 'Know what is working',
-        body: 'Stop guessing whether your LinkedIn post helped or whether the email campaign converted. Get clear signal on what is driving results so you double down on what works and cut what does not.',
-        bullets: [
-          'Clear signal — no guessing which channel drove results',
-          'Top-performing topics and formats identified for you',
-          'Underperforming activities flagged before money is wasted',
-          'Double down on what works, cut what does not',
-        ],
-        metrics: [
-          { val: '62%', label: 'Top channel (LinkedIn)' },
-          { val: 'Instant', label: 'Performance signal' },
-          { val: '0', label: 'Guesswork remaining' },
-        ],
-      },
-      {
-        title: 'Grow without hiring',
-        body: 'Omnivyra gives you the thinking of a marketing team without the headcount. Strategy, execution priorities, and performance signals — all in one place, built for one person moving fast.',
-        bullets: [
-          'Strategy, execution, and reporting — all in one place',
-          'Built for solo operators who move fast and need results',
-          'No agency fees, no freelancer management overhead',
-          'Scales with you as your business grows',
-        ],
-        metrics: [
-          { val: '1', label: 'Person needed' },
-          { val: 'Team', label: 'Thinking power' },
-          { val: '£0', label: 'Extra headcount' },
-        ],
-      },
+    label: 'Founder / CXO',
+    badge: 'Popular for SMB leaders',
+    identity: 'Oversight / priorities / confidence',
+    headline: 'See where marketing needs leadership attention.',
+    subhead: 'For founders and CXOs who need control without managing every post, report, and campaign task.',
+    dashboardTitle: 'Executive marketing brief',
+    dashboardStatus: '3 priorities surfaced',
+    signals: [
+      { label: 'Campaign execution', value: 'On track', state: 'good' },
+      { label: 'Authority gap', value: 'High', state: 'watch' },
+      { label: 'Competitor movement', value: 'Rising', state: 'build' },
     ],
+    cta: 'Get Visibility Snapshot',
+    steps: {
+      challenge: {
+        title: 'Marketing is happening, but leadership sees fragments.',
+        summary: 'Updates arrive through calls, decks, screenshots, and opinions.',
+        pain: 'You cannot quickly tell what is working, what is stuck, and where spend may be leaking.',
+        connects: ['Campaign progress', 'Content activity', 'Market Pulse', 'Visibility signals'],
+        changes: ['Less status chasing', 'Clearer spend conversations', 'Sharper weekly priorities'],
+        metrics: [
+          { value: '5 min', label: 'leadership review' },
+          { value: '3', label: 'priority risks' },
+          { value: '1', label: 'operating view' },
+        ],
+        recommendations: ['Review authority gaps', 'Ask team for campaign proof', 'Delay spend until content gaps are fixed'],
+      },
+      visibility: {
+        title: 'You need the business view, not tool-by-tool detail.',
+        summary: 'Omnivyra shows what deserves attention across marketing operations.',
+        pain: 'The missing piece is not more data. It is a leadership lens on execution, risk, and next decisions.',
+        connects: ['Execution status', 'Competitive pressure', 'Digital authority', 'Approval needs'],
+        changes: ['Know what to approve', 'Know what to challenge', 'Know what to pause'],
+        metrics: [
+          { value: 'Live', label: 'activity context' },
+          { value: 'Less', label: 'follow-up noise' },
+          { value: 'More', label: 'decision confidence' },
+        ],
+        recommendations: ['Check stalled initiatives', 'Review competitor movement', 'Prioritize authority-building work'],
+      },
+      intelligence: {
+        title: 'Active Intelligence turns activity into executive clarity.',
+        summary: 'Signals are generated from the operations running in and around Omnivyra.',
+        pain: 'Dashboards show numbers. Omnivyra explains which operational signals matter to leadership.',
+        connects: ['Reports', 'Campaigns', 'Content workflows', 'Market context'],
+        changes: ['Risks become visible', 'Priorities become clearer', 'Strategy reviews become faster'],
+        metrics: [
+          { value: '4', label: 'systems connected' },
+          { value: 'Next', label: 'action visible' },
+          { value: 'AI-era', label: 'visibility lens' },
+        ],
+        recommendations: ['Strengthen comparison pages', 'Track authority movement', 'Ask for next-best-action brief'],
+      },
+      outcomes: {
+        title: 'The outcome is control without micromanagement.',
+        summary: 'You understand marketing direction and can intervene only where it matters.',
+        pain: 'Without a shared operating view, leadership either over-manages or stays too far away.',
+        connects: ['Oversight', 'Accountability', 'Priority setting', 'Business confidence'],
+        changes: ['Better strategic focus', 'Cleaner accountability', 'More confident marketing investment'],
+        metrics: [
+          { value: 'Clear', label: 'what is moving' },
+          { value: 'Visible', label: 'what is blocked' },
+          { value: 'Focused', label: 'what happens next' },
+        ],
+        recommendations: ['Run weekly visibility review', 'Approve top campaign priority', 'Track one authority metric'],
+      },
+      actions: {
+        title: 'Start with visibility, then scale the operating layer.',
+        summary: 'Use the snapshot to understand public authority, then test workflows with free credits.',
+        pain: 'The first step should be low-friction and truthful.',
+        connects: ['Digital Authority Snapshot', 'Company profile', 'Free credits', 'Operational workflows'],
+        changes: ['Fast entry point', 'No credit card friction', 'Clear path into deeper intelligence'],
+        metrics: [
+          { value: '0', label: 'credit card required' },
+          { value: '1', label: 'company profile' },
+          { value: 'Free', label: 'starting layer' },
+        ],
+        recommendations: ['Create account', 'Complete company profile', 'Request Digital Authority Snapshot'],
+      },
+    },
+  },
+  {
+    id: 'marketing',
+    label: 'Marketing Lead',
+    badge: 'Execution workflow',
+    identity: 'Coordination / campaigns / next-best-actions',
+    headline: 'Coordinate campaigns, content, and visibility in one flow.',
+    subhead: 'For marketing leads who need execution clarity before the next campaign review.',
+    dashboardTitle: 'Campaign operating view',
+    dashboardStatus: 'Execution in motion',
+    signals: [
+      { label: 'Launch campaign', value: 'Ready', state: 'good' },
+      { label: 'AEO content', value: 'Needs brief', state: 'build' },
+      { label: 'Report narrative', value: 'Drafting', state: 'good' },
+    ],
+    cta: 'Explore Your Workflow',
+    steps: {
+      challenge: {
+        title: 'Stop coordinating execution through disconnected systems.',
+        summary: 'Campaigns, reporting, visibility, engagement, and content planning rarely move together operationally.',
+        pain: 'You spend too much energy connecting work that should already be connected.',
+        connects: ['Campaign builder', 'Content creation', 'Publishing', 'Reporting context'],
+        changes: ['Less coordination drag', 'Faster campaign handoff', 'Clearer team priorities'],
+        metrics: [
+          { value: '4', label: 'workflows aligned' },
+          { value: 'Next', label: 'priority visible' },
+          { value: '1', label: 'team view' },
+        ],
+        recommendations: ['Create campaign skeleton', 'Brief missing content', 'Review weekly execution risks'],
+      },
+      visibility: {
+        title: 'Execution needs visibility context.',
+        summary: 'Campaign planning improves when SEO, AEO, GEO, authority, and engagement signals are visible.',
+        pain: 'A campaign can launch on time and still miss the discoverability layer that makes it work.',
+        connects: ['SEO/AEO/GEO readiness', 'Content depth', 'Engagement', 'Channel movement'],
+        changes: ['Better campaign briefs', 'Visibility-aware content', 'Stronger stakeholder updates'],
+        metrics: [
+          { value: 'SEO', label: 'search context' },
+          { value: 'AEO', label: 'answer context' },
+          { value: 'GEO', label: 'AI context' },
+        ],
+        recommendations: ['Add answer-ready sections', 'Map content gaps', 'Tie publishing to visibility objective'],
+      },
+      intelligence: {
+        title: 'Recommendations become useful because they know the work.',
+        summary: 'Omnivyra reads execution context before suggesting what to change.',
+        pain: 'Generic AI suggestions ignore timing, capacity, campaign stage, and existing assets.',
+        connects: ['Briefs', 'Assets', 'Schedules', 'Performance signals'],
+        changes: ['Practical recommendations', 'Cleaner prioritization', 'Fewer disconnected tasks'],
+        metrics: [
+          { value: 'Live', label: 'execution context' },
+          { value: '3', label: 'recommended moves' },
+          { value: 'Less', label: 'guesswork' },
+        ],
+        recommendations: ['Refresh weak asset', 'Move campaign timing', 'Create authority support content'],
+      },
+      outcomes: {
+        title: 'Marketing reviews become operational, not defensive.',
+        summary: 'You can explain what happened, what changed, and what the team is doing next.',
+        pain: 'Reporting is painful when execution context is scattered.',
+        connects: ['Performance story', 'Campaign status', 'Content movement', 'Next actions'],
+        changes: ['Cleaner reviews', 'Faster course correction', 'More trust in the plan'],
+        metrics: [
+          { value: '2 min', label: 'review prep view' },
+          { value: 'Auto', label: 'performance narrative' },
+          { value: 'Clear', label: 'next action' },
+        ],
+        recommendations: ['Prepare campaign narrative', 'Flag underperforming content', 'Show next sprint plan'],
+      },
+      actions: {
+        title: 'Use free credits to test the working layer.',
+        summary: 'Build, create, schedule, and inspect how Omnivyra supports daily execution.',
+        pain: 'Marketing teams need to feel the workflow, not just read about it.',
+        connects: ['Free credits', 'Campaign workflow', 'Content workflow', 'Recommendations'],
+        changes: ['Hands-on testing', 'Lower adoption friction', 'Faster internal buy-in'],
+        metrics: [
+          { value: 'Free', label: 'credits to test' },
+          { value: 'No', label: 'card required' },
+          { value: 'Fast', label: 'workflow trial' },
+        ],
+        recommendations: ['Claim credits', 'Create a campaign draft', 'Generate first content asset'],
+      },
+    },
+  },
+  {
+    id: 'growth',
+    label: 'Growth Team',
+    badge: 'Opportunity detection',
+    identity: 'Signals / gaps / competitive movement',
+    headline: 'Find discoverability gaps before competitors turn them into advantage.',
+    subhead: 'For growth teams connecting visibility, content depth, market movement, and experiments.',
+    dashboardTitle: 'Growth opportunity map',
+    dashboardStatus: 'Gap detected',
+    signals: [
+      { label: 'AI answer presence', value: 'Weak', state: 'watch' },
+      { label: 'Entity clarity', value: 'Improving', state: 'build' },
+      { label: 'Competitor pressure', value: 'High', state: 'watch' },
+    ],
+    cta: 'Get Visibility Snapshot',
+    steps: {
+      challenge: {
+        title: 'Growth opportunities disappear when discoverability signals stay fragmented.',
+        summary: 'Most growth teams track channels separately without understanding operational visibility patterns.',
+        pain: 'You see movement, but not always the opportunity behind it.',
+        connects: ['Visibility signals', 'Competitor movement', 'Content depth', 'Market Pulse'],
+        changes: ['Earlier gap detection', 'Sharper growth bets', 'Faster prioritization'],
+        metrics: [
+          { value: 'AI', label: 'visibility gaps' },
+          { value: '3', label: 'growth signals' },
+          { value: 'Now', label: 'priority timing' },
+        ],
+        recommendations: ['Inspect AI answer presence', 'Compare competitor authority', 'Prioritize content gaps'],
+      },
+      visibility: {
+        title: 'SEO alone no longer explains discoverability.',
+        summary: 'Search, answer engines, generative systems, and authority signals now overlap.',
+        pain: 'Teams miss growth when they optimize only for old visibility models.',
+        connects: ['SEO readiness', 'AEO readiness', 'GEO readiness', 'AI visibility'],
+        changes: ['Broader visibility model', 'Better content investment', 'Clearer opportunity sequence'],
+        metrics: [
+          { value: 'SEO', label: 'search' },
+          { value: 'AEO', label: 'answers' },
+          { value: 'GEO', label: 'generative' },
+        ],
+        recommendations: ['Measure readiness', 'Fix entity gaps', 'Create answer-ready content'],
+      },
+      intelligence: {
+        title: 'Operational context turns signals into growth priorities.',
+        summary: 'Omnivyra connects what the market is doing with what your team can execute.',
+        pain: 'Insights are useless when they do not become a prioritized operating plan.',
+        connects: ['Market Pulse', 'Campaign planning', 'Content workflow', 'Authority signals'],
+        changes: ['Better opportunity ranking', 'More realistic experiments', 'Clearer next-best-actions'],
+        metrics: [
+          { value: 'Ranked', label: 'opportunities' },
+          { value: 'Live', label: 'market context' },
+          { value: 'Next', label: 'growth move' },
+        ],
+        recommendations: ['Build comparison asset', 'Strengthen proof pages', 'Monitor competitor shift'],
+      },
+      outcomes: {
+        title: 'Growth work becomes less reactive.',
+        summary: 'You know which gaps matter and which moves can compound.',
+        pain: 'Without operational intelligence, teams chase every signal with the same urgency.',
+        connects: ['Opportunity scoring', 'Execution capacity', 'Visibility movement', 'Performance context'],
+        changes: ['Sharper bets', 'Less wasted experimentation', 'More compounding visibility'],
+        metrics: [
+          { value: 'Less', label: 'signal chasing' },
+          { value: 'More', label: 'strategic focus' },
+          { value: 'Clear', label: 'growth path' },
+        ],
+        recommendations: ['Select top opportunity', 'Assign content owner', 'Review movement monthly'],
+      },
+      actions: {
+        title: 'Start by measuring the public visibility layer.',
+        summary: 'The snapshot gives growth teams a baseline before deeper connected reports.',
+        pain: 'You cannot prioritize what you have not measured.',
+        connects: ['Snapshot', 'Authority baseline', 'Competitor view', 'Readiness gaps'],
+        changes: ['Faster baseline', 'Clearer first fix', 'Better growth roadmap'],
+        metrics: [
+          { value: 'Free', label: 'baseline layer' },
+          { value: 'Public', label: 'signals first' },
+          { value: 'Next', label: 'fix sequence' },
+        ],
+        recommendations: ['Request snapshot', 'Review top gaps', 'Plan visibility sprint'],
+      },
+    },
   },
   {
     id: 'creator',
-    tab: 'I create & grow content',
-    initials: 'CR',
-    role: 'Content Creator / Personal Brand',
-    intro: 'Your content is your business. You need to know what resonates, where to grow, and how to turn an audience into something sustainable.',
-    sections: [
-      {
-        title: 'The challenge you live with',
-        body: 'You are creating consistently but growth feels inconsistent. Some posts blow up, others land flat. You do not always know why — and the platforms keep changing the rules.',
-        bullets: [
-          'Consistent effort, wildly inconsistent results',
-          'No clear pattern — some posts soar, most land flat',
-          'Platform algorithms change and you adapt blindly',
-          'No framework for replicating what works',
-        ],
-        metrics: [
-          { val: '30%', label: 'Posts that perform' },
-          { val: '70%', label: 'Miss the mark' },
-          { val: '?', label: 'Reason known' },
-        ],
-      },
-      {
-        title: 'What Omnivyra does for you',
-        body: 'It analyses your content performance across platforms and shows you the patterns: which topics drive engagement, which formats get reach, which times your audience is actually active.',
-        bullets: [
-          'Content performance analysed across all your platforms',
-          'Topics that drive engagement ranked and explained',
-          'Formats that get reach vs. formats that get buried',
-          'Optimal posting times for your specific audience',
-        ],
-        metrics: [
-          { val: '94', label: 'Top content score' },
-          { val: '4', label: 'Topics ranked' },
-          { val: 'Clear', label: 'What works & why' },
-        ],
-      },
-      {
-        title: 'Strategy behind the content',
-        body: 'Great content is not just creative — it is structured. Omnivyra helps you build a content strategy that maps your themes, formats, and cadence to your growth goals, not just your inspiration.',
-        bullets: [
-          'Content themes mapped to audience growth goals',
-          'Format and cadence decided — not left to inspiration',
-          'Education, inspiration, and promotion balanced correctly',
-          'Consistent output replaces reactive posting',
-        ],
-        metrics: [
-          { val: '3', label: 'Content themes' },
-          { val: '6', label: 'Posts per week' },
-          { val: '100%', label: 'Goal aligned' },
-        ],
-      },
-      {
-        title: 'Channel-by-channel intelligence',
-        body: 'LinkedIn is different from Instagram. Instagram is different from YouTube. Omnivyra tells you where your specific audience is, how they behave, and what kind of content drives them to follow, share, or act.',
-        bullets: [
-          'Each platform treated differently, as it should be',
-          'Where your specific audience actually spends time',
-          'What content type drives follows, shares, and action',
-          'Which platform to invest in now vs. later',
-        ],
-        metrics: [
-          { val: '4', label: 'Platforms analysed' },
-          { val: '88', label: 'LinkedIn score' },
-          { val: '1', label: 'Platform to focus on' },
-        ],
-      },
-      {
-        title: 'From creator to brand',
-        body: 'When you are ready to monetise, partner, or scale — Omnivyra gives you the data story that makes the case. Engagement rates, audience profile, content consistency: everything a brand or investor needs to see.',
-        bullets: [
-          'Data story ready for brand partnerships and investors',
-          'Engagement rate, audience profile, and consistency tracked',
-          'Clear proof that your audience is real and active',
-          'The narrative a brand partner needs to say yes',
-        ],
-        metrics: [
-          { val: '4.8%', label: 'Avg. engagement' },
-          { val: '91%', label: 'Posting consistency' },
-          { val: '+340', label: 'Followers / month' },
-        ],
-      },
+    label: 'Content Strategist',
+    badge: 'Content intelligence',
+    identity: 'Content / authority / AI visibility',
+    headline: 'Content should be guided by discoverability intelligence.',
+    subhead: 'Most content systems operate without understanding AI visibility, authority gaps, or topic positioning.',
+    dashboardTitle: 'Content authority map',
+    dashboardStatus: 'Authority building',
+    signals: [
+      { label: 'Education posts', value: 'Strong', state: 'good' },
+      { label: 'AI visibility', value: 'Needs structure', state: 'build' },
+      { label: 'Platform focus', value: 'LinkedIn', state: 'good' },
     ],
+    cta: 'Explore Your Workflow',
+    steps: {
+      challenge: {
+        title: 'Content should be guided by discoverability intelligence.',
+        summary: 'Most content systems operate without understanding AI visibility, authority gaps, or topic positioning.',
+        pain: 'You plan content without enough confidence in authority direction, topic positioning, or discoverability impact.',
+        connects: ['Content themes', 'Platform presence', 'Engagement', 'Authority signals'],
+        changes: ['Less random posting', 'Clearer theme focus', 'Better authority building'],
+        metrics: [
+          { value: '4', label: 'themes ranked' },
+          { value: '1', label: 'platform focus' },
+          { value: 'AI', label: 'visibility lens' },
+        ],
+        recommendations: ['Rank content themes', 'Repeat authority formats', 'Fix thin profile signals'],
+      },
+      visibility: {
+        title: 'Creators need discoverability beyond platform likes.',
+        summary: 'Authority depends on entity clarity, content depth, platform presence, and AI interpretation.',
+        pain: 'Platform metrics do not show whether your brand is understandable to search and AI systems.',
+        connects: ['Entity clarity', 'Content depth', 'AI visibility', 'Public authority'],
+        changes: ['Smarter content direction', 'Better positioning', 'More durable visibility'],
+        metrics: [
+          { value: 'Entity', label: 'clarity' },
+          { value: 'Depth', label: 'content signal' },
+          { value: 'Trust', label: 'authority cue' },
+        ],
+        recommendations: ['Clarify topical pillars', 'Add proof assets', 'Structure profile and content summaries'],
+      },
+      intelligence: {
+        title: 'Omnivyra connects creation with visibility impact.',
+        summary: 'Content ideas, creative assets, and publishing signals feed the next recommendation.',
+        pain: 'Generic content advice ignores what your audience and authority signals are already saying.',
+        connects: ['Text content', 'Creator-led visuals', 'Publishing', 'Engagement signals'],
+        changes: ['More relevant ideas', 'Better asset planning', 'Clearer content experiments'],
+        metrics: [
+          { value: 'Next', label: 'content move' },
+          { value: 'Smart', label: 'format choice' },
+          { value: 'Clear', label: 'theme path' },
+        ],
+        recommendations: ['Create proof-led post', 'Turn best idea into banner', 'Publish answer-ready explainer'],
+      },
+      outcomes: {
+        title: 'The payoff is creative control with strategic direction.',
+        summary: 'You know what to create and how it supports authority.',
+        pain: 'Without direction, content becomes busy work.',
+        connects: ['Creative output', 'Brand authority', 'Platform focus', 'Discoverability'],
+        changes: ['Better consistency', 'More intentional publishing', 'Clearer creator-to-brand path'],
+        metrics: [
+          { value: 'Less', label: 'content drift' },
+          { value: 'More', label: 'authority focus' },
+          { value: 'Ready', label: 'brand story' },
+        ],
+        recommendations: ['Build weekly theme plan', 'Create repeatable formats', 'Track authority movement'],
+      },
+      actions: {
+        title: 'Use credits to test content creation and direction.',
+        summary: 'Try the workflow with content ideas, creative assets, and platform focus.',
+        pain: 'Creators need to feel whether the platform improves output quality quickly.',
+        connects: ['Free credits', 'Content creation', 'Visual assets', 'Publishing direction'],
+        changes: ['Fast experimentation', 'No card needed', 'Clearer creative workflow'],
+        metrics: [
+          { value: 'Free', label: 'credits' },
+          { value: 'Fast', label: 'first asset' },
+          { value: 'Next', label: 'content plan' },
+        ],
+        recommendations: ['Claim credits', 'Create first content asset', 'Review topic recommendations'],
+      },
+    },
+  },
+  {
+    id: 'agency',
+    label: 'Agency',
+    badge: 'Client workflow',
+    identity: 'Client proof / reporting / differentiated strategy',
+    headline: 'Turn client work into a stronger intelligence narrative.',
+    subhead: 'For agencies that need to explain strategy, prove progress, and recommend the next move with confidence.',
+    dashboardTitle: 'Client intelligence brief',
+    dashboardStatus: 'Ready for review',
+    signals: [
+      { label: 'Visibility snapshot', value: 'Prepared', state: 'good' },
+      { label: 'Competitor pressure', value: 'Rising', state: 'watch' },
+      { label: 'Next sprint', value: 'Prioritized', state: 'build' },
+    ],
+    cta: 'Get Visibility Snapshot',
+    steps: {
+      challenge: {
+        title: 'Client reporting becomes more strategic when operational context is connected.',
+        summary: 'Agencies often explain isolated metrics instead of operational visibility movement.',
+        pain: 'The agency may be doing strong work, but the proof is scattered across reports and tools.',
+        connects: ['Client snapshots', 'Campaign activity', 'Content work', 'Market context'],
+        changes: ['Stronger client trust', 'Better review meetings', 'Clearer next sprint'],
+        metrics: [
+          { value: 'Proof', label: 'behind strategy' },
+          { value: 'Next', label: 'sprint clarity' },
+          { value: 'Client', label: 'ready view' },
+        ],
+        recommendations: ['Prepare visibility narrative', 'Show competitor pressure', 'Prioritize client next actions'],
+      },
+      visibility: {
+        title: 'Clients need to see where discoverability is weak.',
+        summary: 'The snapshot turns SEO, AEO, GEO, AI visibility, and authority into a clearer conversation.',
+        pain: 'Without a baseline, recommendations can feel subjective.',
+        connects: ['Digital authority', 'AI visibility', 'Content gaps', 'Competitive positioning'],
+        changes: ['Better client education', 'More credible recommendations', 'Cleaner strategic positioning'],
+        metrics: [
+          { value: 'SEO', label: 'readiness' },
+          { value: 'AEO', label: 'answers' },
+          { value: 'GEO', label: 'generative' },
+        ],
+        recommendations: ['Run client snapshot', 'Explain top gaps', 'Map fixes to next retainer sprint'],
+      },
+      intelligence: {
+        title: 'Operational intelligence makes agency advice harder to dismiss.',
+        summary: 'Recommendations are tied to client visibility, campaign work, content depth, and market movement.',
+        pain: 'Client trust drops when reporting does not connect execution with strategy.',
+        connects: ['Reports', 'Execution', 'Market Pulse', 'Recommendations'],
+        changes: ['Sharper strategy', 'Better proof', 'More differentiated delivery'],
+        metrics: [
+          { value: 'Live', label: 'client context' },
+          { value: 'Ranked', label: 'priorities' },
+          { value: 'Clear', label: 'next move' },
+        ],
+        recommendations: ['Create client action brief', 'Show market movement', 'Tie content work to authority gap'],
+      },
+      outcomes: {
+        title: 'The outcome is a more trusted client relationship.',
+        summary: 'Clients see the logic behind the work, not just the output.',
+        pain: 'Agencies lose value when clients cannot connect activity to growth direction.',
+        connects: ['Strategic proof', 'Operational reporting', 'Client education', 'Next-best-actions'],
+        changes: ['Better retention conversations', 'Higher perceived expertise', 'Clearer expansion path'],
+        metrics: [
+          { value: 'More', label: 'client trust' },
+          { value: 'Less', label: 'report friction' },
+          { value: 'Better', label: 'strategic proof' },
+        ],
+        recommendations: ['Standardize client snapshot', 'Use action briefs', 'Track movement by sprint'],
+      },
+      actions: {
+        title: 'Start with a client visibility baseline.',
+        summary: 'Use the snapshot as an entry point into deeper client intelligence.',
+        pain: 'Agencies need a fast, credible way to start the strategic conversation.',
+        connects: ['Snapshot', 'Client profile', 'Authority report', 'Next sprint plan'],
+        changes: ['Faster client diagnosis', 'Cleaner onboarding', 'More strategic entry point'],
+        metrics: [
+          { value: 'Free', label: 'first layer' },
+          { value: 'Fast', label: 'client baseline' },
+          { value: 'Next', label: 'sprint plan' },
+        ],
+        recommendations: ['Create account', 'Add client profile', 'Request snapshot'],
+      },
+    },
+  },
+  {
+    id: 'solo',
+    label: 'Solo Operator',
+    badge: 'Small team fit',
+    identity: 'Focus / capacity / practical execution',
+    headline: 'Know what marketing work to do when time is limited.',
+    subhead: 'For lean teams that need marketing to move without hiring a full marketing department.',
+    dashboardTitle: 'Lean action plan',
+    dashboardStatus: 'Ready to execute',
+    signals: [
+      { label: 'This week', value: '3 tasks', state: 'good' },
+      { label: 'Content asset', value: 'Draft', state: 'build' },
+      { label: 'Channel focus', value: 'LinkedIn', state: 'good' },
+    ],
+    cta: 'Explore Your Workflow',
+    steps: {
+      challenge: {
+        title: 'Marketing becomes easier when operational clarity replaces guesswork.',
+        summary: 'Solo teams struggle to manage visibility, publishing, discoverability, and execution together.',
+        pain: 'Without a practical plan, marketing becomes inconsistent and reactive.',
+        connects: ['Weekly tasks', 'Content creation', 'Campaign basics', 'Performance signals'],
+        changes: ['Less overwhelm', 'More focus', 'Consistent progress'],
+        metrics: [
+          { value: '30 min', label: 'weekly focus' },
+          { value: '3', label: 'next tasks' },
+          { value: '1', label: 'channel focus' },
+        ],
+        recommendations: ['Pick one channel', 'Create one asset', 'Review one signal'],
+      },
+      visibility: {
+        title: 'Small teams need a simple view of what matters.',
+        summary: 'You need to know where you are visible, what is weak, and what can wait.',
+        pain: 'Too many recommendations create more confusion than action.',
+        connects: ['Visibility baseline', 'Content gaps', 'Channel focus', 'Authority signals'],
+        changes: ['Clear first move', 'Less wasted effort', 'Better use of limited time'],
+        metrics: [
+          { value: '1', label: 'focus area' },
+          { value: 'Clear', label: 'what can wait' },
+          { value: 'Next', label: 'best action' },
+        ],
+        recommendations: ['Request snapshot', 'Fix top gap first', 'Delay low-impact channels'],
+      },
+      intelligence: {
+        title: 'Guidance should fit your capacity.',
+        summary: 'Omnivyra turns intelligence into actions a small team can actually execute.',
+        pain: 'Enterprise-style plans do not help when the team is one or two people.',
+        connects: ['Capacity', 'Priorities', 'Content creation', 'Execution plan'],
+        changes: ['Realistic weekly plan', 'Better focus', 'Progress without headcount'],
+        metrics: [
+          { value: 'Lean', label: 'workflow' },
+          { value: 'Practical', label: 'recommendations' },
+          { value: 'Fast', label: 'execution' },
+        ],
+        recommendations: ['Create weekly plan', 'Generate content draft', 'Schedule one campaign touchpoint'],
+      },
+      outcomes: {
+        title: 'The payoff is momentum without complexity.',
+        summary: 'You know what to do next and why it matters.',
+        pain: 'Marketing stalls when every action requires a new decision.',
+        connects: ['Focus', 'Execution', 'Reporting', 'Confidence'],
+        changes: ['More consistency', 'Fewer abandoned plans', 'Clearer growth habit'],
+        metrics: [
+          { value: 'More', label: 'momentum' },
+          { value: 'Less', label: 'decision fatigue' },
+          { value: 'Better', label: 'marketing rhythm' },
+        ],
+        recommendations: ['Use weekly action list', 'Repeat best format', 'Review progress monthly'],
+      },
+      actions: {
+        title: 'Use free credits to test the workflow.',
+        summary: 'Start small: one plan, one asset, one next action.',
+        pain: 'Adoption should feel easy for lean teams.',
+        connects: ['Free credits', 'Content asset', 'Action plan', 'Snapshot'],
+        changes: ['Low-friction trial', 'Practical first win', 'No credit card barrier'],
+        metrics: [
+          { value: 'Free', label: 'credits' },
+          { value: '1', label: 'first asset' },
+          { value: 'No', label: 'card required' },
+        ],
+        recommendations: ['Claim credits', 'Create first asset', 'Request snapshot when profile is ready'],
+      },
+    },
   },
 ];
 
-// ── Remaining data ────────────────────────────────────────────────────────────
+const TRANSFORMATIONS = [
+  ['Disconnected tools', 'Connected operational intelligence'],
+  ['Reactive decisions', 'Guided priorities'],
+  ['Fragmented discoverability', 'Unified visibility intelligence'],
+  ['Reporting chaos', 'Operational clarity'],
+];
 
-const UNIFIED_VALUES = [
+const TESTIMONIALS = [
   {
-    icon: '⚡',
-    title: 'One place for all signals',
-    body: 'Your social accounts, campaigns, website, and content — connected and interpreted together.',
+    quote: 'Omnivyra gives leadership a clear view of what marketing is doing without turning every review into a reporting exercise.',
+    name: 'Founder',
+    role: 'B2B services company',
   },
   {
-    icon: '🎯',
-    title: 'Decisions, not data',
-    body: 'We do not show you metrics. We tell you what they mean and what to do next.',
+    quote: 'The value is not another dashboard. It is knowing which campaign, content, or visibility gap deserves attention now.',
+    name: 'Marketing Lead',
+    role: 'Growth-stage team',
   },
   {
-    icon: '🗓️',
-    title: 'Plans that match reality',
-    body: 'Campaign skeletons and content calendars built around your capacity and goals.',
-  },
-  {
-    icon: '📈',
-    title: 'Performance that compounds',
-    body: 'Every campaign you run teaches the system. Recommendations get sharper over time.',
+    quote: 'For client work, the snapshot and operating context make recommendations feel much more strategic.',
+    name: 'Agency Strategist',
+    role: 'Digital agency',
   },
 ];
 
-const CAPABILITIES = [
-  'Marketing performance signals across all connected channels',
-  'AI-generated campaign skeletons and weekly execution plans',
-  'Content strategy mapping: themes, formats, cadence',
-  'Audience and segment intelligence',
-  'Website and SEO health monitoring',
-  'Channel-specific recommendations and priority scoring',
-  'Campaign planning and collaborative brief building',
-  'Decision history and performance narrative',
-];
+const stateStyles: Record<SignalState, string> = {
+  good: 'border-[#9BD6FF] bg-[#E8F7FF] text-[#075FAE]',
+  watch: 'border-[#CBE2F7] bg-white text-[#0A3A7A]',
+  build: 'border-[#0A66C2] bg-[#0A66C2] text-white',
+};
 
-const DECISION_QA = [
-  {
-    q: 'Which channel should I focus on this quarter?',
-    a: 'The one with the best engagement-to-effort ratio for your specific audience — we will show you which that is.',
-  },
-  {
-    q: 'Is my content strategy working?',
-    a: 'We track what resonates by topic, format, and timing — and flag when patterns shift.',
-  },
-  {
-    q: 'Why did this campaign underperform?',
-    a: 'Audience mismatch, timing, creative fatigue, or channel saturation — we diagnose, not just report.',
-  },
-  {
-    q: 'What should I post next week?',
-    a: 'A plan built from your goals, past performance, and current channel momentum.',
-  },
-];
+const roleAtmospheres: Record<RoleId, string> = {
+  founder:
+    'radial-gradient(circle at 18% 18%, rgba(10,102,194,0.13), transparent 28%), radial-gradient(circle at 86% 44%, rgba(7,29,58,0.07), transparent 32%), rgba(238,247,255,0.92)',
+  marketing:
+    'radial-gradient(circle at 28% 22%, rgba(63,169,245,0.14), transparent 28%), radial-gradient(circle at 82% 54%, rgba(10,102,194,0.08), transparent 34%), rgba(238,247,255,0.92)',
+  growth:
+    'radial-gradient(circle at 22% 24%, rgba(10,102,194,0.11), transparent 30%), radial-gradient(circle at 82% 42%, rgba(70,180,255,0.13), transparent 32%), rgba(238,247,255,0.92)',
+  creator:
+    'radial-gradient(circle at 24% 18%, rgba(63,169,245,0.12), transparent 28%), radial-gradient(circle at 76% 52%, rgba(169,218,255,0.18), transparent 36%), rgba(238,247,255,0.92)',
+  agency:
+    'radial-gradient(circle at 18% 26%, rgba(8,46,99,0.10), transparent 30%), radial-gradient(circle at 84% 40%, rgba(10,102,194,0.13), transparent 34%), rgba(238,247,255,0.92)',
+  solo:
+    'radial-gradient(circle at 24% 22%, rgba(63,169,245,0.10), transparent 28%), radial-gradient(circle at 82% 56%, rgba(10,102,194,0.09), transparent 34%), rgba(238,247,255,0.92)',
+};
 
-// ── Component ────────────────────────────────────────────────────────────────
+function OperationalAtmosphere() {
+  return (
+    <div className="pointer-events-none fixed inset-0 z-0 opacity-45" aria-hidden="true">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_14%_16%,rgba(10,102,194,0.045),transparent_25%),radial-gradient(circle_at_84%_72%,rgba(63,169,245,0.05),transparent_30%)]" />
+      <svg className="h-full w-full" viewBox="0 0 1400 1000" preserveAspectRatio="none">
+        <path
+          d="M80 210 C 280 120, 430 260, 620 220 S 920 140, 1260 270"
+          fill="none"
+          stroke="rgba(10,102,194,0.055)"
+          strokeWidth="1.4"
+          strokeDasharray="3 20"
+          className="solution-signal-drift"
+        />
+        <path
+          d="M120 790 C 330 640, 520 760, 720 660 S 1010 560, 1300 720"
+          fill="none"
+          stroke="rgba(63,169,245,0.05)"
+          strokeWidth="1.4"
+          className="solution-signal-breathe"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function SignalMemory({ dark = false }: { dark?: boolean }) {
+  return (
+    <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+      <div className={dark ? 'absolute inset-0 omnivyra-dark-grid opacity-35' : 'absolute inset-0 omnivyra-light-grid opacity-70'} />
+      <svg className="absolute inset-0 h-full w-full opacity-70" viewBox="0 0 1200 620" preserveAspectRatio="none">
+        <path
+          d="M70 160 C 240 95, 360 205, 520 172 S 790 95, 1110 235"
+          fill="none"
+          stroke={dark ? 'rgba(169,218,255,0.11)' : 'rgba(10,102,194,0.07)'}
+          strokeWidth="1"
+          strokeDasharray="3 22"
+          className="solution-signal-drift"
+        />
+        <path
+          d="M120 505 C 285 405, 455 545, 630 456 S 880 372, 1120 494"
+          fill="none"
+          stroke={dark ? 'rgba(255,255,255,0.06)' : 'rgba(63,169,245,0.055)'}
+          strokeWidth="1"
+          className="solution-signal-breathe"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function PrimaryCtas() {
+  return (
+    <div className="flex flex-col justify-center gap-3 sm:flex-row">
+      <Link
+        href="/create-account"
+        className="inline-flex min-h-[50px] items-center justify-center rounded-full bg-white px-7 py-3 text-[15px] font-black text-[#0A66C2] shadow-[0_14px_34px_rgba(0,0,0,0.16)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_44px_rgba(0,0,0,0.22)]"
+      >
+        Get Visibility Snapshot
+      </Link>
+      <Link
+        href="/get-free-credits"
+        className="inline-flex min-h-[50px] items-center justify-center rounded-full border border-white/30 bg-white/10 px-7 py-3 text-[15px] font-black text-white backdrop-blur transition hover:bg-white/20"
+      >
+        Explore Your Workflow
+      </Link>
+    </div>
+  );
+}
+
+function CinematicFooter() {
+  const columns = [
+    { heading: 'Product', links: [{ label: 'Features', href: '/features' }, { label: 'Solutions', href: '/solutions' }, { label: 'Pricing', href: '/pricing' }] },
+    { heading: 'Company', links: [{ label: 'About', href: '/about' }, { label: 'Blog', href: '/blog' }] },
+    { heading: 'Legal', links: [{ label: 'Privacy Policy', href: '/privacy' }, { label: 'Terms of Service', href: '/terms' }, { label: 'Data Deletion Instructions', href: '/data-deletion' }] },
+  ];
+
+  return (
+    <footer className="relative z-10 overflow-hidden bg-[#F7FBFF] px-6 pb-10 pt-16 lg:px-8">
+      <SignalMemory />
+      <div className="pointer-events-none absolute left-1/2 top-0 h-40 w-[80%] -translate-x-1/2 bg-gradient-to-b from-[#0A66C2]/[0.055] to-transparent blur-2xl" />
+      <div className="relative mx-auto max-w-[1180px] pt-8">
+        <div className="h-px w-full bg-gradient-to-r from-transparent via-[#C9DDF3]/65 to-transparent" />
+        <div className="mt-10 grid gap-12 lg:grid-cols-[1.22fr_1fr] lg:items-start">
+          <div>
+            <Link href="/" aria-label="Omnivyra home" className="inline-flex">
+              <img src="/logo.png" alt="Omnivyra" className="h-12 w-auto object-contain" />
+            </Link>
+            <p className="mt-5 max-w-sm text-sm leading-7 text-[#5D6F83]">
+              Connected intelligence for AI-era visibility and marketing operations.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 gap-x-10 gap-y-8 sm:grid-cols-3">
+            {columns.map((column) => (
+              <div key={column.heading}>
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-[#071D3A]">{column.heading}</p>
+                <ul className="mt-4 space-y-3">
+                  {column.links.map((link) => (
+                    <li key={link.href}>
+                      <Link href={link.href} className="text-sm text-[#5D6F83] transition hover:text-[#0A66C2]">
+                        {link.label}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-12 h-px w-full bg-gradient-to-r from-transparent via-[#D8E3F0]/60 to-transparent" />
+        <div className="mt-7 flex flex-col gap-3 text-xs text-[#6B7C93] sm:flex-row sm:items-center sm:justify-between">
+          <p>&copy; {new Date().getFullYear()} Omnivyra. All rights reserved.</p>
+          <p>Marketing Decision Intelligence Platform</p>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+function RoleSelector({
+  activeRole,
+  onSelect,
+}: {
+  activeRole: Role;
+  onSelect: (role: Role) => void;
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-[24px] border border-[#CBE2F7] bg-white/[0.86] p-3 shadow-[0_14px_42px_rgba(8,68,138,0.07)] backdrop-blur">
+      <SignalMemory />
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="relative px-2">
+          <p className="text-xs font-black uppercase tracking-[0.24em] text-[#0A66C2]">How do you operate marketing?</p>
+          <p className="mt-1 text-sm text-[#496179]">Choose how fragmented operations affect your role.</p>
+        </div>
+        <select
+          value={activeRole.id}
+          onChange={(event) => {
+            const selected = ROLES.find((role) => role.id === event.target.value);
+            if (selected) onSelect(selected);
+          }}
+          className="rounded-2xl border border-[#CBE2F7] bg-[#F7FBFF] px-4 py-3 text-sm font-bold text-[#071D3A] outline-none transition focus:border-[#0A66C2] lg:hidden"
+          aria-label="Select marketing role"
+        >
+          {ROLES.map((role) => (
+            <option key={role.id} value={role.id}>{role.label}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="relative mt-3 hidden grid-cols-6 gap-2 lg:grid">
+        {ROLES.map((role) => {
+          const active = role.id === activeRole.id;
+          return (
+            <button
+              key={role.id}
+              type="button"
+              onClick={() => onSelect(role)}
+              className={`group rounded-2xl border px-3 py-3 text-left transition duration-300 ${
+                active
+                  ? 'border-[#0A66C2] bg-[#0A66C2] text-white shadow-[0_16px_34px_rgba(10,102,194,0.24)]'
+                  : 'border-[#D7E8F8] bg-[#F7FBFF]/85 text-[#071D3A] hover:-translate-y-0.5 hover:border-[#9BD6FF] hover:bg-white'
+              }`}
+            >
+              <span className={`inline-flex rounded-full px-2 py-1 text-[9px] font-black uppercase tracking-[0.12em] ${
+                active ? 'bg-white/15 text-[#D6F0FF]' : 'bg-white text-[#0A66C2]'
+              }`}>
+                {role.badge}
+              </span>
+              <span className="mt-2 block text-sm font-black leading-5">{role.label}</span>
+              <span className={`mt-1 block text-[11px] leading-4 ${active ? 'text-[#D6F0FF]' : 'text-[#5C748C]'}`}>{role.identity}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ProgressNavigator({
+  activeStep,
+  setActiveStep,
+  activeRole,
+}: {
+  activeStep: number;
+  setActiveStep: (step: number) => void;
+  activeRole: Role;
+}) {
+  return (
+    <nav className="relative overflow-hidden rounded-[28px] border border-[#CBE2F7] bg-white/[0.90] p-5 shadow-[0_18px_56px_rgba(8,68,138,0.08)] backdrop-blur">
+      <SignalMemory />
+      <div className="relative">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-black uppercase tracking-[0.24em] text-[#0A66C2]">Operational journey</p>
+        <span className="rounded-full bg-[#F0F8FF] px-3 py-1 text-xs font-black text-[#0A66C2]">
+          {activeStep + 1} of {STEPS.length}
+        </span>
+      </div>
+
+      <div className="relative mt-5 space-y-1">
+        <div className="pointer-events-none absolute bottom-4 left-[23px] top-4 w-px bg-gradient-to-b from-[#0A66C2]/10 via-[#0A66C2]/30 to-[#0A66C2]/10" />
+        {STEPS.map((step, index) => {
+          const active = index === activeStep;
+          const complete = index < activeStep;
+          return (
+            <button
+              key={step.id}
+              type="button"
+              onClick={() => setActiveStep(index)}
+              className={`group relative flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
+                active ? 'bg-[#0A66C2] text-white shadow-[0_14px_30px_rgba(10,102,194,0.20)]' : 'text-[#496179] hover:bg-[#F0F8FF]'
+              }`}
+            >
+              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-black ${
+                active
+                  ? 'border-white bg-white text-[#0A66C2]'
+                  : complete
+                    ? 'border-[#0A66C2] bg-[#0A66C2] text-white'
+                    : 'border-[#B8D8F3] bg-white text-[#0A66C2]'
+              }`}>
+                {index + 1}
+              </span>
+              <span className={`text-sm font-bold ${active ? 'text-white' : 'text-[#071D3A]'}`}>{step.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-[#D7E8F8] bg-[#F7FBFF] p-4">
+        <p className="text-[11px] font-black uppercase tracking-[0.2em] text-[#0A66C2]">Current mode</p>
+        <p className="mt-2 text-base font-black text-[#071D3A]">{activeRole.label}</p>
+        <p className="mt-1 text-xs font-semibold leading-5 text-[#5C748C]">{activeRole.identity}</p>
+      </div>
+      </div>
+    </nav>
+  );
+}
+
+function StatusPill({ value, state }: { value: string; state: SignalState }) {
+  return <span className={`rounded-full border px-3 py-1 text-xs font-black ${stateStyles[state]}`}>{value}</span>;
+}
+
+function FounderView({ role, step }: { role: Role; step: StepContent }) {
+  return (
+    <div className="rounded-[26px] border border-[#CBE2F7] bg-[#F7FBFF] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Executive intelligence</p>
+          <h3 className="mt-2 text-xl font-black text-[#071D3A]">{role.dashboardTitle}</h3>
+        </div>
+        <StatusPill value="Confidence 74" state="build" />
+      </div>
+      <div className="mt-4 rounded-2xl bg-white p-4">
+        <div className="flex items-end gap-2">
+          {[58, 52, 49, 46, 41, 44, 39].map((height, index) => (
+            <div key={index} className="flex-1 rounded-t-lg bg-[#0A66C2]" style={{ height }} />
+          ))}
+        </div>
+        <div className="mt-3 flex items-center justify-between text-xs font-bold text-[#496179]">
+          <span>Visibility trend</span>
+          <span className="text-[#0A66C2]">Needs attention</span>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {([
+          ['Competitor authority rising', 'Watch', 'watch'],
+          ['3 priority risks surfaced', 'Review', 'build'],
+          ['Content execution delayed', 'Blocked', 'watch'],
+          ['Strategic visibility score', '74/100', 'good'],
+        ] as ReadonlyArray<readonly [string, string, SignalState]>).map(([label, value, state]) => (
+          <div key={label} className="rounded-2xl border border-[#D7E8F8] bg-white p-3">
+            <p className="text-sm font-black text-[#071D3A]">{label}</p>
+            <div className="mt-2"><StatusPill value={value} state={state as SignalState} /></div>
+          </div>
+        ))}
+      </div>
+      <MetricRow metrics={step.metrics} />
+    </div>
+  );
+}
+
+function MarketingView({ role, step }: { role: Role; step: StepContent }) {
+  return (
+    <div className="rounded-[26px] border border-[#CBE2F7] bg-[#F7FBFF] p-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Workflow operational</p>
+          <h3 className="mt-2 text-xl font-black text-[#071D3A]">{role.dashboardTitle}</h3>
+        </div>
+        <StatusPill value="Queue active" state="build" />
+      </div>
+      <div className="mt-4 grid gap-3">
+        {['Plan', 'Create', 'Publish', 'Review'].map((item, index) => (
+          <div key={item} className="grid grid-cols-[90px_1fr_auto] items-center gap-3 rounded-2xl bg-white p-3">
+            <span className="text-sm font-black text-[#071D3A]">{item}</span>
+            <div className="h-2 rounded-full bg-[#D7E8F8]">
+              <div className="h-2 rounded-full bg-[#0A66C2]" style={{ width: `${[85, 58, 72, 44][index]}%` }} />
+            </div>
+            <span className="text-xs font-black text-[#0A66C2]">{[85, 58, 72, 44][index]}%</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {([
+          ['Paid visibility dropping', 'Alert', 'watch' as SignalState],
+          ['2 campaign bottlenecks', 'Fix', 'build' as SignalState],
+          ['SEO/AEO opportunity detected', 'Open', 'good' as SignalState],
+          ['Publishing alignment improved', 'Stable', 'good' as SignalState],
+        ] as ReadonlyArray<readonly [string, string, SignalState]>).map(([label, value, state]) => (
+          <div key={label} className="rounded-2xl border border-[#D7E8F8] bg-white p-3">
+            <p className="text-sm font-black text-[#071D3A]">{label}</p>
+            <div className="mt-2"><StatusPill value={value} state={state as SignalState} /></div>
+          </div>
+        ))}
+      </div>
+      <MetricRow metrics={step.metrics} />
+    </div>
+  );
+}
+
+function GrowthView({ role, step }: { role: Role; step: StepContent }) {
+  return (
+    <div className="rounded-[26px] border border-[#CBE2F7] bg-[#F7FBFF] p-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Opportunity radar</p>
+          <h3 className="mt-2 text-xl font-black text-[#071D3A]">{role.dashboardTitle}</h3>
+        </div>
+        <StatusPill value="GEO gap" state="build" />
+      </div>
+      <div className="mt-4 grid grid-cols-4 gap-2 rounded-2xl bg-white p-3">
+        {Array.from({ length: 16 }).map((_, index) => (
+          <div
+            key={index}
+            className={`h-10 rounded-xl ${index % 5 === 0 ? 'bg-[#0A66C2]' : index % 3 === 0 ? 'bg-[#9BD6FF]' : 'bg-[#E8F7FF]'}`}
+          />
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {([
+          ['Visibility momentum rising', 'Up', 'good' as SignalState],
+          ['Competitor overlap increasing', 'Watch', 'watch' as SignalState],
+          ['GEO opportunity detected', 'Act', 'build' as SignalState],
+          ['Authority growth accelerating', 'Good', 'good' as SignalState],
+        ] as ReadonlyArray<readonly [string, string, SignalState]>).map(([label, value, state]) => (
+          <div key={label} className="rounded-2xl border border-[#D7E8F8] bg-white p-3">
+            <p className="text-sm font-black text-[#071D3A]">{label}</p>
+            <div className="mt-2"><StatusPill value={value} state={state as SignalState} /></div>
+          </div>
+        ))}
+      </div>
+      <MetricRow metrics={step.metrics} />
+    </div>
+  );
+}
+
+function ContentView({ role, step }: { role: Role; step: StepContent }) {
+  return (
+    <div className="rounded-[26px] border border-[#CBE2F7] bg-[#F7FBFF] p-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Content strategist view</p>
+          <h3 className="mt-2 text-xl font-black text-[#071D3A]">{role.dashboardTitle}</h3>
+        </div>
+        <StatusPill value="3 opportunities" state="build" />
+      </div>
+      <div className="mt-4 rounded-2xl bg-white p-4">
+        <div className="grid grid-cols-3 gap-3">
+          {['Topic authority', 'AI visibility', 'Publishing'].map((label, index) => (
+            <div key={label} className="rounded-2xl border border-[#D7E8F8] p-3 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border-[8px] border-[#0A66C2] text-sm font-black text-[#0A66C2]">
+                {[42, 68, 81][index]}
+              </div>
+              <p className="mt-2 text-xs font-black text-[#071D3A]">{label}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {([
+          ['Topic authority weak', 'Build', 'watch' as SignalState],
+          ['AI visibility improving', 'Up', 'good' as SignalState],
+          ['3 content opportunities detected', 'Open', 'build' as SignalState],
+          ['Publishing consistency stable', 'Stable', 'good' as SignalState],
+        ] as ReadonlyArray<readonly [string, string, SignalState]>).map(([label, value, state]) => (
+          <div key={label} className="rounded-2xl border border-[#D7E8F8] bg-white p-3">
+            <p className="text-sm font-black text-[#071D3A]">{label}</p>
+            <div className="mt-2"><StatusPill value={value} state={state as SignalState} /></div>
+          </div>
+        ))}
+      </div>
+      <MetricRow metrics={step.metrics} />
+    </div>
+  );
+}
+
+function AgencyView({ role, step }: { role: Role; step: StepContent }) {
+  return (
+    <div className="rounded-[26px] border border-[#CBE2F7] bg-[#F7FBFF] p-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Multi-client intelligence</p>
+          <h3 className="mt-2 text-xl font-black text-[#071D3A]">{role.dashboardTitle}</h3>
+        </div>
+        <StatusPill value="Review ready" state="good" />
+      </div>
+      <div className="mt-4 grid gap-2">
+        {[
+          ['Client A', 'Visibility loss', 42],
+          ['Client B', 'Authority improving', 74],
+          ['Client C', 'Competitor overlap', 58],
+        ].map(([client, label, score]) => (
+          <div key={client} className="grid grid-cols-[80px_1fr_48px] items-center gap-3 rounded-2xl bg-white p-3">
+            <span className="text-sm font-black text-[#071D3A]">{client}</span>
+            <div>
+              <p className="text-xs font-bold text-[#496179]">{label}</p>
+              <div className="mt-1 h-2 rounded-full bg-[#D7E8F8]"><div className="h-2 rounded-full bg-[#0A66C2]" style={{ width: `${score}%` }} /></div>
+            </div>
+            <span className="text-sm font-black text-[#0A66C2]">{score}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {([
+          ['2 clients losing visibility', 'Watch', 'watch' as SignalState],
+          ['Strategic recommendation ready', 'Ready', 'build' as SignalState],
+          ['Authority benchmark improved', 'Good', 'good' as SignalState],
+          ['Client opportunity tracking', 'Live', 'good' as SignalState],
+        ] as ReadonlyArray<readonly [string, string, SignalState]>).map(([label, value, state]) => (
+          <div key={label} className="rounded-2xl border border-[#D7E8F8] bg-white p-3">
+            <p className="text-sm font-black text-[#071D3A]">{label}</p>
+            <div className="mt-2"><StatusPill value={value} state={state as SignalState} /></div>
+          </div>
+        ))}
+      </div>
+      <MetricRow metrics={step.metrics} />
+    </div>
+  );
+}
+
+function SoloView({ role, step }: { role: Role; step: StepContent }) {
+  return (
+    <div className="rounded-[26px] border border-[#CBE2F7] bg-[#F7FBFF] p-4">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Simplified action queue</p>
+          <h3 className="mt-2 text-xl font-black text-[#071D3A]">{role.dashboardTitle}</h3>
+        </div>
+        <StatusPill value="3 actions" state="build" />
+      </div>
+      <div className="mt-4 grid gap-2">
+        {['Create one authority post', 'Schedule campaign touchpoint', 'Review visibility gap'].map((item, index) => (
+          <div key={item} className="flex items-center gap-3 rounded-2xl bg-white p-3">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#0A66C2] text-sm font-black text-white">{index + 1}</span>
+            <span className="text-sm font-black text-[#071D3A]">{item}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {([
+          ['Visibility improving', 'Up', 'good' as SignalState],
+          ['Publishing consistency stable', 'Stable', 'good' as SignalState],
+          ['Authority gaps detected', 'Fix', 'watch' as SignalState],
+          ['Operational overload reduced', 'Focus', 'build' as SignalState],
+        ] as ReadonlyArray<readonly [string, string, SignalState]>).map(([label, value, state]) => (
+          <div key={label} className="rounded-2xl border border-[#D7E8F8] bg-white p-3">
+            <p className="text-sm font-black text-[#071D3A]">{label}</p>
+            <div className="mt-2"><StatusPill value={value} state={state as SignalState} /></div>
+          </div>
+        ))}
+      </div>
+      <MetricRow metrics={step.metrics} />
+    </div>
+  );
+}
+
+function MetricRow({ metrics }: { metrics: StepContent['metrics'] }) {
+  return (
+    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+      {metrics.map((metric) => (
+        <div key={metric.label} className="rounded-2xl border border-[#D7E8F8] bg-white p-3">
+          <p className="text-xl font-black text-[#0A66C2]">{metric.value}</p>
+          <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.12em] text-[#607A94]">{metric.label}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RoleOperationalView({ role, step }: { role: Role; step: StepContent }) {
+  if (role.id === 'founder') return <FounderView role={role} step={step} />;
+  if (role.id === 'marketing') return <MarketingView role={role} step={step} />;
+  if (role.id === 'growth') return <GrowthView role={role} step={step} />;
+  if (role.id === 'creator') return <ContentView role={role} step={step} />;
+  if (role.id === 'agency') return <AgencyView role={role} step={step} />;
+  return <SoloView role={role} step={step} />;
+}
+
+function GuidedPanel({ role, step }: { role: Role; step: StepContent }) {
+  return (
+    <article key={`${role.id}-${step.title}`} className="solution-reveal relative overflow-hidden rounded-[32px] border border-[#CBE2F7] bg-white/[0.90] p-5 shadow-[0_24px_72px_rgba(8,68,138,0.10)] backdrop-blur lg:p-7">
+      <SignalMemory />
+      <div className="pointer-events-none absolute -right-28 top-8 h-72 w-72 rounded-full bg-[#3FA9F5]/[0.10] blur-3xl" />
+      <div className="relative grid gap-7 lg:grid-cols-[0.92fr_1.08fr] lg:items-start">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.28em] text-[#0A66C2]">{role.label}</p>
+          <h2 className="mt-3 text-3xl font-black leading-tight tracking-tight text-[#071D3A] lg:text-4xl">{step.title}</h2>
+          <p className="mt-4 text-base leading-7 text-[#496179]">{step.summary}</p>
+
+          <div className="mt-5 rounded-2xl border border-[#D7E8F8] bg-[#F7FBFF]/85 p-4">
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Daily frustration</p>
+            <p className="mt-2 text-sm font-semibold leading-6 text-[#334B63]">{step.pain}</p>
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Omnivyra unifies</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {step.connects.map((item) => (
+                  <span key={item} className="rounded-full border border-[#CBE2F7] bg-[#F7FBFF]/90 px-3 py-2 text-xs font-black text-[#0A3A7A]">{item}</span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">What changes</p>
+              <div className="mt-3 space-y-2">
+                {step.changes.map((item) => (
+                  <div key={item} className="rounded-2xl bg-[#0A66C2] px-3 py-2 text-xs font-bold leading-5 text-white">{item}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <RoleOperationalView role={role} step={step} />
+        </div>
+      </div>
+
+      <div className="relative mt-6 rounded-[26px] border border-[#CBE2F7] bg-[#F7FBFF]/86 p-4">
+        <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#0A66C2]">Recommended actions</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              {step.recommendations.map((item, index) => (
+                <div key={item} className="flex items-start gap-3 rounded-2xl bg-white px-3 py-3 shadow-[0_8px_20px_rgba(8,68,138,0.05)]">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#0A66C2] text-xs font-black text-white">{index + 1}</span>
+                  <span className="text-sm font-bold leading-5 text-[#071D3A]">{item}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <Link
+            href={role.id === 'marketing' || role.id === 'creator' || role.id === 'solo' ? '/get-free-credits' : '/create-account'}
+            className="inline-flex min-h-[52px] items-center justify-center rounded-full bg-[#0A66C2] px-7 py-3 text-sm font-black text-white shadow-[0_16px_34px_rgba(10,102,194,0.22)] transition hover:-translate-y-0.5 hover:bg-[#075FAE]"
+          >
+            {role.cta}
+          </Link>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function FragmentedFlow() {
+  const nodes = ['Content', 'Campaigns', 'Publishing', 'Visibility', 'Analytics', 'Reporting'];
+  const positions = [
+    'left-[4%] top-[10%]',
+    'left-[34%] top-[4%]',
+    'right-[4%] top-[14%]',
+    'left-[6%] bottom-[16%]',
+    'left-[38%] bottom-[8%]',
+    'right-[6%] bottom-[18%]',
+  ];
+  return (
+    <div className="relative overflow-hidden rounded-[30px] border border-[#CBE2F7]/70 bg-[#F7FBFF]/72 p-5 shadow-[0_18px_56px_rgba(8,68,138,0.06)] backdrop-blur">
+      <div className="pointer-events-none absolute inset-0 opacity-45" aria-hidden="true">
+        <SignalMemory />
+      </div>
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(10,102,194,0.10),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.62),rgba(247,251,255,0.36))]" />
+      <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-70" viewBox="0 0 900 520" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M92 126 C 245 72, 332 180, 452 154 S 670 104, 806 202" fill="none" stroke="rgba(10,102,194,0.12)" strokeWidth="1" strokeDasharray="3 18" className="solution-signal-drift" />
+        <path d="M96 370 C 250 290, 384 420, 512 330 S 700 276, 820 372" fill="none" stroke="rgba(63,169,245,0.11)" strokeWidth="1" className="solution-signal-breathe" />
+        <path d="M120 130 C 278 230, 330 246, 450 252 S 620 255, 785 150" fill="none" stroke="rgba(10,102,194,0.13)" strokeWidth="1" strokeDasharray="2 15" className="solution-signal-drift" />
+        <path d="M120 390 C 290 292, 340 266, 450 252 S 610 238, 782 382" fill="none" stroke="rgba(63,169,245,0.12)" strokeWidth="1" strokeDasharray="2 15" className="solution-signal-drift-slow" />
+      </svg>
+      <div className="relative min-h-[430px]">
+        <div className="hidden sm:block">
+          {nodes.map((node, index) => (
+            <div
+              key={node}
+              className={`solution-node-drift absolute w-[29%] rounded-2xl border px-4 py-3 ${positions[index]} ${
+                index % 2 === 0
+                  ? 'border-[#D7E8F8]/70 bg-white/70'
+                  : 'border-[#CBE2F7]/65 bg-[#EAF6FF]/62'
+              }`}
+            >
+              <p className="text-sm font-black text-[#071D3A]">{node}</p>
+              <p className="mt-1 text-xs font-semibold text-[#607A94]">Operational signal</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:hidden">
+          {nodes.map((node) => (
+            <div key={node} className="rounded-2xl border border-[#D7E8F8]/70 bg-white/70 p-4">
+              <p className="text-sm font-black text-[#071D3A]">{node}</p>
+              <p className="mt-1 text-xs font-semibold text-[#607A94]">Operational signal</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="absolute left-1/2 top-[46%] hidden -translate-x-1/2 -translate-y-1/2 sm:block">
+          <div className="relative grid h-44 w-44 place-items-center rounded-full border border-[#0A66C2]/20 bg-[#0A66C2]/[0.08] shadow-[inset_0_0_42px_rgba(10,102,194,0.08)]">
+            <div className="absolute h-32 w-32 rounded-full border border-[#3FA9F5]/25 bg-white/50" />
+            <div className="relative max-w-[120px] text-center text-sm font-black leading-5 text-[#0A3A7A]">
+              Omnivyra operational layer
+            </div>
+          </div>
+        </div>
+
+        <div className="relative mt-5 overflow-hidden rounded-[24px] bg-[#0A66C2] p-5 text-white shadow-[0_18px_38px_rgba(10,102,194,0.20)] sm:absolute sm:inset-x-0 sm:bottom-0 sm:mt-0">
+          <div className="absolute -right-20 -top-20 h-48 w-48 rounded-full bg-white/10 blur-3xl" />
+          <p className="text-[11px] font-black uppercase tracking-[0.22em] text-[#BFE5FF]">Connected visibility intelligence</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {['Guided priorities', 'Operational clarity', 'Discoverability context'].map((item) => (
+              <div key={item} className="rounded-2xl border border-white/20 bg-white/10 p-4 text-sm font-black">{item}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TransformationRows() {
+  return (
+    <div className="relative mx-auto mt-10 max-w-5xl overflow-hidden rounded-[30px] border border-[#CBE2F7] bg-white/[0.90] p-5 shadow-[0_18px_56px_rgba(8,68,138,0.08)] backdrop-blur">
+      <SignalMemory />
+      <div className="pointer-events-none absolute bottom-16 left-7 top-16 hidden w-px bg-gradient-to-b from-[#0A66C2]/10 via-[#0A66C2]/34 to-[#0A66C2]/10 sm:block" />
+      {TRANSFORMATIONS.map(([before, after], index) => (
+        <div key={before} className="relative grid gap-3 py-3 pl-0 sm:grid-cols-[52px_1fr] sm:items-stretch">
+          <div className="solution-node-drift relative z-10 flex h-10 w-10 items-center justify-center rounded-full bg-[#0A66C2] text-sm font-black text-white shadow-[0_10px_24px_rgba(10,102,194,0.22)] sm:mt-4">
+            {String(index + 1).padStart(2, '0')}
+          </div>
+          <div className="relative overflow-hidden rounded-2xl border border-[#D7E8F8] bg-[#F7FBFF]/72 p-4">
+            <div className="grid gap-3 sm:grid-cols-[0.82fr_1.18fr] sm:items-center">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.2em] text-[#607A94]">Starts as</p>
+                <p className="mt-1 text-lg font-black text-[#071D3A]">{before}</p>
+              </div>
+              <div className="rounded-2xl border border-[#0A66C2]/30 bg-[#0A66C2] px-4 py-4 text-white shadow-[0_14px_30px_rgba(10,102,194,0.16)]">
+                <p className="text-xs font-black uppercase tracking-[0.2em] text-[#BFE5FF]">Synchronizes into</p>
+                <p className="mt-1 text-lg font-black">{after}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function SolutionsPage() {
-  const [activePersona, setActivePersona] = useState(0);
-  const [activeSection, setActiveSection] = useState(0);
-  const persona = PERSONAS[activePersona];
-  const section = persona.sections[activeSection];
-  const visual = PERSONA_VISUALS[activePersona][activeSection];
+  const [activeRoleId, setActiveRoleId] = useState<RoleId>('founder');
+  const [activeStep, setActiveStep] = useState(0);
+  const activeRole = ROLES.find((role) => role.id === activeRoleId) ?? ROLES[0];
+  const activeStepContent = activeRole.steps[STEPS[activeStep].id];
+  const activeAtmosphere = roleAtmospheres[activeRole.id];
 
-  function handlePersonaChange(idx: number) {
-    setActivePersona(idx);
-    setActiveSection(0);
+  function selectRole(role: Role) {
+    setActiveRoleId(role.id);
+    setActiveStep(0);
   }
 
   return (
     <>
       <Head>
-        <title>Solutions | Omnivyra</title>
+        <title>Solutions for Scaling Marketing Operations | Omnivyra</title>
         <meta
           name="description"
-          content="Marketing clarity for every role. Whether you run a team, do it all yourself, or build a personal brand — Omnivyra gives you the intelligence to act with confidence."
+          content="Explore how Omnivyra helps founders, marketing leads, growth teams, creators, agencies, and solo operators scale marketing operations with operational intelligence."
         />
       </Head>
 
-      <div className="min-h-screen bg-[#F5F9FF]">
-
-        {/* ── Hero ─────────────────────────────────────────────────────────── */}
-        <section
-          className="relative overflow-hidden"
-          style={{ background: 'linear-gradient(150deg, #0A1F44 0%, #0A3A7A 50%, #0A66C2 100%)' }}
-        >
-          <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-            <div
-              className="absolute -top-32 left-1/3 h-[420px] w-[420px] rounded-full opacity-[0.12]"
-              style={{ background: 'radial-gradient(circle, #3FA9F5 0%, transparent 70%)' }}
-            />
-            <div
-              className="absolute bottom-0 right-0 h-64 w-64 rounded-full opacity-[0.07]"
-              style={{ background: 'radial-gradient(circle, #3FA9F5 0%, transparent 70%)' }}
-            />
-          </div>
-          <div className="relative mx-auto max-w-[1280px] px-6 py-20 text-center lg:px-8 lg:py-28">
-            <p className="mb-4 inline-block rounded-full border border-[#3FA9F5]/30 bg-[#3FA9F5]/10 px-4 py-1 text-xs font-semibold uppercase tracking-widest text-[#3FA9F5]">
-              Built for every kind of marketer
+      <main className="relative isolate overflow-x-hidden bg-[#F7FBFF] text-[#071D3A]">
+        <OperationalAtmosphere />
+        <section className="relative z-10 overflow-hidden" style={{ background: BLUE_FIELD }}>
+          <SignalMemory dark />
+          <div className="absolute left-1/2 top-0 h-[360px] w-[70%] -translate-x-1/2 bg-[#3FA9F5]/[0.08] blur-3xl" />
+          <div className="relative mx-auto max-w-[1280px] px-6 py-12 text-center lg:px-8 lg:py-14">
+            <p className="inline-flex rounded-full border border-white/30 bg-white/10 px-4 py-2 text-xs font-black uppercase tracking-[0.28em] text-[#D6F0FF] backdrop-blur">
+              Solutions
             </p>
-            <h1 className="text-4xl font-bold leading-[1.1] tracking-tight text-white sm:text-5xl xl:text-[3.25rem]">
-              Marketing looks different<br className="hidden sm:block" /> for everyone.
-              <br />
-              <span className="text-[#3FA9F5]">Clarity shouldn&rsquo;t.</span>
+            <h1 className="mx-auto mt-5 max-w-5xl text-4xl font-black leading-[1.04] tracking-tight text-white sm:text-5xl lg:text-[3.35rem]">
+              Marketing operations rarely fail from lack of effort.
             </h1>
-            <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-white/75">
-              Whether you lead a team, run your business solo, or build a personal brand — Omnivyra gives you the intelligence to act with confidence, not guesswork.
+            <p className="mx-auto mt-5 max-w-3xl text-base leading-7 text-[#EAF6FF] sm:text-lg">
+              They fail because systems, visibility, execution, and intelligence do not move together. Omnivyra helps each role experience connected operational intelligence inside the way marketing actually runs.
             </p>
-          </div>
-        </section>
-
-        {/* ── Persona tabs ─────────────────────────────────────────────────── */}
-        <section className="mx-auto max-w-[1280px] px-6 py-20 lg:px-8">
-          {/* Tab row */}
-          <div role="tablist" aria-label="Choose your role" className="flex flex-wrap justify-center gap-3">
-            {PERSONAS.map((p, idx) => (
-              <button
-                key={p.id}
-                role="tab"
-                aria-selected={activePersona === idx}
-                aria-controls={`panel-${p.id}`}
-                id={`tab-${p.id}`}
-                onClick={() => handlePersonaChange(idx)}
-                className={`rounded-full px-6 py-2.5 text-sm font-semibold transition-all ${
-                  activePersona === idx
-                    ? 'bg-[#0A66C2] text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)]'
-                    : 'border border-[#0A66C2]/30 bg-white text-[#0A66C2] hover:bg-[#0A66C2]/8'
-                }`}
-              >
-                {p.tab}
-              </button>
-            ))}
-          </div>
-
-          {/* Persona panel */}
-          <div
-            key={activePersona}
-            role="tabpanel"
-            id={`panel-${persona.id}`}
-            aria-labelledby={`tab-${persona.id}`}
-            className="mt-12 animate-fadeIn"
-          >
-            {/* Persona header */}
-            <div className="mb-10 flex flex-col items-center gap-4 text-center sm:flex-row sm:text-left">
-              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#0A66C2] to-[#3FA9F5] text-lg font-bold text-white shadow-lg">
-                {persona.initials}
-              </div>
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-widest text-[#0A66C2]">{persona.role}</p>
-                <p className="mt-1 max-w-xl text-[15px] leading-relaxed text-[#6B7C93]">{persona.intro}</p>
-              </div>
-            </div>
-
-            {/* Two-column: section nav + content */}
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-[280px_1fr]">
-              {/* Section nav */}
-              <nav aria-label="Section navigation" className="flex flex-col gap-2">
-                {persona.sections.map((sec, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setActiveSection(idx)}
-                    className={`rounded-xl px-4 py-3 text-left text-sm font-medium transition-all ${
-                      activeSection === idx
-                        ? 'bg-[#0A66C2] text-white shadow-md'
-                        : 'bg-white text-[#0B1F33] hover:bg-[#EBF3FD] hover:text-[#0A66C2]'
-                    }`}
-                  >
-                    <span className={`mr-2 text-xs ${activeSection === idx ? 'text-white/60' : 'text-[#6B7C93]'}`}>
-                      {String(idx + 1).padStart(2, '0')}
-                    </span>
-                    {sec.title}
-                  </button>
-                ))}
-              </nav>
-
-              {/* Section content — enriched right panel */}
-              <div
-                key={`${activePersona}-${activeSection}`}
-                className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm animate-fadeIn"
-              >
-                {/* Top bar */}
-                <div className="flex items-center justify-between border-b border-gray-100 bg-[#F5F9FF] px-6 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-widest text-[#0A66C2]">
-                    {String(activeSection + 1).padStart(2, '0')} / {String(persona.sections.length).padStart(2, '0')}
-                  </p>
-                  <div className="flex gap-1.5">
-                    {persona.sections.map((_, i) => (
-                      <button
-                        key={i}
-                        onClick={() => setActiveSection(i)}
-                        className={`h-1.5 rounded-full transition-all ${i === activeSection ? 'w-6 bg-[#0A66C2]' : 'w-1.5 bg-gray-300 hover:bg-[#0A66C2]/40'}`}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid gap-8 p-6 lg:grid-cols-2 lg:p-8">
-                  {/* Left: text content */}
-                  <div>
-                    <h2 className="text-2xl font-bold tracking-tight text-[#0B1F33] sm:text-[1.6rem]">
-                      {section.title}
-                    </h2>
-                    <p className="mt-3 text-[15px] leading-relaxed text-[#6B7C93]">
-                      {section.body}
-                    </p>
-
-                    {/* Bullet points */}
-                    <ul className="mt-5 space-y-2.5">
-                      {section.bullets.map((b) => (
-                        <li key={b} className="flex items-start gap-3">
-                          <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#0A66C2]/10">
-                            <svg className="h-3 w-3 text-[#0A66C2]" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" />
-                            </svg>
-                          </span>
-                          <span className="text-sm leading-snug text-[#0B1F33]">{b}</span>
-                        </li>
-                      ))}
-                    </ul>
-
-                    {/* Metrics pills */}
-                    <div className="mt-6 flex flex-wrap gap-3">
-                      {section.metrics.map((m) => (
-                        <div key={m.label} className="rounded-xl border border-[#0A66C2]/15 bg-[#F0F7FF] px-4 py-2.5">
-                          <p className="text-lg font-bold text-[#0A66C2]">{m.val}</p>
-                          <p className="text-[10px] text-[#6B7C93]">{m.label}</p>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Navigation */}
-                    <div className="mt-8 flex items-center gap-3">
-                      <button
-                        onClick={() => setActiveSection((s) => Math.max(0, s - 1))}
-                        disabled={activeSection === 0}
-                        className="rounded-full border border-gray-200 px-4 py-2 text-sm font-medium text-[#0B1F33] transition hover:border-[#0A66C2] hover:text-[#0A66C2] disabled:opacity-30"
-                      >
-                        ← Previous
-                      </button>
-                      <button
-                        onClick={() => setActiveSection((s) => Math.min(persona.sections.length - 1, s + 1))}
-                        disabled={activeSection === persona.sections.length - 1}
-                        className="rounded-full bg-[#0A66C2] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#0A3872] disabled:opacity-30"
-                      >
-                        Next →
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Right: visual mock panel */}
-                  <div className="flex flex-col gap-3">
-                    {visual}
-                  </div>
-                </div>
-              </div>
+            <div className="mt-7">
+              <PrimaryCtas />
             </div>
           </div>
         </section>
 
-        {/* ── Unified value ─────────────────────────────────────────────────── */}
-        <section className="bg-white py-20">
-          <div className="mx-auto max-w-[1280px] px-6 lg:px-8">
-            <div className="mx-auto mb-12 max-w-2xl text-center">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-[#0A66C2]">Everything works together</p>
-              <h2 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">
-                One platform. Every role. Real decisions.
+        <section className="relative z-10 border-b border-[#D7E8F8]" style={{ background: activeAtmosphere }}>
+          <SignalMemory />
+          <div className="relative mx-auto max-w-[1280px] px-6 py-8 lg:px-8 lg:py-11">
+            <RoleSelector activeRole={activeRole} onSelect={selectRole} />
+
+            <div className="mt-10 grid gap-6 lg:grid-cols-[286px_1fr] lg:items-start">
+              <ProgressNavigator activeStep={activeStep} setActiveStep={setActiveStep} activeRole={activeRole} />
+              <GuidedPanel role={activeRole} step={activeStepContent} />
+            </div>
+          </div>
+        </section>
+
+        <section className="relative z-10 bg-white/[0.92]">
+          <SignalMemory />
+          <div className="mx-auto max-w-[1280px] px-6 py-12 lg:px-8 lg:py-14">
+            <div className="max-w-5xl">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-[#0A66C2]">Why this matters</p>
+              <h2 className="mt-4 text-3xl font-black tracking-tight text-[#071D3A] sm:text-5xl">
+                Most marketing operations were never designed to work together.
               </h2>
-              <p className="mt-4 text-base leading-relaxed text-[#6B7C93]">
-                Omnivyra is not a collection of tools bolted together. It is a single intelligence layer built to give every kind of marketer the clarity they need.
+              <p className="mt-7 text-xs font-black uppercase tracking-[0.22em] text-[#0A66C2]">The operating reality</p>
+              <p className="mt-3 max-w-3xl text-lg leading-8 text-[#496179]">
+                Teams use separate systems for content, campaigns, publishing, discoverability, analytics, and reporting,
+                but operational understanding rarely moves together.
               </p>
             </div>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {UNIFIED_VALUES.map((v) => (
-                <div key={v.title} className="rounded-2xl border border-gray-100 bg-[#F5F9FF] p-6">
-                  <div className="mb-4 text-3xl">{v.icon}</div>
-                  <h3 className="text-base font-semibold text-[#0B1F33]">{v.title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">{v.body}</p>
+
+            <div className="mt-8 grid gap-8 lg:grid-cols-[0.55fr_1.45fr] lg:items-stretch">
+              <div className="flex flex-col">
+                <div className="grid flex-1 gap-1">
+                  {[
+                    ['Fragmented execution', 'Work moves, but the operating pattern is hard to see.'],
+                    ['Delayed decisions', 'Reports arrive after the moment to act has passed.'],
+                    ['Discoverability blind spots', 'Visibility gaps stay hidden until growth slows.'],
+                  ].map(([title, body]) => (
+                    <div key={title} className="relative border-l border-[#0A66C2]/20 px-5 py-5">
+                      <span className="absolute -left-[5px] top-7 h-2.5 w-2.5 rounded-full bg-[#0A66C2]/45" />
+                      <p className="text-sm font-black text-[#0A66C2]">{title}</p>
+                      <p className="mt-1 text-sm leading-6 text-[#496179]">{body}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ── Core capabilities ─────────────────────────────────────────────── */}
-        <section className="py-20">
-          <div className="mx-auto max-w-[1280px] px-6 lg:px-8">
-            <div className="grid grid-cols-1 gap-12 lg:grid-cols-2 lg:items-center">
-              <div>
-                <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-[#0A66C2]">Core capabilities</p>
-                <h2 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">
-                  Everything you need.<br />Nothing you don&rsquo;t.
-                </h2>
-                <p className="mt-4 text-base leading-relaxed text-[#6B7C93]">
-                  Every feature in Omnivyra exists to reduce the distance between information and a good decision.
-                </p>
               </div>
-              <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                {CAPABILITIES.map((cap) => (
-                  <li key={cap} className="flex items-start gap-3">
-                    <span className="mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-[#0A66C2]/10">
-                      <svg className="h-3 w-3 text-[#0A66C2]" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M2 6l3 3 5-5" />
-                      </svg>
-                    </span>
-                    <span className="text-sm leading-snug text-[#0B1F33]">{cap}</span>
-                  </li>
-                ))}
-              </ul>
+              <FragmentedFlow />
             </div>
           </div>
         </section>
 
-        {/* ── Decision Intelligence ─────────────────────────────────────────── */}
-        <section className="bg-white py-20">
-          <div className="mx-auto max-w-[1280px] px-6 lg:px-8">
-            <div className="mx-auto mb-12 max-w-2xl text-center">
-              <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-[#0A66C2]">Decision intelligence</p>
-              <h2 className="text-3xl font-bold tracking-tight text-[#0B1F33] sm:text-4xl">
-                When you know what to do,<br />everything changes.
+        <section className="relative z-10 bg-[#F7FBFF]/[0.92]">
+          <SignalMemory />
+          <div className="relative mx-auto max-w-[1280px] px-6 py-16 lg:px-8 lg:py-20">
+            <div className="mx-auto max-w-3xl text-center">
+              <p className="text-xs font-black uppercase tracking-[0.28em] text-[#0A66C2]">Outcome-driven operations</p>
+              <h2 className="mt-4 text-3xl font-black tracking-tight text-[#071D3A] sm:text-4xl">
+                Built for operational outcomes, not isolated dashboards.
               </h2>
             </div>
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              {DECISION_QA.map(({ q, a }) => (
-                <div key={q} className="rounded-2xl border border-gray-100 bg-[#F5F9FF] p-6">
-                  <p className="mb-3 text-sm font-semibold text-[#0B1F33]">{q}</p>
-                  <div className="flex items-start gap-3">
-                    <span className="mt-0.5 flex-shrink-0 text-[#0A66C2]">→</span>
-                    <p className="text-sm leading-relaxed text-[#6B7C93]">{a}</p>
-                  </div>
-                </div>
+            <TransformationRows />
+            <div className="mx-auto mt-8 max-w-3xl rounded-[26px] border border-[#CBE2F7] bg-white/[0.82] p-5 text-center shadow-[0_14px_36px_rgba(8,68,138,0.06)] backdrop-blur">
+              <p className="text-xs font-black uppercase tracking-[0.22em] text-[#0A66C2]">Future evolution</p>
+              <p className="mt-3 text-sm font-semibold leading-7 text-[#496179]">
+                Operational intelligence is still evolving through deeper forecasting, contextual analysis, and connected
+                decision support. Our goal is to empower teams to operate with clearer visibility, stronger operational
+                understanding, and increasingly intelligent marketing execution.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="relative z-10 bg-white/[0.92]">
+          <SignalMemory />
+          <div className="mx-auto max-w-[1280px] px-6 py-16 lg:px-8 lg:py-20">
+            <div className="grid gap-5 lg:grid-cols-3">
+              {TESTIMONIALS.map((item) => (
+                <figure key={item.name} className="relative overflow-hidden rounded-[26px] border border-[#CBE2F7] bg-white/[0.90] p-6 shadow-[0_18px_46px_rgba(8,68,138,0.09)] backdrop-blur">
+                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#0A66C2]/35 to-transparent" />
+                  <blockquote className="text-lg font-black leading-8 text-[#071D3A]">"{item.quote}"</blockquote>
+                  <figcaption className="mt-5 border-t border-[#D7E8F8] pt-4">
+                    <p className="font-black text-[#0A66C2]">{item.name}</p>
+                    <p className="text-sm text-[#496179]">{item.role}</p>
+                  </figcaption>
+                </figure>
               ))}
             </div>
           </div>
         </section>
 
-        {/* ── Final CTA ────────────────────────────────────────────────────── */}
-        <section className="py-20" style={{ background: 'linear-gradient(135deg, #0A1F44 0%, #0A66C2 100%)' }}>
-          <div className="mx-auto max-w-[1280px] px-6 text-center lg:px-8">
-            <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              See how it works for you.
+        <section className="relative z-10 overflow-hidden" style={{ background: BLUE_FIELD }}>
+          <SignalMemory dark />
+          <div className="absolute left-1/2 top-0 h-[300px] w-[70%] -translate-x-1/2 bg-[#3FA9F5]/[0.08] blur-3xl" />
+          <div className="relative mx-auto max-w-[900px] px-6 py-16 text-center lg:px-8 lg:py-20">
+            <p className="text-xs font-black uppercase tracking-[0.28em] text-[#D6F0FF]">Start simple</p>
+            <h2 className="mt-4 text-3xl font-black tracking-tight text-white sm:text-5xl">
+              Start with your Visibility Snapshot.
             </h2>
-            <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-white/70">
-              Start with a free audit. No credit card, no setup, no guesswork — just clarity.
+            <p className="mx-auto mt-5 max-w-2xl text-base leading-8 text-[#EAF6FF]">
+              Create an account, complete your company profile, request the snapshot, and use free credits to explore the workflow layer.
             </p>
-            <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
-              <Link
-                href="/audit/website-growth-check"
-                className="rounded-full bg-white px-8 py-3.5 text-[15px] font-semibold text-[#0A66C2] shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition hover:shadow-[0_6px_28px_rgba(255,255,255,0.35)] hover:opacity-95"
-              >
-                Run Free Audit
-              </Link>
-              <Link
-                href="/features"
-                className="rounded-full border-2 border-white/40 bg-white/10 px-8 py-3.5 text-[15px] font-semibold text-white backdrop-blur-sm transition hover:bg-white/20"
-              >
-                See How It Works
-              </Link>
+            <div className="mt-9">
+              <PrimaryCtas />
             </div>
-            <p className="mt-5 text-xs text-white/35">No credit card required &middot; Free to start</p>
           </div>
         </section>
+      </main>
 
-        <Footer />
-      </div>
-
-      <style jsx>{`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(8px); }
-          to   { opacity: 1; transform: translateY(0); }
+      <CinematicFooter />
+      <style jsx global>{`
+        @keyframes solutionSignalDrift {
+          0%,
+          100% {
+            stroke-dashoffset: 0;
+            opacity: 0.5;
+          }
+          50% {
+            stroke-dashoffset: -38;
+            opacity: 0.88;
+          }
         }
-        .animate-fadeIn {
-          animation: fadeIn 0.25s ease both;
+
+        @keyframes solutionSignalBreathe {
+          0%,
+          100% {
+            opacity: 0.28;
+          }
+          50% {
+            opacity: 0.66;
+          }
+        }
+
+        @keyframes solutionNodeDrift {
+          0%,
+          100% {
+            transform: translate3d(0, 0, 0);
+          }
+          50% {
+            transform: translate3d(0, -4px, 0);
+          }
+        }
+
+        @keyframes solutionReveal {
+          from {
+            opacity: 0.88;
+            transform: translateY(8px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        .solution-signal-drift {
+          animation: solutionSignalDrift 15s ease-in-out infinite;
+        }
+
+        .solution-signal-drift-slow {
+          animation: solutionSignalDrift 19s ease-in-out infinite reverse;
+        }
+
+        .solution-signal-breathe {
+          animation: solutionSignalBreathe 9s ease-in-out infinite;
+        }
+
+        .solution-node-drift {
+          animation: solutionNodeDrift 10s ease-in-out infinite;
+        }
+
+        .solution-reveal {
+          animation: solutionReveal 420ms ease-out both;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .solution-signal-drift,
+          .solution-signal-drift-slow,
+          .solution-signal-breathe,
+          .solution-node-drift,
+          .solution-reveal {
+            animation: none;
+          }
         }
       `}</style>
     </>

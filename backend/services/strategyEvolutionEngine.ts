@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Strategy Evolution Engine — Step 6
  *
@@ -51,8 +52,7 @@ export type StrategyEvolution = {
 
 /** Load the most recent strategy snapshot from campaigns. */
 async function loadCurrentStrategy(companyId: string): Promise<StrategySnapshot | null> {
-  const { data } = await supabase
-    .from('campaigns')
+  const { data } = await ownedDbTable('campaigns')
     .select('platforms, posting_frequency, content_mix, campaign_goal')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
@@ -74,8 +74,7 @@ async function loadCurrentStrategy(companyId: string): Promise<StrategySnapshot 
 async function loadPlatformTrends(
   companyId: string
 ): Promise<Array<{ platform: string; trend: 'growing' | 'declining' | 'stable' }>> {
-  const { data: campaigns } = await supabase
-    .from('campaigns')
+  const { data: campaigns } = await ownedDbTable('campaigns')
     .select('id')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
@@ -215,7 +214,7 @@ export async function evolveStrategy(companyId: string): Promise<StrategyEvoluti
   // ── Persist to strategy_evolution_log ─────────────────────────────────────
   let logId: string | undefined;
   try {
-    const { data: log } = await supabase.from('strategy_evolution_log').insert({
+    const { data: log } = await ownedDbTable('strategy_evolution_log').insert({
       company_id:       companyId,
       previous_snapshot: current,
       new_snapshot:      evolved,

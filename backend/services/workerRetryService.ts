@@ -1,3 +1,4 @@
+import { ownedDbTable } from '../db/writeOwner';
 /**
  * Worker Retry Service
  * Retry policy and dead letter queue for background workers.
@@ -40,7 +41,7 @@ export async function moveToDeadLetter(
 ): Promise<void> {
   const failureReason = typeof error === 'string' ? error : sanitizeError(error);
   try {
-    await supabase.from('worker_dead_letter_queue').insert({
+    await ownedDbTable('worker_dead_letter_queue').insert({
       worker_name: workerName,
       job_payload: payload ?? {},
       failure_reason: failureReason.slice(0, 4000),

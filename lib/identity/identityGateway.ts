@@ -1,4 +1,5 @@
 import { supabase } from '../../backend/db/supabaseClient';
+import { ownedDbTable } from '../../backend/db/writeOwner';
 
 function normalizeEmail(email?: string | null): string | null {
   return email ? email.trim().toLowerCase() : null;
@@ -29,8 +30,7 @@ export async function ensureUnifiedPerson({
   }
 
   if (normEmail) {
-    const { data } = await supabase
-      .from('unified_persons')
+    const { data } = await ownedDbTable('unified_persons')
       .select('id')
       .eq('company_id', companyId)
       .eq('primary_email', normEmail)
@@ -42,8 +42,7 @@ export async function ensureUnifiedPerson({
   }
 
   if (normPhone) {
-    const { data } = await supabase
-      .from('unified_persons')
+    const { data } = await ownedDbTable('unified_persons')
       .select('id')
       .eq('company_id', companyId)
       .eq('primary_phone', normPhone)
@@ -54,8 +53,7 @@ export async function ensureUnifiedPerson({
     }
   }
 
-  const { data, error } = await supabase
-    .from('unified_persons')
+  const { data, error } = await ownedDbTable('unified_persons')
     .insert({
       company_id: companyId,
       primary_email: normEmail,

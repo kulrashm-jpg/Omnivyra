@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { supabase } from '../db/supabaseClient';
+import { ownedDbTable } from '../db/writeOwner';
 
 export function normalizeUrl(rawUrl: string): string {
   const url = new URL(rawUrl);
@@ -63,8 +64,7 @@ export function todayIsoDate(): string {
 
 export async function ensureCanonicalDomain(companyId: string, rootUrlOrHost: string): Promise<{ id: string; primary_domain: string }> {
   const host = normalizeHost(rootUrlOrHost);
-  const { data, error } = await supabase
-    .from('canonical_domains')
+  const { data, error } = await ownedDbTable('canonical_domains')
     .upsert(
       {
         company_id: companyId,
@@ -84,8 +84,7 @@ export async function ensureCanonicalDomain(companyId: string, rootUrlOrHost: st
 }
 
 export async function resolveCompanyWebsite(companyId: string): Promise<string | null> {
-  const { data, error } = await supabase
-    .from('companies')
+  const { data, error } = await ownedDbTable('companies')
     .select('website, website_domain')
     .eq('id', companyId)
     .maybeSingle();

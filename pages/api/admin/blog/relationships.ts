@@ -1,21 +1,17 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BLOG_PUBLISH_MANAGE } from '../../../../shared/contracts/security';
 
 const VALID_TYPES = new Set(['related', 'prerequisite', 'continuation']);
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const ok = await requireSuperAdmin(req, res);
-  if (!ok) return;
+  // All methods on this route are mutations — gate on BLOG_PUBLISH_MANAGE.
+  const guard = await requireCapability(req, res, {
+    capability: BLOG_PUBLISH_MANAGE,
+    reason: 'blog relationship mutation',
+  });
+  if (guard.ok !== true) return;
 
   // ── POST — create relationship ─────────────────────────────────────────────
   if (req.method === 'POST') {
