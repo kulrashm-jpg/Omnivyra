@@ -73,6 +73,20 @@ export interface CompanyReportsResult extends DomainReportState {
 const REPORT_ENGINE_VERSION = 'v1' as const;
 const RELAX_FREE_REPORT_LIMIT = true;
 
+/**
+ * Phase 2: single source of truth for the stale-generation timeout.
+ * Any report stuck in `status='generating'` longer than this is reaped
+ * by the recovery cron and demoted to `status='failed'`.
+ *
+ * Override at runtime via REPORT_GENERATION_TIMEOUT_MINUTES.
+ */
+export const REPORT_GENERATION_TIMEOUT_MINUTES: number = (() => {
+  const raw = process.env.REPORT_GENERATION_TIMEOUT_MINUTES;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return 10;
+})();
+
 type ReportGenerationPayload = {
   generated_at: string;
   engine_version: typeof REPORT_ENGINE_VERSION;
@@ -193,12 +207,27 @@ async function getCompanyDomain(companyId: string): Promise<string> {
   return normalizeReportDomain(rawDomain);
 }
 
-export async function getDomainReportState(domain: string): Promise<DomainReportState> {
+export async function getDomainReportState(
+  domain: string,
+  companyId?: string,
+): Promise<DomainReportState> {
   const normalizedDomain = normalizeReportDomain(domain);
 
-  const { data, error } = await ownedDbTable('reports')
+  let query = ownedDbTable('reports')
     .select('is_free, status')
     .eq('domain', normalizedDomain);
+
+  // Phase 1 fix: dedupe is scoped per (company_id, domain). A missing
+  // companyId is preserved for legacy callers but logged so we can find them.
+  if (companyId) {
+    query = query.eq('company_id', companyId);
+  } else {
+    console.warn(
+      '[reportCardService] getDomainReportState called without companyId; result is cross-tenant',
+    );
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new ReportRequestError('Failed to load report state', 'REPORT_LOOKUP_FAILED', 500);
@@ -242,7 +271,7 @@ export async function getCompanyReportsForCard(
   const [reports, roleResult, domainState] = await Promise.all([
     getCompanyReports(companyId),
     getUserRole(userId, companyId),
-    getDomainReportState(resolvedDomain),
+    getDomainReportState(resolvedDomain, companyId),
   ]);
 
   return {
@@ -269,7 +298,10 @@ function mapInsertConflict(errorMessage: string): ReportRequestError {
       409,
     );
   }
-  if (message.includes('unique_generating_report_per_domain')) {
+  if (
+    message.includes('unique_generating_report_per_company_domain') ||
+    message.includes('unique_generating_report_per_domain')
+  ) {
     return new ReportRequestError(
       'Report already in progress',
       'REPORT_IN_PROGRESS',
@@ -290,7 +322,7 @@ async function createReport(
   },
 ): Promise<ReportRecord> {
   const domain = input.domain ? normalizeReportDomain(input.domain) : await getCompanyDomain(companyId);
-  const state = await getDomainReportState(domain);
+  const state = await getDomainReportState(domain, companyId);
 
   if (state.hasGeneratingReport) {
     throw new ReportRequestError('Report already in progress', 'REPORT_IN_PROGRESS', 409);
@@ -513,6 +545,11 @@ export async function updateReportStatus(
 
   if (status === 'completed') {
     payload.completed_at = now;
+    // Clear stale failure metadata if a prior recovery sweep marked this
+    // row as failed before the original generation finished. An explicit
+    // `errorMessage` in `updates` (rare on the success path) still wins
+    // because it is applied below.
+    payload.error_message = null;
   }
 
   if (updates?.data) {
@@ -523,9 +560,16 @@ export async function updateReportStatus(
     payload.error_message = updates.errorMessage;
   }
 
-  const { error } = await ownedDbTable('reports')
-    .update(payload)
-    .eq('id', reportId);
+  // Optimistic lifecycle precondition: a successful completion may only
+  // overwrite a row that is still in the `generating` state. This blocks
+  // a zombie lambda from resurrecting a row the recovery cron (or any
+  // other terminal transition) has already moved out of `generating`.
+  // Any other status transition keeps its prior unconditional behavior.
+  let query = ownedDbTable('reports').update(payload).eq('id', reportId);
+  if (status === 'completed') {
+    query = query.eq('status', 'generating');
+  }
+  const { error } = await query;
 
   if (error) {
     throw new ReportRequestError('Failed to update report status', 'REPORT_UPDATE_FAILED', 500);
@@ -591,8 +635,25 @@ export async function generateReportPayload(
   };
 }
 
-export function startAsyncReportGeneration(report: ReportRecord): void {
-  void (async () => {
+/**
+ * Phase 3: returns the lifecycle Promise instead of detaching it.
+ *
+ * The previous `void (async()=>{})()` pattern was unsafe on Vercel: once the
+ * HTTP response was flushed the lambda froze, often killing the closure
+ * mid-flight and leaving rows pinned at `status='generating'` forever.
+ *
+ * Callers MUST do one of the following with the returned Promise:
+ *   1. `await` it before responding (blocks the request for full generation)
+ *   2. Hand it to a platform keep-alive primitive (e.g. Vercel's `waitUntil`)
+ *      so the runtime keeps the function warm past response flush.
+ *
+ * The Promise resolves when the lifecycle terminates (completed OR failed);
+ * it never rejects — all errors are caught internally and persisted as a
+ * `status='failed'` row. The reaper at /api/cron/recover-stale-reports is
+ * the safety net for the worst case where neither (1) nor (2) succeeds.
+ */
+export function startAsyncReportGeneration(report: ReportRecord): Promise<void> {
+  return (async () => {
     let payload: ReportGenerationPayload;
 
     // Task 2: isolate generateReportPayload so its failure is always captured
@@ -667,4 +728,90 @@ export function startAsyncReportGeneration(report: ReportRecord): void {
       }
     }
   })();
+}
+
+export interface StaleReportRecoveryResult {
+  scanned: number;
+  recovered: number;
+  recoveredIds: string[];
+  cutoffIso: string;
+  timeoutMinutes: number;
+}
+
+/**
+ * Phase 2: Reap reports that have been stuck in `status='generating'` longer
+ * than `timeoutMinutes`. Demotes them to `status='failed'` so the partial
+ * unique index `unique_generating_report_per_company_domain` releases the
+ * (company_id, domain) slot and new requests can succeed.
+ *
+ * Idempotent and safe when there are no stale rows.
+ */
+export async function recoverStaleGeneratingReports(
+  timeoutMinutes: number = REPORT_GENERATION_TIMEOUT_MINUTES,
+): Promise<StaleReportRecoveryResult> {
+  const cutoffIso = new Date(Date.now() - timeoutMinutes * 60_000).toISOString();
+  const nowIso = new Date().toISOString();
+
+  // Use started_at when present, otherwise created_at. The new partial index
+  // (status, started_at) supports this scan.
+  const { data, error } = await ownedDbTable('reports')
+    .update({
+      status: 'failed',
+      error_message: 'Generation timeout recovery',
+      updated_at: nowIso,
+    })
+    .eq('status', 'generating')
+    .or(`started_at.lt.${cutoffIso},and(started_at.is.null,created_at.lt.${cutoffIso})`)
+    .select('id');
+
+  if (error) {
+    throw new ReportRequestError(
+      `Failed to recover stale reports: ${error.message}`,
+      'STALE_REPORT_RECOVERY_FAILED',
+      500,
+    );
+  }
+
+  const recoveredIds = ((data || []) as Array<{ id: string }>).map((row) => row.id);
+
+  return {
+    scanned: recoveredIds.length,
+    recovered: recoveredIds.length,
+    recoveredIds,
+    cutoffIso,
+    timeoutMinutes,
+  };
+}
+
+export async function listStaleGeneratingReports(
+  timeoutMinutes: number = REPORT_GENERATION_TIMEOUT_MINUTES,
+): Promise<Array<{
+  id: string;
+  company_id: string;
+  domain: string;
+  started_at: string | null;
+  created_at: string;
+}>> {
+  const cutoffIso = new Date(Date.now() - timeoutMinutes * 60_000).toISOString();
+  const { data, error } = await ownedDbTable('reports')
+    .select('id, company_id, domain, started_at, created_at')
+    .eq('status', 'generating')
+    .or(`started_at.lt.${cutoffIso},and(started_at.is.null,created_at.lt.${cutoffIso})`)
+    .order('started_at', { ascending: true, nullsFirst: true });
+
+  if (error) {
+    throw new ReportRequestError(
+      `Failed to list stale reports: ${error.message}`,
+      'STALE_REPORT_LIST_FAILED',
+      500,
+    );
+  }
+
+  return (data || []) as Array<{
+    id: string;
+    company_id: string;
+    domain: string;
+    started_at: string | null;
+    created_at: string;
+  }>;
 }

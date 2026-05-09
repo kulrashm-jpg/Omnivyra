@@ -345,7 +345,10 @@ async function triggerSnapshotReport(params: {
     resolvedInput: resolvedInput as unknown as Record<string, unknown>,
     readiness,
   });
-  startAsyncReportGeneration(report);
+  // Phase 3: keep-alive aware so the snapshot lifecycle survives a Vercel
+  // cron lambda freeze. Falls back to await on non-Vercel runtimes.
+  const { keepAliveAfterResponse } = await import('@/lib/runtime/keepAlive');
+  await keepAliveAfterResponse(startAsyncReportGeneration(report));
 
   return { reportId: report.id };
 }

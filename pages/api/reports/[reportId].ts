@@ -24,6 +24,7 @@ import {
   startAsyncReportGeneration,
   type ReportRecord,
 } from '../../../backend/services/reportCardService';
+import { keepAliveAfterResponse } from '../../../lib/runtime/keepAlive';
 import type {
   CompanyBlogIntelligenceResult,
 } from '../../../lib/blog/companyBlogIntelligenceService';
@@ -85,6 +86,7 @@ async function requeueIncompleteReport(report: ReportApiRow): Promise<void> {
     .update({
       status: 'generating',
       updated_at: now,
+      started_at: now,
       completed_at: null,
       error_message: null,
     })
@@ -96,7 +98,9 @@ async function requeueIncompleteReport(report: ReportApiRow): Promise<void> {
     return;
   }
 
-  startAsyncReportGeneration(report as ReportRecord);
+  // Phase 3: same keep-alive as /api/reports/generate so the lifecycle
+  // promise is not orphaned by a Vercel lambda freeze.
+  await keepAliveAfterResponse(startAsyncReportGeneration(report as ReportRecord));
 }
 
 // ── Mappers: CompanyBlogIntelligenceResult → ReportViewPayload ────────────────

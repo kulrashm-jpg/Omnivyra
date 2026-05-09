@@ -18,11 +18,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const auth = req.headers['authorization'];
-    if (auth !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  if (!cronSecret) {
+    console.warn('[cron/analytics-ingestion] CRON_SECRET not configured; rejecting request to fail closed');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (req.headers['authorization'] !== `Bearer ${cronSecret}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {

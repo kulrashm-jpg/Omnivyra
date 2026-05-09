@@ -17,7 +17,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'GET') return res.status(405).end();
 
   const secret = process.env.CRON_SECRET;
-  if (secret && req.headers['x-cron-secret'] !== secret) {
+  if (!secret) {
+    console.warn('[cron/aggregate-blog-analytics] CRON_SECRET not configured; rejecting request to fail closed');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (req.headers['x-cron-secret'] !== secret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

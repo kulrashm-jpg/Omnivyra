@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { checkEnvIsolationOnce } from '../../lib/env/namespace';
 
 /**
  * Supabase Admin Client — lazy singleton.
@@ -64,6 +65,9 @@ function getAdminClient(): SupabaseClient {
   if (_client) return _client;
 
   const { url, key } = getSupabaseConfig();
+
+  // Warn-only cross-environment contamination check. Never blocks startup.
+  checkEnvIsolationOnce();
 
   _client = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },

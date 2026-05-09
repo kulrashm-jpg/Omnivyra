@@ -30,8 +30,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Auth: cron host sets Authorization: Bearer <CRON_SECRET>
   const cronSecret = process.env.CRON_SECRET;
-  const triggeredByCronSecret = !!cronSecret && req.headers['authorization'] === `Bearer ${cronSecret}`;
-  if (cronSecret && !triggeredByCronSecret) {
+  if (!cronSecret) {
+    console.warn('[cron/process-scheduled-posts] CRON_SECRET not configured; rejecting request to fail closed');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const triggeredByCronSecret = req.headers['authorization'] === `Bearer ${cronSecret}`;
+  if (!triggeredByCronSecret) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 

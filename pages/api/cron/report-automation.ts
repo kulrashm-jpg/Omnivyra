@@ -8,7 +8,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const secret = config.INTERNAL_METRICS_SECRET;
-  if (secret && req.headers['x-cron-secret'] !== secret) {
+  if (!secret) {
+    console.warn('[cron/report-automation] INTERNAL_METRICS_SECRET not configured; rejecting request to fail closed');
+    return res.status(401).json({ error: 'Unauthorised' });
+  }
+  if (req.headers['x-cron-secret'] !== secret) {
     return res.status(401).json({ error: 'Unauthorised' });
   }
 

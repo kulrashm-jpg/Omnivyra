@@ -13,6 +13,7 @@ import { hasEnoughCredits } from '../../../backend/services/creditDeductionServi
 import { evaluateResolvedReportReadiness } from '../../../backend/services/reportReadinessService';
 import { ensureAutomationConfig } from '../../../backend/services/reportAutomationService';
 import { resolveSnapshotReportInput, persistSnapshotReportInputs } from '../../../backend/services/snapshotInputResolver';
+import { keepAliveAfterResponse } from '../../../lib/runtime/keepAlive';
 
 type GenerateReportRequest = {
   companyId?: string;
@@ -150,7 +151,11 @@ export default async function handler(
           readiness,
         });
 
-    startAsyncReportGeneration(report);
+    // Phase 3: hand the lifecycle Promise to a Vercel-aware keep-alive so the
+    // background work survives HTTP response flush. Falls back to awaiting
+    // when not running on Vercel. The recover-stale-reports cron is the
+    // safety net if either path is interrupted (e.g. lambda hard kill).
+    await keepAliveAfterResponse(startAsyncReportGeneration(report));
 
     if (reportCategory === 'snapshot') {
       await ensureAutomationConfig({
