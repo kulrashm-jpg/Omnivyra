@@ -10,10 +10,12 @@
     {
       "path": "/api/cron/analytics-ingestion",
       "schedule": "0 2 * * *"
-    },
-    {
-      "path": "/api/cron/recover-stale-reports",
-      "schedule": "*/5 * * * *"
     }
-  ]
+  ],
+  "experimentalServices": {
+    "web": {
+      "routePrefix": "/",
+      "framework": "nextjs"
+    }
+  }
 }
