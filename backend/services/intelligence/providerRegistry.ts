@@ -282,23 +282,13 @@ function ensureBootstrapped(): void {
     } catch (error) {
       /* unavailable */
     }
-  } else if (process.env.MOZ_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/mozAdapter');
-      registerAuthorityInflowProvider(new mod.MozAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
-  } else if (process.env.MAJESTIC_API_KEY) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const mod = require('./adapters/majesticAdapter');
-      registerAuthorityInflowProvider(new mod.MajesticAdapter());
-    } catch (error) {
-      /* unavailable */
-    }
   }
+  // NOTE: mozAdapter / majesticAdapter conditional registrations were
+  // removed because the adapter files are not present in the repo and
+  // their static require() paths fail the Next.js webpack build. Restore
+  // when (a) the adapter implementations are added under
+  // backend/services/intelligence/adapters/ and (b) the corresponding
+  // MOZ_API_KEY / MAJESTIC_API_KEY are set in the runtime environment.
 
   // ── Trust coherence (review aggregator + extraction) ────────────────────────
   if (process.env.TRUST_COHERENCE_ENABLED === 'true') {
