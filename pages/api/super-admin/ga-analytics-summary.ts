@@ -7,28 +7,7 @@ import {
   resolveOmnivyraWebsiteCompany,
   resolveOmnivyraWebsiteUrl,
 } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-
-async function requireSuperAdminAccess(
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') {
-    return true;
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (isAdmin) return true;
-    res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-    return false;
-  }
-
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { requireSuperAdminGaAccess } from '../../../backend/services/superAdminGaAccess';
 
 async function fetchAllRows<T>(
   build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
@@ -55,16 +34,25 @@ function aggregatedCount(metadata: Record<string, unknown> | null | undefined): 
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({
+      status: 'error',
+      code: 'GA_METHOD_NOT_ALLOWED',
+      message: 'Method not allowed',
+    });
   }
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  const access = await requireSuperAdminGaAccess(req, res);
+  if (!access) return;
 
   try {
     const company = await resolveOmnivyraWebsiteCompany();
 
     if (!company) {
-      return res.status(404).json({ error: 'OMNIVYRA_WEBSITE_COMPANY_NOT_FOUND' });
+      return res.status(404).json({
+        status: 'error',
+        code: 'OMNIVYRA_WEBSITE_COMPANY_NOT_FOUND',
+        message: 'No Omnivyra website company is configured.',
+      });
     }
 
     const companyId = company.id;
@@ -260,6 +248,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       conversions,
     });
   } catch (error: any) {
-    return res.status(500).json({ error: error?.message || 'FAILED_TO_LOAD_GA_ANALYTICS' });
+    return res.status(500).json({
+      status: 'error',
+      code: 'GA_ANALYTICS_LOAD_FAILED',
+      message: error?.message || 'Failed to load Google Analytics summary',
+    });
   }
 }

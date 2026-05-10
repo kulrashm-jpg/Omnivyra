@@ -76,7 +76,11 @@ export default function SuperAdminPanel() {
 
 
   useEffect(() => {
-    fetchWithAuth('/api/super-admin/platform-oauth-configs')
+    // Auth probe: must accept the legacy super_admin_session bridge cookie set by
+    // /api/super-admin/login, otherwise env-credential operators bounce back here.
+    // platform-oauth-configs uses requireCapability (canonical-session-only) which
+    // rejects the bridge cookie — analytics-summary still honors it.
+    fetchWithAuth('/api/super-admin/analytics-summary')
       .then((r) => { if (r.status === 403) window.location.href = '/super-admin/login'; })
       .catch(() => { window.location.href = '/super-admin/login'; });
     loadSuperAdminData();

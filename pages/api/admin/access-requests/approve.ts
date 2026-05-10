@@ -105,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     .from('companies')
     .insert({
       name:               company,
-      website:            request.website_url ?? requestId, // NOT NULL placeholder if blank
+      website:            request.website_url ?? null,
       admin_email_domain: null,
       status:             'active',
       created_at:         now,

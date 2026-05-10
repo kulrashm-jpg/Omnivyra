@@ -80,6 +80,11 @@ export async function resolveOmnivyraWebsiteCompany(): Promise<OmnivyraWebsiteCo
     company_profiles: profilesByCompanyId.get(company.id) ?? [],
   }));
 
+  // Match strictly on verified website-domain. The previous implementation
+  // also accepted any active company whose name CONTAINED 'omnivyra', which
+  // meant a tenant signing up as e.g. "Omnivyra Test Co" with a corrupted
+  // website value would silently shadow the real Omnivyra row in the
+  // Super Admin GA tab. That's the multi-tenant footgun the audit flagged.
   return (
     enrichedCompanies.find(
       (company) =>
@@ -87,8 +92,7 @@ export async function resolveOmnivyraWebsiteCompany(): Promise<OmnivyraWebsiteCo
         (
           isOmnivyraWebsiteDomain(company.website_domain) ||
           isOmnivyraWebsiteDomain(company.website) ||
-          isOmnivyraWebsiteDomain(company.company_profiles?.[0]?.website_url) ||
-          String(company.name || '').toLowerCase().includes('omnivyra')
+          isOmnivyraWebsiteDomain(company.company_profiles?.[0]?.website_url)
         ),
     ) ?? null
   );

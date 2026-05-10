@@ -1,53 +1,37 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { saveSelectedProperty } from '../../../backend/services/analyticsIntegrationService';
 import { resolveOmnivyraWebsiteCompany } from '../../../backend/services/omnivyraWebsiteCompanyService';
-import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-
-async function requireSuperAdminAccess(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') {
-    return true;
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return false;
-  }
-
-  const { data: roleRow } = await supabase
-    .from('user_company_roles')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('role', 'SUPER_ADMIN')
-    .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
-
-  if (!roleRow) {
-    res.status(403).json({ error: 'Super admin access required' });
-    return false;
-  }
-
-  return true;
-}
+import { requireSuperAdminGaAccess } from '../../../backend/services/superAdminGaAccess';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({
+      status: 'error',
+      code: 'GA_METHOD_NOT_ALLOWED',
+      message: 'Method not allowed',
+    });
   }
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  const access = await requireSuperAdminGaAccess(req, res);
+  if (!access) return;
 
   const propertyId = typeof req.body?.propertyId === 'string' ? req.body.propertyId : '';
   if (!propertyId) {
-    return res.status(400).json({ status: 'error', message: 'propertyId is required' });
+    return res.status(400).json({
+      status: 'error',
+      code: 'GA_MISSING_PROPERTY_ID',
+      message: 'propertyId is required',
+    });
   }
 
   const company = await resolveOmnivyraWebsiteCompany();
   if (!company) {
-    return res.status(404).json({ error: 'OMNIVYRA_WEBSITE_COMPANY_NOT_FOUND' });
+    return res.status(404).json({
+      status: 'error',
+      code: 'OMNIVYRA_WEBSITE_COMPANY_NOT_FOUND',
+      message: 'No Omnivyra website company is configured.',
+    });
   }
 
   try {
@@ -58,6 +42,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       property,
     });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: 'Failed to select Google Analytics property' });
+    const rawMessage = error instanceof Error ? error.message : 'Failed to select Google Analytics property';
+    const normalized = rawMessage.toLowerCase();
+
+    if (normalized.includes('integration not found')) {
+      return res.status(404).json({
+        status: 'error',
+        code: 'GA_INTEGRATION_NOT_FOUND',
+        message: 'No GA4 integration exists yet for this company. Connect Google Analytics first.',
+      });
+    }
+
+    if (normalized.includes('does not belong to this company')) {
+      return res.status(400).json({
+        status: 'error',
+        code: 'GA_PROPERTY_NOT_OWNED',
+        message: 'The selected GA4 property is not associated with the current integration.',
+      });
+    }
+
+    return res.status(500).json({
+      status: 'error',
+      code: 'GA_SELECT_PROPERTY_FAILED',
+      message: rawMessage,
+    });
   }
 }

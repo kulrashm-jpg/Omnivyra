@@ -821,7 +821,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
     const { error: companyErr } = await supabase.from('companies').insert({
       id:                 companyId,
       name:               rawCompanyName,
-      website:            companyId, // websites column is NOT NULL — placeholder until /onboarding/company refines it
+      website:            null,
       admin_email_domain: emailDomain,
       domain_claimed_at:  now,
       status:             'active',

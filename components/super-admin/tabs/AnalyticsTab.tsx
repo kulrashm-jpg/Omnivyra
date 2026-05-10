@@ -41,6 +41,32 @@ function formatLastSync(value: string | null): string {
   return parsed.toLocaleString();
 }
 
+// Mirrors backend/scheduler/cron.ts GA4_INGESTION_INTERVAL_MS (6h). The
+// /api/cron/analytics-ingestion Vercel cron also runs ga4 ingestion daily
+// (24h). Anything older than 24h means scheduled ingestion has stopped or
+// the GA token has been revoked — surface that to the operator.
+const GA_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+function isGaSyncStale(lastSync: string | null | undefined): boolean {
+  if (!lastSync) return false; // never-synced is rendered separately
+  const parsed = new Date(lastSync).getTime();
+  if (!Number.isFinite(parsed)) return false;
+  return Date.now() - parsed > GA_STALE_THRESHOLD_MS;
+}
+
+function readErrorMessage(data: any, fallback: string): string {
+  if (!data) return fallback;
+  const message = typeof data.message === 'string' ? data.message.trim() : '';
+  const error = typeof data.error === 'string' ? data.error.trim() : '';
+  const code = typeof data.code === 'string' ? data.code.trim() : '';
+  if (message && code) return `${message} (${code})`;
+  if (message) return message;
+  if (error && code && error !== code) return `${error} (${code})`;
+  if (error) return error;
+  if (code) return code;
+  return fallback;
+}
+
 export default function AnalyticsTab({
   isLoadingAnalytics,
   analyticsSummary,
@@ -70,7 +96,7 @@ export default function AnalyticsTab({
       if (signal?.cancelled) return;
       if (!response.ok) {
         setGaSummary(null);
-        setGaAnalyticsError(data?.error || 'Failed to load Google Analytics summary');
+        setGaAnalyticsError(readErrorMessage(data, 'Failed to load Google Analytics summary'));
         return;
       }
       setGaSummary(data as GoogleAnalyticsCompanySummary);
@@ -132,7 +158,7 @@ export default function AnalyticsTab({
       });
       const data = await response.json().catch(() => null);
       if (!response.ok || !data?.authorizationUrl) {
-        throw new Error(data?.message || 'Failed to connect Google Analytics');
+        throw new Error(readErrorMessage(data, 'Failed to connect Google Analytics'));
       }
       window.location.href = data.authorizationUrl;
     } catch (error: any) {
@@ -154,7 +180,7 @@ export default function AnalyticsTab({
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(data?.message || 'Failed to select Google Analytics property');
+        throw new Error(readErrorMessage(data, 'Failed to select Google Analytics property'));
       }
       setGaNotice('Google Analytics property selected.');
       await loadGaAnalytics();
@@ -360,6 +386,20 @@ export default function AnalyticsTab({
           {gaAnalyticsError && (
             <div className="rounded-lg border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
               {gaAnalyticsError}
+            </div>
+          )}
+
+          {gaSummary?.ga_status.connected && isGaSyncStale(gaSummary.ga_status.last_sync) && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-5 py-4 text-sm text-amber-800 flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
+              <div>
+                <div className="font-semibold">Analytics may be outdated</div>
+                <div className="mt-1">
+                  Last successful GA4 sync was {formatLastSync(gaSummary.ga_status.last_sync)}.
+                  Numbers below may not reflect the most recent traffic. Reconnect Google Analytics
+                  if syncs do not resume.
+                </div>
+              </div>
             </div>
           )}
 
