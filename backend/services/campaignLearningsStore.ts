@@ -2,7 +2,7 @@ import { ownedDbTable } from '../db/writeOwner';
 /**
  * Campaign Learnings Store
  *
- * Reads and writes structured learnings from the `campaign_learnings` table.
+ * Reads and writes structured learnings from the `campaign_autonomous_learnings` table.
  * Learnings are distilled from performance data after each campaign cycle
  * and injected into future campaign generation as context.
  *
@@ -40,7 +40,7 @@ export type CampaignLearning = {
 export async function upsertLearning(learning: CampaignLearning): Promise<void> {
   try {
     // Check for existing matching learning
-    let query = ownedDbTable('campaign_learnings')
+    let query = ownedDbTable('campaign_autonomous_learnings')
       .select('id, engagement_impact, confidence, sample_size')
       .eq('company_id', learning.company_id)
       .eq('learning_type', learning.learning_type)
@@ -57,7 +57,7 @@ export async function upsertLearning(learning: CampaignLearning): Promise<void> 
       const newImpact  = (existing.engagement_impact * existing.sample_size + learning.engagement_impact * learning.sample_size) / n;
       const newConf    = (existing.confidence * existing.sample_size + learning.confidence * learning.sample_size) / n;
 
-      await ownedDbTable('campaign_learnings')
+      await ownedDbTable('campaign_autonomous_learnings')
         .update({
           engagement_impact: parseFloat(newImpact.toFixed(4)),
           confidence:        parseFloat(newConf.toFixed(3)),
@@ -67,7 +67,7 @@ export async function upsertLearning(learning: CampaignLearning): Promise<void> 
         })
         .eq('id', (existing as any).id);
     } else {
-      await ownedDbTable('campaign_learnings').insert({
+      await ownedDbTable('campaign_autonomous_learnings').insert({
         company_id:       learning.company_id,
         campaign_id:      learning.campaign_id ?? null,
         learning_type:    learning.learning_type,
@@ -92,7 +92,7 @@ export async function getTopLearnings(
   companyId: string,
   options: { limit?: number; learning_type?: LearningType; platform?: string } = {}
 ): Promise<CampaignLearning[]> {
-  let query = ownedDbTable('campaign_learnings')
+  let query = ownedDbTable('campaign_autonomous_learnings')
     .select('*')
     .eq('company_id', companyId)
     .gte('confidence', 0.3)

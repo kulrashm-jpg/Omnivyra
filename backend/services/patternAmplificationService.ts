@@ -2,13 +2,22 @@
  * Pattern Amplification Service
  *
  * When a content pattern's success_rate crosses a threshold:
- *   1. Persists a reuse directive to `campaign_learnings` with high confidence
+ *   1. Persists a reuse directive to `campaign_autonomous_learnings` with high confidence
  *   2. Boosts its weight in `global_campaign_patterns` (increases sample_count + avg_rate)
  *   3. Returns an injectable amplification context for the next campaign prompt
  *
  * Thresholds:
  *   amplify  — avg_engagement_rate > AMPLIFY_THRESHOLD (2× platform average)
  *   boost    — avg_engagement_rate > BOOST_THRESHOLD  (1.5× platform average)
+ *
+ * Phase A correction: previously this service SELECTed
+ *   `avg_engagement_rate, sample_count`
+ * from campaign_learnings, but those columns belong to
+ * `global_campaign_patterns`, NOT the autonomous-feature learnings
+ * table. The autonomous-feature schema (per
+ * `20260320_autonomous_system.sql`) is `engagement_impact, sample_size`.
+ * The SELECT below now uses the actual autonomous schema columns and
+ * maps them to the AmplifiedPattern's semantic field names.
  */
 
 import { supabase } from '../db/supabaseClient';
@@ -45,24 +54,40 @@ async function getWinningPatterns(companyId: string): Promise<Array<{
   sample_count: number;
   confidence: number;
 }>> {
+  // Phase A: SELECT the actual autonomous-feature columns
+  // (engagement_impact, sample_size) from campaign_autonomous_learnings,
+  // then map them to AmplifiedPattern's semantic field names downstream.
   const { data } = await supabase
-    .from('campaign_learnings')
-    .select('platform, content_type, pattern, avg_engagement_rate, sample_count, confidence')
+    .from('campaign_autonomous_learnings')
+    .select('platform, content_type, pattern, engagement_impact, sample_size, confidence')
     .eq('company_id', companyId)
     .gte('confidence', 0.5)
     .not('platform', 'is', null)
     .not('pattern', 'is', null)
-    .order('avg_engagement_rate', { ascending: false })
+    .order('engagement_impact', { ascending: false })
     .limit(30);
 
-  return (data ?? []) as Array<{
+  return ((data ?? []) as Array<{
     platform: string;
     content_type: string;
     pattern: string;
-    avg_engagement_rate: number;
-    sample_count: number;
+    engagement_impact: number;
+    sample_size: number;
     confidence: number;
-  }>;
+  }>).map((row) => ({
+    platform:            row.platform,
+    content_type:        row.content_type,
+    pattern:             row.pattern,
+    // engagement_impact in the autonomous-feature schema is a positive-
+    // or-negative delta vs the campaign average. Surfacing it as
+    // `avg_engagement_rate` preserves the downstream amplification
+    // logic; the threshold comparison still works because patterns with
+    // negative impact are filtered by the `confidence >= 0.5 + ratio
+    // >= BOOST_MULTIPLIER` chain in amplifyWinningPatterns.
+    avg_engagement_rate: row.engagement_impact,
+    sample_count:        row.sample_size,
+    confidence:          row.confidence,
+  }));
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────

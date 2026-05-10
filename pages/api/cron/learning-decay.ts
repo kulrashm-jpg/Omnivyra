@@ -2,16 +2,29 @@
 /**
  * GET /api/cron/learning-decay
  *
- * Daily cron — applies time-decay to campaign_learnings and seeds
- * global patterns if the table is empty.
+ * Daily cron — applies time-decay to campaign_autonomous_learnings and
+ * seeds global patterns if the table is empty.
  *
  * Schedule: 0 2 * * *  (2am daily)
  * Header:   x-cron-secret: $CRON_SECRET
+ *
+ * Phase A containment: gated on AUTONOMOUS_CRON_ENABLED === 'true'
+ * (default OFF). When disabled, no learningDecayService /
+ * globalPatternService import or call occurs — those services target
+ * tables that don't exist in production until Phase B.
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { runLearningDecay } from '@/backend/services/learningDecayService';
-import { seedGlobalPatterns } from '@/backend/services/globalPatternService';
+import {
+  isAutonomousCronEnabled,
+  mintCronCorrelationId,
+  buildCronSkipReport,
+  logCronSkipped,
+  logCronFatal,
+  probeAutonomousTables,
+} from '@/backend/services/autonomousFeatureFlag';
+
+const HANDLER_NAME = 'cron/learning-decay';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -27,15 +40,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Unauthorised' });
   }
 
+  const correlationId = mintCronCorrelationId('cron-decay');
+
+  if (!isAutonomousCronEnabled()) {
+    logCronSkipped(HANDLER_NAME, correlationId);
+    return res.status(200).json(buildCronSkipReport(HANDLER_NAME, correlationId));
+  }
+
   try {
+    const { supabase } = await import('@/backend/db/supabaseClient');
+    const { runLearningDecay } = await import('@/backend/services/learningDecayService');
+    const { seedGlobalPatterns } = await import('@/backend/services/globalPatternService');
+
+    await probeAutonomousTables(supabase, HANDLER_NAME, correlationId);
+
     const [decayResult, seededCount] = await Promise.all([
       runLearningDecay(),
       seedGlobalPatterns(),
     ]);
 
-    console.log('[cron/learning-decay]', { decayResult, seededCount });
-    return res.status(200).json({ success: true, decay: decayResult, patterns_seeded: seededCount });
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify({
+      level:           'info',
+      event:           'cron_completed',
+      handler:         HANDLER_NAME,
+      correlationId,
+      decay:           decayResult,
+      patterns_seeded: seededCount,
+    }));
+    return res.status(200).json({ success: true, correlationId, decay: decayResult, patterns_seeded: seededCount });
   } catch (err: unknown) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    logCronFatal(HANDLER_NAME, correlationId, err);
+    return res.status(500).json({
+      error:         err instanceof Error ? err.message : String(err),
+      correlationId,
+    });
   }
 }

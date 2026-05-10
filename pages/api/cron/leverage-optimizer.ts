@@ -17,11 +17,17 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { measureOutcomeScore } from '../../../backend/services/outcomeTrackingService';
-import { checkAndFailFast } from '../../../backend/services/failFastService';
-import { optimizeCreditEfficiency } from '../../../backend/services/creditEfficiencyEngine';
-import { checkCreditAlerts } from '../../../backend/services/creditAlertService';
 import { runJob } from '../../../backend/services/jobRunner';
+import {
+  isAutonomousCronEnabled,
+  mintCronCorrelationId,
+  buildCronSkipReport,
+  logCronSkipped,
+  logCronFatal,
+  probeAutonomousTables,
+} from '../../../backend/services/autonomousFeatureFlag';
+
+const HANDLER_NAME = 'cron/leverage-optimizer';
 
 type LeverageRunResult = {
   companies_processed: number;
@@ -45,6 +51,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.headers['x-cron-secret'] !== secret) {
     return res.status(401).json({ error: 'Unauthorised' });
   }
+
+  const correlationId = mintCronCorrelationId('cron-leverage');
+
+  // Phase A kill-switch — must come BEFORE the autonomous-feature
+  // service imports below. When disabled, no autonomous service is
+  // loaded into the module graph and no DB query against the missing
+  // tables (campaign_outcomes, fail_fast_log, content_type_efficiency,
+  // credit_efficiency_scores) is issued.
+  if (!isAutonomousCronEnabled()) {
+    logCronSkipped(HANDLER_NAME, correlationId);
+    return res.status(200).json(buildCronSkipReport(HANDLER_NAME, correlationId));
+  }
+
+  // Lazy imports — keep autonomous-feature service modules out of the
+  // graph for disabled invocations. Pulled in only after the flag check.
+  const { measureOutcomeScore } = await import('../../../backend/services/outcomeTrackingService');
+  const { checkAndFailFast } = await import('../../../backend/services/failFastService');
+  const { optimizeCreditEfficiency } = await import('../../../backend/services/creditEfficiencyEngine');
+  const { checkCreditAlerts } = await import('../../../backend/services/creditAlertService');
+
+  // One-shot probe: warn loudly if operator enabled the flag without
+  // applying the Phase B canonical migration.
+  await probeAutonomousTables(supabase, HANDLER_NAME, correlationId);
 
   const result: LeverageRunResult = {
     companies_processed: 0,
@@ -209,10 +238,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    console.log('[cron/leverage-optimizer]', result);
-    return res.status(200).json({ success: true, result });
-  } catch (err: any) {
-    console.error('[cron/leverage-optimizer] fatal', err?.message);
-    return res.status(500).json({ error: err?.message });
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify({
+      level:         'info',
+      event:         'cron_completed',
+      handler:       HANDLER_NAME,
+      correlationId,
+      result,
+    }));
+    return res.status(200).json({ success: true, correlationId, result });
+  } catch (err: unknown) {
+    logCronFatal(HANDLER_NAME, correlationId, err);
+    return res.status(500).json({
+      error:         err instanceof Error ? err.message : String(err),
+      correlationId,
+    });
   }
 }
