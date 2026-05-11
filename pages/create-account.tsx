@@ -16,6 +16,8 @@ import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { validateEmailDomain } from '../lib/auth/domainValidation';
 import { trackWebsiteEvent } from '../lib/websiteAnalytics';
+import { logoutCurrentSession } from '../lib/security/sessionClient';
+import { clearBrowserAuthState } from '../utils/authStorage';
 
 export default function CreateAccountPage() {
   const router = useRouter();
@@ -47,10 +49,12 @@ export default function CreateAccountPage() {
   }, [router.query.ref]);
 
   useEffect(() => {
-    getSupabaseBrowser().auth.getSession().then(({ data }) => {
-      if (data.session) router.replace('/dashboard');
-    });
-  }, [router]);
+    (async () => {
+      try { await logoutCurrentSession(); } catch { /* ignore */ }
+      try { await getSupabaseBrowser().auth.signOut(); } catch { /* ignore */ }
+      clearBrowserAuthState({ preservePkce: false });
+    })();
+  }, []);
 
   function validateEmail(val: string): boolean {
     const check = validateEmailDomain(val);

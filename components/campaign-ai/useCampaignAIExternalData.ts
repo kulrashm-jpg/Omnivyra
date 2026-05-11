@@ -85,7 +85,7 @@ export function useCampaignAIExternalData({
     }
     const fromCampaign = String((campaignData as any)?.company_id ?? (campaignData as any)?.companyId ?? '').trim();
     if (fromCampaign) return fromCampaign;
-    return window.localStorage.getItem('selected_company_id') || window.localStorage.getItem('company_id') || '';
+    return '';
   }, [companyId, campaignData]);
 
   const planningCatalog = useCampaignAiPlanningCatalog({ resolvedCompanyId });

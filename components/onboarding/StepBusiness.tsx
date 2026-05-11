@@ -6,6 +6,8 @@ const INDUSTRIES = [
   'Marketing & Advertising',
   'E-commerce & Retail',
   'Finance & Banking',
+  'Banking',
+  'Insurance',
   'Healthcare',
   'Education',
   'Media & Entertainment',
@@ -13,6 +15,13 @@ const INDUSTRIES = [
   'Real Estate',
   'Food & Beverage',
   'Manufacturing',
+  'Telecommunications',
+  'Energy & Utilities',
+  'Construction & Infrastructure',
+  'Logistics & Transportation',
+  'Automotive',
+  'Government & Public Sector',
+  'Nonprofit',
   'Other',
 ];
 
@@ -22,13 +31,21 @@ const GOALS = [
   { value: 'authority', label: 'Build authority', desc: 'Become a thought leader in your space' },
 ] as const;
 
+const BUSINESS_TYPES = [
+  { value: 'Product company', label: 'Product company' },
+  { value: 'Reseller / distributor', label: 'Reseller / distributor' },
+  { value: 'Service provider', label: 'Service provider' },
+  { value: 'Agency', label: 'Agency' },
+];
+
 interface StepBusinessProps {
   initialName: string;
   initialIndustry: string;
+  initialBusinessTypes: string[];
   initialGoal: string;
   isLoading: boolean;
   error: string | null;
-  onSave: (name: string, industry: string, goal: string) => Promise<boolean>;
+  onSave: (name: string, industry: string, businessTypes: string[], goal: string) => Promise<boolean>;
   onNext: () => void;
   onBack: () => void;
 }
@@ -36,6 +53,7 @@ interface StepBusinessProps {
 export default function StepBusiness({
   initialName,
   initialIndustry,
+  initialBusinessTypes,
   initialGoal,
   isLoading,
   error,
@@ -45,12 +63,13 @@ export default function StepBusiness({
 }: StepBusinessProps) {
   const [name, setName] = useState(initialName);
   const [industry, setIndustry] = useState(initialIndustry);
+  const [businessTypes, setBusinessTypes] = useState(initialBusinessTypes);
   const [goal, setGoal] = useState(initialGoal);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !industry || !goal) return;
-    const ok = await onSave(name.trim(), industry, goal);
+    const ok = await onSave(name.trim(), industry, businessTypes, goal);
     if (ok) onNext();
   };
 
@@ -98,6 +117,39 @@ export default function StepBusiness({
               <option key={ind} value={ind}>{ind}</option>
             ))}
           </select>
+        </div>
+
+        {/* Business type */}
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+            Business type <span className="font-normal text-gray-400">(select all that apply)</span>
+          </label>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {BUSINESS_TYPES.map((type) => {
+              const selected = businessTypes.includes(type.value);
+              return (
+                <button
+                  key={type.value}
+                  type="button"
+                  onClick={() => {
+                    setBusinessTypes((prev) =>
+                      prev.includes(type.value)
+                        ? prev.filter((item) => item !== type.value)
+                        : [...prev, type.value],
+                    );
+                  }}
+                  disabled={isLoading}
+                  className={`px-4 py-2.5 rounded-xl border text-left text-sm transition-all ${
+                    selected
+                      ? 'border-violet-400 bg-violet-50 ring-1 ring-violet-400 text-violet-700'
+                      : 'border-gray-200 bg-white hover:border-gray-300 text-gray-800'
+                  }`}
+                >
+                  {type.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Goal */}

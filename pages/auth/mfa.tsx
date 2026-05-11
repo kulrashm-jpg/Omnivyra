@@ -113,9 +113,13 @@ export default function MfaChallengePage() {
 
   async function handleResponse(r: Response) {
     if (r.ok) {
-      // Auth session cookie is now attached. Land on the home route — it
-      // runs post-login-route and forwards to the right destination.
-      router.replace('/');
+      // Auth session cookie is now attached. If the caller threaded a
+      // `next` param through (e.g. /super-admin/login forwards
+      // `next=/super-admin/dashboard` so platform operators don't get
+      // detoured through the tenant command-center), honor it. Otherwise
+      // land on the home route, which runs post-login-route and forwards
+      // to the right destination.
+      router.replace(safeNextDestination(router.query.next) ?? '/');
       return;
     }
     if (r.status === 429) {
@@ -250,6 +254,21 @@ export default function MfaChallengePage() {
       </div>
     </div>
   );
+}
+
+/**
+ * Accept a `next` query value only when it is a same-origin app path.
+ * Rejects absolute URLs, protocol-relative URLs, and anything not starting
+ * with a single `/` so an attacker can't craft `?next=https://evil.com`
+ * and ride the post-MFA redirect off-site.
+ */
+function safeNextDestination(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  let decoded: string;
+  try { decoded = decodeURIComponent(raw); } catch { return null; }
+  if (!decoded.startsWith('/') || decoded.startsWith('//')) return null;
+  return decoded;
 }
 
 function FactorTab(props: { active: boolean; onClick: () => void; label: string }) {

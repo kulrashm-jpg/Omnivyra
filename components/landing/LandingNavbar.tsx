@@ -6,6 +6,8 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { useCredits } from '../../hooks/useCredits';
+import { logoutCurrentSession } from '../../lib/security/sessionClient';
+import { clearBrowserAuthState } from '../../utils/authStorage';
 import { ChevronDown, LayoutDashboard, LogOut, User, Menu, X, Coins } from 'lucide-react';
 
 const LANDING_ROUTES = ['/', '/pricing', '/about', '/blog'];
@@ -45,7 +47,9 @@ export default function LandingNavbar() {
 
   const handleLogout = async () => {
     setIsSigningOut(true);
+    try { await logoutCurrentSession(); } catch { /* ignore server-side logout cleanup failures */ }
     try { await getSupabaseBrowser().auth.signOut(); } catch { /* already signed out */ }
+    clearBrowserAuthState({ preservePkce: false });
     window.location.href = '/login';
   };
 

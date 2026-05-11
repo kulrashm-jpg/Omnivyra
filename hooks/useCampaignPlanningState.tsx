@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/router';
+import { useCompanyContext } from '../components/CompanyContext';
 
 import { 
   ArrowLeft, 
@@ -31,6 +32,7 @@ import WeeklyRefinementInterface from '../components/WeeklyRefinementInterface';
 
 export function useCampaignPlanningState() {
   const router = useRouter();
+  const { user } = useCompanyContext();
   const [campaignData, setCampaignData] = useState({
     id: '',
     name: '',
@@ -117,6 +119,53 @@ export function useCampaignPlanningState() {
     const t = window.setTimeout(() => setNotice(null), 3200);
     return () => window.clearTimeout(t);
   }, [notice]);
+
+  // SECURITY: clear all server-fetched campaign state when the authenticated
+  // identity changes. Prevents the previous user's campaign drafts/AI outputs
+  // from being visible after a sign-out → sign-in in the same tab.
+  const previousUserIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const currentUserId = user?.userId ?? null;
+    const previousUserId = previousUserIdRef.current;
+    if (previousUserId && previousUserId !== currentUserId) {
+      setCampaignData({ id: '', name: '', timeframe: 'quarter', startDate: '', endDate: '', description: '', goals: [] });
+      setCampaignId(null);
+      setAiProgram(null);
+      setAiImprovements([]);
+      setAiImprovementsError(null);
+      setAiSuggestionContext(null);
+      setExpandedSuggestionIds(new Set());
+      setSelectedSuggestionIds(new Set());
+      setHasExistingPlan(false);
+      setPlanDescription('');
+      setStrategyStatus(null);
+      setReapprovalStatus(null);
+      setForecastVsActual(null);
+      setForecastError(null);
+      setOptimizationAdvice(null);
+      setOptimizationError(null);
+      setViralTopicMemory(null);
+      setViralTopicError(null);
+      setLeadConversionIntel(null);
+      setLeadIntelError(null);
+      setMomentumData(null);
+      setMomentumError(null);
+      setPlatformAdvice(null);
+      setPlatformAdviceError(null);
+      setRebalanceProposal(null);
+      setRebalanceStatus(null);
+      setRebalanceError(null);
+      setRecommendationContext(null);
+      setRecommendationHash(null);
+      setAlignedPreview(null);
+      setAlignedPreviewError(null);
+      setGroupedContext(null);
+      setPlanGenerationError(null);
+      setReviseError(null);
+      setNotice(null);
+    }
+    previousUserIdRef.current = currentUserId;
+  }, [user?.userId]);
 
   const isStrategyLocked = strategyStatus === 'approved';
   const isStrategyProposed = strategyStatus === 'proposed';
@@ -892,7 +941,7 @@ export function useCampaignPlanningState() {
       console.log('Setting campaign ID from URL:', id);
       setCampaignId(id);
       const companyId = typeof window !== 'undefined'
-        ? (new URLSearchParams(window.location.search).get('companyId') || window.localStorage.getItem('selected_company_id') || window.localStorage.getItem('company_id'))
+        ? (new URLSearchParams(window.location.search).get('companyId') || '')
         : undefined;
       const campaignsUrl = companyId
         ? `/api/campaigns?type=campaign&campaignId=${id}&companyId=${encodeURIComponent(companyId)}`

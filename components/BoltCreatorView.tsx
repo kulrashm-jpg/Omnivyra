@@ -13,6 +13,8 @@ import { BoltCampaignChat } from './bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from './BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
+import BoltPlatformPicker from './bolt/BoltPlatformPicker';
+import { isCrossPlatformShareableFormat } from '../lib/shared/bolt/crossPlatformSharing';
 
 type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -26,8 +28,8 @@ const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: str
 
 const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
 
-// Creator formats that appear on 2+ platforms in CONTENT_PLATFORM_AFFINITY — eligible for cross-platform sharing
-const FORMATS_SUPPORTING_CROSS_PLATFORM = new Set<CreatorContentFormat>(['video', 'reel', 'short', 'story', 'carousel']);
+// Round-7 Phase 2: cross-platform-sharing eligibility moved to
+// `lib/shared/bolt/crossPlatformSharing.ts` (single source of truth).
 
 const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: string; hint: string }[] = [
   { value: 'video',    label: 'Video',    icon: '🎬', hint: 'Long-form video content' },
@@ -376,6 +378,12 @@ export default function BoltCreatorView({ d }: { d: S }) {
     setSuggestionsLoading,
     setThemeSource,
     setTopic,
+    selectedPlatforms,
+    togglePlatform,
+    availablePlatforms,
+    platformHidden,
+    platformsLoading,
+    platformBlocked,
     sharingMode,
     showChat,
     sourceContentToken,
@@ -585,7 +593,7 @@ export default function BoltCreatorView({ d }: { d: S }) {
                   { value: 'unique' as SharingMode, label: 'Unique',     icon: '✦',  hint: 'Distinct content per platform' },
                   { value: 'ai'     as SharingMode, label: 'AI Decides', icon: '🤖', hint: 'AI checks format compatibility' },
                 ] as const).map((opt) => {
-                  const isSharedDisabled = opt.value === 'shared' && contentFormats.length > 0 && contentFormats.some((f) => !FORMATS_SUPPORTING_CROSS_PLATFORM.has(f));
+                  const isSharedDisabled = opt.value === 'shared' && contentFormats.length > 0 && contentFormats.some((f) => !isCrossPlatformShareableFormat(f));
                   return (
                     <button
                       key={opt.value}
@@ -605,11 +613,25 @@ export default function BoltCreatorView({ d }: { d: S }) {
                   );
                 })}
               </div>
-              {contentFormats.some((f) => !FORMATS_SUPPORTING_CROSS_PLATFORM.has(f)) && (
+              {contentFormats.some((f) => !isCrossPlatformShareableFormat(f)) && (
                 <p className="text-[10px] text-amber-600 mt-2 leading-snug">
-                  ⚠ {contentFormats.filter((f) => !FORMATS_SUPPORTING_CROSS_PLATFORM.has(f)).map((f) => f.charAt(0).toUpperCase() + f.slice(1)).join(', ')} {contentFormats.filter((f) => !FORMATS_SUPPORTING_CROSS_PLATFORM.has(f)).length === 1 ? 'does' : 'do'} not support cross-platform sharing — Shared mode is unavailable.
+                  ⚠ {contentFormats.filter((f) => !isCrossPlatformShareableFormat(f)).map((f) => f.charAt(0).toUpperCase() + f.slice(1)).join(', ')} {contentFormats.filter((f) => !isCrossPlatformShareableFormat(f)).length === 1 ? 'does' : 'do'} not support cross-platform sharing — Shared mode is unavailable.
                 </p>
               )}
+            </div>
+
+            {/* Platforms — capability-aware picker (Round-6: creator capability) */}
+            <div className="px-5 pt-4 pb-4 border-t border-gray-100">
+              <BoltPlatformPicker
+                accent="indigo"
+                loading={platformsLoading}
+                blocked={platformBlocked}
+                supported={availablePlatforms}
+                hidden={platformHidden ?? []}
+                selected={selectedPlatforms}
+                onToggle={togglePlatform}
+                emptyMessage="No creator-compatible platforms connected yet. Connect Instagram, TikTok, YouTube, or Facebook to target specific platforms."
+              />
             </div>
 
             {/* Campaign Start Date */}

@@ -20,11 +20,17 @@ import { categorizeError } from './errorRecoveryService';
 import { recordPostAnalytics } from './analyticsService';
 import { logActivity } from './activityLogger';
 import { checkAndCompleteCampaignIfEligible } from './CampaignCompletionService';
+import { validatePlatformContentCompatibility } from './platformContentValidator';
+import { logger } from './logger';
+import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
 
 export type PublishNowInput = {
   scheduled_post_id: string;
   social_account_id: string;
   user_id: string;
+  /** Identifies which surface invoked publishNow (api, queue, scheduler,
+   *  super-admin). Emitted in observability logs; never reaches the platform. */
+  publish_source?: string;
 };
 
 export type PublishNowResult = {
@@ -59,6 +65,49 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       external_post_id: scheduledPost.platform_post_id,
       post_url: scheduledPost.post_url,
       published_at: scheduledPost.published_at,
+      timestamp,
+    };
+  }
+
+  // Authoritative capability validation. Runs BEFORE adapter selection, account
+  // resolution, or any media upload — so queue workers, scheduled jobs, and
+  // super-admin/API callers all reject incompatible publishes at the same
+  // chokepoint. The API layer also validates; this is the lower-shared layer
+  // that guarantees coverage regardless of entry point.
+  const compatibility = validatePlatformContentCompatibility({
+    platform: scheduledPost.platform,
+    contentSignals: { contentType: scheduledPost.content_type },
+    payload: {
+      hasText: !!(scheduledPost.content && scheduledPost.content.trim().length > 0),
+      mediaUrls: scheduledPost.media_urls ?? [],
+    },
+  });
+  if (compatibility.ok === false) {
+    const failure = compatibility;
+    const eventName = failure.code === 'CAPABILITY_UNRESOLVED'
+      ? CAPABILITY_LOG_EVENTS.UNRESOLVED
+      : CAPABILITY_LOG_EVENTS.REJECTED;
+    const payload: CapabilityLogPayload = {
+      surface: 'publishNow',
+      publishSource: input.publish_source ?? 'unknown',
+      platform: failure.platform ?? scheduledPost.platform,
+      resolvedCapability: failure.capability,
+      contentType: scheduledPost.content_type,
+      code: failure.code,
+      scheduledPostId: scheduled_post_id,
+    };
+    logger.warn(eventName, payload);
+    const message = failure.message;
+    await updateScheduledPostOnFailure(scheduled_post_id, message);
+    await ownedDbTable('scheduled_posts')
+      .update({
+        error_code: failure.code,
+        error_message: message,
+      })
+      .eq('id', scheduled_post_id);
+    return {
+      status: 'FAILED',
+      message,
       timestamp,
     };
   }

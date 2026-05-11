@@ -15,6 +15,8 @@ import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
+import BoltPlatformPicker from '../../components/bolt/BoltPlatformPicker';
+import { useBoltPlatformPicker } from '../../hooks/useBoltPlatformPicker';
 
 type TextFormat    = 'post' | 'short_story' | 'article' | 'newsletter' | 'white_paper';
 type CreatorFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
@@ -283,6 +285,19 @@ export default function BoltCombinedStrategyPage() {
   const [themeSource, setThemeSource] = useState<ThemeSource>('hybrid');
   const [sharingMode, setSharingMode] = useState<SharingMode>('ai');
   const [campaignStartDate, setCampaignStartDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  // Round-6: capability-aware platform picker (strategy-mix = registry union;
+  // fail-closed on unknowns; emits canonical platform.capability.filtered log).
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const platformPicker = useBoltPlatformPicker(companyId, 'strategy-mix');
+  const togglePlatform = (p: string) =>
+    setSelectedPlatforms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  useEffect(() => {
+    if (platformPicker.loading || platformPicker.supported.length === 0) return;
+    setSelectedPlatforms((prev) => {
+      const filtered = prev.filter((p) => platformPicker.supported.includes(p));
+      return filtered.length > 0 ? filtered : platformPicker.supported;
+    });
+  }, [platformPicker.loading, platformPicker.supported]);
   const [outcomeView, setOutcomeView] = useState<OutcomeView>('week_plan');
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -745,6 +760,21 @@ export default function BoltCombinedStrategyPage() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Platforms — capability-aware picker (Round-6: strategy-mix = registry union) */}
+            <div className="px-5 pt-4 pb-4 border-t border-gray-100">
+              <BoltPlatformPicker
+                accent="violet"
+                loading={platformPicker.loading}
+                blocked={platformPicker.blocked}
+                supported={platformPicker.supported}
+                hidden={platformPicker.hidden}
+                selected={selectedPlatforms}
+                onToggle={togglePlatform}
+                hint="Strategy Mix targets every connected platform that's registered for publishing."
+                emptyMessage="No registered platforms connected yet. Connect your social accounts to enable Strategy Mix."
+              />
             </div>
 
             {/* Campaign Start Date */}

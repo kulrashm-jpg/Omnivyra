@@ -45,6 +45,7 @@ import {
   findCreditTransaction,
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
+import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 function fireAlerts(orgId: string): void {
@@ -146,6 +147,37 @@ export type ExecuteResult<T> =
   | { status: 'not_a_member'; userId: string; orgId: string }
   | { status: 'org_control_blocked'; code: 'ORG_BLOCKED' | 'HIGH_RISK_ACTION_GATED' | 'DAILY_LIMIT_EXCEEDED'; reason: string };
 
+export interface CreditReservationHandle {
+  orgId: string;
+  userId: string;
+  action: CreditAction;
+  referenceType: string;
+  referenceId: string;
+  idempotencyKey: string;
+  holdTransactionId: string;
+  creditsReserved: number;
+  split: CategorySplit;
+}
+
+export type CreditReservationResult =
+  | ({ status: 'reserved' | 'already_reserved' } & CreditReservationHandle)
+  | { status: 'already_confirmed' }
+  | { status: 'already_released' }
+  | { status: 'insufficient_credits'; available: number; required: number }
+  | { status: 'no_credit_account' }
+  | { status: 'not_a_member'; userId: string; orgId: string }
+  | { status: 'org_control_blocked'; code: 'ORG_BLOCKED' | 'HIGH_RISK_ACTION_GATED' | 'DAILY_LIMIT_EXCEEDED'; reason: string };
+
+export type CreditReservationSettlement =
+  | { status: 'confirmed'; confirmTransactionId: string | null; creditsCharged: number }
+  | { status: 'already_confirmed' }
+  | { status: 'already_released' };
+
+export type CreditReservationRelease =
+  | { status: 'released'; releaseTransactionId: string | null }
+  | { status: 'already_released' }
+  | { status: 'already_confirmed' };
+
 export interface CreateCreditOptions {
   orgId:           string;
   amount:          number;
@@ -193,6 +225,62 @@ function scaleSplitToActual(held: CategorySplit, actual: number): CategorySplit 
   return { free: freeA, incentive: incentiveA, paid: paidA };
 }
 
+function getReservationKeys(idempotencyKey: string): { holdKey: string; confirmKey: string; releaseKey: string } {
+  return {
+    holdKey: `${idempotencyKey}:hold`,
+    confirmKey: `${idempotencyKey}:confirm`,
+    releaseKey: `${idempotencyKey}:release`,
+  };
+}
+
+function assertCanonicalCreditAction(input: {
+  action: CreditAction;
+  referenceType: string;
+  referenceId: string;
+  orgId: string;
+  userId: string;
+}): NonNullable<ReturnType<typeof resolveMonetizationFeature>> {
+  const registryResolution = resolveMonetizationFeature({ action_key: input.action });
+  if (!registryResolution?.feature_key || !registryResolution.action_key || !registryResolution.pricing_key) {
+    logger.error('monetization_registry_unresolved_credit_action_hard_fail', {
+      action: input.action,
+      referenceType: input.referenceType,
+      referenceId: input.referenceId,
+      orgId: input.orgId,
+      userId: input.userId,
+      resolved: registryResolution
+        ? {
+            feature_key: registryResolution.feature_key,
+            action_key: registryResolution.action_key,
+            pricing_key: registryResolution.pricing_key,
+          }
+        : null,
+    });
+    void recordCostAnomaly({
+      organizationId: input.orgId,
+      type: 'unknown_action_key',
+      severity: 'critical',
+      actionKey: input.action,
+      metadata: {
+        reference_type: input.referenceType,
+        reference_id: input.referenceId,
+        user_id: input.userId,
+        reason: 'credit_execution_registry_hard_fail',
+      },
+    });
+    throw new Error(`[creditExecution] action "${input.action}" is not fully mapped in the monetization registry`);
+  }
+  if (registryResolution.action_key !== input.action) {
+    logger.warn('monetization_registry_legacy_action_alias_used', {
+      requested_action: input.action,
+      resolved_action: registryResolution.action_key,
+      feature_key: registryResolution.feature_key,
+      pricing_key: registryResolution.pricing_key,
+    });
+  }
+  return registryResolution;
+}
+
 // ── Core: executeWithCredits ───────────────────────────────────────────────────
 
 /**
@@ -214,10 +302,241 @@ function scaleSplitToActual(held: CategorySplit, actual: number): CategorySplit 
  * if (result.status === 'executed') return result.result;
  * ```
  */
+export async function reserveCreditsForWork(opts: {
+  userId: string;
+  orgId: string;
+  action: CreditAction;
+  referenceType: string;
+  referenceId: string;
+  idempotencyKey: string;
+  amountOverride?: number;
+  note?: string;
+  validateMembership?: boolean;
+}): Promise<CreditReservationResult> {
+  const { userId, orgId, action, referenceType, referenceId } = opts;
+  if (!opts.idempotencyKey || opts.idempotencyKey.trim() === '') {
+    throw new Error(`[creditReservation] MISSING idempotencyKey for action "${action}"`);
+  }
+  assertCanonicalCreditAction({ action, referenceType, referenceId, orgId, userId });
+
+  const shouldValidateMembership = opts.validateMembership !== false && userId !== orgId;
+  if (shouldValidateMembership) {
+    const { assertOrgMembership } = await import('./requestAccessService');
+    const isMember = await assertOrgMembership(userId, orgId);
+    if (!isMember) {
+      logger.warn('credit_tenant_violation', { userId, orgId, action });
+      return { status: 'not_a_member', userId, orgId };
+    }
+  }
+
+  const { holdKey, confirmKey, releaseKey } = getReservationKeys(opts.idempotencyKey);
+  const [existingConfirm, existingRelease, existingHold] = await Promise.all([
+    findCreditTransaction(confirmKey),
+    findCreditTransaction(releaseKey),
+    findCreditTransaction(holdKey),
+  ]);
+
+  if (existingConfirm) return { status: 'already_confirmed' };
+  if (existingRelease) return { status: 'already_released' };
+
+  const credits = opts.amountOverride ?? await getCreditCost(action);
+
+  const { preflightCheck } = await import('./orgControlService');
+  const verdict = await preflightCheck(orgId, credits);
+  if (verdict.allowed === false) {
+    const blocked = verdict as Extract<typeof verdict, { allowed: false }>;
+    logger.warn('credit_org_control_block', { orgId, action, code: blocked.code });
+    return { status: 'org_control_blocked', code: blocked.code, reason: blocked.reason };
+  }
+
+  if (existingHold) {
+    const split = await loadCreditHoldSplit(existingHold.id);
+    if (split) {
+      logger.info('credit_hold_reused_for_long_running_work', {
+        orgId,
+        action,
+        holdId: existingHold.id,
+        idempotencyKey: opts.idempotencyKey,
+      });
+      return {
+        status: 'already_reserved',
+        orgId,
+        userId,
+        action,
+        referenceType,
+        referenceId,
+        idempotencyKey: opts.idempotencyKey,
+        holdTransactionId: existingHold.id,
+        creditsReserved: split.free + split.incentive + split.paid,
+        split,
+      };
+    }
+  }
+
+  const { wallet, available, split } = await resolveDeduction(orgId, credits);
+  if (!wallet) {
+    logger.warn('credit_no_account', { orgId, action });
+    return { status: 'no_credit_account' };
+  }
+  if (!split || !available) {
+    logger.warn('credit_insufficient', { orgId, action, required: credits, available: available?.total ?? 0 });
+    fireAlerts(orgId);
+    return { status: 'insufficient_credits', available: available?.total ?? 0, required: credits };
+  }
+
+  const { error: holdErr, transactionId } = await callCreditReservation({
+    orgId,
+    phase: 'hold',
+    split,
+    idempotencyKey: holdKey,
+    referenceType,
+    referenceId,
+    note: `[HOLD] ${opts.note ?? action}`,
+    performedBy: userId,
+  });
+
+  if (holdErr) {
+    const msg = (holdErr as any).message ?? '';
+    if (msg.includes('insufficient')) {
+      fireAlerts(orgId);
+      return { status: 'insufficient_credits', available: 0, required: credits };
+    }
+    if (msg.includes('no_credit_account')) return { status: 'no_credit_account' };
+    logger.error('credit_hold_failed', { orgId, action, idempotencyKey: opts.idempotencyKey, message: msg });
+    throw new Error(`[creditReservation] hold failed: ${msg}`);
+  }
+  if (!transactionId) throw new Error('[creditReservation] hold failed: no transaction id returned');
+
+  return {
+    status: 'reserved',
+    orgId,
+    userId,
+    action,
+    referenceType,
+    referenceId,
+    idempotencyKey: opts.idempotencyKey,
+    holdTransactionId: transactionId,
+    creditsReserved: credits,
+    split,
+  };
+}
+
+export async function confirmCreditReservation(handle: CreditReservationHandle & {
+  note?: string;
+}): Promise<CreditReservationSettlement> {
+  const { confirmKey, releaseKey } = getReservationKeys(handle.idempotencyKey);
+  const [existingConfirm, existingRelease] = await Promise.all([
+    findCreditTransaction(confirmKey),
+    findCreditTransaction(releaseKey),
+  ]);
+  if (existingConfirm) return { status: 'already_confirmed' };
+  if (existingRelease) return { status: 'already_released' };
+
+  const { error: confirmErr, transactionId } = await callCreditReservation({
+    orgId: handle.orgId,
+    phase: 'confirm',
+    split: handle.split,
+    idempotencyKey: confirmKey,
+    referenceType: handle.referenceType,
+    referenceId: handle.referenceId,
+    note: handle.note ?? handle.action.replace(/_/g, ' '),
+    performedBy: handle.userId,
+    parentId: handle.holdTransactionId,
+  });
+  if (confirmErr) {
+    const msg = (confirmErr as any).message ?? '';
+    logger.error('credit_confirm_failed_for_long_running_work', {
+      orgId: handle.orgId,
+      action: handle.action,
+      idempotencyKey: handle.idempotencyKey,
+      message: msg,
+    });
+    throw new Error(`[creditReservation] confirm failed: ${msg}`);
+  }
+
+  const creditsCharged = handle.split.free + handle.split.incentive + handle.split.paid;
+  if (transactionId) {
+    await trackUsage({
+      orgId: handle.orgId,
+      userId: handle.userId,
+      action: handle.action,
+      credits: creditsCharged,
+      split: handle.split,
+      referenceType: handle.referenceType,
+      referenceId: handle.referenceId,
+      confirmTransactionId: transactionId,
+    });
+    void logUsageEvent({
+      organization_id: handle.orgId,
+      user_id: handle.userId,
+      source_type: 'internal',
+      source_name: 'credit_reservation',
+      process_type: handle.action,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      unit_cost: 0,
+      total_cost: 0,
+      total_cost_usd: 0,
+      final_price_usd: null,
+      error_flag: false,
+      retry_attempt: 1,
+      final_attempt: true,
+      credits_charged: creditsCharged,
+      reference_type: handle.referenceType,
+      reference_id: handle.referenceId,
+      metadata: {
+        hold_transaction_id: handle.holdTransactionId,
+        confirm_transaction_id: transactionId,
+        pricing_hold_credits: handle.creditsReserved,
+      },
+    });
+  }
+
+  return { status: 'confirmed', confirmTransactionId: transactionId, creditsCharged };
+}
+
+export async function releaseCreditReservation(handle: CreditReservationHandle & {
+  note?: string;
+}): Promise<CreditReservationRelease> {
+  const { confirmKey, releaseKey } = getReservationKeys(handle.idempotencyKey);
+  const [existingConfirm, existingRelease] = await Promise.all([
+    findCreditTransaction(confirmKey),
+    findCreditTransaction(releaseKey),
+  ]);
+  if (existingRelease) return { status: 'already_released' };
+  if (existingConfirm) return { status: 'already_confirmed' };
+
+  const { error: releaseErr, transactionId } = await callCreditReservation({
+    orgId: handle.orgId,
+    phase: 'release',
+    split: handle.split,
+    idempotencyKey: releaseKey,
+    referenceType: handle.referenceType,
+    referenceId: handle.referenceId,
+    note: `[RELEASE] ${handle.note ?? handle.action}`,
+    performedBy: handle.userId,
+    parentId: handle.holdTransactionId,
+  });
+  if (releaseErr) {
+    const msg = (releaseErr as any).message ?? '';
+    logger.error('credit_release_failed_for_long_running_work', {
+      orgId: handle.orgId,
+      action: handle.action,
+      idempotencyKey: handle.idempotencyKey,
+      message: msg,
+    });
+    throw new Error(`[creditReservation] release failed: ${msg}`);
+  }
+
+  return { status: 'released', releaseTransactionId: transactionId };
+}
+
 export async function executeWithCredits<T>(
   opts: ExecuteWithCreditsOptions<T>,
 ): Promise<ExecuteResult<T>> {
   const { userId, orgId, action, referenceType, referenceId, note, executor } = opts;
+  assertCanonicalCreditAction({ action, referenceType, referenceId, orgId, userId });
 
   // ── HARD FAIL: idempotencyKey is mandatory ─────────────────────────────────
   if (!opts.idempotencyKey || opts.idempotencyKey.trim() === '') {

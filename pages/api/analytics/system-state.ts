@@ -15,6 +15,7 @@ type TimelinePoint = {
 
 type OverviewMetric = {
   platformsConnected: number;
+  platformsReady: number;
   activeIntegrations: number;
   activeCampaigns: number;
   totalContentAssets: number;
@@ -211,9 +212,12 @@ function integrationMatches(row: GenericRow, patterns: string[]): boolean {
   const haystack = [
     row.type,
     row.name,
+    row.display_name,
+    row.provider_key,
     row.category,
     row.purpose,
     typeof row.config === 'object' ? JSON.stringify(row.config) : null,
+    typeof row.config_json === 'object' ? JSON.stringify(row.config_json) : null,
   ]
     .filter(Boolean)
     .join(' ')
@@ -323,8 +327,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const [
     companyIntegrations,
     socialAccounts,
-    externalApiSources,
-    externalApiHealth,
+    externalApiConnections,
     campaigns,
     campaignMetrics,
     scheduledPosts,
@@ -343,13 +346,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     fetchRows('company_integrations', 'id, type, name, status, config, last_tested_at, updated_at, last_error', (query) =>
       query.eq('company_id', companyId)
     ),
-    fetchRows('social_accounts', 'id, platform, is_active, last_sync_at, updated_at', (query) =>
+    fetchRows('social_accounts', 'id, platform, is_active, last_sync_at, updated_at, token_expires_at, access_token', (query) =>
       query.eq('company_id', companyId)
     ),
-    fetchRows('external_api_sources', 'id, name, category, purpose, is_active, company_id, updated_at', (query) =>
-      query.or(`company_id.eq.${companyId},company_id.is.null`)
+    fetchRows('external_api_connections', 'id, provider_key, display_name, category, auth_type, is_active, updated_at', (query) =>
+      query.eq('company_id', companyId)
     ),
-    fetchRows('external_api_health', 'api_source_id, last_test_status, last_test_at, last_error_message'),
     fetchRows('campaigns', 'id, status, created_at', (query) =>
       hasCampaigns ? query.in('id', campaignIds) : query.eq('id', ZERO_UUID)
     ),
@@ -394,19 +396,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const contentRows = contentPlans.length > 0 ? contentPlans : contentAssets;
   const activeUsers = new Set(companyUsers.map((row) => String(row.user_id ?? '').trim()).filter(Boolean)).size;
-  const activeSocialAccounts = socialAccounts.filter((row) => row.is_active === true);
+  const nowMs = now.getTime();
+  const isPostableSocialAccount = (row: GenericRow): boolean => {
+    if (row.is_active !== true) return false;
+    const accessToken = typeof row.access_token === 'string' ? row.access_token.trim() : '';
+    if (!accessToken) return false;
+    const expiresAtRaw = row.token_expires_at;
+    if (expiresAtRaw == null || expiresAtRaw === '') return false;
+    const expiresAtMs = new Date(String(expiresAtRaw)).getTime();
+    return Number.isFinite(expiresAtMs) && expiresAtMs > nowMs;
+  };
+  const readySocialAccounts = socialAccounts.filter(isPostableSocialAccount);
+  const platformsReady = readySocialAccounts.length;
 
-  const healthByApiSourceId = new Map<string, GenericRow>();
-  for (const row of externalApiHealth) {
-    const key = String(row.api_source_id ?? '').trim();
-    if (!key) continue;
-    const existing = healthByApiSourceId.get(key);
-    const existingDate = existing ? new Date(String(existing.last_test_at ?? 0)).getTime() : 0;
-    const currentDate = new Date(String(row.last_test_at ?? 0)).getTime();
-    if (!existing || currentDate >= existingDate) {
-      healthByApiSourceId.set(key, row);
-    }
-  }
+  const googleAnalyticsStatus = await getGoogleAnalyticsStatus(companyId).catch(() => null);
+  const googleAnalyticsConnected = googleAnalyticsStatus?.ready === true;
 
   const apis: IntegrationApi[] = [
     ...companyIntegrations.map((row) => ({
@@ -416,23 +420,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       status: classifyApiStatus(row),
       lastSyncAt: mostRecentDate(String(row.last_tested_at ?? ''), String(row.updated_at ?? '')),
     })),
-    ...externalApiSources.map((row) => {
-      const health = healthByApiSourceId.get(String(row.id ?? '').trim()) ?? {};
-      return {
-        id: String(row.id ?? Math.random()),
-        name: String(row.name ?? 'External API'),
-        category: String(row.category ?? row.purpose ?? 'other'),
-        status: classifyApiStatus({ ...row, ...health }),
-        lastSyncAt: mostRecentDate(String((health as GenericRow).last_test_at ?? ''), String(row.updated_at ?? '')),
-      };
-    }),
+    ...externalApiConnections.map((row) => ({
+      id: String(row.id ?? Math.random()),
+      name: String(row.display_name ?? row.provider_key ?? 'External API'),
+      category: String(row.category ?? 'other'),
+      status: classifyApiStatus(row),
+      lastSyncAt: mostRecentDate(String(row.updated_at ?? '')),
+    })),
+    ...(googleAnalyticsStatus?.integration
+      ? [{
+          id: `analytics:${googleAnalyticsStatus.integration.id}`,
+          name: 'Google Analytics',
+          category: 'analytics',
+          status: (googleAnalyticsConnected ? 'active' : googleAnalyticsStatus.integration.status === 'error' ? 'error' : 'disconnected') as HealthState,
+          lastSyncAt: mostRecentDate(googleAnalyticsStatus.integration.updated_at ?? null),
+        }]
+      : []),
   ].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
 
-  const googleAnalyticsStatus = await getGoogleAnalyticsStatus(companyId).catch(() => null);
-  const googleAnalyticsConnected = googleAnalyticsStatus?.ready === true;
   const crmConnected =
     companyIntegrations.some((row) => integrationMatches(row, ['hubspot', 'salesforce', 'pipedrive', 'zoho crm', 'crm'])) ||
-    externalApiSources.some((row) => integrationMatches(row, ['hubspot', 'salesforce', 'pipedrive', 'zoho crm', 'crm']));
+    externalApiConnections.some((row) => integrationMatches(row, ['hubspot', 'salesforce', 'pipedrive', 'zoho crm', 'crm']));
 
   const metricsByPlatform = campaignMetrics.reduce<Record<string, { engagementCount: number }>>((acc, row) => {
     const platform = String(row.platform ?? '').trim().toLowerCase();
@@ -454,13 +462,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const platformKeys = Array.from(new Set([
     ...Object.keys(postsByPlatform),
-    ...activeSocialAccounts.map((row) => String(row.platform ?? '').trim().toLowerCase()).filter(Boolean),
+    ...socialAccounts.map((row) => String(row.platform ?? '').trim().toLowerCase()).filter(Boolean),
   ])).sort();
 
   const platformState: IntegrationPlatform[] = platformKeys.map((platform) => {
-    const platformAccounts = activeSocialAccounts.filter((row) => String(row.platform ?? '').trim().toLowerCase() === platform);
+    const readyForPlatform = readySocialAccounts.filter((row) => String(row.platform ?? '').trim().toLowerCase() === platform);
     const allPlatformAccounts = socialAccounts.filter((row) => String(row.platform ?? '').trim().toLowerCase() === platform);
-    const status: HealthState = platformAccounts.length > 0 ? 'active' : allPlatformAccounts.length > 0 ? 'error' : 'disconnected';
+    const status: HealthState = readyForPlatform.length > 0 ? 'active' : allPlatformAccounts.length > 0 ? 'error' : 'disconnected';
     const platformPosts = postsByPlatform[platform] ?? [];
     const trend = buildTimeline(7, (dateKey) => {
       return platformPosts.filter((row) => {
@@ -595,7 +603,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       },
     },
     overview: {
-      platformsConnected: activeSocialAccounts.length,
+      platformsConnected: socialAccounts.length,
+      platformsReady,
       activeIntegrations: apis.filter((row) => row.status === 'active').length,
       activeCampaigns: campaignStatusCounts.active,
       totalContentAssets: contentRows.length,

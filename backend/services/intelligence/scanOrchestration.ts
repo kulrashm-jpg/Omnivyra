@@ -36,6 +36,12 @@ export type ScanQueueRecord = {
   enqueued_at: string;
   enqueued_by: TenantContext['actor'];
   started_at: string | null;
+  /** Worker currently holding the lease. */
+  worker_id: string | null;
+  /** Latest worker heartbeat while status === 'running'. */
+  heartbeat_at: string | null;
+  /** Number of failed runner attempts already made. */
+  attempt_count: number;
   completed_at: string | null;
   /** When the scan completed, the snapshot it produced is referenced here for traceability. */
   resulting_snapshot_observed_at: string | null;
@@ -117,6 +123,9 @@ export async function enqueueScan(params: {
     enqueued_at: new Date().toISOString(),
     enqueued_by: params.tenantContext.actor,
     started_at: null,
+    worker_id: null,
+    heartbeat_at: null,
+    attempt_count: 0,
     completed_at: null,
     resulting_snapshot_observed_at: null,
     failure_reason: null,
@@ -133,7 +142,7 @@ export async function enqueueScan(params: {
 export async function transitionScan(params: {
   tenantContext: TenantContext;
   scanId: string;
-  next: Partial<Pick<ScanQueueRecord, 'status' | 'started_at' | 'completed_at' | 'cancelled_reason' | 'failure_reason' | 'resulting_snapshot_observed_at'>>;
+  next: Partial<Pick<ScanQueueRecord, 'status' | 'started_at' | 'completed_at' | 'cancelled_reason' | 'failure_reason' | 'resulting_snapshot_observed_at' | 'worker_id' | 'heartbeat_at' | 'attempt_count'>>;
 }): Promise<ScanQueueRecord | null> {
   const prior = await activeScanQueueStore.byId(params.scanId);
   if (!prior) return null;

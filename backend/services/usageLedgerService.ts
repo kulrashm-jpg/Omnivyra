@@ -19,6 +19,12 @@ import {
 } from './pricingService';
 import { recordUnifiedTransaction } from './unifiedTransactionService';
 import { logger } from './logger';
+import {
+  getProcessTypeToActionKeyMap,
+  isKnownPricingKey,
+  resolveActionKeyFromProcessType,
+  resolveMonetizationFeature,
+} from '../../shared/monetization/featureRegistry';
 
 // Guardrail: any single request whose api_cost exceeds this threshold logs a
 // cost_anomalies row. Threshold is conservative — a well-behaved LLM call is
@@ -40,7 +46,7 @@ export async function calculateAiCost(
   if (!actionKey) {
     throw new Error(
       `[usageLedger.calculateAiCost] processType="${processType}" has no action_key mapping — ` +
-      'add it to PROCESS_TYPE_TO_ACTION_KEY in usageLedgerService.ts.',
+      'add it to shared/monetization/featureRegistry.ts.',
     );
   }
   const result = await _resolveLlmCostFromConfig({
@@ -78,7 +84,7 @@ export async function resolveLlmCost(params: {
   if (!actionKey) {
     throw new Error(
       `[usageLedger.resolveLlmCost] processType="${params.processType}" has no action_key mapping — ` +
-      'add it to PROCESS_TYPE_TO_ACTION_KEY in usageLedgerService.ts.',
+      'add it to shared/monetization/featureRegistry.ts.',
     );
   }
   try {
@@ -221,6 +227,8 @@ export async function logUsageEvent(params: {
   credits_charged?: number | null;
   reference_type?:  string | null;
   reference_id?:    string | null;
+  beta_cohort?: string | null;
+  monetization_beta_enabled?: boolean;
 }): Promise<void> {
   try {
     const attemptMeta =
@@ -375,6 +383,19 @@ export async function logUsageEvent(params: {
       });
     }
 
+    const betaTag = params.beta_cohort != null || params.monetization_beta_enabled != null
+      ? {
+          beta_cohort: params.beta_cohort ?? null,
+          monetization_beta_enabled: params.monetization_beta_enabled === true,
+        }
+      : await import('./monetizationBetaAccessService')
+        .then(({ getOrganizationBetaTag }) => getOrganizationBetaTag(params.organization_id))
+        .then((tag) => ({
+          beta_cohort: tag.beta_cohort,
+          monetization_beta_enabled: tag.monetization_beta_enabled,
+        }))
+        .catch(() => ({ beta_cohort: null, monetization_beta_enabled: false }));
+
     await ownedDbTable('usage_events').insert({
       organization_id: params.organization_id,
       campaign_id: params.campaign_id ?? null,
@@ -402,6 +423,8 @@ export async function logUsageEvent(params: {
       output_cost_usd: params.output_cost_usd ?? null,
       final_price_usd: params.final_price_usd ?? null,
       pricing_snapshot: params.pricing_snapshot ?? null,
+      beta_cohort: betaTag.beta_cohort,
+      monetization_beta_enabled: betaTag.monetization_beta_enabled,
       metadata: mergedMetadata,
     });
 
@@ -454,7 +477,7 @@ export async function logUsageEvent(params: {
 // their CreditAction equivalents; unknown values log a one-time warning.
 // Nothing is rejected — the goal is visibility, not enforcement (yet).
 
-const PROCESS_TYPE_TO_ACTION_KEY: Record<string, string> = {
+const LEGACY_PROCESS_TYPE_TO_ACTION_KEY: Record<string, string> = {
   // LLM completions (chat)
   generateCampaignPlan:            'campaign_generation',
   generateContentBlueprint:        'content_basic',
@@ -509,12 +532,12 @@ const _warnedUnknownProcessTypes = new Set<string>();
 
 function warnIfUnknownProcessType(processType: string): void {
   if (!processType) return;
-  if (PROCESS_TYPE_TO_ACTION_KEY[processType]) return;
+  if (resolveActionKey(processType)) return;
   if (_warnedUnknownProcessTypes.has(processType)) return;
   _warnedUnknownProcessTypes.add(processType);
   console.warn(
     `[usageLedger] unknown process_type='${processType}' — not mapped to a CreditAction. ` +
-    `Add it to PROCESS_TYPE_TO_ACTION_KEY in usageLedgerService.ts.`,
+    `Add it to shared/monetization/featureRegistry.ts.`,
   );
 }
 
@@ -524,5 +547,21 @@ function warnIfUnknownProcessType(processType: string): void {
  * "no billing mapping yet" rather than blocking the request.
  */
 export function resolveActionKey(processType: string): string | null {
-  return PROCESS_TYPE_TO_ACTION_KEY[processType] ?? null;
+  const canonicalActionKey =
+    resolveActionKeyFromProcessType(processType) ??
+    (isKnownPricingKey(processType) ? processType : null);
+
+  if (canonicalActionKey) return canonicalActionKey;
+
+  const legacyActionKey = LEGACY_PROCESS_TYPE_TO_ACTION_KEY[processType] ?? null;
+  if (legacyActionKey) {
+    logger.warn('monetization_registry_legacy_process_mapping_used', {
+      process_type: processType,
+      legacy_action_key: legacyActionKey,
+      canonical_feature_key: resolveMonetizationFeature({ action_key: legacyActionKey })?.feature_key ?? null,
+    });
+  }
+  return legacyActionKey;
 }
+
+export const PROCESS_TYPE_TO_ACTION_KEY: Record<string, string> = getProcessTypeToActionKeyMap();

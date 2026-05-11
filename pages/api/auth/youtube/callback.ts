@@ -143,14 +143,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           username: channel.snippet?.customUrl || null,
           profile_picture_url: channel.snippet?.thumbnails?.default?.url || null,
           is_active: true,
-          permissions: grantedScopes.length > 0 ? grantedScopes : [
-            'openid',
-            'email',
-            'profile',
-            'https://www.googleapis.com/auth/youtube',
-            'https://www.googleapis.com/auth/youtube.upload',
-            'https://www.googleapis.com/auth/youtube.force-ssl',
-          ],
+          // `permissions` removed — column not on social_accounts (schema drift).
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -169,14 +162,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           username: channel.snippet?.customUrl || null,
           profile_picture_url: channel.snippet?.thumbnails?.default?.url || null,
           is_active: true,
-          permissions: grantedScopes.length > 0 ? grantedScopes : [
-            'openid',
-            'email',
-            'profile',
-            'https://www.googleapis.com/auth/youtube',
-            'https://www.googleapis.com/auth/youtube.upload',
-            'https://www.googleapis.com/auth/youtube.force-ssl',
-          ],
+          // `permissions` removed — column not on social_accounts (schema drift).
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           access_token: encryptedCols.access_token,

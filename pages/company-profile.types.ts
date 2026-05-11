@@ -118,6 +118,7 @@ export type CompanyProfile = {
       solution_domains?: string[] | null;
       competitor_details?: Array<{
         name: string;
+        domain?: string | null;
         category?: string | null;
         tier?: string | null;
         score?: number | null;
@@ -132,6 +133,7 @@ export type CompanyProfile = {
       } | null;
       market_alternatives?: Array<{
         name: string;
+        domain?: string | null;
         category?: string | null;
         tier?: string | null;
         score?: number | null;
@@ -150,6 +152,22 @@ export type CompanyProfile = {
       preferred_regions?: string[] | null;
       updated_at?: string | null;
     } | null;
+    default_inputs?: {
+      company_name?: string | null;
+      website_domain?: string | null;
+      business_type?: string | null;
+      industry?: string | null;
+      geography?: string | null;
+      social_links?: string[] | null;
+      competitors?: string[] | null;
+    } | null;
+    industry_review?: {
+      conflict?: boolean | null;
+      user_industry?: string | null;
+      ai_suggested_industry?: string | null;
+      source?: string | null;
+      updated_at?: string | null;
+    } | null;
     intelligence?: {
       primary_objective?: string | null;
       primary_target_metric?: string | null;
@@ -158,7 +176,43 @@ export type CompanyProfile = {
       target_note?: string | null;
       updated_at?: string | null;
     } | null;
+    user_guidance?: UserGuidedIntelligence | null;
   } | null;
+};
+
+export type UserGuidedIntelligence = {
+  version?: number;
+  updated_at?: string | null;
+  competitors?: Array<{
+    name: string;
+    domain?: string | null;
+    state: 'user_added' | 'pinned' | 'rejected' | 'removed' | 'restored';
+    source?: string | null;
+    rationale?: string | null;
+    original_source?: string | null;
+    original_rank?: number | null;
+    competitor_intelligence?: any;
+    updated_at?: string | null;
+  }> | null;
+  messaging?: Partial<Record<
+    'positioning' | 'differentiation' | 'messaging' | 'audience_framing' | 'strategic_narrative' | 'authority_framing' | 'transformation_framing',
+    {
+      ai_value?: string | null;
+      approved_value?: string | null;
+      edited_value?: string | null;
+      status?: 'ai_suggested' | 'approved' | 'edited' | 'rejected' | 'regenerate_requested';
+      guidance?: string | null;
+      updated_at?: string | null;
+    }
+  >> | null;
+  guidance_notes?: Array<{
+    id: string;
+    text: string;
+    category?: string | null;
+    status?: 'active' | 'archived';
+    created_at?: string | null;
+  }> | null;
+  audit?: Array<{ action: string; target?: string | null; created_at?: string | null }> | null;
 };
 
 export type CompanyProfileRefinement = {
@@ -271,6 +325,7 @@ export const emptyProfile: CompanyProfile = {
       target_note: '',
       updated_at: null,
     },
+    user_guidance: null,
   },
 };
 

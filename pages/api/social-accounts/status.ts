@@ -182,7 +182,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const now = new Date().toISOString();
 
-  const result = SUPPORTED_PLATFORMS.map((p) => {
+  // Provider-taxonomy normalization: Threads is a Meta-family sub-feature
+  // that piggy-backs the Instagram OAuth handler (`authPath: '/api/auth/
+  // instagram'`). Internally it remains a routable provider for SUPER_ADMIN
+  // tooling, but Company Admin operators should not see it as a standalone
+  // connect option — connecting Instagram already provisions Threads. Pure
+  // response-layer filter: SUPPORTED_PLATFORMS is untouched, no DB rows
+  // mutated, OAuth handlers and refresh helpers continue to support
+  // platform='threads' for any internal/SUPER_ADMIN code path.
+  const HIDE_FROM_COMPANY_ADMIN = new Set(['threads']);
+  const isSuperAdminCaller = userRole === 'SUPER_ADMIN';
+  const visiblePlatforms = isSuperAdminCaller
+    ? SUPPORTED_PLATFORMS
+    : SUPPORTED_PLATFORMS.filter((p) => !HIDE_FROM_COMPANY_ADMIN.has(p.key));
+
+  const result = visiblePlatforms.map((p) => {
     const acc = accountMap[p.key] ?? null;
     const inactiveAcc = inactiveAccountMap[p.key] ?? null;
     const isThreads = p.key === 'threads';

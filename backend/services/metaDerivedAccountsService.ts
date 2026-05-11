@@ -129,6 +129,7 @@ async function upsertSocialAccount(input: {
   extraColumns: Record<string, unknown>;
   fallbackMetrics: Record<string, unknown>;
 }) {
+  // Strict find by platform_user_id.
   const baseQuery = ownedDbTable('social_accounts')
     .select('id')
     .eq('user_id', input.userId)
@@ -138,7 +139,30 @@ async function upsertSocialAccount(input: {
   if (input.companyId) baseQuery.eq('company_id', input.companyId);
   else baseQuery.is('company_id', null);
 
-  const { data: existing } = await baseQuery.maybeSingle();
+  let existing: { id: string } | null = null;
+  {
+    const { data } = await baseQuery.maybeSingle();
+    existing = data ? { id: data.id } : null;
+  }
+
+  // Relaxed fallback when strict miss: re-use the existing (user, company,
+  // platform) row regardless of platform_user_id drift. Meta sometimes
+  // returns a different Instagram Business id across reconnects (Page
+  // re-binding, business-portfolio change, IG account re-link), and we
+  // want one canonical IG row per tenant — not two stale rows where the
+  // older one is permanently is_active=false and shows "Not connected".
+  if (!existing) {
+    const relaxedQ = ownedDbTable('social_accounts')
+      .select('id')
+      .eq('user_id', input.userId)
+      .eq('platform', input.platform)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (input.companyId) relaxedQ.eq('company_id', input.companyId);
+    else relaxedQ.is('company_id', null);
+    const { data: relaxed } = await relaxedQ.maybeSingle();
+    if (relaxed?.id) existing = { id: relaxed.id };
+  }
   const encrypted = encryptTokenColumns(input.token);
   const common = {
     user_id: input.userId,
@@ -148,7 +172,7 @@ async function upsertSocialAccount(input: {
     account_name: input.accountName,
     username: input.username,
     is_active: true,
-    permissions: input.token.scope?.split(',').filter(Boolean) ?? [],
+    // `permissions` removed — column not on social_accounts (schema drift).
     token_expires_at: input.token.expires_at ?? null,
     last_sync_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),

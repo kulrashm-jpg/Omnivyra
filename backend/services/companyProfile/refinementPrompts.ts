@@ -4,7 +4,8 @@
  */
 
 import { runCompletionWithOperation } from '../aiGateway';
-import { CompanyProfile, CompanyProfileExtractionOutput } from './types';
+import { CompanyProfile, CompanyProfileExtractionOutput, EntityArchetypeIntelligence } from './types';
+import { buildArchetypePromptContext, isAudienceLedArchetype, isArchetypeInfluential } from './entityArchetype';
 
 export const cleanEvidenceWithAi = async (
   companyId: string | null,
@@ -56,8 +57,20 @@ export const cleanEvidenceWithAi = async (
 
 export const buildExtractionPrompt = (
   cleanedEvidence: Array<{ label: string; url: string; summary: string }>,
-  _currentProfile: CompanyProfile
+  _currentProfile: CompanyProfile,
+  archetype?: EntityArchetypeIntelligence | null,
 ) => {
+  const archetypeContext = buildArchetypePromptContext(archetype);
+  const audienceLedGuidance = isAudienceLedArchetype(archetype)
+    ? '\nArchetype guidance:\n' +
+      '- This entity appears audience-led, creator-led, thought-led, media-led, community-led, or hybrid.\n' +
+      '- Interpret "products/services" broadly as offers, formats, education products, advisory work, community access, media properties, tools, or recurring value surfaces.\n' +
+      '- Do not force SaaS-style positioning, rigid transactional funnels, or buyer-only ICP language when evidence points to readers, subscribers, learners, followers, members, or operators.\n' +
+      '- Preserve worldview, educational focus, audience relationship, and authority signals as useful profile context.\n'
+    : '';
+  const conservativeGuidance = archetype && !isArchetypeInfluential(archetype)
+    ? '\nArchetype guidance: low confidence. Stay close to conventional company extraction and do not over-adapt.\n'
+    : '';
   const systemPrompt =
     'You are a Company Profile Extraction Engine.\n\n' +
     'Extract structured business facts from the provided evidence (website + social profiles).\n\n' +
@@ -70,7 +83,10 @@ export const buildExtractionPrompt = (
     '- If evidence is insufficient, return null with source="missing".\n\n' +
     'For each field return:\n' +
     '{ values: string[] | string | null, source: "website" | "social" | "inferred" | "missing", confidence: "High" | "Medium" | "Low" }\n\n' +
-    'Output must be structured JSON only. No commentary.';
+    'Output must be structured JSON only. No commentary.' +
+    (archetypeContext ? `\n\nENTITY ARCHETYPE CONTEXT:\n${archetypeContext}` : '') +
+    audienceLedGuidance +
+    conservativeGuidance;
 
   const userPrompt =
     'Extract a structured Company Profile from the evidence below.\n\n' +
@@ -91,6 +107,7 @@ export const buildExtractionPrompt = (
     '- industry_list, category_list, geography_list, competitors_list, content_themes_list must be arrays.\n' +
     '- Do not return empty arrays if evidence exists.\n' +
     '- If multiple industries or geographies apply, include all.\n\n' +
+    (archetypeContext ? `Entity archetype context:\n${archetypeContext}\n\n` : '') +
     'Evidence:\n' +
     JSON.stringify(cleanedEvidence);
 

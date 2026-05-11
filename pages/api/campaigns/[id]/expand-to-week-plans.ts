@@ -3,6 +3,7 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
 import { blueprintWeeksToLegacyRefinements } from '../../../../backend/services/campaignBlueprintAdapter';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 
 /**
  * POST /api/campaigns/[id]/expand-to-week-plans
@@ -18,6 +19,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Campaign ID required' });
   }
+
+  // SECURITY: enforce caller has access to this campaign's company before mutating.
+  const access = await requireCampaignAccess(req, res, id);
+  if (!access) return;
 
   const campaignId = id;
 

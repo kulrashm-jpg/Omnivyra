@@ -9,11 +9,13 @@
  * incrementally.
  */
 
-import type { NextApiResponse } from 'next';
+import type { NextApiRequest, NextApiResponse } from 'next';
 import { evaluateStepUp } from './StepUpAuthorizationService';
 import { getStepUpPolicy } from './stepup/StepUpPolicyRegistry';
 import { logSecurityEvent } from './audit/SecurityAuditService';
 import { respondDenied } from './AuthorizationService';
+import { correlationIdFor } from './correlationId';
+import { authModeFor } from './authMode';
 import type {
   AuthenticatedPrincipal,
   Capability,
@@ -32,10 +34,13 @@ export interface RequireStepUpOptions {
  * written (401 with `STEP_UP_REQUIRED` code) and the caller MUST early-return.
  */
 export async function requireStepUp(
+  req: NextApiRequest,
   res: NextApiResponse,
   principal: AuthenticatedPrincipal,
   options: RequireStepUpOptions,
 ): Promise<boolean> {
+  const correlationId = correlationIdFor(req);
+  const authMode = authModeFor(principal);
   const policy = options.policyOverride ?? getStepUpPolicy(options.capability);
   if (!policy) {
     // Capability has no registered step-up policy. By convention this is
@@ -44,17 +49,21 @@ export async function requireStepUp(
     await logSecurityEvent({
       capability: options.capability,
       decision: 'stepup_required',
-      reason: `${options.reason} | no policy registered`,
+      reason: `${options.reason} | no policy registered | corr=${correlationId}`,
       actorUserId: principal.userId,
       actorSessionId: principal.sessionId,
       principalUserId: principal.userId,
       principalSupabaseUid: principal.supabaseUid,
       viaLegacyBridge: principal.legacyCookieSuperAdmin,
     });
+    res.setHeader('x-omnivyra-correlation-id', correlationId);
     res.status(401).json({
       error: 'Step-up authentication required (no policy registered)',
       code: 'STEP_UP_REQUIRED',
       capability: options.capability,
+      correlationId,
+      authMode,
+      stepUpStatus: principal.legacyCookieSuperAdmin ? 'not_applicable' : 'required',
     });
     return false;
   }
@@ -68,7 +77,7 @@ export async function requireStepUp(
       actorSessionId: principal.sessionId,
       principalUserId: principal.userId,
       principalSupabaseUid: principal.supabaseUid,
-      reason: options.reason,
+      reason: `${options.reason} | corr=${correlationId}`,
       stepupActive: principal.stepUp.active,
       stepupFactor: principal.stepUp.factor,
       mfaPhishingResistant: principal.mfa.phishingResistant,
@@ -86,7 +95,7 @@ export async function requireStepUp(
     actorSessionId: principal.sessionId,
     principalUserId: principal.userId,
     principalSupabaseUid: principal.supabaseUid,
-    reason: `${options.reason} | ${decision.reason}`,
+    reason: `${options.reason} | ${decision.reason} | corr=${correlationId}`,
     stepupActive: principal.stepUp.active,
     stepupFactor: principal.stepUp.factor,
     mfaPhishingResistant: principal.mfa.phishingResistant,
@@ -94,10 +103,18 @@ export async function requireStepUp(
     viaLegacyBridge: principal.legacyCookieSuperAdmin,
   });
 
-  respondDenied(res, {
-    allowed: false,
-    reason: 'STEP_UP_REQUIRED',
-    capability: options.capability,
-  });
+  respondDenied(
+    res,
+    {
+      allowed: false,
+      reason: 'STEP_UP_REQUIRED',
+      capability: options.capability,
+    },
+    {
+      correlationId,
+      authMode,
+      stepUpStatus: principal.legacyCookieSuperAdmin ? 'not_applicable' : 'required',
+    },
+  );
   return false;
 }

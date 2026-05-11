@@ -27,6 +27,8 @@ import {
 import { resolvePrincipal } from './IdentityResolver';
 import { getStepUpPolicy } from './stepup/StepUpPolicyRegistry';
 import { logSecurityEvent } from './audit/SecurityAuditService';
+import { correlationIdFor } from './correlationId';
+import { authModeFor, stepUpStatusFor } from './authMode';
 import {
   STEP_UP_REQUIRED_CAPABILITIES,
   type AuthenticatedPrincipal,
@@ -79,19 +81,28 @@ export async function requireCapability(
   res: NextApiResponse,
   options: RequireCapabilityOptions,
 ): Promise<RequireCapabilityResult> {
+  const correlationId = correlationIdFor(req);
   const principalResult = await resolvePrincipal(req);
   if (principalResult.ok !== true) {
     // Audit the unauth attempt against the capability so denied-while-unauth shows up.
     await logSecurityEvent({
       capability: options.capability,
       decision: 'capability_check_failed',
-      reason: `unauthenticated: ${principalResult.reason}`,
+      reason: `unauthenticated: ${principalResult.reason} | corr=${correlationId}`,
       organizationId: options.organizationId ?? null,
       resourceId: options.resourceId ?? null,
       ip: clientIp(req),
       userAgent: userAgent(req),
     });
-    res.status(401).json({ error: 'Authorization required', code: 'NOT_AUTHENTICATED' });
+    res.setHeader('x-omnivyra-correlation-id', correlationId);
+    res.status(401).json({
+      error: 'Authorization required',
+      code: 'NOT_AUTHENTICATED',
+      capability: options.capability,
+      correlationId,
+      authMode: 'unauthenticated' as const,
+      stepUpStatus: 'not_applicable' as const,
+    });
     return { ok: false, sent: true };
   }
 
@@ -170,7 +181,7 @@ export async function requireCapability(
       await logSecurityEvent({
         capability: options.capability,
         decision: 'elevated_route_denied',
-        reason: `${options.reason} | ${denied.reason}`,
+        reason: `${options.reason} | ${denied.reason} | corr=${correlationId}`,
         actorUserId: principal.userId,
         actorSessionId: principal.sessionId,
         principalUserId: principal.userId,
@@ -182,7 +193,11 @@ export async function requireCapability(
         userAgent: ua,
       });
     }
-    respondDenied(res, denied);
+    respondDenied(res, denied, {
+      correlationId,
+      authMode: authModeFor(principal),
+      stepUpStatus: stepUpStatusFor(principal, true, denied.reason !== 'STEP_UP_REQUIRED'),
+    });
     return { ok: false, sent: true };
   }
 
@@ -199,7 +214,7 @@ export async function requireCapability(
   await logSecurityEvent({
     capability: options.capability,
     decision: 'capability_check_failed',
-    reason: `${options.reason} | ${deniedFlat.reason}`,
+    reason: `${options.reason} | ${deniedFlat.reason} | corr=${correlationId}`,
     actorUserId: principal.userId,
     actorSessionId: principal.sessionId,
     principalUserId: principal.userId,
@@ -210,7 +225,11 @@ export async function requireCapability(
     ip,
     userAgent: ua,
   });
-  respondDenied(res, deniedFlat);
+  respondDenied(res, deniedFlat, {
+    correlationId,
+    authMode: authModeFor(principal),
+    stepUpStatus: stepUpStatusFor(principal, false, false),
+  });
   return { ok: false, sent: true };
 }
 

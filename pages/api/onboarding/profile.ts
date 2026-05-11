@@ -14,6 +14,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
+import { selectCompatibleCompanyRole } from '../../../backend/services/companyMembershipIntegrityService';
 
 type SuccessResponse = { success: true; route: string };
 type ErrorResponse   = { error: string; code?: string };
@@ -60,15 +61,29 @@ export default async function handler(
 
   // ── 3. Determine next route ───────────────────────────────────────────────
   // After profile completion, user needs to set up or join a company
-  const { data: roleRow } = await supabase
+  const { data: roleRows } = await supabase
     .from('user_company_roles')
-    .select('company_id')
+    .select('company_id, join_source, created_at')
     .eq('user_id', user.id)
     .eq('status', 'active')
-    .limit(1)
-    .maybeSingle();
+    .order('created_at', { ascending: false });
 
-  const route = roleRow ? await getUserPreferenceRoute(user.id) : '/onboarding/company';
+  const rawRows = (roleRows as Array<{ company_id?: string | null; join_source?: string | null }> | null) ?? [];
+  const companyIds = Array.from(new Set(rawRows.map((row) => row.company_id).filter(Boolean) as string[]));
+  const { data: companyRows } = companyIds.length
+    ? await supabase
+        .from('companies')
+        .select('id, website_domain, admin_email_domain')
+        .in('id', companyIds)
+    : { data: [] as any[] };
+  const companyById = new Map((companyRows || []).map((row: any) => [String(row.id), row]));
+  const compatibleRole = selectCompatibleCompanyRole({
+    rows: rawRows,
+    companyById,
+    userEmail: user.email ?? null,
+  });
+
+  const route = compatibleRole ? await getUserPreferenceRoute(user.id) : '/onboarding/company';
 
   return res.status(200).json({ success: true, route });
 }

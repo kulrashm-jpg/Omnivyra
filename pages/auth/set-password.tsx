@@ -19,8 +19,10 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
+import { clearBrowserAuthState } from '../../utils/authStorage';
 
 type Stage = 'loading' | 'form' | 'success' | 'error';
+const AUTH_FLOW_SESSION_MARKER = 'auth_flow_session_established_v1';
 
 export default function SetPasswordPage() {
   const router = useRouter();
@@ -50,6 +52,7 @@ export default function SetPasswordPage() {
       // ── 1. Check for hash-fragment tokens (implicit flow: #access_token=…) ──
       const hash = window.location.hash;
       if (hash && hash.includes('access_token')) {
+        clearBrowserAuthState({ preservePkce: false });
         const hp = new URLSearchParams(hash.substring(1));
         const at = hp.get('access_token');
         const rt = hp.get('refresh_token');
@@ -66,6 +69,7 @@ export default function SetPasswordPage() {
 
       // ── 2. PKCE code exchange (legacy/fallback) ──
       if (code) {
+        clearBrowserAuthState({ preservePkce: true });
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);
         if (!error && data.session) {
           setUserEmail(data.session.user.email ?? '');
@@ -74,14 +78,25 @@ export default function SetPasswordPage() {
         }
       }
 
-      // ── 3. Existing session (e.g. came via /auth/callback) ──
-      const { data } = await supabase.auth.getSession();
-      if (data.session) {
+      // ── 3. Existing session is allowed only when /auth/callback just
+      // established it from a verification token in this tab.
+      const marker = (() => {
+        try { return window.sessionStorage.getItem(AUTH_FLOW_SESSION_MARKER); } catch { return null; }
+      })();
+      if (marker === '1') {
+        const { data } = await supabase.auth.getSession();
+        if (!data.session?.user?.id) {
+          clearBrowserAuthState({ preservePkce: false });
+          setError('Link expired or already used. Please request a new one.');
+          setStage('error');
+          return;
+        }
         setUserEmail(data.session.user.email ?? '');
         setStage('form');
         return;
       }
 
+      clearBrowserAuthState({ preservePkce: false });
       setError('Link expired or already used. Please request a new one.');
       setStage('error');
     }
@@ -122,6 +137,7 @@ export default function SetPasswordPage() {
     }
 
     setStage('success');
+    try { window.sessionStorage.removeItem(AUTH_FLOW_SESSION_MARKER); } catch { /* ignore */ }
     setTimeout(() => router.replace(route), 1200);
   }
 

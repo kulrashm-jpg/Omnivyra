@@ -113,6 +113,8 @@ export class ScanWorker {
           status: 'completed',
           completed_at: new Date().toISOString(),
           resulting_snapshot_observed_at: result.snapshot_observed_at,
+          worker_id: null,
+          heartbeat_at: null,
         },
       });
       await publishScanProgress({
@@ -137,6 +139,8 @@ export class ScanWorker {
             status: 'failed',
             failure_reason: reason,
             completed_at: new Date().toISOString(),
+            worker_id: null,
+            heartbeat_at: null,
           },
         });
         await publishScanProgress({
@@ -172,7 +176,12 @@ export class ScanWorker {
         await transitionScan({
           tenantContext,
           scanId: scan.id,
-          next: { status: 'queued', failure_reason: 'recovered from stale heartbeat' },
+          next: {
+            status: 'queued',
+            failure_reason: 'recovered from stale heartbeat',
+            worker_id: null,
+            heartbeat_at: null,
+          },
         });
         recovered += 1;
       }
@@ -187,7 +196,7 @@ export class ScanWorker {
   }
 
   private async requeue(scan: ScanQueueRecord, reason: string): Promise<void> {
-    await this.store.update({ ...scan, status: 'queued', failure_reason: reason });
+    await this.store.update({ ...scan, status: 'queued', failure_reason: reason, worker_id: null, heartbeat_at: null });
   }
 
   private scheduleHeartbeat(scan: ScanQueueRecord): void {

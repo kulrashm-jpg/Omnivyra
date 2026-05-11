@@ -22,6 +22,8 @@ import {
 import { sanitizeReportViewPayload } from '../../../backend/services/reportContentSanitizationService';
 import {
   startAsyncReportGeneration,
+  MAX_REPORT_GENERATION_ATTEMPTS,
+  REPORT_RETRY_COOLDOWN_MINUTES,
   type ReportRecord,
 } from '../../../backend/services/reportCardService';
 import { keepAliveAfterResponse } from '../../../lib/runtime/keepAlive';
@@ -79,7 +81,56 @@ function buildGeneratingPayload(
   };
 }
 
+/**
+ * LIFECYCLE OWNER — sole entry point for re-running a previously-completed
+ * report row. Counts as one of the approved lifecycle services alongside
+ * createReport / updateReportStatus / updateReportHeartbeat /
+ * recoverStaleGeneratingReports.
+ *
+ * Invariants:
+ *   - The flip back to `generating` is gated by `.eq('status','completed')`
+ *     so a row that has already been requeued (by a concurrent request) is
+ *     not re-flipped twice.
+ *   - Resets `started_at` and `last_heartbeat_at` to `now` so the recovery
+ *     reaper does not immediately reap the freshly-requeued row.
+ *   - Bumps `attempt_count` and applies the same retry-ceiling +
+ *     cooldown-decay rule as createReport. Inside the cooldown window the
+ *     requeue is skipped (no row mutation, no generation kicked off).
+ *
+ * DO NOT write a parallel "re-run" path in another module. Extend or call
+ * this function instead.
+ */
 async function requeueIncompleteReport(report: ReportApiRow): Promise<void> {
+  // Phase 4 + cooldown decay: enforce retry ceiling on requeue. Missing/null
+  // attempt_count (legacy rows) is treated as 1.
+  const currentAttempts =
+    typeof (report as { attempt_count?: number | null }).attempt_count === 'number'
+      ? ((report as { attempt_count?: number | null }).attempt_count as number)
+      : 1;
+
+  let nextAttempts = currentAttempts + 1;
+  if (currentAttempts >= MAX_REPORT_GENERATION_ATTEMPTS) {
+    // Cooldown decay: use the row's own `updated_at` as the anchor.
+    const updatedAtIso = (report as { updated_at?: string | null }).updated_at;
+    const lastUpdatedMs = updatedAtIso ? new Date(updatedAtIso).getTime() : 0;
+    const cooldownExpiresAtMs = lastUpdatedMs + REPORT_RETRY_COOLDOWN_MINUTES * 60_000;
+    if (Date.now() < cooldownExpiresAtMs) {
+      console.warn(
+        '[reports/[reportId]] requeue skipped: attempt_count',
+        currentAttempts,
+        '>= MAX_REPORT_GENERATION_ATTEMPTS',
+        MAX_REPORT_GENERATION_ATTEMPTS,
+        '(cooldown active until',
+        new Date(cooldownExpiresAtMs).toISOString(),
+        ') for report',
+        report.id,
+      );
+      return;
+    }
+    // Cooldown expired → natural reset.
+    nextAttempts = 1;
+  }
+
   const now = new Date().toISOString();
   const { error } = await supabase
     .from('reports')
@@ -87,6 +138,11 @@ async function requeueIncompleteReport(report: ReportApiRow): Promise<void> {
       status: 'generating',
       updated_at: now,
       started_at: now,
+      // Phase 1: anchor heartbeat to requeue moment so the reaper does not
+      // immediately reap a freshly requeued row.
+      last_heartbeat_at: now,
+      // Phase 4: bump or reset attempt counter per cooldown decision above.
+      attempt_count: nextAttempts,
       completed_at: null,
       error_message: null,
     })
@@ -154,28 +210,31 @@ export default async function handler(
   }
   const type = rawType as ValidReportType;
 
-  // Fetch the report record — confirm ownership via company membership
+  // SECURITY: filter the report query by the caller's accessible companies up
+  // front. Returning the same 404 for nonexistent and forbidden ids prevents
+  // enumeration of report uuids across the tenant boundary.
+  const { data: membershipRows } = await supabase
+    .from('user_company_roles')
+    .select('company_id')
+    .eq('user_id', user.id)
+    .eq('status', 'active');
+  const accessibleCompanyIds = (membershipRows ?? [])
+    .map((row) => (row as { company_id?: string | null }).company_id)
+    .filter((cid): cid is string => Boolean(cid));
+
+  if (accessibleCompanyIds.length === 0) {
+    return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });
+  }
+
   const { data: report, error: reportError } = await supabase
     .from('reports')
     .select('id, company_id, user_id, domain, report_type, status, created_at, data, metadata')
     .eq('id', reportId)
+    .in('company_id', accessibleCompanyIds)
     .maybeSingle();
 
   if (reportError || !report) {
     return res.status(404).json({ error: 'Report not found', code: 'NOT_FOUND' });
-  }
-
-  // Confirm the requesting user belongs to this company
-  const { data: membership } = await supabase
-    .from('user_company_roles')
-    .select('company_id')
-    .eq('user_id', user.id)
-    .eq('company_id', report.company_id)
-    .eq('status', 'active')
-    .maybeSingle();
-
-  if (!membership) {
-    return res.status(403).json({ error: 'Access denied', code: 'ACCESS_DENIED' });
   }
 
   // Still generating — return status so the view page shows the spinner

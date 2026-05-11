@@ -29,7 +29,12 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
   linkedin:  { label: 'LinkedIn',  authUrl: 'https://www.linkedin.com/oauth/v2/authorization', tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken', scopes: ['openid','profile','email','w_member_social'] },
   x:         { label: 'X', authUrl: 'https://twitter.com/i/oauth2/authorize', tokenUrl: 'https://api.twitter.com/2/oauth2/token', scopes: ['tweet.read','tweet.write','users.read','like.write','follows.write','offline.access'] },
   youtube:   { label: 'YouTube',   authUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token', scopes: ['openid','email','profile','https://www.googleapis.com/auth/youtube','https://www.googleapis.com/auth/youtube.upload','https://www.googleapis.com/auth/youtube.force-ssl'] },
-  facebook:  { label: 'Meta (Facebook · Instagram · WhatsApp)', authUrl: 'https://www.facebook.com/v22.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token', scopes: ['pages_show_list','pages_read_engagement','pages_manage_posts','pages_manage_engagement','instagram_basic','instagram_manage_comments','instagram_manage_insights','instagram_content_publish','whatsapp_business_management','whatsapp_business_messaging','public_profile'] },
+  // Facebook-only scopes. Instagram/WhatsApp share the same Meta App but
+  // are connected through their own surfaces with their own provider-
+  // specific scope sets (see /api/community-ai/connectors/meta/auth.ts).
+  // Mixing them here used to produce "Invalid Scopes" rejections from
+  // Meta when Instagram products weren't fully provisioned on the app.
+  facebook:  { label: 'Meta (Facebook)', authUrl: 'https://www.facebook.com/v22.0/dialog/oauth', tokenUrl: 'https://graph.facebook.com/v22.0/oauth/access_token', scopes: ['pages_show_list','pages_read_engagement','pages_manage_posts','pages_manage_engagement','business_management','public_profile'] },
   tiktok:    { label: 'TikTok',   authUrl: 'https://www.tiktok.com/auth/authorize/', tokenUrl: 'https://open-api.tiktok.com/oauth/access_token/', scopes: ['user.info.basic','video.list'] },
   pinterest: { label: 'Pinterest', authUrl: 'https://www.pinterest.com/oauth/', tokenUrl: 'https://api.pinterest.com/v5/oauth/token', scopes: ['boards:read','pins:read','pins:write'] },
   reddit:        { label: 'Reddit',         authUrl: 'https://www.reddit.com/api/v1/authorize', tokenUrl: 'https://www.reddit.com/api/v1/access_token', scopes: ['identity','submit','read'] },
@@ -44,9 +49,23 @@ const PLATFORM_DEFAULTS: Record<string, { label: string; authUrl: string; tokenU
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Split the gate by method. GET returns metadata only (which platforms
+  // are configured, the enabled flag, the 6-char client_id preview, and
+  // updated_at) — no secret material is decrypted into the response, so
+  // requiring step-up to *list* would block the operator from seeing
+  // their own configuration on every page load. The legacy env-var
+  // SUPER_ADMIN runtime didn't gate this read on step-up, which is why
+  // configs appeared "deleted" the moment the bridge was retired: GETs
+  // started returning 401 STEP_UP_REQUIRED before any rows could be
+  // serialised. POST and DELETE keep the full step-up requirement
+  // because they mutate credential material.
+  const requireStepUp = req.method !== 'GET';
   const guard = await requireCapability(req, res, {
     capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
-    reason: 'platform OAuth credential admin',
+    reason: req.method === 'GET'
+      ? 'platform OAuth credential admin (read)'
+      : 'platform OAuth credential admin',
+    requireStepUp,
   });
   if (guard.ok !== true) return;
 

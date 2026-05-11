@@ -1,30 +1,61 @@
 /**
  * POST /api/admin/bootstrap-super-admin
  *
- * Establishes the canonical DB-backed SUPER_ADMIN authority. Two modes:
+ * Establishes the canonical DB-backed SUPER_ADMIN authority. Three modes:
  *
  *   mode='promote' — an existing SUPER_ADMIN promotes another user.
  *     Body: { mode: 'promote', targetUserId: string, organizationId?: string }
  *     Auth: requireCapability(IDENTITY_ADMIN_ASSIGN) — phishing-resistant
  *           step-up + trusted device.
  *
- *   mode='bootstrap' — first SUPER_ADMIN, when NONE exists.
+ *   mode='bootstrap' — first SUPER_ADMIN, self-promote when NONE exists.
  *     Body: { mode: 'bootstrap', bootstrapToken: string, organizationId?: string }
  *     Auth: caller must be authenticated (Bearer/cookie via IdentityResolver),
  *           non-bridge, have a passkey enrolled, AND have an active
- *           phishing-resistant step-up session.
- *           bootstrapToken must equal env SUPER_ADMIN_BOOTSTRAP_TOKEN
- *           (timing-safe compare). The token is single-use by design:
- *           after a SUPER_ADMIN row exists, mode='bootstrap' is
- *           permanently disabled and cannot resurrect (the existence
- *           check is the lock).
+ *           phishing-resistant step-up session. Use this when an existing
+ *           Supabase user already has a passkey + step-up.
+ *
+ *   mode='env-credential' — Phase 2 first-deploy bootstrap.
+ *     Body: { mode: 'env-credential', bootstrapToken: string,
+ *             username: string, password: string,
+ *             targetUserId: string, organizationId?: string,
+ *             mintCanonicalSession?: boolean }
+ *     Auth: env SUPER_ADMIN_USERNAME/PASSWORD + SUPER_ADMIN_BOOTSTRAP_TOKEN.
+ *           NO calling principal required — this is the path used at
+ *           initial deployment when no canonical SUPER_ADMIN exists yet
+ *           and the operator has only the env shared secret.
+ *
+ *           targetUserId MUST point to an EXISTING users row. This route
+ *           never creates users — it only attaches the SUPER_ADMIN role
+ *           to a chosen real account. After success the operator must:
+ *             1. Set SUPER_ADMIN_PRIMARY_USER_ID env to the new user's id.
+ *             2. Have the user log in via Supabase + enroll a passkey.
+ *             3. Unset SUPER_ADMIN_BOOTSTRAP_TOKEN.
+ *
+ *           When mintCanonicalSession=true, ALSO mints an omnivyra_session
+ *           cookie for the target user so a one-shot operator can
+ *           immediately access /super-admin without bouncing through
+ *           Supabase login. The cookie is bound to the target user, not
+ *           the env identity.
  *
  * Hard-expiry: SUPER_ADMIN_BOOTSTRAP_TOKEN env var should be unset after
  * the first successful bootstrap. The route emits a deprecation warning
  * if the token env var is still present alongside an existing SUPER_ADMIN.
  *
+ * Replay protection:
+ *   - Single-use lock: after ANY SUPER_ADMIN row exists, all bootstrap-
+ *     creating modes ('bootstrap', 'env-credential') return
+ *     BOOTSTRAP_ALREADY_CONSUMED. The DB row is the lock.
+ *   - Token compare is timing-safe.
+ *   - Every attempt — success or failure — writes a capability_audit_log
+ *     row (decision='super_admin_bootstrap_started' / '_completed' /
+ *     '_denied') with IP + UA so attempts are observable.
+ *   - In-memory rate limit on env-credential mode: 5 failures per minute
+ *     per IP triggers a temporary 429.
+ *
  * Rules:
- *   - NEVER auto-promote silently — both modes are explicit operator actions.
+ *   - NEVER auto-promote silently — every mode is an explicit operator action.
+ *   - NEVER create users — env-credential mode requires a pre-existing users row.
  *   - Bridge principals (legacy super_admin_session cookie) cannot self-promote.
  *   - Capability-based assignment only — direct DB writes are gated by this route.
  *   - Audit linkage mandatory.
@@ -40,6 +71,11 @@ import { evaluateStepUp } from '../../../backend/security/StepUpAuthorizationSer
 import { getStepUpPolicy } from '../../../backend/security/stepup/StepUpPolicyRegistry';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
 import { IDENTITY_ADMIN_ASSIGN } from '../../../shared/contracts/security';
+import {
+  createSession,
+  attachSessionCookie,
+} from '../../../backend/security/SessionAuthorityService';
+import { resetSuperAdminIdentityCache } from '../../../backend/security/startup/superAdminIdentityCheck';
 
 const SUPER_ADMIN_ROLE = 'SUPER_ADMIN';
 
@@ -50,9 +86,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const body = parseBody(req);
-  const mode = body.mode === 'promote' ? 'promote' : body.mode === 'bootstrap' ? 'bootstrap' : null;
+  const rawMode = body.mode;
+  const mode: 'promote' | 'bootstrap' | 'env-credential' | null =
+    rawMode === 'promote'
+      ? 'promote'
+      : rawMode === 'bootstrap'
+        ? 'bootstrap'
+        : rawMode === 'env-credential'
+          ? 'env-credential'
+          : null;
   if (!mode) {
-    return res.status(400).json({ error: 'mode must be "promote" or "bootstrap"' });
+    return res.status(400).json({ error: 'mode must be "promote", "bootstrap", or "env-credential"' });
   }
 
   const ip = clientIp(req);
@@ -106,6 +150,162 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       targetUserId,
       organizationId: inserted.organizationId,
       roleRowId: inserted.roleRowId,
+    });
+  }
+
+  // ── Mode: env-credential (Phase 2, first-deploy operator bootstrap) ─────
+  // Path used when the platform has never had a canonical SUPER_ADMIN and
+  // the operator only has env credentials. Promotes an EXISTING users row
+  // to SUPER_ADMIN. Single-use (DB existence check) + token-gated +
+  // env-credential-gated + IP-rate-limited.
+  if (mode === 'env-credential') {
+    if (envCredentialRateLimited(ip)) {
+      await deny('env_credential_rate_limited', ip, ua);
+      return res.status(429).json({
+        error: 'Too many env-credential bootstrap attempts. Try again in a minute.',
+        code: 'BOOTSTRAP_RATE_LIMITED',
+      });
+    }
+
+    const username = typeof body.username === 'string' ? body.username : null;
+    const password = typeof body.password === 'string' ? body.password : null;
+    const bootstrapTokenEnvMode = typeof body.bootstrapToken === 'string' ? body.bootstrapToken : null;
+    const targetUserId = typeof body.targetUserId === 'string' ? body.targetUserId : null;
+    const organizationId = typeof body.organizationId === 'string' ? body.organizationId : null;
+    const mintCookie = body.mintCanonicalSession === true;
+
+    if (!username || !password || !bootstrapTokenEnvMode || !targetUserId) {
+      await deny('env_credential_missing_fields', ip, ua);
+      return res.status(400).json({
+        error: 'username, password, bootstrapToken, and targetUserId are required for mode=env-credential',
+      });
+    }
+
+    // 1. Validate env credentials (must match login env values).
+    const envUser = String(process.env.SUPER_ADMIN_USERNAME ?? '').trim();
+    const envPass = String(process.env.SUPER_ADMIN_PASSWORD ?? '').trim();
+    if (!envUser || !envPass) {
+      await deny('env_credential_env_missing', ip, ua);
+      return res.status(503).json({
+        error: 'Bootstrap env credentials not configured',
+        code: 'BOOTSTRAP_NOT_CONFIGURED',
+      });
+    }
+    const userMatches = constantTimeStringEquals(username, envUser);
+    const passMatches = constantTimeStringEquals(password, envPass);
+    if (!(userMatches && passMatches)) {
+      recordEnvCredentialFailure(ip);
+      await deny('env_credential_invalid', ip, ua);
+      return res.status(401).json({ error: 'Invalid env credentials', code: 'INVALID_CREDENTIALS' });
+    }
+
+    // 2. Validate bootstrap token (timing-safe).
+    const envToken2 = process.env.SUPER_ADMIN_BOOTSTRAP_TOKEN;
+    if (!envToken2 || envToken2.length < 32) {
+      await deny('env_credential_token_env_missing', ip, ua);
+      return res.status(503).json({ error: 'Bootstrap token not configured', code: 'BOOTSTRAP_NOT_CONFIGURED' });
+    }
+    if (!constantTimeStringEquals(bootstrapTokenEnvMode, envToken2)) {
+      recordEnvCredentialFailure(ip);
+      await deny('env_credential_token_mismatch', ip, ua);
+      return res.status(401).json({ error: 'Invalid bootstrap token', code: 'BOOTSTRAP_TOKEN_INVALID' });
+    }
+
+    // 3. Single-use check: refuse if any SUPER_ADMIN already exists.
+    const { count: existingCount2 } = await ownedDbTable('user_company_roles')
+      .select('id', { count: 'exact', head: true })
+      .eq('role', SUPER_ADMIN_ROLE)
+      .eq('status', 'active');
+    if ((existingCount2 ?? 0) > 0) {
+      await deny('env_credential_already_consumed', ip, ua);
+      return res.status(409).json({
+        error: 'A SUPER_ADMIN already exists. Use mode=promote with a passkey-enrolled SUPER_ADMIN instead.',
+        code: 'BOOTSTRAP_ALREADY_CONSUMED',
+      });
+    }
+
+    // 4. Verify target user exists and is not soft-deleted. Never create users.
+    const { data: targetRow } = await ownedDbTable('users')
+      .select('id, supabase_uid, email, is_deleted')
+      .eq('id', targetUserId)
+      .maybeSingle();
+    if (!targetRow) {
+      await deny('env_credential_target_user_not_found', ip, ua, null, targetUserId);
+      return res.status(404).json({
+        error: 'targetUserId does not match any users row. Provision the user via Supabase first.',
+        code: 'TARGET_USER_NOT_FOUND',
+      });
+    }
+    const target = targetRow as { id: string; supabase_uid: string | null; email: string | null; is_deleted: boolean };
+    if (target.is_deleted) {
+      await deny('env_credential_target_user_deleted', ip, ua, null, targetUserId);
+      return res.status(409).json({
+        error: 'targetUserId points to a soft-deleted user.',
+        code: 'TARGET_USER_DELETED',
+      });
+    }
+
+    // 5. Promote — assignSuperAdmin is idempotent and binds to an org.
+    const inserted = await assignSuperAdmin(target.id, organizationId);
+    if (inserted.ok === false) {
+      await deny(inserted.reason, ip, ua, null, target.id);
+      return res.status(inserted.status).json({ error: inserted.reason });
+    }
+
+    // 6. Optional: mint canonical session for the target user so the
+    //    operator can immediately access /super-admin in this browser.
+    let canonicalSessionId: string | null = null;
+    if (mintCookie) {
+      try {
+        const created = await createSession({
+          userId: target.id,
+          supabaseUid: target.supabase_uid ?? target.id,
+          ip,
+          userAgent: ua,
+        });
+        attachSessionCookie(res, created.cookieValue);
+        canonicalSessionId = created.session.id;
+      } catch (err) {
+        logger.warn('env_credential_bootstrap_session_mint_failed', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // 7. Reset the identity-check cache so the next /api/super-admin/login
+    //    call picks up the new state immediately instead of waiting up to 60s.
+    resetSuperAdminIdentityCache();
+
+    await logSecurityEvent({
+      capability: IDENTITY_ADMIN_ASSIGN,
+      decision: 'super_admin_bootstrap_completed',
+      actorUserId: null, // env credentials — no user actor
+      actorSessionId: canonicalSessionId,
+      principalUserId: target.id,
+      principalSupabaseUid: target.supabase_uid,
+      resourceId: inserted.roleRowId,
+      reason: `mode=env-credential organizationId=${inserted.organizationId} canonicalSession=${canonicalSessionId !== null}`,
+      ip,
+      userAgent: ua,
+      viaLegacyBridge: false,
+    });
+
+    if (process.env.SUPER_ADMIN_BOOTSTRAP_TOKEN) {
+      logger.warn('super_admin_bootstrap_token_still_set_after_use', {
+        message: 'Unset SUPER_ADMIN_BOOTSTRAP_TOKEN now that a DB-backed SUPER_ADMIN exists. Subsequent bootstrap calls will return BOOTSTRAP_ALREADY_CONSUMED, but rotating the token out is a defense-in-depth step.',
+      });
+    }
+
+    return res.status(201).json({
+      ok: true,
+      bootstrappedUserId: target.id,
+      organizationId: inserted.organizationId,
+      roleRowId: inserted.roleRowId,
+      canonicalSessionMinted: canonicalSessionId !== null,
+      nextSteps: {
+        setEnv: { name: 'SUPER_ADMIN_PRIMARY_USER_ID', value: target.id },
+        action: 'Have the bootstrapped user log in via Supabase and enroll a passkey at /settings/security, then unset SUPER_ADMIN_BOOTSTRAP_TOKEN.',
+      },
     });
   }
 
@@ -363,4 +563,37 @@ function clientIp(req: NextApiRequest): string | null {
 function userAgent(req: NextApiRequest): string | null {
   const ua = req.headers['user-agent'];
   return typeof ua === 'string' ? ua : null;
+}
+
+// ── env-credential rate limiting ────────────────────────────────────────────
+// In-process counter: 5 failures per IP per 60-second window. The bootstrap
+// surface is small enough that an in-process limiter is sufficient and
+// avoids a Redis dependency. After Phase 2 ships, expect <1 call ever per
+// deployment, so the bound is generous.
+
+const ENV_CREDENTIAL_FAILURE_WINDOW_MS = 60_000;
+const ENV_CREDENTIAL_FAILURE_LIMIT = 5;
+const envCredentialFailures = new Map<string, number[]>();
+
+function envCredentialRateLimited(ip: string | null): boolean {
+  const key = ip ?? '<unknown>';
+  const now = Date.now();
+  const cutoff = now - ENV_CREDENTIAL_FAILURE_WINDOW_MS;
+  const recent = (envCredentialFailures.get(key) ?? []).filter((t) => t > cutoff);
+  envCredentialFailures.set(key, recent);
+  return recent.length >= ENV_CREDENTIAL_FAILURE_LIMIT;
+}
+
+function recordEnvCredentialFailure(ip: string | null): void {
+  const key = ip ?? '<unknown>';
+  const now = Date.now();
+  const cutoff = now - ENV_CREDENTIAL_FAILURE_WINDOW_MS;
+  const recent = (envCredentialFailures.get(key) ?? []).filter((t) => t > cutoff);
+  recent.push(now);
+  envCredentialFailures.set(key, recent);
+}
+
+/** Test/CI hook: clear in-process rate-limit state. */
+export function _resetEnvCredentialRateLimit(): void {
+  envCredentialFailures.clear();
 }

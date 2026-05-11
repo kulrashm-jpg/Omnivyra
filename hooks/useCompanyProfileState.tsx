@@ -1,18 +1,33 @@
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
+import { setUserScopedLocalStorage } from '../utils/authStorage';
 import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import { getAuthToken } from '../utils/getAuthToken';
 import {
   type CompanyProfile,
   type CompanyProfileRefinement,
+  type UserGuidedIntelligence,
   emptyProfile,
   splitToList,
   joinList,
   buildSocialProfilesFromScalars,
 } from '../pages/company-profile.types';
+import { normalizeCanonicalWebsite } from '../utils/companyProfileValidation';
+
+const ONBOARDING_CHECKPOINT_PREFIX = 'company_profile_onboarding:';
+const ONBOARDING_REFINE_STALE_MS = 2 * 60 * 1000;
+
+type OnboardingCheckpoint = {
+  continuationVisible?: boolean;
+  skipped?: boolean;
+  refined?: boolean;
+  inFlight?: boolean;
+  refineStartedAt?: string;
+  updatedAt?: string;
+};
 
 export function useCompanyProfileState() {
   const router = useRouter();
@@ -46,6 +61,7 @@ export function useCompanyProfileState() {
   const [companyId, setCompanyId] = useState('');
   const [notFound, setNotFound] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasProfileLoadSettled, setHasProfileLoadSettled] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
@@ -102,6 +118,62 @@ export function useCompanyProfileState() {
   const [companyIdCopied, setCompanyIdCopied] = useState(false);
   const [createCompanyError, setCreateCompanyError] = useState<string | null>(null);
   const [showCompanyFactReviewPrompt, setShowCompanyFactReviewPrompt] = useState(false);
+  const onboardingRequested = router.isReady && router.query.onboarding === 'company-profile';
+  const roleHydrated = !isCompanyLoading && Boolean(userRole);
+  const profileHydrated = !isLoading && hasProfileLoadSettled;
+  const isOnboardingResolving = Boolean(onboardingRequested && (!roleHydrated || !profileHydrated));
+  const isOnboardingMode = useMemo(
+    () =>
+      onboardingRequested &&
+      roleHydrated &&
+      isCompanyAdmin &&
+      !canCreateCompany,
+    [onboardingRequested, roleHydrated, isCompanyAdmin, canCreateCompany]
+  );
+  const [onboardingContinuationVisible, setOnboardingContinuationVisible] = useState(false);
+  const refineInFlightRef = useRef(false);
+
+  // SECURITY: clear all server-fetched company-profile state when the
+  // authenticated identity changes. Prevents the previous user's profile
+  // drafts, chat threads, and refinement history from being visible after a
+  // sign-out → sign-in in the same tab.
+  const previousUserIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const currentUserId = user?.userId ?? null;
+    const previousUserId = previousUserIdRef.current;
+    if (previousUserId && previousUserId !== currentUserId) {
+      setProfile(null);
+      setDraftProfile(emptyProfile);
+      setCompanyId('');
+      setNotFound(false);
+      setHasProfileLoadSettled(false);
+      setOverallProfileCompletion(null);
+      setProblemTransformationCompletion(null);
+      setLatestRefinement(null);
+      setRefinementHistory([]);
+      setMissingFieldAnswers({});
+      setTargetCustomerMessages([]);
+      setTargetCustomerInput('');
+      setCampaignPurposeMessages([]);
+      setCampaignPurposeInput('');
+      setMarketingIntelligenceMessages([]);
+      setMarketingIntelligenceInput('');
+      setProblemTransformationQuestions([]);
+      setProblemTransformationAnswers([]);
+      setProblemTransformationInferMessages([]);
+      setProblemTransformationInferInput('');
+      setPendingProblemTransformationUpdates(null);
+      setShowCompanyFactReviewPrompt(false);
+      setOnboardingContinuationVisible(false);
+      setErrorMessage(null);
+      setSuccessMessage(null);
+      setLastFetchStatus(null);
+      setLastFetchError(null);
+      setCreateCompanyError(null);
+      setCreateCompanyForm({ name: '', website: '', industry: '' });
+    }
+    previousUserIdRef.current = currentUserId;
+  }, [user?.userId]);
 
   const filteredCompanies = useMemo(() => {
     const q = (companySearchFilter || '').trim().toLowerCase();
@@ -172,16 +244,66 @@ export function useCompanyProfileState() {
   const notifyCompanyProfileUpdated = (updatedCompanyId: string) => {
     if (typeof window === 'undefined' || !updatedCompanyId) return;
     const updatedAt = new Date().toISOString();
-    try {
-      localStorage.setItem(`company_profile_updated:${updatedCompanyId}`, updatedAt);
-    } catch {
-      // ignore storage quota/privacy errors
+    const userId = user?.userId;
+    if (userId) {
+      try {
+        // Scope by user so a different signed-in user can never read or be
+        // signaled by another user's profile-updated marker.
+        localStorage.setItem(
+          `company_profile_updated:${userId}:${updatedCompanyId}`,
+          updatedAt,
+        );
+      } catch {
+        // ignore storage quota/privacy errors
+      }
     }
     window.dispatchEvent(
       new CustomEvent('company-profile-updated', {
         detail: { companyId: updatedCompanyId, updatedAt },
       })
     );
+  };
+
+  const getOnboardingCheckpointKey = (id = companyId || activeProfile.company_id) => {
+    if (!id) return '';
+    const userId = user?.userId;
+    if (!userId) return '';
+    // Scope by user so onboarding checkpoint state never leaks across
+    // identities sharing the same browser or company id.
+    return `${ONBOARDING_CHECKPOINT_PREFIX}${userId}:${id}`;
+  };
+
+  const readOnboardingCheckpoint = (id = companyId || activeProfile.company_id): OnboardingCheckpoint | null => {
+    if (typeof window === 'undefined') return null;
+    const key = getOnboardingCheckpointKey(id);
+    if (!key) return null;
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) as OnboardingCheckpoint : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const writeOnboardingCheckpoint = (
+    patch: OnboardingCheckpoint,
+    id = companyId || activeProfile.company_id,
+  ) => {
+    if (typeof window === 'undefined') return;
+    const key = getOnboardingCheckpointKey(id);
+    if (!key) return;
+    const next = {
+      ...(readOnboardingCheckpoint(id) ?? {}),
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(key, JSON.stringify(next));
+  };
+
+  const isRecentOnboardingRefineInFlight = (checkpoint: OnboardingCheckpoint | null) => {
+    if (!checkpoint?.inFlight || !checkpoint.refineStartedAt) return false;
+    const startedAt = new Date(checkpoint.refineStartedAt).getTime();
+    return !Number.isNaN(startedAt) && Date.now() - startedAt < ONBOARDING_REFINE_STALE_MS;
   };
 
   useEffect(() => {
@@ -218,6 +340,7 @@ export function useCompanyProfileState() {
   useEffect(() => {
     const loadProfile = async () => {
       try {
+        setHasProfileLoadSettled(false);
         setIsLoading(true);
         if (isCompanyLoading) return;
         if (!isAuthenticated) {
@@ -269,7 +392,7 @@ export function useCompanyProfileState() {
         setProfile(data.profile || null);
         if (data.profile) {
           setDraftProfile(data.profile);
-          setIsEditing(false); // existing profile loads in view mode
+          setIsEditing(isOnboardingMode ? true : false); // onboarding collects social links before refinement
         } else {
           setIsEditing(true); // no profile yet — start in edit mode
         }
@@ -280,19 +403,20 @@ export function useCompanyProfileState() {
         setLastFetchError(null);
         if (data.profile?.company_id) {
           setCompanyId(data.profile.company_id);
-          localStorage.setItem('company_id', data.profile.company_id);
+          setUserScopedLocalStorage('company_id', user?.userId ?? null, data.profile.company_id);
         }
       } catch (error) {
         console.error('Error loading company profile:', error);
         setLastFetchError((error as Error)?.message || 'Failed to load company profile');
         setErrorMessage('Failed to load company profile.');
       } finally {
+        setHasProfileLoadSettled(true);
         setIsLoading(false);
       }
     };
 
     loadProfile();
-  }, [companyId, isAuthenticated, isCompanyLoading, isCompanyAdmin, companies]);
+  }, [companyId, isAuthenticated, isCompanyLoading, isCompanyAdmin, companies, isOnboardingMode, user?.userId]);
 
   useEffect(() => {
     const loadRefinements = async () => {
@@ -321,6 +445,26 @@ export function useCompanyProfileState() {
     };
     loadRefinements();
   }, [companyId, isAuthenticated, isCompanyLoading]);
+
+  useEffect(() => {
+    if (!isOnboardingMode || !companyId) return;
+    const checkpoint = readOnboardingCheckpoint(companyId);
+    if (checkpoint?.continuationVisible || checkpoint?.skipped || checkpoint?.refined) {
+      setOnboardingContinuationVisible(true);
+      return;
+    }
+    if (checkpoint?.refineStartedAt && refinementHistory.length > 0) {
+      const startedAt = new Date(checkpoint.refineStartedAt).getTime();
+      const completedForSession = refinementHistory.some((entry) => {
+        const createdAt = new Date((entry as any).created_at || '').getTime();
+        return !Number.isNaN(startedAt) && !Number.isNaN(createdAt) && createdAt >= startedAt;
+      });
+      if (completedForSession) {
+        writeOnboardingCheckpoint({ continuationVisible: true, refined: true, inFlight: false }, companyId);
+        setOnboardingContinuationVisible(true);
+      }
+    }
+  }, [isOnboardingMode, companyId, refinementHistory]);
 
   const updateActiveProfile = (next: CompanyProfile) => {
     if (profile) {
@@ -614,19 +758,133 @@ export function useCompanyProfileState() {
   // Advance through steps on a timer; actual API call may finish earlier or later
   const REFINE_STEP_DELAYS = [0, 9000, 20000, 28000, 40000]; // ms from start
 
-  const refineProfile = async () => {
+  const getValidCanonicalWebsite = (profileData: CompanyProfile): string | null => {
+    return normalizeCanonicalWebsite(profileData.website_url);
+  };
+
+  const saveUserGuidance = async (
+    userGuidance: UserGuidedIntelligence | null,
+    action = 'update_guidance',
+    target?: string | null,
+  ) => {
+    const resolvedCompanyId = companyId || activeProfile.company_id;
+    if (!resolvedCompanyId) {
+      setErrorMessage('Select a company before saving guidance.');
+      return null;
+    }
+    setIsSaving(true);
+    setErrorMessage(null);
     try {
+      const response = await fetchWithAuth('/api/company-profile/guidance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: resolvedCompanyId,
+          action,
+          target,
+          user_guidance: userGuidance,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to save intelligence guidance');
+      const next = data.profile || {
+        ...activeProfile,
+        report_settings: {
+          ...(activeProfile.report_settings || {}),
+          user_guidance: userGuidance,
+        },
+      };
+      setProfile(next);
+      setDraftProfile(next);
+      setSuccessMessage('Intelligence guidance saved.');
+      return next as CompanyProfile;
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to save intelligence guidance');
+      return null;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const persistProfileBeforeRefine = async (): Promise<CompanyProfile> => {
+    const canonicalWebsite = getValidCanonicalWebsite(activeProfile);
+    if (!canonicalWebsite) {
+      throw new Error('A valid company website is required before refinement.');
+    }
+    const payload: Record<string, unknown> = {
+      companyId: companyId || activeProfile.company_id,
+      company_id: companyId || activeProfile.company_id,
+      website_url: canonicalWebsite,
+    };
+    ([
+      'linkedin_url',
+      'facebook_url',
+      'instagram_url',
+      'x_url',
+      'youtube_url',
+      'tiktok_url',
+      'reddit_url',
+      'pinterest_url',
+      'whatsapp_url',
+      'blog_url',
+    ] as Array<keyof CompanyProfile>).forEach((field) => {
+      const normalized = normalizeCanonicalWebsite(activeProfile[field]);
+      if (normalized) payload[field] = normalized;
+    });
+    const response = await fetchWithAuth('/api/company-profile/onboarding-presence', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null);
+      throw new Error(errorBody?.error || errorBody?.details || 'Failed to save profile before refinement');
+    }
+    const data = await response.json();
+    const persisted = data.profile || payload;
+    setProfile(persisted);
+    setDraftProfile(persisted);
+    notifyCompanyProfileUpdated(persisted.company_id || companyId);
+    return persisted;
+  };
+
+  const refineProfile = async () => {
+    if (isRefining || refineInFlightRef.current) return;
+    const checkpoint = isOnboardingMode ? readOnboardingCheckpoint() : null;
+    if (isOnboardingMode && isRecentOnboardingRefineInFlight(checkpoint)) {
+      setErrorMessage('AI refinement is already running for this onboarding session. Wait a moment before retrying.');
+      return;
+    }
+    const canonicalWebsite = getValidCanonicalWebsite(activeProfile);
+    if (!canonicalWebsite) {
+      setErrorMessage('Add a valid company website before using Refine with AI.');
+      return;
+    }
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const clearTimers = () => timers.forEach(clearTimeout);
+    try {
+      refineInFlightRef.current = true;
+      const refineStartedAt = new Date().toISOString();
+      if (isOnboardingMode) {
+        writeOnboardingCheckpoint({
+          inFlight: true,
+          refineStartedAt,
+          continuationVisible: false,
+          skipped: false,
+          refined: false,
+        });
+      }
       setIsRefining(true);
       setRefineStep(1);
       setErrorMessage(null);
       setSuccessMessage(null);
 
-      // Schedule step advances based on typical timing
-      const timers: ReturnType<typeof setTimeout>[] = [];
-      REFINE_STEP_DELAYS.slice(1).forEach((delay, i) => {
-        timers.push(setTimeout(() => setRefineStep(i + 2), delay));
-      });
-      const clearTimers = () => timers.forEach(clearTimeout);
+      if (!isOnboardingMode) {
+        // Schedule step advances based on typical timing for the existing editor flow.
+        REFINE_STEP_DELAYS.slice(1).forEach((delay, i) => {
+          timers.push(setTimeout(() => setRefineStep(i + 2), delay));
+        });
+      }
       if (!companyId) {
         clearTimers();
         setRefineStep(0);
@@ -648,12 +906,13 @@ export function useCompanyProfileState() {
         competitors_list: [],
       }));
 
+      const persistedProfile = await persistProfileBeforeRefine();
       const {
         competitors: _refineCompetitors,
         competitors_list: _refineCompetitorsList,
         report_settings: activeReportSettings,
         ...activeProfileForRefine
-      } = activeProfile;
+      } = persistedProfile;
       const refineReportSettings: Record<string, any> | undefined = activeReportSettings
         ? { ...(activeReportSettings as Record<string, any>) }
         : undefined;
@@ -678,28 +937,33 @@ export function useCompanyProfileState() {
       const payload = {
         ...activeProfileForRefine,
         report_settings: refineReportSettings,
-        companyId: companyId || activeProfile.company_id,
-        company_id: companyId || activeProfile.company_id,
-        industry_list: activeProfile.industry_list ?? splitToList(activeProfile.industry),
-        category_list: activeProfile.category_list ?? splitToList(activeProfile.category),
-        geography_list: activeProfile.geography_list ?? splitToList(activeProfile.geography),
-        content_themes_list: activeProfile.content_themes_list ?? splitToList(activeProfile.content_themes),
-        products_services_list: activeProfile.products_services_list ?? splitToList(activeProfile.products_services),
-        target_audience_list: activeProfile.target_audience_list ?? splitToList(activeProfile.target_audience),
-        goals_list: activeProfile.goals_list ?? splitToList(activeProfile.goals),
-        brand_voice_list: activeProfile.brand_voice_list ?? splitToList(activeProfile.brand_voice),
-        social_profiles: buildSocialProfilesFromScalars(activeProfile),
-        core_problem_statement: activeProfile.core_problem_statement ?? null,
-        pain_symptoms: Array.isArray(activeProfile.pain_symptoms) ? activeProfile.pain_symptoms : splitToList(String(activeProfile.pain_symptoms || '')),
-        awareness_gap: activeProfile.awareness_gap ?? null,
-        problem_impact: activeProfile.problem_impact ?? null,
-        life_with_problem: activeProfile.life_with_problem ?? null,
-        life_after_solution: activeProfile.life_after_solution ?? null,
-        desired_transformation: activeProfile.desired_transformation ?? null,
-        transformation_mechanism: activeProfile.transformation_mechanism ?? null,
-        authority_domains: Array.isArray(activeProfile.authority_domains) ? activeProfile.authority_domains : splitToList(String(activeProfile.authority_domains || '')),
+        companyId: companyId || persistedProfile.company_id,
+        company_id: companyId || persistedProfile.company_id,
+        onboarding: isOnboardingMode ? 'company-profile' : undefined,
+        onboardingMode: isOnboardingMode,
+        website_url: canonicalWebsite,
+        industry_list: persistedProfile.industry_list ?? splitToList(persistedProfile.industry),
+        category_list: persistedProfile.category_list ?? splitToList(persistedProfile.category),
+        geography_list: persistedProfile.geography_list ?? splitToList(persistedProfile.geography),
+        content_themes_list: persistedProfile.content_themes_list ?? splitToList(persistedProfile.content_themes),
+        products_services_list: persistedProfile.products_services_list ?? splitToList(persistedProfile.products_services),
+        target_audience_list: persistedProfile.target_audience_list ?? splitToList(persistedProfile.target_audience),
+        goals_list: persistedProfile.goals_list ?? splitToList(persistedProfile.goals),
+        brand_voice_list: persistedProfile.brand_voice_list ?? splitToList(persistedProfile.brand_voice),
+        social_profiles: buildSocialProfilesFromScalars({ ...persistedProfile, website_url: canonicalWebsite }),
+        core_problem_statement: persistedProfile.core_problem_statement ?? null,
+        pain_symptoms: Array.isArray(persistedProfile.pain_symptoms) ? persistedProfile.pain_symptoms : splitToList(String(persistedProfile.pain_symptoms || '')),
+        awareness_gap: persistedProfile.awareness_gap ?? null,
+        problem_impact: persistedProfile.problem_impact ?? null,
+        life_with_problem: persistedProfile.life_with_problem ?? null,
+        life_after_solution: persistedProfile.life_after_solution ?? null,
+        desired_transformation: persistedProfile.desired_transformation ?? null,
+        transformation_mechanism: persistedProfile.transformation_mechanism ?? null,
+        authority_domains: Array.isArray(persistedProfile.authority_domains) ? persistedProfile.authority_domains : splitToList(String(persistedProfile.authority_domains || '')),
       };
-      const response = await fetchWithAuth('/api/company-profile/refine', {
+      const response = await fetchWithAuth(isOnboardingMode
+        ? `/api/company-profile/refine?onboarding=company-profile&companyId=${encodeURIComponent(companyId || persistedProfile.company_id || '')}`
+        : '/api/company-profile/refine', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -724,18 +988,38 @@ export function useCompanyProfileState() {
       setRefineStep(0);
       setNotFound(false);
       setIsEditing(true); // AI updated fields — enter edit mode so user can review and save
-      setSuccessMessage('Profile enriched by AI. Review the changes and click Save Profile.');
+      setOnboardingContinuationVisible(true);
+      if (isOnboardingMode) {
+        writeOnboardingCheckpoint({ continuationVisible: true, refined: true, inFlight: false });
+      }
+      setSuccessMessage(
+        isOnboardingMode
+          ? 'Profile enriched and saved by AI. Review the populated sections, then continue to business details.'
+          : 'Profile enriched and saved by AI. Review and edit any fields that need adjustment.'
+      );
       if (data?.refinement) {
         setLatestRefinement(data.refinement);
         setRefinementHistory((prev) => [data.refinement, ...prev]);
       }
     } catch (error) {
       console.error('Error refining company profile:', error);
-      setErrorMessage('Failed to refine company profile.');
+      if (isOnboardingMode) {
+        writeOnboardingCheckpoint({ inFlight: false });
+      }
+      setErrorMessage((error as Error).message || 'Failed to refine company profile.');
     } finally {
+      clearTimers();
+      refineInFlightRef.current = false;
       setIsRefining(false);
       setRefineStep(0);
     }
+  };
+
+  const skipOnboardingRefinement = () => {
+    if (!isOnboardingMode) return;
+    writeOnboardingCheckpoint({ continuationVisible: true, skipped: true, inFlight: false });
+    setOnboardingContinuationVisible(true);
+    setSuccessMessage('AI refinement skipped. Continue with business details and save when finished.');
   };
 
   const sendTargetCustomerMessage = async (userContent?: string) => {
@@ -1446,6 +1730,8 @@ export function useCompanyProfileState() {
     isCompanyLoading,
     isContentArchitect,
     isEditing,
+    isOnboardingMode,
+    isOnboardingResolving,
     isLoading,
     isRefining,
     isSaving,
@@ -1463,6 +1749,7 @@ export function useCompanyProfileState() {
     normalizeUrlField,
     notFound,
     notifyCompanyProfileUpdated,
+    onboardingContinuationVisible,
     openCampaignPurposePanel,
     openInferProblemTransformationPanel,
     openMarketingIntelligencePanel,
@@ -1492,6 +1779,7 @@ export function useCompanyProfileState() {
     router,
     saveProblemTransformation,
     saveProfile,
+    saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
     sendCampaignPurposeMessage,
@@ -1548,6 +1836,7 @@ export function useCompanyProfileState() {
     setTargetCustomerPanelOpen,
     showCompanyFactReviewPrompt,
     showCreateCompanyModal,
+    skipOnboardingRefinement,
     successMessage,
     targetCustomerInput,
     targetCustomerLoading,

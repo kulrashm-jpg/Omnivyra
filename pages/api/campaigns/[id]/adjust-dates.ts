@@ -7,6 +7,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { adjustCampaignDates } from '../../../../backend/services/schedulingService';
 import { logActivity } from '../../../../backend/services/activityLogger';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -24,6 +25,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!new_start_date || !user_id) {
       return res.status(400).json({ error: 'new_start_date and user_id are required' });
     }
+
+    // SECURITY: enforce that the authenticated caller has access to this campaign's
+    // company. Without this, any authenticated user could mutate another company's
+    // campaign by guessing the path id.
+    const access = await requireCampaignAccess(req, res, id);
+    if (!access) return;
 
     const newStartDate = new Date(new_start_date);
     const result = await adjustCampaignDates(id, newStartDate, user_id);

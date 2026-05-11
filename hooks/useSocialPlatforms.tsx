@@ -382,11 +382,15 @@ export function useSocialPlatforms() {
     setChecks(cached);
   }, []);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
-  useEffect(() => { loadCatalogApis(); }, [loadCatalogApis]);
-  useEffect(() => { loadCompanyConfigs(); }, [loadCompanyConfigs]);
-  useEffect(() => { loadContentPrefs(); }, [loadContentPrefs]);
-  useEffect(() => { loadApiRequests(); }, [loadApiRequests]);
+  // Each loader has its own try/catch internally, but if any synchronous
+  // throw escapes (extremely rare, e.g. setState on an unmounted hook), the
+  // unhandled rejection lights up the Next.js dev overlay. .catch() on the
+  // useEffect invocation closes that gap — production behaviour unchanged.
+  useEffect(() => { loadStatus().catch(() => {}); }, [loadStatus]);
+  useEffect(() => { loadCatalogApis().catch(() => {}); }, [loadCatalogApis]);
+  useEffect(() => { loadCompanyConfigs().catch(() => {}); }, [loadCompanyConfigs]);
+  useEffect(() => { loadContentPrefs().catch(() => {}); }, [loadContentPrefs]);
+  useEffect(() => { loadApiRequests().catch(() => {}); }, [loadApiRequests]);
 
   // Daily auto-check: re-verify any configured platform whose cache is stale
   useEffect(() => {

@@ -17,7 +17,8 @@ import { scheduleStructuredPlan } from './structuredPlanScheduler';
 import { retryWithBackoff } from '../utils/retryWithBackoff';
 import { getUserFriendlyMessage } from '../utils/userFriendlyErrors';
 import { getConnectedPlatformsForCompany, CONTENT_PLATFORM_AFFINITY } from '../utils/platformEligibility';
-import { filterBoltPlatforms, sanitizeBoltPlanForTextOnly } from '../utils/boltTextContentConfig';
+import { sanitizeBoltPlanForTextOnly } from '../utils/boltTextContentConfig';
+import { filterConnectedPlatformsForContent } from '../../lib/shared/social/platformContentFilter';
 import { aggregateBoltAiMetrics } from './boltMetricsAggregator';
 import { getBlueprintCacheMetrics } from './contentBlueprintCache';
 import { getAdaptiveDistributionAdjustments } from './campaignAdaptiveOptimizer';
@@ -859,9 +860,13 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
     // than the user saw in the picker and platforms silently disappear.
     const profile = await getProfile(companyId, { autoRefine: false, languageRefine: false }).catch(() => null);
     const rawPlatforms = await getConnectedPlatformsForCompany(companyId, profile);
-    // Creator and Combined campaigns include all platforms (YouTube, TikTok valid for video/reel).
-    // Text-only BOLT excludes video-first platforms that can't accept text posts.
-    eligiblePlatforms = (requiresMediaFlow || isCombined) ? rawPlatforms : filterBoltPlatforms(rawPlatforms);
+    // Creator and Combined campaigns include all platforms (multi-capability).
+    // Text-only BOLT routes through the canonical capability filter so any
+    // non-text-capable platform (Instagram/Pinterest/TikTok/YouTube) is
+    // excluded by the same rules as the publish validator and UI picker.
+    eligiblePlatforms = (requiresMediaFlow || isCombined)
+      ? rawPlatforms
+      : filterConnectedPlatformsForContent(rawPlatforms, { workflowType: 'text' }).supported;
 
     // Honor execConfig.selected_platforms (per-campaign platform picker from the
     // BOLT Text strategy builder). Intersect with eligiblePlatforms so the user

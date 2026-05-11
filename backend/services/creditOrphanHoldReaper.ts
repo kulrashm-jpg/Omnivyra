@@ -36,6 +36,8 @@ import { logger } from './logger';
 import { logSecurityEvent } from '../security/audit/SecurityAuditService';
 import { callCreditReservation } from '../repositories/creditExecutionRepository';
 import type { CategorySplit } from './creditPriorityService';
+import { reconcileDurableMonetizationReservations } from './monetizationReservationReconciliationService';
+import { recordMonetizationOperationalEvent } from './monetizationOpsService';
 
 interface HoldRow {
   id: string;
@@ -48,6 +50,7 @@ interface HoldRow {
   reference_id: string | null;
   performed_by: string | null;
   created_at: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface ReapResult {
@@ -55,6 +58,7 @@ export interface ReapResult {
   released: number;
   skippedHasSibling: number;
   skippedTooYoung: number;
+  skippedQuarantined: number;
   failed: number;
   releasedHoldIds: string[];
 }
@@ -80,8 +84,19 @@ export async function reapOrphanHolds(input?: {
   const cutoffMin = new Date(Date.now() - minAge * 1000).toISOString();
   const cutoffMax = new Date(Date.now() - maxAge * 1000).toISOString();
 
+  await reconcileDurableMonetizationReservations({
+    minAgeSeconds: minAge,
+    batchLimit: limit,
+    orgId: input?.orgId,
+    reconciledBy: 'system:credit-orphan-hold-reap-preflight',
+  }).catch((err) => {
+    logger.error('orphan_hold_reaper_preflight_reconciliation_failed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+  });
+
   let query = ownedDbTable('credit_transactions')
-    .select('id, organization_id, free_delta, paid_delta, incentive_delta, idempotency_key, reference_type, reference_id, performed_by, created_at')
+    .select('id, organization_id, free_delta, paid_delta, incentive_delta, idempotency_key, reference_type, reference_id, performed_by, created_at, metadata')
     .eq('execution_phase', 'hold')
     .lt('created_at', cutoffMin)
     .gt('created_at', cutoffMax)
@@ -93,6 +108,13 @@ export async function reapOrphanHolds(input?: {
   const { data: holds, error } = await query;
   if (error) {
     logger.error('orphan_hold_reaper_query_failed', { message: error.message });
+    await recordMonetizationOperationalEvent({
+      eventName: 'monetization.orphan_hold_reaper_query_failed',
+      severity: 'ERROR',
+      organizationId: input?.orgId ?? null,
+      alertKey: 'orphan_hold_reaper_query_failed',
+      metadata: { message: error.message },
+    });
     throw new Error(`orphan_hold_reaper_query_failed: ${error.message}`);
   }
 
@@ -101,11 +123,25 @@ export async function reapOrphanHolds(input?: {
     released:          0,
     skippedHasSibling: 0,
     skippedTooYoung:   0,
+    skippedQuarantined: 0,
     failed:            0,
     releasedHoldIds:   [],
   };
 
   for (const row of (holds ?? []) as HoldRow[]) {
+    if (row.metadata?.reconciliation_status === 'quarantined') {
+      result.skippedQuarantined += 1;
+      await recordMonetizationOperationalEvent({
+        eventName: 'monetization.orphan_hold_reaper_skipped_quarantined',
+        severity: 'WARN',
+        organizationId: row.organization_id,
+        reservationId: row.id,
+        alertKey: 'orphan_hold_quarantined',
+        metadata: { reference_type: row.reference_type, reference_id: row.reference_id },
+      });
+      continue;
+    }
+
     const baseKey = stripHoldSuffix(row.idempotency_key);
     if (!baseKey) {
       // Idempotency key didn't match the canonical `${baseKey}:hold` shape.
@@ -115,6 +151,14 @@ export async function reapOrphanHolds(input?: {
       logger.warn('orphan_hold_reaper_unrecognized_key', {
         holdId: row.id,
         key:    row.idempotency_key,
+      });
+      await recordMonetizationOperationalEvent({
+        eventName: 'monetization.orphan_hold_reaper_unrecognized_key',
+        severity: 'WARN',
+        organizationId: row.organization_id,
+        reservationId: row.id,
+        alertKey: 'orphan_hold_unrecognized_key',
+        metadata: { idempotency_key: row.idempotency_key },
       });
       continue;
     }
@@ -168,6 +212,14 @@ export async function reapOrphanHolds(input?: {
         orgId:   row.organization_id,
         message: (rpcErr as { message?: string }).message,
       });
+      await recordMonetizationOperationalEvent({
+        eventName: 'monetization.orphan_hold_reaper_release_failed',
+        severity: 'ERROR',
+        organizationId: row.organization_id,
+        reservationId: row.id,
+        alertKey: 'orphan_hold_release_failed',
+        metadata: { message: (rpcErr as { message?: string }).message },
+      });
       continue;
     }
 
@@ -182,11 +234,26 @@ export async function reapOrphanHolds(input?: {
       resourceId:      row.id,
       reason:          `orphan_hold_released org=${row.organization_id} key=${baseKey} free=${split.free} paid=${split.paid} incentive=${split.incentive}`,
     });
+    await recordMonetizationOperationalEvent({
+      eventName: 'monetization.orphan_hold_released',
+      severity: 'WARN',
+      organizationId: row.organization_id,
+      reservationId: row.id,
+      alertKey: 'orphan_hold_released',
+      metadata: { split, reference_type: row.reference_type, reference_id: row.reference_id },
+    });
   }
 
   if (result.released > 0 || result.failed > 0) {
     logger.warn('orphan_hold_reaper_summary', { ...result });
   }
+  await recordMonetizationOperationalEvent({
+    eventName: 'monetization.orphan_hold_reaper_completed',
+    severity: result.failed > 0 || result.released > 0 || result.skippedQuarantined > 0 ? 'WARN' : 'INFO',
+    organizationId: input?.orgId ?? null,
+    alertKey: result.failed > 0 || result.released > 0 ? 'orphan_hold_reaper_activity' : null,
+    metadata: result as unknown as Record<string, unknown>,
+  });
 
   return result;
 }

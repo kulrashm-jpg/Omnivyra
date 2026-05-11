@@ -12,6 +12,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
+import { isPlatformSuperAdmin } from '@/backend/services/rbacService';
 import { getOAuthCredentialsForPlatform } from '@/backend/auth/oauthCredentialResolver';
 import { refreshTwitterTokenIfNeeded } from '@/backend/auth/tokenRefresh';
 import { getToken } from '@/backend/auth/tokenStore';
@@ -198,8 +199,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let account_name: string | null = null;
   let live_check_supported = supportsLiveTokenCheck(platform);
 
-  const isSuperAdmin = req.cookies?.super_admin_session === '1';
+  // Canonical SUPER_ADMIN super-power: pick up ANY active account across
+  // tenants when the caller is a real platform SUPER_ADMIN. Previously this
+  // pivoted on the bridge cookie (`super_admin_session=1`), which produced
+  // false "Awaiting account" badges for canonical operators (mrawat) because
+  // the cookie never gets set by the canonical login flow — the fallback then
+  // filtered `social_accounts.user_id = <super_admin user>` which finds
+  // nothing, since the SUPER_ADMIN themselves rarely owns a tenant's account.
+  //
+  // Note we still also honour the bridge cookie for any env-credential
+  // operator path that is in-flight (`legacy_super_admin_session === '1'`).
+  // The bridge module hard-expires on 2026-08-05, so this is transitional.
   const { user } = await getSupabaseUserFromRequest(req).catch(() => ({ user: null, error: '' }));
+  const isSuperAdmin = await (async () => {
+    if (req.cookies?.super_admin_session === '1') return true;
+    if (!user?.id) return false;
+    try { return await isPlatformSuperAdmin(user.id); } catch { return false; }
+  })();
   const platformAliases = getPlatformAliases(platform);
 
   let accountId: string | null = null;

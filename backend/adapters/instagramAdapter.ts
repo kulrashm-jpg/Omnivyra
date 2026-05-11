@@ -200,17 +200,11 @@ export async function publishToInstagram(
   }
 
   try {
-    // Instagram requires media for posts (images or videos)
-    if (!post.media_urls || post.media_urls.length === 0) {
-      return {
-        success: false,
-        error: {
-          code: 'INSTAGRAM_NO_MEDIA',
-          message: 'Instagram posts require at least one image or video',
-          retryable: false,
-        },
-      };
-    }
+    // Round-3 Phase 3: media-required check removed. Centralized
+    // validatePlatformContentCompatibility (called from publishToPlatform —
+    // the sole entry point to this adapter) rejects no-media payloads
+    // upstream as MEDIA_REQUIRED. The registry is the single authority for
+    // platform-capability rules.
 
     // Format content automatically for Instagram
     const formatted = formatContentForPlatform(post.content, 'instagram', {

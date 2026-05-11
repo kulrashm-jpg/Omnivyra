@@ -17,6 +17,7 @@ import { UpgradePrompt } from './monetization';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import { PLATFORM_LABELS } from '../lib/shared/platforms';
+import BoltPlatformPicker from './bolt/BoltPlatformPicker';
 
 type ContentFormat = 'post' | 'tweet' | 'short_story' | 'article' | 'poll';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -627,6 +628,8 @@ export default function BoltStrategyView({ d }: { d: S }) {
     selectedPlatforms,
     togglePlatform,
     platformsLoading,
+    platformHidden,
+    platformBlocked,
     sourceContentToken,
     sourcePayload,
     strategicFocus,
@@ -853,47 +856,18 @@ export default function BoltStrategyView({ d }: { d: S }) {
               </div>
             </div>
 
-            {/* Platforms — pick which connected platforms this campaign should target */}
+            {/* Platforms — capability-aware picker (Round-6 Phase 4 shared component) */}
             <div className="px-5 pt-4 pb-4 border-t border-gray-100">
-              <div className="flex items-center gap-2 mb-2">
-                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">Platforms</label>
-                <span className="text-[10px] text-gray-400">— pick which connected platforms to use for this campaign</span>
-              </div>
-              {platformsLoading ? (
-                <p className="text-xs text-gray-400">Loading connected platforms…</p>
-              ) : availablePlatforms.length === 0 ? (
-                <p className="text-xs text-gray-400">
-                  No text-compatible platforms connected yet. Add social links in company settings to target specific platforms.
-                </p>
-              ) : (
-                <>
-                  <div className="flex flex-wrap gap-1.5">
-                    {availablePlatforms.map((p) => {
-                      const selected = selectedPlatforms.includes(p);
-                      const label = PLATFORM_LABELS[p] ?? (p.charAt(0).toUpperCase() + p.slice(1));
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => togglePlatform(p)}
-                          className={`text-xs px-2.5 py-1.5 rounded-full border-2 font-medium transition-all ${
-                            selected
-                              ? 'border-amber-400 bg-amber-100 text-amber-900'
-                              : 'border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50'
-                          }`}
-                        >
-                          {selected && '✓ '}{label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {selectedPlatforms.length === 0 && (
-                    <p className="text-[11px] text-amber-700 mt-2">
-                      Select at least one platform — otherwise BOLT will default to all connected platforms.
-                    </p>
-                  )}
-                </>
-              )}
+              <BoltPlatformPicker
+                accent="amber"
+                loading={platformsLoading}
+                blocked={platformBlocked}
+                supported={availablePlatforms}
+                hidden={platformHidden ?? []}
+                selected={selectedPlatforms}
+                onToggle={togglePlatform}
+                emptyMessage="No text-compatible platforms connected yet. Add social links in company settings to target specific platforms."
+              />
             </div>
 
             {/* Campaign Start Date */}

@@ -28,6 +28,11 @@ import {
   attachSessionCookie,
 } from '../../../backend/security/SessionAuthorityService';
 import { logSecurityEvent } from '../../../backend/security/audit/SecurityAuditService';
+import { checkSuperAdminIdentity } from '../../../backend/security/startup/superAdminIdentityCheck';
+import {
+  mintSignedBridgeCookieValue,
+  buildBridgeSetCookieHeader,
+} from '../../../backend/security/bridgeCookie';
 
 interface CanonicalUserRow {
   id: string;
@@ -89,6 +94,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const ip = clientIp(req);
   const ua = (req.headers['user-agent'] as string | undefined) ?? null;
 
+  // Phase 1 — Session Integrity Diagnostics: probe the canonical
+  // identity wiring BEFORE we attempt to mint a canonical session.
+  // Logs structured warnings + audit rows when the env / DB state means
+  // login can only return a bridge principal. The check is memoized for
+  // 60s so back-to-back logins don't hammer the DB.
+  const identityState = await checkSuperAdminIdentity();
+
   // Phase 1: try to mint a canonical auth_session if the operator has
   // designated a primary SUPER_ADMIN user. Failures here are non-fatal —
   // we still set the bridge cookie so existing admin UX is preserved.
@@ -129,16 +141,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
-  // Bridge cookie (compatibility mirror) — set unconditionally for now so
-  // admin routes that haven't migrated to `requireCapability` continue to
-  // work. Wave 3 deletes this once all admin routes are canonical.
-  const superAdminCookie = [
-    'super_admin_session=1',
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    'Max-Age=86400',
-  ].join('; ');
+  // Phase 1: explicit, structured telemetry whenever this login resolves
+  // to bridge-only operation. Without this signal an operator hitting
+  // the APIs-tab redirect loop has no breadcrumb pointing at the root
+  // cause (canonical wiring missing).
+  if (canonicalSessionId === null) {
+    const identityLabel = identityState.ok === true ? 'ok' : identityState.reason;
+    const identityPrimaryUserId = identityState.ok === true
+      ? identityState.primaryUserId
+      : identityState.primaryUserId;
+    const bridgeReason = identityState.ok === true
+      ? 'canonical mint failed at runtime'
+      : identityState.reason;
+    logger.warn('super_admin_login_bridge_only_session', {
+      identityState: identityLabel,
+      primaryUserId: identityPrimaryUserId,
+      consequence: 'operator will hold a bridge principal; capability-gated routes (APIs tab, etc.) will deny.',
+      ip,
+    });
+    await logSecurityEvent({
+      capability: 'super_admin.legacy',
+      decision: 'bridge_authority_used',
+      reason: `super-admin login fell through to bridge-only session (${bridgeReason})`,
+      viaLegacyBridge: true,
+      ip,
+      userAgent: ua,
+    });
+  }
+
+  // Phase 2 — bridge cookie hardening. The cookie is now an HMAC-signed
+  // payload (`<base64url(payload)>.<sig>`) instead of a static `1`,
+  // includes Secure in production, and is independently age-bounded
+  // server-side. See backend/security/bridgeCookie.ts.
+  let superAdminCookie: string;
+  try {
+    superAdminCookie = buildBridgeSetCookieHeader(mintSignedBridgeCookieValue());
+  } catch (err) {
+    // Should be unreachable in any properly-configured environment —
+    // BRIDGE_COOKIE_SECRET / SESSION_COOKIE_SECRET is required. Fail
+    // loud rather than silently downgrade to an unsigned cookie.
+    logger.error('super_admin_login_bridge_cookie_mint_failed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return res.status(503).json({
+      error: 'Bridge cookie signing not configured',
+      code: 'BRIDGE_COOKIE_SECRET_MISSING',
+    });
+  }
   const clearContentArchitectCookie = [
     'content_architect_session=',
     'Path=/',
@@ -159,5 +208,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   return res.status(200).json({
     success: true,
     canonicalSession: canonicalSessionId !== null,
+    // Phase 1 — Session Integrity Diagnostics: surface the auth mode +
+    // identity-wiring health to the login page so it can show the
+    // operator a meaningful banner BEFORE they hit the APIs tab.
+    authMode: canonicalSessionId !== null ? 'canonical' : 'bridge',
+    identity: identityState.ok === true
+      ? { ok: true as const }
+      : { ok: false as const, issue: identityState.reason },
   });
 }

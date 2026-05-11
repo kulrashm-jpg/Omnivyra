@@ -1,6 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import externalApisHandler from '../../../pages/api/external-apis/index';
-import { publishScheduledPost } from '../../services/socialPlatformPublisher';
 import { supabase } from '../../db/supabaseClient';
 import { createApiRequestMock } from '../utils';
 
@@ -224,74 +223,9 @@ describe('Social platform config', () => {
     expect(listRes.body?.apis?.length).toBe(1);
   });
 
-  it('publisher rejects unsupported content type', async () => {
-    sourcesStore.set('api-1', {
-      id: 'api-1',
-      name: 'Video Platform',
-      base_url: 'video',
-      purpose: 'posting',
-      category: 'youtube',
-      is_active: true,
-      auth_type: 'none',
-      api_key_name: null,
-      platform_type: 'video',
-      supported_content_types: ['video'],
-      promotion_modes: ['organic'],
-      required_metadata: {},
-      posting_constraints: {},
-      requires_admin: false,
-      created_at: '2026-01-01T00:00:00Z',
-    });
-    healthStore.set('api-1', {
-      api_source_id: 'api-1',
-      reliability_score: 0.9,
-      freshness_score: 1,
-    });
-
-    const result = await publishScheduledPost(
-      {
-        post_id: 'post-1',
-        platform: 'youtube',
-        content: 'Text only',
-        content_type: 'text',
-        scheduled_time: '2026-01-01T00:00:00Z',
-        campaign_id: 'camp-1',
-      },
-      { dry_run: false, admin_override: true }
-    );
-    expect(result.status).toBe('SKIPPED');
-  });
-
-  it('skips inactive platform', async () => {
-    sourcesStore.set('api-2', {
-      id: 'api-2',
-      name: 'LinkedIn',
-      base_url: 'urn:li:person:abc',
-      purpose: 'posting',
-      category: 'linkedin',
-      is_active: false,
-      auth_type: 'none',
-      api_key_name: null,
-      platform_type: 'social',
-      supported_content_types: ['text'],
-      promotion_modes: ['organic'],
-      required_metadata: {},
-      posting_constraints: {},
-      requires_admin: false,
-      created_at: '2026-01-01T00:00:00Z',
-    });
-
-    const result = await publishScheduledPost(
-      {
-        post_id: 'post-2',
-        platform: 'linkedin',
-        content: 'Hello',
-        content_type: 'text',
-        scheduled_time: '2026-01-01T00:00:00Z',
-        campaign_id: 'camp-1',
-      },
-      { dry_run: false, admin_override: true }
-    );
-    expect(result.status).toBe('SKIPPED');
-  });
+  // Round-4 Phase 1: tests for `publishScheduledPost` removed alongside the
+  // deprecated `socialPlatformPublisher` module. Capability-aware rejection of
+  // unsupported content_types is now covered by:
+  //   - backend/tests/unit/platformContentCapability.test.ts (validator)
+  //   - backend/tests/unit/publishNowService.capability.test.ts (queue path)
 });

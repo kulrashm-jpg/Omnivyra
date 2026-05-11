@@ -1,6 +1,13 @@
 import { runCompletionWithOperation } from '../aiGateway';
 import { supabase } from '../../db/supabaseClient';
-import type { CompanyProfile, StrategyProfile } from './types';
+import type { CompanyProfile, StrategyProfile, EntityArchetypeIntelligence } from './types';
+import { buildArchetypePromptContext } from './entityArchetype';
+import {
+  buildStructuredCompetitorDimensionBlock,
+  enforceStrategyGrounding,
+  shouldUseAudienceLedSynthesis,
+} from './competitorSynthesis';
+import { buildUserGuidanceContextBlock } from './userGuidance';
 
 type StrategyProfileDraft = {
   strategyProfile: StrategyProfile | null;
@@ -140,6 +147,7 @@ function buildStrategyDerivationPrompt(input: {
   websiteSummaries: Array<{ label: string; url: string; summary: string }>;
   blogSamples: string[];
   postSamples: string[];
+  archetype?: EntityArchetypeIntelligence | null;
 }): { systemPrompt: string; userPrompt: string } {
   const websiteEvidence = input.websiteSummaries
     .slice(0, 12)
@@ -158,6 +166,15 @@ function buildStrategyDerivationPrompt(input: {
     input.profile.unique_value ? `Unique value: ${input.profile.unique_value}` : null,
     input.profile.competitive_advantages ? `Competitive advantages: ${input.profile.competitive_advantages}` : null,
   ].filter(Boolean).join('\n');
+  const archetypeContext = buildArchetypePromptContext(input.archetype);
+  const useAudienceLedSynthesis = shouldUseAudienceLedSynthesis(input.archetype, input.profile.report_settings?.competitor_intelligence ?? null);
+  const competitorIntelligence = useAudienceLedSynthesis
+    ? buildStructuredCompetitorDimensionBlock(input.profile.report_settings?.competitor_intelligence ?? null)
+    : '';
+  const userGuidanceContext = buildUserGuidanceContextBlock(input.profile);
+  const audienceLedRules = useAudienceLedSynthesis
+    ? '\nAudience-led adaptation: extract worldview, recurring ideas, audience relationship, trust mechanics, educational/media formats, and ecosystem role as first-class strategy signals. Use competitor intelligence only as grounding for differentiation, not as facts about the company.\n'
+    : '';
 
   return {
     systemPrompt:
@@ -169,7 +186,8 @@ function buildStrategyDerivationPrompt(input: {
       '3. Do not copy raw website text.\n' +
       '4. Keep only specific, repeatable strategic signals.\n' +
       '5. Base the profile on what the company consistently emphasizes, promotes, criticizes, or differentiates.\n' +
-      '6. If evidence is weak, return fewer items rather than generic filler.\n\n' +
+      '6. If evidence is weak, return fewer items rather than generic filler.\n' +
+      '7. When competitor dimensions are provided, ground at least one differentiation, typical angle, or worldview distinction in audience overlap, trust mechanics, ecosystem role, monetization mode, publication/media identity, or narrative territory. Do not present peer traits as company facts unless company evidence also supports them.\n\n' +
       'Return JSON with this exact shape:\n' +
       '{\n' +
       '  "worldview": string | null,\n' +
@@ -187,6 +205,10 @@ function buildStrategyDerivationPrompt(input: {
       `WEBSITE EVIDENCE:\n${websiteEvidence || 'None'}\n\n` +
       `BLOG / NEWSLETTER EVIDENCE:\n${blogEvidence || 'None'}\n\n` +
       `POST EVIDENCE:\n${postEvidence || 'None'}\n\n` +
+      `${archetypeContext ? `ENTITY ARCHETYPE CONTEXT:\n${archetypeContext}\n\n` : ''}` +
+      `${competitorIntelligence ? `STRUCTURED COMPETITOR DIMENSIONS:\n${competitorIntelligence}\n\n` : ''}` +
+      `${userGuidanceContext ? `${userGuidanceContext}\n\n` : ''}` +
+      audienceLedRules +
       'Build a usable strategy profile from repeated signals only.',
   };
 }
@@ -214,6 +236,7 @@ function finalizeStrategyProfile(raw: RawStrategyExtraction): StrategyProfile | 
 export async function deriveStrategyProfileDraft(
   profile: CompanyProfile,
   sourceSummaries: Array<{ label: string; url: string; summary: string }> = [],
+  archetype?: EntityArchetypeIntelligence | null,
 ): Promise<StrategyProfileDraft> {
   const companyId = cleanText(profile.company_id);
   if (!companyId) {
@@ -243,6 +266,7 @@ export async function deriveStrategyProfileDraft(
     websiteSummaries,
     blogSamples,
     postSamples,
+    archetype: archetype ?? profile.report_settings?.entity_archetype ?? null,
   });
 
   try {
@@ -260,7 +284,11 @@ export async function deriveStrategyProfileDraft(
     });
     const parsed = JSON.parse(result.output?.trim() || '{}') as RawStrategyExtraction;
     return {
-      strategyProfile: finalizeStrategyProfile(parsed),
+      strategyProfile: enforceStrategyGrounding(
+        finalizeStrategyProfile(parsed),
+        profile,
+        archetype ?? profile.report_settings?.entity_archetype ?? null,
+      ),
       signalSummary: {
         websiteSourcesUsed: websiteSummaries.length,
         blogSamplesUsed: blogSamples.length,

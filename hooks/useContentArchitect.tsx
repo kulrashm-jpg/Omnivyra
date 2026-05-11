@@ -21,6 +21,7 @@ import {
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
 import RecommendationBlueprintCard from '../components/recommendations/cards/RecommendationBlueprintCard';
+import { setUserScopedLocalStorage } from '../utils/authStorage';
 
 type CompanyHit = { company_id: string; name: string };
 type CampaignHit = { id: string; name: string; company_id: string };
@@ -87,7 +88,7 @@ function isTabUnlocked(tabId: TabId, unlocked: TabId): boolean {
 
 export function useContentArchitect() {
   const router = useRouter();
-  const { userRole, setSelectedCompanyId, isLoading: isContextLoading } = useCompanyContext();
+  const { user, userRole, setSelectedCompanyId, isLoading: isContextLoading } = useCompanyContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [companies, setCompanies] = useState<CompanyHit[]>([]);
@@ -172,10 +173,8 @@ export function useContentArchitect() {
     setSelectedCompany(c);
     setSelectedCampaign(null);
     setSelectedCompanyId(c.company_id);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('selected_company_id', c.company_id);
-      window.localStorage.setItem('company_id', c.company_id);
-    }
+    setUserScopedLocalStorage('selected_company_id', user?.userId ?? null, c.company_id);
+    setUserScopedLocalStorage('company_id', user?.userId ?? null, c.company_id);
   };
 
   const handleSelectCampaign = (c: CampaignHit) => {
@@ -186,10 +185,8 @@ export function useContentArchitect() {
     setSelectedCompany({ company_id: c.company_id, name: '' });
     setSelectedCompanyId(c.company_id);
     setActiveTab('recommendation-cards');
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('selected_company_id', c.company_id);
-      window.localStorage.setItem('company_id', c.company_id);
-    }
+    setUserScopedLocalStorage('selected_company_id', user?.userId ?? null, c.company_id);
+    setUserScopedLocalStorage('company_id', user?.userId ?? null, c.company_id);
   };
 
   const handleSelectRecommendation = (r: RecommendationHit) => {
@@ -208,10 +205,8 @@ export function useContentArchitect() {
     setSelectedWeek(null);
     setSelectedActivity(null);
     setActiveTab('weekly-plan');
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('selected_company_id', r.company_id);
-      window.localStorage.setItem('company_id', r.company_id);
-    }
+    setUserScopedLocalStorage('selected_company_id', user?.userId ?? null, r.company_id);
+    setUserScopedLocalStorage('company_id', user?.userId ?? null, r.company_id);
   };
 
   const currentCompanyId =

@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
+import { resolveUserContext } from '../../../../backend/services/userContextService';
+import { isSuperAdmin } from '../../../../backend/services/rbacService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -12,23 +13,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'jobId is required' });
   }
 
-  const { data: job, error: jobError } = await supabase
+  // SECURITY: filter the job query by the caller's accessible companies up
+  // front. Returning the same 404 for nonexistent and forbidden ids prevents
+  // enumeration of job uuids across the tenant boundary.
+  const userContext = await resolveUserContext(req);
+  if (!userContext?.userId) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  const isContentArchitect = userContext.userId === 'content_architect';
+  const isPlatformAdmin = isContentArchitect || (await isSuperAdmin(userContext.userId));
+
+  let query = supabase
     .from('recommendation_jobs')
     .select('id, company_id, status')
-    .eq('id', jobId)
-    .single();
+    .eq('id', jobId);
+  if (!isPlatformAdmin) {
+    if (!userContext.companyIds?.length) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+    query = query.in('company_id', userContext.companyIds);
+  }
+  const { data: job, error: jobError } = await query.maybeSingle();
 
   if (jobError || !job) {
     return res.status(404).json({ error: 'Job not found' });
   }
-
-  const access = await enforceCompanyAccess({
-    req,
-    res,
-    companyId: job.company_id,
-    requireCampaignId: false,
-  });
-  if (!access) return;
 
   if (job.status !== 'COMPLETED' && job.status !== 'FAILED') {
     return res.status(200).json({

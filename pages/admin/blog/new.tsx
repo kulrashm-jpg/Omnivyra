@@ -81,7 +81,7 @@ export default function AdminBlogNewPage() {
     try {
       const companyId =
         (typeof router.query.prefill_company_id === 'string' && router.query.prefill_company_id) ||
-        (typeof window !== 'undefined' ? (localStorage.getItem('selected_company_id') || '') : '');
+        '';
 
       if (!companyId) {
         jumpToImproveArea(area);

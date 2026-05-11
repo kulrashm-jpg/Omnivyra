@@ -6,36 +6,14 @@
  */
 
 import { NextApiRequest, NextApiResponse } from 'next';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
-import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
-import { isPlatformSuperAdmin, isSuperAdmin } from '../../../backend/services/rbacService';
 import {
   updateProviderAccount,
   deactivateProviderAccount,
 } from '../../../backend/services/providerAccountService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
 import { supabase } from '../../../backend/db/supabaseClient';
-
-// ── Auth guard ─────────────────────────────────────────────────────────────────
-
-async function requireSuperAdmin(
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<{ userId: string } | null> {
-  const legacy = getLegacySuperAdminSession(req);
-  if (legacy) return { userId: legacy.userId };
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user) {
-    res.status(401).json({ error: 'UNAUTHORIZED' });
-    return null;
-  }
-  if ((await isPlatformSuperAdmin(user.id)) || (await isSuperAdmin(user.id))) {
-    return { userId: user.id };
-  }
-  res.status(403).json({ error: 'SUPER_ADMIN_ONLY' });
-  return null;
-}
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
 // ── Handler ────────────────────────────────────────────────────────────────────
 
@@ -45,8 +23,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Account ID required' });
   }
 
-  const session = await requireSuperAdmin(req, res);
-  if (!session) return;
+  // Phase 2 mutation gate. PUT/DELETE on provider-accounts mutates
+  // encrypted OAuth credentials → same blast radius as platform OAuth.
+  // Bridge principals receive 403 CAPABILITY_NOT_HELD.
+  const guard = await requireCapability(req, res, {
+    capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
+    reason: `provider-account ${req.method} for ${id}`,
+    resourceId: id,
+  });
+  if (guard.ok !== true) return;
+  const session = { userId: guard.principal.userId };
+  void session; // reserved for future audit linkage
 
   // Verify account exists
   const { data: existing, error: fetchError } = await supabase

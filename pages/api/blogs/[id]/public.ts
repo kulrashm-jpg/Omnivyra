@@ -1,12 +1,17 @@
 
 /**
- * Public endpoint — no auth required.
+ * Public endpoint — no auth required (BY DESIGN).
  * Returns a published blog post by ID or slug.
  * Used by /company-blog/[slug].
  *
  * Query:
  *   ?id=<uuid>        — look up by primary key
  *   ?slug=<slug>&company_id=<uuid> — look up by slug within company
+ *
+ * KNOWN TRADE-OFF: anyone with a published-post UUID (or slug+company_id)
+ * can read the post. This is intentional — the post is already published.
+ * Do NOT add owner verification here without first checking the public
+ * `/company-blog/[slug]` page which depends on this being open.
  */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';

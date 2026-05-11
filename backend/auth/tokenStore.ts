@@ -215,14 +215,45 @@ export async function dualWriteSocialAccount(opts: {
     ? permissions
     : (token.scope ? token.scope.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean) : null);
   try {
-    // Find existing row
-    const query = ownedDbTable('social_accounts')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('company_id', companyId)
-      .eq('platform', platform);
-    if (platformUserId) query.eq('platform_user_id', platformUserId);
-    const { data: existing } = await query.maybeSingle();
+    // Strict find: match the platform_user_id the OAuth callback observed.
+    // First-time connects + reconnects with the same provider user-id hit this.
+    let existing: { id: string } | null = null;
+    {
+      const strict = ownedDbTable('social_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('company_id', companyId)
+        .eq('platform', platform);
+      if (platformUserId) strict.eq('platform_user_id', platformUserId);
+      const { data } = await strict.maybeSingle();
+      existing = data ? { id: data.id } : null;
+    }
+
+    // Relaxed fallback: same tenant + platform but DIFFERENT platform_user_id.
+    // Meta in particular returns different fb_user_id values across OAuth
+    // sessions (Page-scoped vs User-scoped id, business-portfolio impersonation,
+    // re-grants under a different identity). Without this fallback, a
+    // reconnect would silently fail at INSERT time (unique index
+    // social_accounts_company_platform_user_unique covers (company_id,
+    // platform, platform_user_id), so a new row IS possible — but two rows
+    // for the same tenant/platform is worse than one, and the original
+    // is_active=false row would still show "Not connected" in the UI).
+    // Treating one (user, company, platform) as the canonical asset and
+    // updating its platform_user_id keeps a single source of truth and
+    // re-activates the row on every reconnect.
+    if (!existing && platformUserId) {
+      const relaxed = await ownedDbTable('social_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('company_id', companyId)
+        .eq('platform', platform)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (relaxed.data?.id) {
+        existing = { id: relaxed.data.id };
+      }
+    }
 
     if (existing?.id) {
       const updatePayload: Record<string, unknown> = {
@@ -232,7 +263,21 @@ export async function dualWriteSocialAccount(opts: {
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
-      if (scopeList) updatePayload.permissions = scopeList;
+      // Keep platform_user_id in sync when Meta hands us a fresh value on
+      // reconnect. Without this the row's platform_user_id stays at the
+      // stale value, and downstream services that look up assets by that
+      // id (Page sync, IG discovery hop) miss the new account.
+      if (platformUserId) updatePayload.platform_user_id = platformUserId;
+      // `permissions` was a stale write target — the column does not exist
+      // on social_accounts (schema drift: column dropped without cleaning up
+      // writers). Caller's scope list is still threaded through via
+      // setToken/token storage; granted scopes for Meta-family are
+      // separately recorded in meta_oauth_connections.granted_scopes.
+      // `scopeList` retained as a parameter for backward compat / future
+      // use, but no longer written here. Removing the write unblocks the
+      // entire OAuth callback chain (LinkedIn / X / YouTube / etc.) that
+      // was failing the insert.
+      void scopeList;
       await ownedDbTable('social_accounts').update(updatePayload).eq('id', existing.id);
       await setToken(existing.id, token);
     } else {
@@ -249,7 +294,8 @@ export async function dualWriteSocialAccount(opts: {
         access_token: encrypted.access_token,
         refresh_token: encrypted.refresh_token,
       };
-      if (scopeList) insertPayload.permissions = scopeList;
+      // See comment above — permissions column doesn't exist on
+      // social_accounts. Do not include scopeList in the insert.
       const { data: inserted } = await ownedDbTable('social_accounts').insert(insertPayload).select('id').single();
       if (inserted?.id) await setToken(inserted.id, token);
     }

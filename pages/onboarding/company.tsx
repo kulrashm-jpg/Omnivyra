@@ -14,13 +14,14 @@
  *  5. POST /api/onboarding/setup-company → redirect to welcome, then workspace
  */
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, type FormEvent } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { getAuthToken } from '../../utils/getAuthToken';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { userScopedStorageKey } from '../../utils/authStorage';
 
 type Step = 'loading' | 'website' | 'details' | 'saving' | 'joined' | 'company-exists';
 const COMPANY_DRAFT_KEY = 'onboarding_company_draft_v1';
@@ -30,6 +31,8 @@ const INDUSTRIES = [
   'Marketing & Advertising',
   'E-commerce & Retail',
   'Finance & Banking',
+  'Banking',
+  'Insurance',
   'Healthcare',
   'Education',
   'Media & Entertainment',
@@ -37,6 +40,13 @@ const INDUSTRIES = [
   'Real Estate',
   'Food & Beverage',
   'Manufacturing',
+  'Telecommunications',
+  'Energy & Utilities',
+  'Construction & Infrastructure',
+  'Logistics & Transportation',
+  'Automotive',
+  'Government & Public Sector',
+  'Nonprofit',
   'Other',
 ];
 
@@ -47,6 +57,21 @@ const TEAM_SIZES = [
   { value: '51-200', label: '51 – 200 people' },
   { value: '201+', label: '201+ people' },
 ];
+
+const BUSINESS_TYPES = [
+  { value: 'product', label: 'Product company' },
+  { value: 'reseller', label: 'Reseller / distributor' },
+  { value: 'service', label: 'Service provider' },
+  { value: 'agency', label: 'Agency' },
+];
+
+const FREE_DOMAINS = new Set(['gmail.com','googlemail.com','yahoo.com','outlook.com','hotmail.com','live.com','msn.com','icloud.com','me.com','mac.com','protonmail.com','proton.me','aol.com','mail.com']);
+
+function deriveWebsiteFromEmail(email: string | null | undefined): string {
+  const domain = String(email || '').split('@')[1]?.trim().toLowerCase();
+  if (!domain || FREE_DOMAINS.has(domain)) return '';
+  return `https://www.${domain}`;
+}
 
 function guessCompanyName(url: string): string {
   try {
@@ -71,11 +96,14 @@ export default function CompanySetupPage() {
   const [step, setStep]             = useState<Step>('loading');
   const [session, setSession]       = useState<any>(null);
   const [websiteInput, setWebsite]  = useState('');
+  const [websiteDerivedFromEmail, setWebsiteDerivedFromEmail] = useState(false);
   const [companyName, setCompanyName] = useState('');
   const [industry, setIndustry]     = useState('');
+  const [businessTypes, setBusinessTypes] = useState<string[]>([]);
   const [teamSize, setTeamSize]     = useState('');
   const [errorMsg, setErrorMsg]     = useState<string | null>(null);
   const [joinedCompanyName, setJoinedCompanyName] = useState<string | null>(null);
+  const [companyDraftKey, setCompanyDraftKey] = useState(COMPANY_DRAFT_KEY);
 
   // Company-exists state — shown when this company is already on Omnivyra
   const [existingCompanyId,   setExistingCompanyId]   = useState<string | null>(null);
@@ -92,22 +120,35 @@ export default function CompanySetupPage() {
     getAuthToken().then(async (token) => {
       if (!token) { router.replace('/login'); return; }
       setSession({ access_token: token });
+      const { data: userData } = await getSupabaseBrowser().auth.getUser();
+      const draftKey = userScopedStorageKey(COMPANY_DRAFT_KEY, userData.user?.id) ?? COMPANY_DRAFT_KEY;
+      setCompanyDraftKey(draftKey);
+      const emailDerivedWebsite = deriveWebsiteFromEmail(userData.user?.email);
+      if (emailDerivedWebsite) {
+        setWebsite(emailDerivedWebsite);
+        setCompanyName((current) => current || guessCompanyName(emailDerivedWebsite));
+        setWebsiteDerivedFromEmail(true);
+      } else {
+        setWebsiteDerivedFromEmail(false);
+      }
 
       try {
-        const draftRaw = localStorage.getItem(COMPANY_DRAFT_KEY);
+        const draftRaw = localStorage.getItem(draftKey);
         if (draftRaw) {
           const draft = JSON.parse(draftRaw) as {
             websiteInput?: string;
             companyName?: string;
             industry?: string;
+            businessTypes?: string[];
             teamSize?: string;
             step?: Step;
           };
-          if (draft.websiteInput) setWebsite(draft.websiteInput);
+          if (draft.websiteInput && !emailDerivedWebsite) setWebsite(draft.websiteInput);
           if (draft.companyName) setCompanyName(draft.companyName);
           if (draft.industry) setIndustry(draft.industry);
+          if (Array.isArray(draft.businessTypes)) setBusinessTypes(draft.businessTypes);
           if (draft.teamSize) setTeamSize(draft.teamSize);
-          if (draft.step === 'details' && (draft.companyName || draft.websiteInput)) {
+          if (draft.step === 'details' && (draft.companyName || draft.websiteInput || emailDerivedWebsite)) {
             setStep('details');
           }
         }
@@ -122,7 +163,12 @@ export default function CompanySetupPage() {
       if (listRes.ok) {
         const json = await listRes.json().catch(() => null);
         if (json?.companies?.length) {
-          router.replace('/welcome');
+          const existingCompanyId = json.companies[0]?.company_id || json.companies[0]?.id;
+          router.replace(
+            existingCompanyId
+              ? `/company-profile?companyId=${encodeURIComponent(existingCompanyId)}&onboarding=company-profile`
+              : '/company-profile?onboarding=company-profile'
+          );
           return;
         }
       }
@@ -149,7 +195,7 @@ export default function CompanySetupPage() {
         // Non-fatal — fall through to company creation form
       }
 
-      setStep((current) => (current === 'details' ? current : 'website'));
+      setStep((current) => (current === 'details' ? current : emailDerivedWebsite ? 'details' : 'website'));
     });
   }, [router]);
 
@@ -157,16 +203,17 @@ export default function CompanySetupPage() {
     if (step === 'loading' || step === 'saving' || step === 'joined' || step === 'company-exists') return;
     try {
       localStorage.setItem(
-        COMPANY_DRAFT_KEY,
-        JSON.stringify({ websiteInput, companyName, industry, teamSize, step }),
+        companyDraftKey,
+        JSON.stringify({ websiteInput, companyName, industry, businessTypes, teamSize, step }),
       );
+      localStorage.removeItem(COMPANY_DRAFT_KEY);
     } catch {
       // ignore storage failures
     }
-  }, [websiteInput, companyName, industry, teamSize, step]);
+  }, [websiteInput, companyName, industry, businessTypes, teamSize, step, companyDraftKey]);
 
   // ── Step A: website submitted ─────────────────────────────────────────────
-  function handleWebsiteNext(e: React.FormEvent) {
+  function handleWebsiteNext(e: FormEvent) {
     e.preventDefault();
     const url = normaliseUrl(websiteInput);
     if (!url) { setErrorMsg('Please enter your company website.'); return; }
@@ -182,7 +229,6 @@ export default function CompanySetupPage() {
         setErrorMsg('Please enter a public website URL, not a local or private address.');
         return;
       }
-      const FREE_DOMAINS = new Set(['gmail.com','googlemail.com','yahoo.com','outlook.com','hotmail.com','live.com','msn.com','icloud.com','me.com','mac.com','protonmail.com','proton.me','aol.com','mail.com']);
       if (FREE_DOMAINS.has(hostname)) {
         setErrorMsg('Please enter your company website, not a personal email provider domain.');
         return;
@@ -200,7 +246,7 @@ export default function CompanySetupPage() {
   }
 
   // ── Step B: details submitted ─────────────────────────────────────────────
-  async function handleDetailsSubmit(e: React.FormEvent) {
+  async function handleDetailsSubmit(e: FormEvent) {
     e.preventDefault();
     if (!companyName.trim()) { setErrorMsg('Please enter your company name.'); return; }
     setErrorMsg(null);
@@ -218,17 +264,27 @@ export default function CompanySetupPage() {
           companyName: companyName.trim(),
           website:     websiteInput,
           industry,
+          businessTypes,
           companySize: teamSize,
           refCode:     (() => { try { return localStorage.getItem('ref_code') ?? undefined; } catch { return undefined; } })(),
         }),
       });
 
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed to create company');
+      if (!res.ok) {
+        if (res.status === 409 && String(json.error || '').toLowerCase().includes('personal profile')) {
+          router.replace('/onboarding/profile');
+          return;
+        }
+        throw new Error(json.error ?? 'Failed to create company');
+      }
 
       // Clear referral code after use
       try { localStorage.removeItem('ref_code'); } catch { /* ignore */ }
-      try { localStorage.removeItem(COMPANY_DRAFT_KEY); } catch { /* ignore */ }
+      try {
+        localStorage.removeItem(companyDraftKey);
+        localStorage.removeItem(COMPANY_DRAFT_KEY);
+      } catch { /* ignore */ }
 
       if (json.companyExists) {
         // Company already exists — show admin contact info, no self-registration
@@ -248,9 +304,9 @@ export default function CompanySetupPage() {
         return;
       }
 
-      // Pre-load company data so the workspace renders with full context
+      // Pre-load company data so the company profile renders with full context
       await refreshCompanies().catch(() => {});
-      router.replace('/welcome?context=company_created');
+      router.replace(`/company-profile?companyId=${encodeURIComponent(json.companyId)}&onboarding=company-profile`);
     } catch (err: any) {
       setErrorMsg(err.message ?? 'Something went wrong. Please try again.');
       setStep('details');
@@ -375,7 +431,9 @@ export default function CompanySetupPage() {
                     Confirm your details
                   </h1>
                   <p className="mt-2 text-sm leading-relaxed text-[#6B7C93]">
-                    {websiteInput
+                    {websiteDerivedFromEmail
+                      ? `We used your verified email domain to set ${websiteInput}. This prevents the wrong company website from being attached.`
+                      : websiteInput
                       ? `We've pre-filled what we can from ${websiteInput} — update anything that's off.`
                       : 'Fill in your company details to personalise your experience.'}
                   </p>
@@ -400,7 +458,7 @@ export default function CompanySetupPage() {
                     />
                   </div>
 
-                  {/* Website (editable) */}
+                  {/* Website */}
                   {websiteInput && (
                     <div>
                       <label htmlFor="websiteEdit" className="block text-sm font-medium text-[#0B1F33] mb-1.5">
@@ -410,9 +468,22 @@ export default function CompanySetupPage() {
                         id="websiteEdit"
                         type="text"
                         value={websiteInput}
-                        onChange={e => setWebsite(e.target.value)}
-                        className="w-full rounded-xl border-2 border-gray-200 bg-white px-4 py-3 text-sm text-[#0B1F33] outline-none transition focus:border-[#0A66C2]"
+                        readOnly={websiteDerivedFromEmail}
+                        aria-readonly={websiteDerivedFromEmail}
+                        onChange={e => {
+                          if (!websiteDerivedFromEmail) setWebsite(e.target.value);
+                        }}
+                        className={`w-full rounded-xl border-2 border-gray-200 px-4 py-3 text-sm outline-none transition ${
+                          websiteDerivedFromEmail
+                            ? 'bg-slate-100 text-slate-600 cursor-not-allowed'
+                            : 'bg-white text-[#0B1F33] focus:border-[#0A66C2]'
+                        }`}
                       />
+                      {websiteDerivedFromEmail && (
+                        <p className="mt-1 text-xs text-[#6B7C93]">
+                          Locked from your verified email domain. Social links will be discovered from this site during AI refinement when available.
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -432,6 +503,39 @@ export default function CompanySetupPage() {
                         <option key={ind} value={ind}>{ind}</option>
                       ))}
                     </select>
+                  </div>
+
+                  {/* Business type */}
+                  <div>
+                    <div className="block text-sm font-medium text-[#0B1F33] mb-2">
+                      Business type
+                      <span className="ml-1 text-[#6B7C93] font-normal">(select all that apply)</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {BUSINESS_TYPES.map((type) => {
+                        const selected = businessTypes.includes(type.value);
+                        return (
+                          <button
+                            key={type.value}
+                            type="button"
+                            onClick={() => {
+                              setBusinessTypes((prev) =>
+                                prev.includes(type.value)
+                                  ? prev.filter((item) => item !== type.value)
+                                  : [...prev, type.value],
+                              );
+                            }}
+                            className={`rounded-xl border-2 px-3 py-2.5 text-left text-xs font-medium transition ${
+                              selected
+                                ? 'border-[#0A66C2] bg-[#EBF3FD] text-[#0A66C2]'
+                                : 'border-gray-200 bg-white text-[#6B7C93] hover:border-[#0A66C2]/40'
+                            }`}
+                          >
+                            {type.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {/* Team size */}

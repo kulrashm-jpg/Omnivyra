@@ -74,7 +74,32 @@ export function getRedisConfig() {
   return redisConfig;
 }
 
-/** Full IORedis-compatible connection options including TLS for Upstash. */
+/**
+ * Full IORedis-compatible connection options including TLS for Upstash.
+ *
+ * IMPORTANT: this config is shared by both Queue producers AND Worker
+ * consumers. BullMQ Workers issue blocking `BLPOP` commands to fetch jobs
+ * and require `maxRetriesPerRequest: null` on their Redis connection —
+ * any finite value times the BLPOP out after that many retries and the
+ * worker silently stops polling. Previously this was `1` for localhost
+ * Redis under the assumption that fail-fast was preferable in dev, but
+ * the consequence was that every Worker routed through this config
+ * (analytics-ingestion, publish, bolt-execution, whatsapp-broadcast,
+ * whatsapp-webhook, the entire content-generation family) stopped
+ * consuming jobs on localhost. Production was unaffected because
+ * IS_OPTIONAL_LOCAL_REDIS was false there. The intelligence-polling
+ * worker (which has its own getConnection() that already hard-codes
+ * `maxRetriesPerRequest: null`) was the only worker still working in
+ * dev — that is why it was the one queue with completed jobs in the
+ * runtime audit.
+ *
+ * Unconditionally setting `null` matches BullMQ's documented requirement
+ * and works identically for Queue producers (no retry budget needed on
+ * a non-blocking SADD/ZADD). The localhost-only `retryStrategy: () =>
+ * null` is also removed because under a transient Redis blip on
+ * localhost it left the worker permanently disconnected; BullMQ Worker
+ * survives Redis reconnects natively when the strategy is left default.
+ */
 export function getConnectionConfig() {
   return {
     host: redisConfig.host,
@@ -82,9 +107,8 @@ export function getConnectionConfig() {
     password: redisConfig.password,
     ...(redisConfig.tls ? { tls: redisConfig.tls } : {}),
     enableReadyCheck: false,
-    maxRetriesPerRequest: IS_OPTIONAL_LOCAL_REDIS ? 1 : null,
+    maxRetriesPerRequest: null as null,
     lazyConnect: true,
-    ...(IS_OPTIONAL_LOCAL_REDIS ? { retryStrategy: () => null } : {}),
   };
 }
 

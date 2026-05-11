@@ -1,3 +1,18 @@
+/**
+ * GET  /api/super-admin/analytics-provider-config — read GA4 OAuth config
+ * POST /api/super-admin/analytics-provider-config — upsert GA4 OAuth config
+ *
+ * Phase 2 — direct-cookie migration (mutation only):
+ *   - GET stays bridge-compatible via the centralized
+ *     `getLegacySuperAdminSession` helper (now signature-validated +
+ *     dry-run-aware). Read access continues to work for env-credential
+ *     operators on the home tab.
+ *   - POST gates on `requireCapability(INTEGRATION_PLATFORM_OAUTH_MANAGE)`.
+ *     This is the same capability that protects /super-admin/platform-oauth-configs;
+ *     overwriting Google Analytics OAuth client secrets has the same blast
+ *     radius as overwriting platform OAuth credentials. Step-up
+ *     (phishing-resistant + trusted device) is required.
+ */
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import {
@@ -7,9 +22,13 @@ import {
   upsertAnalyticsProviderConfig,
 } from '../../../backend/services/analyticsProviderConfigService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
-async function requireAnalyticsProviderAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1') return true;
+async function requireAnalyticsProviderRead(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
+  // Bridge accepted for READ only via centralized helper.
+  if (getLegacySuperAdminSession(req) !== null) return true;
 
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user?.id) {
@@ -33,10 +52,8 @@ async function requireAnalyticsProviderAdmin(req: NextApiRequest, res: NextApiRe
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const allowed = await requireAnalyticsProviderAdmin(req, res);
-  if (!allowed) return;
-
   if (req.method === 'GET') {
+    if (!(await requireAnalyticsProviderRead(req, res))) return;
     try {
       const config = await getAnalyticsProviderConfigSummary('google_analytics');
       return res.status(200).json({ config });
@@ -47,6 +64,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'POST') {
+    // Phase 2 migration: capability + step-up gate. Bridge principals
+    // are explicitly rejected (BRIDGE_FACTOR_INSUFFICIENT) because the
+    // bridge cap set excludes INTEGRATION_PLATFORM_OAUTH_MANAGE.
+    const guard = await requireCapability(req, res, {
+      capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
+      reason: 'analytics provider OAuth credentials mutation',
+    });
+    if (guard.ok !== true) return;
+
     try {
       const enabled = Boolean(req.body?.enabled);
       const clientId = typeof req.body?.oauth_client_id === 'string' ? req.body.oauth_client_id : undefined;

@@ -177,7 +177,7 @@ async function handleActionUpdate(body: ActionUpdateBody, actorId: string, res: 
 
   if (!viaMapping && !viaOverride && !legacyMatch) {
     return res.status(400).json({
-      error: `Unknown action_key '${actionKey}'. Add it to PROCESS_TYPE_TO_ACTION_KEY or credit_cost_config first.`,
+      error: `Unknown action_key '${actionKey}'. Add it to shared/monetization/featureRegistry.ts or credit_cost_config first.`,
       code:  'UNKNOWN_ACTION_KEY',
     });
   }

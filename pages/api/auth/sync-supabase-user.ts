@@ -30,6 +30,7 @@ import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateL
 import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/domainVerificationService';
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
 import { issueMfaIntent, userHasVerifiedMfaFactor } from '../../../backend/security/MfaIntent';
+import { SELF_REGISTERED_JOIN_SOURCE } from '../../../backend/services/companyMembershipIntegrityService';
 
 type BootstrapRejection = {
   code:
@@ -261,46 +262,9 @@ export default async function handler(
     // is missing, it repairs them without re-granting. If the org already
     // has a clean claim row, it returns 'already_claimed' as a no-op.
     void reconcileInitialFreeCreditForUser(existingUserId, normalizedEmail);
-    try {
-      const result = await bootstrapCompanyFromSignupIntent({
-        userId: existingUserId,
-        email: normalizedEmail,
-        clientIp,
-      });
-      if (result.ok === false) {
-        const rejection = result.rejection;
-        return res.status(rejection.status).json({
-          error:   rejection.code,
-          code:    rejection.code,
-          details: rejection.details,
-          ...(rejection.final_domain
-            ? { final_domain: rejection.final_domain }
-            : {}),
-          ...(rejection.conflicting_company_id
-            ? { conflicting_company_id: rejection.conflicting_company_id }
-            : {}),
-        });
-      }
-      const gate = await gateOnMfa(existingUserId);
-      if (gate.required) {
-        return res.status(200).json({ ok: true, mfa_required: true, factors: gate.factors });
-      }
-      await projectSession(existingUserId);
-      return res.status(200).json({
-        ok: true,
-        ...(result.domain_verification
-          ? { domain_verification: result.domain_verification }
-          : {}),
-      });
-    } catch (err) {
-      logger.warn('auth_sync_bootstrap_outer_threw_existing_uid', {
-        email: normalizedEmail,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-    const gateFallbackUid = await gateOnMfa(existingUserId);
-    if (gateFallbackUid.required) {
-      return res.status(200).json({ ok: true, mfa_required: true, factors: gateFallbackUid.factors });
+    const gate = await gateOnMfa(existingUserId);
+    if (gate.required) {
+      return res.status(200).json({ ok: true, mfa_required: true, factors: gate.factors });
     }
     await projectSession(existingUserId);
     return res.status(200).json({ ok: true });
@@ -337,46 +301,9 @@ export default async function handler(
     // Same reconciliation as the by-uid branch: heal any drift between the
     // wallet, claim row, and company stamp on every login. Best-effort.
     void reconcileInitialFreeCreditForUser(existingUserIdByEmail, normalizedEmail);
-    try {
-      const result = await bootstrapCompanyFromSignupIntent({
-        userId: existingUserIdByEmail,
-        email: normalizedEmail,
-        clientIp,
-      });
-      if (result.ok === false) {
-        const rejection = result.rejection;
-        return res.status(rejection.status).json({
-          error:   rejection.code,
-          code:    rejection.code,
-          details: rejection.details,
-          ...(rejection.final_domain
-            ? { final_domain: rejection.final_domain }
-            : {}),
-          ...(rejection.conflicting_company_id
-            ? { conflicting_company_id: rejection.conflicting_company_id }
-            : {}),
-        });
-      }
-      const gateEmail = await gateOnMfa(existingUserIdByEmail);
-      if (gateEmail.required) {
-        return res.status(200).json({ ok: true, mfa_required: true, factors: gateEmail.factors });
-      }
-      await projectSession(existingUserIdByEmail);
-      return res.status(200).json({
-        ok: true,
-        ...(result.domain_verification
-          ? { domain_verification: result.domain_verification }
-          : {}),
-      });
-    } catch (err) {
-      logger.warn('auth_sync_bootstrap_outer_threw_existing_email', {
-        email: normalizedEmail,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-    const gateFallbackEmail = await gateOnMfa(existingUserIdByEmail);
-    if (gateFallbackEmail.required) {
-      return res.status(200).json({ ok: true, mfa_required: true, factors: gateFallbackEmail.factors });
+    const gateEmail = await gateOnMfa(existingUserIdByEmail);
+    if (gateEmail.required) {
+      return res.status(200).json({ ok: true, mfa_required: true, factors: gateEmail.factors });
     }
     await projectSession(existingUserIdByEmail);
     return res.status(200).json({ ok: true });
@@ -384,26 +311,12 @@ export default async function handler(
 
   // Third: brand-new user — INSERT
   // Pre-link to invitation company if one exists for this email
-  let invitedCompanyId: string | null = null;
-  const { data: pendingInvite } = await supabase
-    .from('invitations')
-    .select('company_id')
-    .eq('email', normalizedEmail)
-    .is('accepted_at', null)
-    .is('revoked_at', null)
-    .gt('expires_at', now)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (pendingInvite) invitedCompanyId = (pendingInvite as any).company_id;
-
   const { error: insertError } = await supabase.from('users').insert({
     supabase_uid:      supabaseUid,
     email:             normalizedEmail,
     is_email_verified: true,
     last_sign_in_at:   now,
     has_password:      hasPassword,
-    ...(invitedCompanyId ? { active_company_id: invitedCompanyId } : {}),
   });
 
   if (insertError) {
@@ -411,9 +324,6 @@ export default async function handler(
     return res.status(500).json({ error: 'Failed to sync user to database' });
   }
 
-  // Captured from the brand-new-user bootstrap so the success response can
-  // surface the raw verification token to the client.
-  let insertBranchVerification: SuccessResponse['domain_verification'] | undefined;
   let freshlyInsertedUserId: string | null = null;
 
   // Look the row up separately (instead of chaining .select() onto the
@@ -430,44 +340,6 @@ export default async function handler(
     if (insertedUser) {
       const insertedUserId = (insertedUser as { id: string }).id;
       freshlyInsertedUserId = insertedUserId;
-      const result = await bootstrapCompanyFromSignupIntent({
-        userId: insertedUserId,
-        email: normalizedEmail,
-        clientIp,
-      });
-      if (result.ok === true) {
-        insertBranchVerification = result.domain_verification;
-      } else if (result.ok === false) {
-        const rejection = result.rejection;
-        // Honor the spec's "DO NOT create user/company" guarantee: the user
-        // row was just inserted, so soft-delete it and remove the auth
-        // identity. Soft-delete is sufficient because is_deleted blocks
-        // every downstream auth path; the auth.users row is removed so the
-        // user can re-attempt with a corrected domain on a clean slate.
-        await supabase
-          .from('users')
-          .update({ is_deleted: true, deleted_at: new Date().toISOString() })
-          .eq('id', insertedUserId);
-        try {
-          await supabase.auth.admin.deleteUser(supabaseUid);
-        } catch (authErr) {
-          logger.warn('auth_sync_canonical_reject_auth_cleanup_failed', {
-            email: normalizedEmail,
-            message: authErr instanceof Error ? authErr.message : String(authErr),
-          });
-        }
-        return res.status(rejection.status).json({
-          error:   rejection.code,
-          code:    rejection.code,
-          details: rejection.details,
-          ...(rejection.final_domain
-            ? { final_domain: rejection.final_domain }
-            : {}),
-          ...(rejection.conflicting_company_id
-            ? { conflicting_company_id: rejection.conflicting_company_id }
-            : {}),
-        });
-      }
     }
   } catch (err) {
     logger.warn('auth_sync_post_insert_lookup_failed', {
@@ -479,12 +351,7 @@ export default async function handler(
   if (freshlyInsertedUserId) {
     await projectSession(freshlyInsertedUserId);
   }
-  return res.status(200).json({
-    ok: true,
-    ...(insertBranchVerification
-      ? { domain_verification: insertBranchVerification }
-      : {}),
-  });
+  return res.status(200).json({ ok: true });
 }
 
 /**
@@ -549,6 +416,12 @@ async function bootstrapCompanyFromSignupIntent(input: {
   email: string;
   clientIp?: string;
 }): Promise<BootstrapResult> {
+  logger.warn('auth_sync_signup_intent_company_bootstrap_disabled', {
+    userId: input.userId,
+    email: input.email,
+  });
+  return { ok: true };
+
   try {
     // Skip if user already has any active role — invited users or
     // returning users already belong to a company.
@@ -891,7 +764,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
     void logDomainUnverifiedUsageForCompany({
       company_id: companyId,
       operation:  'auth_sync_company_bootstrap',
-      metadata:   { user_id: input.userId, source: 'self_registered' },
+      metadata:   { user_id: input.userId, source: SELF_REGISTERED_JOIN_SOURCE },
     });
 
     // Insert user_company_roles (idempotent on duplicate user/company pair).
@@ -900,7 +773,7 @@ async function bootstrapCompanyFromSignupIntent(input: {
       company_id:  companyId,
       role:        'COMPANY_ADMIN',
       status:      'active',
-      join_source: 'self_registered',
+      join_source: SELF_REGISTERED_JOIN_SOURCE,
       created_at:  now,
       updated_at:  now,
       accepted_at: now,

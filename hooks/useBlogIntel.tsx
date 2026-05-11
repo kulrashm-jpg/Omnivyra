@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
+import { useCompanyContext } from '../components/CompanyContext';
 import {
   Loader2, Lightbulb, Network, BookOpen, TrendingUp, Rocket,
   Plus, Trash2, ChevronUp, ChevronDown, ExternalLink,
@@ -128,6 +129,7 @@ const TYPE_COLOURS: Record<string, string> = {
 
 export function useBlogIntel() {
   const router = useRouter();
+  const { user } = useCompanyContext();
   const [tab, setTab] = useState<TabId>('recommendations');
 
   // ── Data state ────────────────────────────────────────────────────────────
@@ -140,6 +142,26 @@ export function useBlogIntel() {
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
   const [companyContextNote, setCompanyContextNote] = useState('');
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
+
+  // SECURITY: clear all server-fetched state when the authenticated identity
+  // changes. Prevents the previous user's blog intelligence data from being
+  // visible after a sign-out → sign-in in the same tab.
+  const previousUserIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const currentUserId = user?.userId ?? null;
+    const previousUserId = previousUserIdRef.current;
+    if (previousUserId && previousUserId !== currentUserId) {
+      setPosts([]);
+      setSeries([]);
+      setRelationships([]);
+      setCompanies([]);
+      setSelectedCompanyId('');
+      setCompanyContextNote('');
+      setCompanyProfile(null);
+      setError(null);
+    }
+    previousUserIdRef.current = currentUserId;
+  }, [user?.userId]);
 
   // ── AI Blog Card Modal state ──────────────────────────────────────────────
   const [isAICardModalOpen, setIsAICardModalOpen] = useState(false);
@@ -199,10 +221,7 @@ export function useBlogIntel() {
         if (!active) return;
         setCompanies(list);
 
-        const remembered = typeof window !== 'undefined' ? localStorage.getItem('selected_company_id') || '' : '';
-        const next = remembered && list.some((c) => c.company_id === remembered)
-          ? remembered
-          : (list[0]?.company_id || '');
+        const next = list[0]?.company_id || '';
         setSelectedCompanyId(next);
       } catch {
         // non-blocking for intelligence dashboard
@@ -248,10 +267,6 @@ export function useBlogIntel() {
         setCompanyProfile(null);
       }
     };
-
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('selected_company_id', selectedCompanyId);
-    }
 
     void loadCompanyContext();
   }, [selectedCompanyId]);

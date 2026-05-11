@@ -2,11 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   Activity,
+  ArrowRight,
   BarChart3,
   Database,
   FileText,
   Globe2,
   Link2,
+  Megaphone,
+  MessageSquare,
+  Plug,
   Radio,
   RefreshCw,
   Users,
@@ -61,6 +65,7 @@ type DashboardPayload = {
   };
   overview: {
     platformsConnected: number;
+    platformsReady: number;
     activeIntegrations: number;
     activeCampaigns: number;
     totalContentAssets: number;
@@ -405,13 +410,18 @@ function SectionShell({
 function StatTile({
   label,
   value,
+  category,
 }: {
   label: string;
   value: string;
+  category?: string;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-4 shadow-sm">
-      <div className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{label}</div>
+      {category ? (
+        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-700">{category}</div>
+      ) : null}
+      <div className={`${category ? 'mt-1' : ''} text-xs font-medium uppercase tracking-[0.16em] text-slate-400`}>{label}</div>
       <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">{value}</div>
     </div>
   );
@@ -491,7 +501,7 @@ function TopStrip({
       </div>
 
       {loading ? (
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {Array.from({ length: 5 }).map((_, index) => (
             <div key={index} className="rounded-2xl border border-slate-200 bg-white/80 p-4">
               <SkeletonBlock className="h-3 w-24" />
@@ -504,12 +514,16 @@ function TopStrip({
           System overview is temporarily unavailable.
         </div>
       ) : (
-        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <StatTile label="Platforms Connected" value={formatNumber(overview.platformsConnected)} />
-          <StatTile label="Active Integrations" value={formatNumber(overview.activeIntegrations)} />
-          <StatTile label="Active Campaigns" value={formatNumber(overview.activeCampaigns)} />
-          <StatTile label="Total Content Assets" value={formatNumber(overview.totalContentAssets)} />
-          <StatTile label="Active Users" value={formatNumber(overview.activeUsers)} />
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <StatTile
+            category="Platforms"
+            label="Ready / Connected"
+            value={`${formatNumber(overview.platformsReady)} / ${formatNumber(overview.platformsConnected)}`}
+          />
+          <StatTile category="Integrations" label="Active" value={formatNumber(overview.activeIntegrations)} />
+          <StatTile category="Campaigns" label="Active" value={formatNumber(overview.activeCampaigns)} />
+          <StatTile category="Content" label="Total Assets" value={formatNumber(overview.totalContentAssets)} />
+          <StatTile category="Users" label="Active" value={formatNumber(overview.activeUsers)} />
         </div>
       )}
     </div>
@@ -651,18 +665,46 @@ export default function SystemStateDashboard({
         variant={variant}
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Link href="/campaigns" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-950">
-          Campaigns
+      <div className="grid gap-2.5 sm:grid-cols-2 md:grid-cols-4">
+        <Link
+          href="/campaigns"
+          className="group inline-flex items-center justify-between gap-3 rounded-full border border-slate-200 bg-slate-50/70 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white hover:text-slate-950"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Megaphone className="h-4 w-4 text-slate-500 transition group-hover:text-slate-700" />
+            Campaigns
+          </span>
+          <ArrowRight className="h-3.5 w-3.5 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-600" />
         </Link>
-        <Link href="/content" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-950">
-          Content
+        <Link
+          href="/content"
+          className="group inline-flex items-center justify-between gap-3 rounded-full border border-slate-200 bg-slate-50/70 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white hover:text-slate-950"
+        >
+          <span className="inline-flex items-center gap-2">
+            <FileText className="h-4 w-4 text-slate-500 transition group-hover:text-slate-700" />
+            Content
+          </span>
+          <ArrowRight className="h-3.5 w-3.5 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-600" />
         </Link>
-        <Link href="/engagement" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-950">
-          Engagement
+        <Link
+          href="/engagement"
+          className="group inline-flex items-center justify-between gap-3 rounded-full border border-slate-200 bg-slate-50/70 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white hover:text-slate-950"
+        >
+          <span className="inline-flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-slate-500 transition group-hover:text-slate-700" />
+            Engagement
+          </span>
+          <ArrowRight className="h-3.5 w-3.5 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-600" />
         </Link>
-        <Link href="/integrations?focus=data" className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-950">
-          Integrations
+        <Link
+          href="/integrations?focus=data"
+          className="group inline-flex items-center justify-between gap-3 rounded-full border border-slate-200 bg-slate-50/70 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white hover:text-slate-950"
+        >
+          <span className="inline-flex items-center gap-2">
+            <Plug className="h-4 w-4 text-slate-500 transition group-hover:text-slate-700" />
+            Integrations
+          </span>
+          <ArrowRight className="h-3.5 w-3.5 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-600" />
         </Link>
       </div>
 

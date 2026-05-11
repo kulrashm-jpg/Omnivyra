@@ -418,18 +418,45 @@ export async function startWhatsAppWebhookWorker(processor: (job: any) => Promis
 }
 
 export async function startAnalyticsIngestionWorker(processor: (job: any) => Promise<any>): Promise<void> {
+  // TEMP diagnostic — sentinel file
+  const _diagFs = await import('fs');
+  const _diagPath = await import('path');
+  const _diag = (stage: string, extra?: Record<string, unknown>): void => {
+    try {
+      const line = JSON.stringify({ ts: new Date().toISOString(), stage, ...extra }) + '\n';
+      _diagFs.appendFileSync(_diagPath.join(process.cwd(), '.worker-bootstrap.log'), line);
+    } catch { /* never throw */ }
+  };
+  _diag('startAnalyticsIngestionWorker:entered');
   const config = CONTENT_QUEUE_CONFIG['analytics-ingestion']!;
-  const worker = new Worker('analytics-ingestion', processor, {
-    connection: getConnectionConfig(),
-    concurrency: config.concurrency,
-  });
+  let worker: Worker;
+  try {
+    worker = new Worker('analytics-ingestion', processor, {
+      connection: getConnectionConfig(),
+      concurrency: config.concurrency,
+    });
+    _diag('startAnalyticsIngestionWorker:worker-constructed', { concurrency: config.concurrency });
+  } catch (e) {
+    _diag('startAnalyticsIngestionWorker:constructor-THREW', { error: e instanceof Error ? e.message : String(e) });
+    throw e;
+  }
+  // The BullMQ Worker emits 'ready' once its Redis connection is ready;
+  // 'active' fires on every job claim. If we see neither, the worker
+  // never subscribed.
+  worker.on('ready', () => _diag('analytics-ingestion-worker:ready'));
+  worker.on('error', (err) => _diag('analytics-ingestion-worker:error', { error: err instanceof Error ? err.message : String(err) }));
+  worker.on('closed', () => _diag('analytics-ingestion-worker:closed'));
+  worker.on('active', (job) => _diag('analytics-ingestion-worker:active', { jobId: job.id, name: job.name }));
   worker.on('completed', (job) => {
+    _diag('analytics-ingestion-worker:completed', { jobId: job.id, name: job.name });
     console.info('[analytics-ingestion-worker][completed]', { jobId: job.id });
   });
   worker.on('failed', (job, error) => {
+    _diag('analytics-ingestion-worker:failed', { jobId: job?.id, error: String(error).slice(0, 200) });
     console.error('[analytics-ingestion-worker][failed]', { jobId: job?.id, error: String(error) });
   });
   console.info('[analytics-ingestion-worker] started, concurrency=', config.concurrency);
+  _diag('startAnalyticsIngestionWorker:event-handlers-registered');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

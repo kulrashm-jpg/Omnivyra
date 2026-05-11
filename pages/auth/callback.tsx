@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
+import { clearBrowserAuthState } from '../../utils/authStorage';
+import { assertCallbackIdentitySource } from '../../utils/authIntegrityGuards';
+
+const AUTH_FLOW_SESSION_MARKER = 'auth_flow_session_established_v1';
+
+async function clearServerAuthSession(): Promise<void> {
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } catch { /* ignore */ }
+}
 
 export default function AuthCallback() {
   const router = useRouter();
@@ -18,37 +31,56 @@ export default function AuthCallback() {
     startedRef.current = true;
 
     async function handleCallback() {
-      const supabase  = getSupabaseBrowser();
       const params    = new URLSearchParams(window.location.search);
       const code      = params.get('code');
       const errorParam = params.get('error');
-      const errorDesc  = params.get('error_description');
+      const hash = window.location.hash;
+      const hashParams = hash ? new URLSearchParams(hash.substring(1)) : null;
+      const hashError = hashParams?.get('error');
+      const hasHashToken = Boolean(hash && hash.includes('access_token'));
 
-      if (errorParam) {
-        router.replace(`/login?error=${encodeURIComponent(errorDesc ?? errorParam)}`);
+      if (errorParam || hashError) {
+        await clearServerAuthSession();
+        clearBrowserAuthState({ preservePkce: false });
+        router.replace('/login?error=verification_invalid_or_expired');
         return;
       }
 
+      if (!code && !hasHashToken) {
+        await clearServerAuthSession();
+        clearBrowserAuthState({ preservePkce: false });
+        router.replace('/login?error=verification_invalid_or_expired');
+        return;
+      }
+
+      clearBrowserAuthState({ preservePkce: Boolean(code) });
+      const supabase  = getSupabaseBrowser();
       let accessToken: string | null = null;
+      let verifiedUserId: string | null = null;
+      let establishedFromVerificationFlow = false;
 
       if (code) {
         setStatusMsg('Completing sign-in…');
 
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
-        if (error || !data.session) {
-          router.replace('/login?error=auth_failed');
+        const user = data.session?.user;
+        if (error || !data.session || !user?.id || !user.email) {
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
+          router.replace('/login?error=verification_invalid_or_expired');
           return;
         }
 
         accessToken = data.session.access_token;
+        verifiedUserId = user.id;
+        establishedFromVerificationFlow = true;
       } else {
         // ── Implicit flow: hash fragment (#access_token=…) ──────────────────
         // The SDK processes hash tokens asynchronously, so getSession() may
         // return null if called before initialization completes.
         // Explicitly parse and set the session from the hash to avoid the race.
-        const hash = window.location.hash;
-        if (hash && hash.includes('access_token')) {
+        if (hasHashToken) {
           const hp = new URLSearchParams(hash.substring(1));
           const at = hp.get('access_token');
           const rt = hp.get('refresh_token');
@@ -56,25 +88,42 @@ export default function AuthCallback() {
             // Clear the hash from the URL so it isn't reprocessed on refresh.
             window.history.replaceState(null, '', window.location.pathname + window.location.search);
             const { data, error } = await supabase.auth.setSession({ access_token: at, refresh_token: rt });
-            if (error || !data.session) {
-              router.replace('/login?error=auth_failed');
+            const user = data.session?.user;
+            if (error || !data.session || !user?.id || !user.email) {
+              await clearServerAuthSession();
+              clearBrowserAuthState({ preservePkce: false });
+              router.replace('/login?error=verification_invalid_or_expired');
               return;
             }
             accessToken = data.session.access_token;
+            verifiedUserId = user.id;
+            establishedFromVerificationFlow = true;
           }
         }
 
-        // No hash tokens — fall back to an existing session (e.g. page refresh).
+        // No usable hash tokens: fail closed instead of restoring persisted state.
         if (!accessToken) {
-          const { data } = await supabase.auth.getSession();
-          accessToken = data.session?.access_token ?? null;
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
+          router.replace('/login?error=verification_invalid_or_expired');
+          return;
         }
       }
 
-        if (!accessToken) {
-          router.replace('/login');
-          return;
-        }
+      if (!accessToken || !establishedFromVerificationFlow) {
+        await clearServerAuthSession();
+        clearBrowserAuthState({ preservePkce: false });
+        router.replace('/login?error=verification_invalid_or_expired');
+        return;
+      }
+      assertCallbackIdentitySource({
+        hasVerificationToken: Boolean(code || hasHashToken),
+        accessToken,
+        userId: verifiedUserId,
+      });
+      try {
+        window.sessionStorage.setItem(AUTH_FLOW_SESSION_MARKER, '1');
+      } catch { /* ignore */ }
 
       setStatusMsg('Syncing your account…');
       const mode = params.get('mode') ?? '';
@@ -91,6 +140,8 @@ export default function AuthCallback() {
 
         if (syncRes.status === 403) {
           await supabase.auth.signOut();
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
           router.replace('/login?error=account_deleted');
           return;
         }
@@ -149,12 +200,16 @@ export default function AuthCallback() {
 
         if (verifyRes.status === 403) {
           await supabase.auth.signOut();
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
           router.replace('/login?error=account_deleted');
           return;
         }
 
         if (verifyRes.status === 401) {
           await supabase.auth.signOut();
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
           router.replace('/login?error=invalid_session');
           return;
         }
@@ -178,6 +233,8 @@ export default function AuthCallback() {
         if (verifyJson.requiresLogin) {
           setStatusMsg('Email verified! Redirecting to sign in…');
           await supabase.auth.signOut();
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
           const emailParam = verifyJson.email
             ? `&email=${encodeURIComponent(verifyJson.email)}`
             : '';
@@ -199,12 +256,16 @@ export default function AuthCallback() {
 
         if (routeRes.status === 403) {
           await supabase.auth.signOut();
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
           router.replace('/login?error=account_deleted');
           return;
         }
 
         if (routeRes.status === 401) {
           await supabase.auth.signOut();
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
           router.replace('/login?error=invalid_session');
           return;
         }
@@ -223,6 +284,8 @@ export default function AuthCallback() {
         console.error('[auth/callback] auth bootstrap error:', e);
       }
 
+      await clearServerAuthSession();
+      clearBrowserAuthState({ preservePkce: false });
       router.replace('/login?error=auth_failed');
     }
 

@@ -223,7 +223,14 @@
       "Bash(npm audit *)",
       "Bash([ -s \"C:\\\\\\\\Users\\\\\\\\Admin\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp\\\\\\\\claude\\\\\\\\C--virality\\\\\\\\fd112cf7-06f6-4e2d-ba70-d37fce6f544e\\\\\\\\tasks\\\\\\\\bqvkfwgo8.output\" ])",
       "Bash(tee C:/tmp/build-smoke.log)",
-      "Bash(git diff *)"
+      "Bash(git diff *)",
+      "Bash(git ls-remote *)",
+      "Bash(xargs -I{} git ls-files -s {})",
+      "Bash(xargs -I{} ls -la \"{}\")",
+      "Bash(git fetch *)",
+      "PowerShell(npx --no-install vercel --version 2>&1 | Select-Object -First 5; Write-Output \"---\"; \\(Get-ChildItem -Path . -Filter \"vercel.json\" -ErrorAction SilentlyContinue\\).FullName; Write-Output \"---\"; if \\(Test-Path package.json\\) { \\(Get-Content package.json -Raw | ConvertFrom-Json\\).scripts | Format-List })",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(npm i *)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

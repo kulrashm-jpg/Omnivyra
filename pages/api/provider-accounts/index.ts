@@ -14,10 +14,15 @@ import {
   listAccountsForApi,
 } from '../../../backend/services/providerAccountService';
 import { encryptCredential } from '../../../backend/auth/credentialEncryption';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { INTEGRATION_PLATFORM_OAUTH_MANAGE } from '../../../shared/contracts/security';
 
-// ── Auth guard ─────────────────────────────────────────────────────────────────
+// ── Auth guards ────────────────────────────────────────────────────────────────
+//
+// READ guard: bridge accepted via centralized helper (signature-validated +
+// dry-run-aware). Mutations gate on `requireCapability` below.
 
-async function requireSuperAdmin(
+async function requireSuperAdminRead(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<{ userId: string } | null> {
@@ -41,7 +46,7 @@ async function requireSuperAdmin(
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── GET: list accounts for a provider ──────────────────────────────────────
   if (req.method === 'GET') {
-    const session = await requireSuperAdmin(req, res);
+    const session = await requireSuperAdminRead(req, res);
     if (!session) return;
 
     const { api_source_id } = req.query;
@@ -57,8 +62,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ── POST: create account ────────────────────────────────────────────────────
   if (req.method === 'POST') {
-    const session = await requireSuperAdmin(req, res);
-    if (!session) return;
+    // Phase 2 mutation gate. Provider-account creation writes encrypted
+    // OAuth credentials to api_provider_accounts — same blast radius as
+    // platform-OAuth-configs writes. Bridge principals are explicitly
+    // rejected; canonical SUPER_ADMIN with phishing-resistant +
+    // trusted-device step-up is required.
+    const guard = await requireCapability(req, res, {
+      capability: INTEGRATION_PLATFORM_OAUTH_MANAGE,
+      reason: 'provider-account credential creation',
+    });
+    if (guard.ok !== true) return;
+    const session = { userId: guard.principal.userId };
 
     const {
       api_source_id,

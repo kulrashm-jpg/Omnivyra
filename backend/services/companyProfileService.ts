@@ -26,6 +26,9 @@ export type {
   EnrichmentField,
   EnrichmentOutput,
   ExtractedEvidence,
+  EntityArchetype,
+  EntityArchetypeIntelligence,
+  UserGuidedIntelligence,
 } from './companyProfile/types';
 
 export {
@@ -63,7 +66,7 @@ export { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
 export { generateMarketingIntelligenceDraft } from './companyProfile/marketingIntelligence';
 
 // ─── Private imports used by this module ─────────────────────────────────────
-import type { StrategyProfile, RecommendationContext, CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput } from './companyProfile/types';
+import type { StrategyProfile, RecommendationContext, CompanyProfile, SaveProfileOptions, CompanyProfileRefinementDetails, ProblemTransformationExistingFields, ProblemTransformationRefinedOutput, CompanyProfileExtractionOutput, EntityArchetypeIntelligence } from './companyProfile/types';
 import { COMMERCIAL_FIELD_NAMES, MARKETING_INTELLIGENCE_FIELD_NAMES, PROBLEM_TRANSFORMATION_FIELD_NAMES } from './companyProfile/fieldConstants';
 import {
   normalizeCompanyId,
@@ -92,6 +95,11 @@ import {
 import { refineProblemTransformationAnswers } from './companyProfile/problemTransformation';
 import { deriveStrategyProfileDraft } from './companyProfile/strategyProfile';
 import { generateMarketingIntelligenceDraft } from './companyProfile/marketingIntelligence';
+import { inferEntityArchetype, isArchetypeInfluential, isAudienceLedArchetype, isBusinessFirstOnlyArchetype } from './companyProfile/entityArchetype';
+import {
+  applyApprovedStrategicGuidance,
+  applyUserGuidedCompetitorSteering,
+} from './companyProfile/userGuidance';
 import { classifyCompanyBusiness } from './companyProfile/businessClassification';
 import { buildSavePayload } from './companyProfile/savePayload';
 import { safeParseRecommendationContext, withRecommendationContextDefaults } from '../../utils/safeJson';
@@ -103,6 +111,7 @@ import {
 import {
   assertCompetitorOutputPartition,
   buildCandidatesFromNames,
+  dedupeCompetitorCandidates,
   extractCompetitiveContextFromProfile,
   getFinalCompetitors,
   hasPassedFinalCompetitorGate,
@@ -563,6 +572,428 @@ function profileDiscoverySignalText(profile: CompanyProfile, keywords: string[] 
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
+function cleanCompetitorText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.replace(/\s+/g, ' ').trim() : null;
+}
+
+function pushUniqueText(target: string[], value: string | null | undefined, max = 80) {
+  const cleaned = cleanCompetitorText(value);
+  if (!cleaned) return;
+  const truncated = cleaned.length > max ? cleaned.slice(0, max).trim() : cleaned;
+  if (!target.some((item) => item.toLowerCase() === truncated.toLowerCase())) target.push(truncated);
+}
+
+function archetypeValues(archetype?: EntityArchetypeIntelligence | null): string[] {
+  return archetype ? [archetype.primary_archetype, ...(archetype.secondary_archetypes ?? [])] : [];
+}
+
+function profileAudienceLabel(profile: CompanyProfile, archetype?: EntityArchetypeIntelligence | null): string {
+  return cleanCompetitorText(profile.target_audience)
+    ?? cleanCompetitorText(profile.ideal_customer_profile)
+    ?? cleanCompetitorText(archetype?.audience_relationship)
+    ?? 'the same audience';
+}
+
+function profileTopicLabel(profile: CompanyProfile, archetype?: EntityArchetypeIntelligence | null): string {
+  return cleanCompetitorText(profile.content_themes)
+    ?? cleanCompetitorText(profile.category)
+    ?? cleanCompetitorText(profile.products_services)
+    ?? cleanCompetitorText(archetype?.primary_value_surface)
+    ?? 'the same topic';
+}
+
+function buildArchetypeNativeDiscoverySeeds(
+  profile: CompanyProfile,
+  archetype?: EntityArchetypeIntelligence | null,
+): string[] {
+  if (!isArchetypeInfluential(archetype) || isBusinessFirstOnlyArchetype(archetype)) return [];
+  const values = archetypeValues(archetype);
+  const audience = profileAudienceLabel(profile, archetype);
+  const topic = profileTopicLabel(profile, archetype);
+  const valueSurface = cleanCompetitorText(archetype?.primary_value_surface);
+  const commercialMode = cleanCompetitorText(archetype?.commercial_mode);
+  const seeds: string[] = [];
+
+  if (values.includes('MEDIA_NEWSLETTER')) {
+    pushUniqueText(seeds, `${topic} newsletters`);
+    pushUniqueText(seeds, `${topic} publications`);
+    pushUniqueText(seeds, `${audience} newsletter communities`);
+    pushUniqueText(seeds, `${topic} podcast and newsletter peers`);
+  }
+  if (values.includes('CREATOR_EDUCATOR')) {
+    pushUniqueText(seeds, `${topic} creator educators`);
+    pushUniqueText(seeds, `${topic} courses and communities`);
+    pushUniqueText(seeds, `${audience} education creators`);
+  }
+  if (values.includes('THOUGHT_LEADER')) {
+    pushUniqueText(seeds, `${topic} authors and speakers`);
+    pushUniqueText(seeds, `${topic} thought leaders`);
+    pushUniqueText(seeds, `${topic} leadership education peers`);
+  }
+  if (values.includes('PERSONAL_BRAND')) {
+    pushUniqueText(seeds, `${topic} founder-led brands`);
+    pushUniqueText(seeds, `${topic} personal brand peers`);
+  }
+  if (values.includes('COMMUNITY_LED')) {
+    pushUniqueText(seeds, `${topic} communities`);
+    pushUniqueText(seeds, `${audience} membership communities`);
+  }
+  if (values.includes('CONSULTANT_OPERATOR')) {
+    pushUniqueText(seeds, `${topic} operator advisors`);
+    pushUniqueText(seeds, `${topic} public builders`);
+    pushUniqueText(seeds, `${topic} consultant creators`);
+  }
+  if (values.includes('HYBRID_ENTITY')) {
+    pushUniqueText(seeds, `${topic} audience-led businesses`);
+    pushUniqueText(seeds, `${topic} creator business peers`);
+    pushUniqueText(seeds, `${topic} ecosystem operators`);
+  }
+  pushUniqueText(seeds, valueSurface ? `${valueSurface} peers` : null);
+  pushUniqueText(seeds, commercialMode ? `${commercialMode} alternatives` : null);
+
+  return seeds.slice(0, 10);
+}
+
+function archetypeCandidate(
+  params: {
+    name: string;
+    category: string;
+    description: string;
+    profile: CompanyProfile;
+    archetype: EntityArchetypeIntelligence;
+    classification?: CompetitorCandidate['classification'];
+    productType?: CompetitorCandidate['productType'];
+    productSignals?: string[];
+  },
+): CompetitorCandidate {
+  const audience = profileAudienceLabel(params.profile, params.archetype);
+  const valueSurface = cleanCompetitorText(params.archetype.primary_value_surface);
+  const commercialMode = cleanCompetitorText(params.archetype.commercial_mode);
+  return {
+    name: params.name,
+    source: 'archetype_native_peer',
+    classification: params.classification ?? 'authority_leader',
+    category: params.category,
+    description: params.description,
+    targetCustomer: audience,
+    useCase: valueSurface ?? profileTopicLabel(params.profile, params.archetype),
+    geography: params.profile.geography ?? null,
+    businessModel: commercialMode ?? 'audience-led commercial model',
+    productType: params.productType ?? 'content-based',
+    productSignals: [
+      params.archetype.primary_archetype,
+      ...(params.archetype.secondary_archetypes ?? []),
+      valueSurface,
+      commercialMode,
+      ...(params.productSignals ?? []),
+    ].filter((item): item is string => Boolean(cleanCompetitorText(item))),
+    confidenceScore: 0.74,
+    rationale: `Archetype-native peer inferred from ${params.archetype.primary_archetype} identity, audience overlap, value surface, and monetization context.`,
+    competitorIntelligence: {
+      archetype_peer_category: params.category,
+      audience_overlap: audience,
+      narrative_overlap: valueSurface ?? profileTopicLabel(params.profile, params.archetype),
+      trust_model: params.category.toLowerCase().includes('publication')
+        ? 'recurring audience trust through publishing cadence'
+        : params.category.toLowerCase().includes('community')
+          ? 'member trust through expert access and peer participation'
+          : 'person-led authority and audience trust',
+      publication_identity: params.category.toLowerCase().includes('newsletter') || params.category.toLowerCase().includes('publication') || params.category.toLowerCase().includes('media')
+        ? params.category
+        : null,
+      ecosystem_role: params.category,
+      monetization_adjacency: commercialMode ?? null,
+      creator_operator_identity: params.category.toLowerCase().includes('operator') || params.category.toLowerCase().includes('creator') ? params.category : null,
+      educational_role: params.category.toLowerCase().includes('education') || params.category.toLowerCase().includes('community') ? params.category : null,
+      worldview_adjacency: params.category.toLowerCase().includes('thought') || params.category.toLowerCase().includes('operator') ? valueSurface : null,
+      platform_native_context: (params.productSignals ?? []).some((signal) => /\b(substack|youtube|linkedin|podcast|newsletter)\b/i.test(signal))
+        ? (params.productSignals ?? []).join(', ')
+        : null,
+      reasoning: `Preserved archetype-native context from ${params.archetype.primary_archetype} candidate generation.`,
+    },
+  };
+}
+
+type ArchetypePeerPackEntry = {
+  name: string;
+  category: string;
+  description: string;
+  values: string[];
+  productSignals: string[];
+};
+
+const ARCHETYPE_NAMED_PEER_PACKS: ArchetypePeerPackEntry[] = [
+  {
+    name: 'Morning Brew',
+    category: 'Newsletter and publication peers',
+    description: 'Business media publication competing through daily editorial cadence, audience trust, newsletter distribution, and media monetization.',
+    values: ['MEDIA_NEWSLETTER'],
+    productSignals: ['newsletter', 'publication', 'business media', 'editorial cadence', 'advertising'],
+  },
+  {
+    name: 'The Hustle',
+    category: 'Newsletter and publication peers',
+    description: 'Business and technology newsletter publication competing for reader attention through sharp editorial packaging and subscriber trust.',
+    values: ['MEDIA_NEWSLETTER'],
+    productSignals: ['newsletter', 'publication', 'business media', 'subscribers'],
+  },
+  {
+    name: "Lenny's Newsletter",
+    category: 'Newsletter and publication peers',
+    description: 'Product and growth newsletter/community business competing through expert editorial advice, paid subscriptions, and professional community trust.',
+    values: ['MEDIA_NEWSLETTER', 'COMMUNITY_LED', 'HYBRID_ENTITY'],
+    productSignals: ['newsletter', 'product growth', 'paid subscription', 'private community'],
+  },
+  {
+    name: 'Ali Abdaal',
+    category: 'Creator education peers',
+    description: 'Creator educator competing through YouTube authority, productivity education, books, courses, and newsletter audience trust.',
+    values: ['CREATOR_EDUCATOR', 'PERSONAL_BRAND'],
+    productSignals: ['creator educator', 'youtube', 'courses', 'books', 'newsletter'],
+  },
+  {
+    name: 'Justin Welsh',
+    category: 'Creator education peers',
+    description: 'Solo creator educator competing through audience-building education, digital products, LinkedIn-native authority, and operator playbooks.',
+    values: ['CREATOR_EDUCATOR', 'PERSONAL_BRAND', 'CONSULTANT_OPERATOR'],
+    productSignals: ['creator educator', 'digital products', 'linkedin creator', 'operator playbooks'],
+  },
+  {
+    name: 'Simon Sinek',
+    category: 'Thought-leader peers',
+    description: 'Author and speaker competing through leadership worldview, frameworks, courses, talks, and thesis-led education.',
+    values: ['THOUGHT_LEADER', 'CREATOR_EDUCATOR', 'PERSONAL_BRAND'],
+    productSignals: ['author', 'speaker', 'leadership', 'courses', 'worldview'],
+  },
+  {
+    name: 'Seth Godin',
+    category: 'Thought-leader peers',
+    description: 'Author, speaker, and marketer competing through long-running thought leadership, books, workshops, and worldview-led audience trust.',
+    values: ['THOUGHT_LEADER', 'PERSONAL_BRAND'],
+    productSignals: ['author', 'speaker', 'marketing thought leadership', 'books', 'workshops'],
+  },
+  {
+    name: 'Sahil Bloom',
+    category: 'Operator creator peers',
+    description: 'Founder, investor, and newsletter operator competing through public writing, frameworks, audience trust, and creator-business monetization.',
+    values: ['MEDIA_NEWSLETTER', 'PERSONAL_BRAND', 'CONSULTANT_OPERATOR', 'HYBRID_ENTITY'],
+    productSignals: ['newsletter', 'public writing', 'founder-led brand', 'operator creator'],
+  },
+  {
+    name: 'Packy McCormick',
+    category: 'Operator creator peers',
+    description: 'Operator-writer and investor competing through technology narrative, public analysis, founder ecosystem reach, and newsletter trust.',
+    values: ['MEDIA_NEWSLETTER', 'CONSULTANT_OPERATOR', 'HYBRID_ENTITY'],
+    productSignals: ['newsletter', 'operator writer', 'technology narrative', 'founder ecosystem'],
+  },
+  {
+    name: 'Reforge',
+    category: 'Community and membership peers',
+    description: 'Professional education and membership community competing through expert-led courses, operator frameworks, and peer learning for product and growth leaders.',
+    values: ['COMMUNITY_LED', 'CREATOR_EDUCATOR', 'HYBRID_ENTITY'],
+    productSignals: ['courses', 'membership', 'operator education', 'professional community'],
+  },
+];
+
+function buildNamedArchetypePeerCandidates(
+  profile: CompanyProfile,
+  archetype?: EntityArchetypeIntelligence | null,
+): CompetitorCandidate[] {
+  if (!isArchetypeInfluential(archetype) || isBusinessFirstOnlyArchetype(archetype)) return [];
+  const values = new Set(archetypeValues(archetype));
+  const topic = profileTopicLabel(profile, archetype).toLowerCase();
+  const audience = profileAudienceLabel(profile, archetype).toLowerCase();
+  const selected = ARCHETYPE_NAMED_PEER_PACKS.filter((entry) =>
+    entry.values.some((value) => values.has(value)) ||
+    entry.productSignals.some((signal) => topic.includes(signal.toLowerCase()) || audience.includes(signal.toLowerCase()))
+  ).slice(0, 5);
+
+  return selected.map((entry) => archetypeCandidate({
+    name: entry.name,
+    category: entry.category,
+    description: entry.description,
+    profile,
+    archetype,
+    classification: entry.values.includes(archetype.primary_archetype) ? 'direct_competitor' : 'authority_leader',
+    productSignals: entry.productSignals,
+  }));
+}
+
+function buildArchetypeNativeCompetitorCandidates(
+  profile: CompanyProfile,
+  archetype?: EntityArchetypeIntelligence | null,
+): CompetitorCandidate[] {
+  if (!isArchetypeInfluential(archetype) || isBusinessFirstOnlyArchetype(archetype)) return [];
+  const values = archetypeValues(archetype);
+  const topic = profileTopicLabel(profile, archetype);
+  const audience = profileAudienceLabel(profile, archetype);
+  const candidates: CompetitorCandidate[] = [];
+  const add = (candidate: CompetitorCandidate) => {
+    const key = candidate.name.toLowerCase();
+    if (!candidates.some((existing) => existing.name.toLowerCase() === key)) candidates.push(candidate);
+  };
+
+  if (values.includes('MEDIA_NEWSLETTER')) {
+    add(archetypeCandidate({
+      name: `${topic} newsletters and publications`,
+      category: 'Newsletter and publication peers',
+      description: `Newsletters, publications, and podcasts serving ${audience} with similar editorial territory, trust model, and publishing cadence.`,
+      profile,
+      archetype,
+      classification: 'direct_competitor',
+      productSignals: ['newsletter', 'publication', 'readers', 'subscribers', 'editorial cadence'],
+    }));
+  }
+  if (values.includes('MEDIA_NEWSLETTER')) {
+    add(archetypeCandidate({
+      name: `${topic} Substack and podcast peers`,
+      category: 'Platform-native media peers',
+      description: `Substack publications, podcasts, and platform-native media operators competing for ${audience}'s recurring attention and trust.`,
+      profile,
+      archetype,
+      classification: 'seo_competitor',
+      productSignals: ['substack', 'podcast', 'platform-native media', 'publication'],
+    }));
+  }
+  if (values.includes('CREATOR_EDUCATOR')) {
+    add(archetypeCandidate({
+      name: `${topic} creator educators and course communities`,
+      category: 'Creator education peers',
+      description: `Creator-led education businesses, courses, workshops, and learning communities competing for ${audience}'s trust and learning budget.`,
+      profile,
+      archetype,
+      classification: 'direct_competitor',
+      productSignals: ['creator educator', 'courses', 'workshops', 'learning community'],
+    }));
+    add(archetypeCandidate({
+      name: `${topic} YouTube and LinkedIn educators`,
+      category: 'Platform-native creator peers',
+      description: `YouTube educators, LinkedIn creators, and platform-native teachers competing for ${audience}'s attention, trust, and learning intent.`,
+      profile,
+      archetype,
+      classification: 'seo_competitor',
+      productSignals: ['youtube educator', 'linkedin creator', 'platform-native creator', 'courses'],
+    }));
+  }
+  if (values.includes('THOUGHT_LEADER')) {
+    add(archetypeCandidate({
+      name: `${topic} authors, speakers, and thesis-led educators`,
+      category: 'Thought-leader peers',
+      description: `Authors, speakers, and thesis-led educators competing through worldview, authority, frameworks, and leadership narrative.`,
+      profile,
+      archetype,
+      classification: 'authority_leader',
+      productSignals: ['author', 'speaker', 'worldview', 'frameworks', 'authority'],
+    }));
+  }
+  if (values.includes('COMMUNITY_LED')) {
+    add(archetypeCandidate({
+      name: `${topic} membership communities`,
+      category: 'Community and membership peers',
+      description: `Membership communities, expert networks, and audience-led groups competing for belonging, access, trust, and recurring participation.`,
+      profile,
+      archetype,
+      classification: 'seo_competitor',
+      productSignals: ['membership', 'community', 'network', 'access'],
+    }));
+  }
+  if (values.includes('CONSULTANT_OPERATOR') || values.includes('PERSONAL_BRAND')) {
+    add(archetypeCandidate({
+      name: `${topic} operator-creators and public builders`,
+      category: 'Operator creator peers',
+      description: `Operator-creators, public builders, and advisor-writers competing through lived operating experience, public documentation, and trusted expertise.`,
+      profile,
+      archetype,
+      classification: 'authority_leader',
+      productSignals: ['operator creator', 'public building', 'advisory', 'systems thinking'],
+    }));
+  }
+  if (values.includes('HYBRID_ENTITY')) {
+    add(archetypeCandidate({
+      name: `${topic} hybrid audience-led businesses`,
+      category: 'Hybrid business and audience peers',
+      description: `Businesses blending commercial offers with media, education, community, authority, or founder-led audience trust.`,
+      profile,
+      archetype,
+      classification: 'direct_competitor',
+      productSignals: ['hybrid entity', 'audience-led business', 'commercial offer', 'trust substitute'],
+    }));
+  }
+
+  for (const namedCandidate of buildNamedArchetypePeerCandidates(profile, archetype)) add(namedCandidate);
+
+  return candidates.slice(0, 12);
+}
+
+function applyArchetypeContextToProfile(
+  profile: CompanyProfile,
+  archetype?: EntityArchetypeIntelligence | null,
+): CompanyProfile {
+  if (!isArchetypeInfluential(archetype)) {
+    return {
+      ...profile,
+      report_settings: {
+        ...(profile.report_settings ?? {}),
+        entity_archetype: archetype ?? profile.report_settings?.entity_archetype ?? null,
+      },
+    };
+  }
+
+  const audienceLed = isAudienceLedArchetype(archetype);
+  if (isBusinessFirstOnlyArchetype(archetype)) {
+    return {
+      ...profile,
+      report_settings: {
+        ...(profile.report_settings ?? {}),
+        entity_archetype: archetype,
+      },
+    };
+  }
+  const valueSurface = archetype.primary_value_surface || null;
+  const audienceRelationship = archetype.audience_relationship || null;
+  const commercialMode = archetype.commercial_mode || null;
+  const archetypePositioning = [
+    archetype.primary_archetype,
+    valueSurface,
+    audienceRelationship,
+  ].filter(Boolean).join('; ');
+
+  if (!audienceLed) {
+    return {
+      ...profile,
+      brand_positioning: [profile.brand_positioning, archetypePositioning]
+        .filter(Boolean)
+        .join('; ') || profile.brand_positioning,
+      report_settings: {
+        ...(profile.report_settings ?? {}),
+        entity_archetype: archetype,
+      },
+    };
+  }
+
+  return {
+    ...profile,
+    products_services: profile.products_services || valueSurface || undefined,
+    products_services_list: profile.products_services_list?.length
+      ? profile.products_services_list
+      : valueSurface ? [valueSurface] : profile.products_services_list,
+    target_audience: profile.target_audience || audienceRelationship || undefined,
+    target_audience_list: profile.target_audience_list?.length
+      ? profile.target_audience_list
+      : audienceRelationship ? [audienceRelationship] : profile.target_audience_list,
+    category: profile.category || archetype.primary_archetype.toLowerCase().replace(/_/g, ' '),
+    campaign_focus: profile.campaign_focus || valueSurface || undefined,
+    brand_positioning: [profile.brand_positioning, archetypePositioning]
+      .filter(Boolean)
+      .join('; ') || profile.brand_positioning,
+    sales_motion: profile.sales_motion || commercialMode || undefined,
+    report_settings: {
+      ...(profile.report_settings ?? {}),
+      entity_archetype: archetype,
+    },
+  };
+}
+
 function competitorValidationContextForProfile(profile: CompanyProfile): CompanyCompetitiveContext {
   const baseContext = extractCompetitiveContextFromProfile(profile);
   const signalText = profileDiscoverySignalText(profile);
@@ -644,7 +1075,13 @@ function buildPrioritizedRefineFallbackCandidates(params: {
 async function discoverRefineCompetitorCandidates(
   profile: CompanyProfile,
 ): Promise<RefineCompetitorDiscovery> {
-  const keywords = ensureMinimumDiscoveryKeywords(profile, generateDiscoveryKeywords(profile));
+  const archetype = profile.report_settings?.entity_archetype ?? null;
+  const archetypeSeeds = buildArchetypeNativeDiscoverySeeds(profile, archetype);
+  const keywords = ensureMinimumDiscoveryKeywords(profile, [
+    ...archetypeSeeds,
+    ...generateDiscoveryKeywords(profile),
+  ]);
+  const archetypeCandidates = buildArchetypeNativeCompetitorCandidates(profile, archetype);
   const ownDomain =
     normalizeCompetitorDiscoveryDomain(profile.website_url)
     ?? normalizeCompetitorDiscoveryDomain(profile.name)
@@ -680,10 +1117,20 @@ async function discoverRefineCompetitorCandidates(
   const fallbackCandidates = prioritizedFallbackCandidates.length > 0
     ? prioritizedFallbackCandidates
     : knownDatasetCompetitorCandidates(profile.geography ?? null);
-  const candidates = serpCandidates.length > 0 ? serpCandidates : fallbackCandidates;
+  const candidates = applyUserGuidedCompetitorSteering(profile, dedupeCompetitorCandidates([
+    ...archetypeCandidates,
+    ...(serpCandidates.length > 0 ? serpCandidates : fallbackCandidates),
+  ]));
+  const fallbackWithArchetype = applyUserGuidedCompetitorSteering(profile, dedupeCompetitorCandidates([
+    ...archetypeCandidates,
+    ...fallbackCandidates,
+  ]));
 
   console.info('[refine][competitor-discovery]', {
     keywords_generated: keywords,
+    archetype_keywords_generated: archetypeSeeds,
+    archetype_candidates_generated: archetypeCandidates.map((candidate) => candidate.name),
+    user_guided_competitors: profile.report_settings?.user_guidance?.competitors?.length ?? 0,
     serp_domains_found: serpDomains.length,
     final_candidates_count: candidates.length,
     fallback_used: serpCandidates.length === 0,
@@ -692,7 +1139,7 @@ async function discoverRefineCompetitorCandidates(
 
   return {
     candidates,
-    fallbackCandidates,
+    fallbackCandidates: fallbackWithArchetype,
     keywords,
     serpDomains,
   };
@@ -1009,9 +1456,39 @@ function withExistingText(existing: string | null | undefined, next: string | nu
   return normalizeNonEmptyText(existing) ?? next ?? null;
 }
 
+function normalizeIndustryReviewKey(value: string | null | undefined): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function buildIndustryReview(params: {
+  userIndustry?: string | null;
+  aiIndustry: string[];
+  existing?: NonNullable<NonNullable<CompanyProfile['report_settings']>['industry_review']> | null;
+}): NonNullable<NonNullable<CompanyProfile['report_settings']>['industry_review']> | null {
+  const userIndustry = normalizeNonEmptyText(params.userIndustry);
+  const aiIndustry = normalizeStringArray(params.aiIndustry).join(', ');
+  if (!userIndustry || !aiIndustry) return params.existing ?? null;
+  const userTokens = new Set(normalizeIndustryReviewKey(userIndustry).split(' ').filter((token) => token.length > 2));
+  const aiTokens = normalizeIndustryReviewKey(aiIndustry).split(' ').filter((token) => token.length > 2);
+  const hasOverlap = aiTokens.some((token) => userTokens.has(token));
+  return {
+    ...(params.existing ?? {}),
+    conflict: !hasOverlap,
+    user_industry: userIndustry,
+    ai_suggested_industry: aiIndustry,
+    source: 'website_social_refinement',
+    updated_at: new Date().toISOString(),
+  };
+}
+
 function rankedMarketAlternativesForProfile(competitors: RankedCompetitor[]) {
   return splitRankedCompetitorsForOutput(competitors, 8, 3).market_alternatives.map((competitor) => ({
     name: competitor.name,
+    domain: competitor.domain,
     category: competitor.category,
     tier: competitor.tier,
     score: competitor.final_score,
@@ -1025,12 +1502,28 @@ function rankedMarketAlternativesForProfile(competitors: RankedCompetitor[]) {
 function rankedCompetitorDetailsForProfile(competitors: RankedCompetitor[]) {
   return splitRankedCompetitorsForOutput(competitors, 8, 3).competitors.map((competitor) => ({
     name: competitor.name,
+    domain: competitor.domain,
     category: competitor.category,
     tier: competitor.tier,
     score: competitor.relevance_score,
     confidence: competitor.enrichment_confidence_score,
     rationale: competitor.rationale,
   }));
+}
+
+function rankedCompetitorIntelligenceForProfile(competitors: RankedCompetitor[]) {
+  return splitRankedCompetitorsForOutput(competitors, 8, 3).competitors
+    .map((competitor) => ({
+      name: competitor.name,
+      source: competitor.source,
+      category: competitor.category,
+      tier: competitor.tier,
+      score: competitor.relevance_score,
+      confidence: competitor.enrichment_confidence_score,
+      rationale: competitor.rationale,
+      ...(competitor.competitor_intelligence ?? {}),
+    }))
+    .filter((competitor) => competitor.source === 'archetype_native_peer' || competitor.archetype_peer_category || competitor.narrative_overlap);
 }
 
 function rankedCompetitorQualityForProfile(competitors: RankedCompetitor[]) {
@@ -1339,7 +1832,13 @@ const storeRefinementAudit = async (details: CompanyProfileRefinementDetails) =>
       source_urls: details.source_urls,
       source_summaries: details.source_summaries,
       changed_fields: details.changed_fields,
-      extraction_output: details.extraction_output,
+      extraction_output: details.entity_archetype
+        ? {
+            ...(details.extraction_output ?? {}),
+            entity_archetype: details.entity_archetype,
+            competitor_intelligence: details.competitor_intelligence,
+          }
+        : details.extraction_output,
       missing_fields_questions: details.missing_fields_questions,
       overall_confidence: details.after_profile.overall_confidence ?? 0,
       created_at: details.created_at,
@@ -1363,7 +1862,7 @@ export async function saveProfile(
   const existing = await fetchProfileRaw(companyId);
   const nowIso = new Date().toISOString();
   const source = (options?.source ?? 'user') as 'user' | 'ai_refined';
-  const lastRefinedAt = nowIso;
+  const lastRefinedAt = source === 'ai_refined' ? nowIso : existing?.last_refined_at ?? null;
   const confidenceScore = input.confidence_score ?? existing?.confidence_score ?? 0;
 
   const shouldRefreshClassification =
@@ -1420,18 +1919,20 @@ export async function saveProfile(
 
   const lockedSet = new Set<string>(Array.isArray(existing?.user_locked_fields) ? existing.user_locked_fields : []);
   let didLock = false;
-  for (const key of COMMERCIAL_FIELD_NAMES) {
-    const val = input[key];
-    if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; }
-  }
-  for (const key of MARKETING_INTELLIGENCE_FIELD_NAMES) {
-    const val = input[key];
-    if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; }
-  }
-  for (const key of PROBLEM_TRANSFORMATION_FIELD_NAMES) {
-    const val = input[key as keyof CompanyProfile];
-    const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
-    if (hasVal) { lockedSet.add(key); didLock = true; }
+  if (!options?.suppressUserLocks) {
+    for (const key of COMMERCIAL_FIELD_NAMES) {
+      const val = input[key];
+      if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; }
+    }
+    for (const key of MARKETING_INTELLIGENCE_FIELD_NAMES) {
+      const val = input[key];
+      if (val !== undefined && val !== null && String(val).trim() !== '') { lockedSet.add(key); didLock = true; }
+    }
+    for (const key of PROBLEM_TRANSFORMATION_FIELD_NAMES) {
+      const val = input[key as keyof CompanyProfile];
+      const hasVal = Array.isArray(val) ? val.length > 0 : val !== undefined && val !== null && String(val).trim() !== '';
+      if (hasVal) { lockedSet.add(key); didLock = true; }
+    }
   }
   if (didLock) {
     payload.user_locked_fields = Array.from(lockedSet);
@@ -1478,6 +1979,7 @@ export async function saveProblemTransformationAnswers(
     companyId: resolvedId,
     profile,
     existingFields: existingPT,
+    archetype: profile?.report_settings?.entity_archetype ?? null,
   });
   const lockedSet = new Set<string>(Array.isArray(profile?.user_locked_fields) ? profile.user_locked_fields : []);
   const merged: Partial<CompanyProfile> = { company_id: resolvedId };
@@ -1539,7 +2041,11 @@ export async function deriveAndStoreStrategyProfile(
   const resolvedId = normalizeCompanyId(companyId);
   const profile = await fetchProfileRaw(resolvedId);
   if (!profile) return null;
-  const derived = await deriveStrategyProfileDraft(profile, options?.sourceSummaries ?? []);
+  const derived = await deriveStrategyProfileDraft(
+    profile,
+    options?.sourceSummaries ?? [],
+    profile.report_settings?.entity_archetype ?? null,
+  );
   if (!derived.strategyProfile) return profile;
   return saveProfile(
     {
@@ -1729,7 +2235,7 @@ const runProfileRefinement = async (
   const companyId = profile.company_id ? String(profile.company_id) : null;
   const t0 = Date.now();
   const elapsed = () => `${Date.now() - t0}ms`;
-  let workingProfile = { ...profile };
+  let workingProfile = applyApprovedStrategicGuidance({ ...profile });
 
   const existingSourceUrls = new Set(
     (workingProfile.source_urls || []).map((url) => normalizeUrl(url)).filter((u): u is string => Boolean(u))
@@ -1777,7 +2283,18 @@ const runProfileRefinement = async (
   console.info('[refine] phase=clean-evidence done', { elapsed: elapsed() });
 
   const evidenceForExtraction = cleanedEvidence.length > 0 ? cleanedEvidence : evidenceWithSocial;
-  const extractionPrompt = buildExtractionPrompt(evidenceForExtraction, workingProfile);
+  const entityArchetype = inferEntityArchetype({
+    profile: workingProfile,
+    evidence: evidenceForExtraction,
+  });
+  workingProfile = {
+    ...workingProfile,
+    report_settings: {
+      ...(workingProfile.report_settings ?? {}),
+      entity_archetype: entityArchetype,
+    },
+  };
+  const extractionPrompt = buildExtractionPrompt(evidenceForExtraction, workingProfile, entityArchetype);
 
   console.info('[refine] phase=extraction start', { elapsed: elapsed() });
   const [extractionResult, missingFieldQuestionsRaw] = await Promise.all([
@@ -1823,19 +2340,22 @@ const runProfileRefinement = async (
     category_list: [preliminaryClassification.category],
   };
 
-  const profileForCompetitorDiscovery = buildProfileForCompetitorDiscovery(workingProfile, extraction);
+  const profileForCompetitorDiscovery = applyArchetypeContextToProfile(
+    buildProfileForCompetitorDiscovery(workingProfile, extraction),
+    entityArchetype,
+  );
   const competitorDiscovery = await discoverRefineCompetitorCandidates(profileForCompetitorDiscovery);
-  const baseRefinedPayload = await buildRefinedPayload(workingProfile, extraction, competitorDiscovery);
+  const baseRefinedPayload = await buildRefinedPayload(workingProfile, extraction, competitorDiscovery, entityArchetype);
   const mergedProfileForStrategy = {
     ...workingProfile,
     ...baseRefinedPayload,
   } as CompanyProfile;
   const [derivedStrategyProfile, marketingIntelligenceDraft] = await Promise.all([
-    deriveStrategyProfileDraft(mergedProfileForStrategy, evidenceForExtraction),
-    generateMarketingIntelligenceDraft(mergedProfileForStrategy),
+    deriveStrategyProfileDraft(mergedProfileForStrategy, evidenceForExtraction, entityArchetype),
+    generateMarketingIntelligenceDraft(mergedProfileForStrategy, entityArchetype),
   ]);
 
-  const refinedPayload = {
+  const refinedPayload = applyApprovedStrategicGuidance({
     ...baseRefinedPayload,
     ...mapStrategyProfileToExistingFields(derivedStrategyProfile.strategyProfile, {
       brand_positioning: baseRefinedPayload.brand_positioning ?? workingProfile.brand_positioning ?? null,
@@ -1874,7 +2394,7 @@ const runProfileRefinement = async (
     competitors_list: Array.isArray(baseRefinedPayload.competitors_list)
       ? baseRefinedPayload.competitors_list
       : [],
-  };
+  } as CompanyProfile);
 
   refinedPayload.competitors = Array.isArray(refinedPayload.competitors_list) && refinedPayload.competitors_list.length > 0
     ? refinedPayload.competitors_list.join(', ')
@@ -1900,6 +2420,8 @@ const runProfileRefinement = async (
     changed_fields: buildChangedFields(workingProfile, data),
     created_at: new Date().toISOString(),
     extraction_output: extraction,
+    entity_archetype: entityArchetype,
+    competitor_intelligence: data.report_settings?.competitor_intelligence ?? null,
     missing_fields_questions: missingFieldQuestions,
   };
   await storeRefinementAudit(auditDetails);
@@ -1911,6 +2433,7 @@ async function buildRefinedPayload(
   workingProfile: CompanyProfile,
   extraction: CompanyProfileExtractionOutput,
   competitorDiscovery: RefineCompetitorDiscovery,
+  entityArchetype?: EntityArchetypeIntelligence | null,
 ) {
   const existingConfidence = workingProfile.field_confidence || {};
   const marketPulseSettings = buildAiMarketPulseSettings(workingProfile, extraction);
@@ -1924,7 +2447,11 @@ async function buildRefinedPayload(
   const goalsUpdate = updateArrayField(workingProfile.goals_list ?? splitToList(workingProfile.goals), extraction.goals?.value, extraction.goals?.source, existingConfidence.goals, extraction.goals?.confidence);
   const brandVoiceUpdate = updateArrayField(workingProfile.brand_voice_list ?? splitToList(workingProfile.brand_voice), extraction.brand_voice?.value, extraction.brand_voice?.source, existingConfidence.brand_voice, extraction.brand_voice?.confidence);
   const nameUpdate = updateScalarField(workingProfile.name, extraction.company_name?.value, extraction.company_name?.source, existingConfidence.company_name, extraction.company_name?.confidence);
-  const websiteUpdate = updateScalarField(workingProfile.website_url, extraction.website_url?.value, extraction.website_url?.source, existingConfidence.website_url, extraction.website_url?.confidence);
+  const websiteUpdate = {
+    value: workingProfile.website_url ?? null,
+    confidence: workingProfile.website_url ? 'High' : 'Low',
+    questions: [],
+  };
   const uniqueUpdate = updateScalarField(workingProfile.unique_value, extraction.unique_value_proposition?.value, extraction.unique_value_proposition?.source, existingConfidence.unique_value_proposition, extraction.unique_value_proposition?.confidence);
 
   const mergedSocialProfiles = buildSocialProfileList(workingProfile.social_profiles, extraction.social_profiles);
@@ -1963,25 +2490,38 @@ async function buildRefinedPayload(
   const cleanIndustryList = businessClassification.industry;
   const cleanCategory = businessClassification.category;
   const cleanCategoryList = [cleanCategory];
+  const userIndustryBaseline =
+    normalizeNonEmptyText(workingProfile.report_settings?.default_inputs?.industry) ??
+    normalizeNonEmptyText(workingProfile.industry);
+  const finalIndustryList = userIndustryBaseline
+    ? normalizeStringArray([userIndustryBaseline])
+    : cleanIndustryList;
+  const industryReview = buildIndustryReview({
+    userIndustry: userIndustryBaseline,
+    aiIndustry: cleanIndustryList,
+    existing: workingProfile.report_settings?.industry_review ?? null,
+  });
 
   const extractionConfidence = computeConfidenceScore(extraction);
   const locked = new Set<string>(Array.isArray(workingProfile.user_locked_fields) ? workingProfile.user_locked_fields : []);
   const pick = <T>(refinedVal: T, workingVal: T, field: string): T =>
     locked.has(field) ? workingVal : (refinedVal ?? workingVal ?? null) as T;
-  const contextForCompetitorFit = extractCompetitiveContextFromProfile({
-    ...workingProfile,
-    business_classification: businessClassification.business_classification,
-    industry: cleanIndustryList.join(', '),
-    category: cleanCategory,
-    geography: geographyUpdate.value.join(', ') || workingProfile.geography,
-    products_services: productsUpdate.value.join(', ') || workingProfile.products_services,
-    target_audience: audienceUpdate.value.join(', ') || workingProfile.target_audience,
-    industry_list: cleanIndustryList,
-    category_list: cleanCategoryList,
-    geography_list: geographyUpdate.value,
-    products_services_list: productsUpdate.value,
-    target_audience_list: audienceUpdate.value,
-  });
+  const contextForCompetitorFit = extractCompetitiveContextFromProfile(
+    applyArchetypeContextToProfile({
+      ...workingProfile,
+      business_classification: businessClassification.business_classification,
+      industry: finalIndustryList.join(', '),
+      category: cleanCategory,
+      geography: geographyUpdate.value.join(', ') || workingProfile.geography,
+      products_services: productsUpdate.value.join(', ') || workingProfile.products_services,
+      target_audience: audienceUpdate.value.join(', ') || workingProfile.target_audience,
+      industry_list: finalIndustryList,
+      category_list: cleanCategoryList,
+      geography_list: geographyUpdate.value,
+      products_services_list: productsUpdate.value,
+      target_audience_list: audienceUpdate.value,
+    }, entityArchetype),
+  );
   let rankedCompetitors = await getFinalCompetitors({
     candidates: competitorDiscovery.candidates,
     context: contextForCompetitorFit,
@@ -2078,6 +2618,7 @@ async function buildRefinedPayload(
   assertCompetitorOutputPartition(splitCompetitorOutput, 'refine_profile_competitor_output');
   const competitorValues = splitCompetitorOutput.competitors.map((item) => item.name);
   const competitorDetails = rankedCompetitorDetailsForProfile(rankedCompetitors);
+  const competitorIntelligence = rankedCompetitorIntelligenceForProfile(rankedCompetitors);
   const competitorQuality = rankedCompetitorQualityForProfile(rankedCompetitors);
   const marketAlternatives = rankedMarketAlternativesForProfile(rankedCompetitors);
   const marketPulseWithAlternatives = marketPulseSettings || workingProfile.report_settings?.market_pulse
@@ -2098,7 +2639,7 @@ async function buildRefinedPayload(
   );
 
   const fieldConfidence = {
-    company_name: nameUpdate.confidence, industry: 'High',
+    company_name: nameUpdate.confidence, industry: industryReview?.conflict ? 'Needs Review' : 'High',
     category: 'High', business_classification: 'High', geography: geographyUpdate.confidence,
     competitors: competitorValues.length > 0 ? 'High' : 'Low', content_themes: themesUpdate.confidence,
     products_services: productsUpdate.confidence, target_audience: audienceUpdate.confidence,
@@ -2106,11 +2647,11 @@ async function buildRefinedPayload(
     website_url: websiteUpdate.confidence, unique_value_proposition: uniqueUpdate.confidence,
   };
 
-  console.log('MERGED PROFILE:', { industry_list: cleanIndustryList, category_list: cleanCategoryList, business_classification: businessClassification.business_classification });
+  console.log('MERGED PROFILE:', { industry_list: finalIndustryList, category_list: cleanCategoryList, business_classification: businessClassification.business_classification });
   console.info('Company profile extraction summary', {
     company_id: workingProfile.company_id,
     counts: {
-      industry: cleanIndustryList.length, category: cleanCategoryList.length,
+      industry: finalIndustryList.length, category: cleanCategoryList.length,
       geography: geographyUpdate.value.length, social_profiles: mergedSocialProfiles.length,
     },
   });
@@ -2118,10 +2659,10 @@ async function buildRefinedPayload(
   return {
     company_id: workingProfile.company_id,
     name: pick(nameUpdate.value, workingProfile.name, 'name'),
-    industry: cleanIndustryList.join(', '),
+    industry: finalIndustryList.join(', '),
     category: cleanCategory,
     business_classification: businessClassification.business_classification,
-    website_url: pick(websiteUpdate.value, workingProfile.website_url, 'website_url'),
+    website_url: workingProfile.website_url ?? null,
     linkedin_url: workingProfile.linkedin_url ?? null,
     facebook_url: workingProfile.facebook_url ?? null,
     instagram_url: workingProfile.instagram_url ?? null,
@@ -2141,7 +2682,7 @@ async function buildRefinedPayload(
     competitors: competitorValues.length > 0 ? competitorValues.join(', ') : null,
     unique_value: pick(uniqueUpdate.value, workingProfile.unique_value, 'unique_value'),
     content_themes: pick(themesUpdate.value.join(', '), workingProfile.content_themes, 'content_themes'),
-    industry_list: cleanIndustryList,
+    industry_list: finalIndustryList,
     category_list: cleanCategoryList,
     geography_list: pick(geographyUpdate.value, workingProfile.geography_list, 'geography_list'),
     competitors_list: competitorValues,
@@ -2176,6 +2717,9 @@ async function buildRefinedPayload(
     growth_priorities: workingProfile.growth_priorities ?? null,
     report_settings: {
       ...(workingProfile.report_settings ?? {}),
+      entity_archetype: entityArchetype ?? workingProfile.report_settings?.entity_archetype ?? null,
+      competitor_intelligence: competitorIntelligence.length > 0 ? competitorIntelligence : workingProfile.report_settings?.competitor_intelligence ?? null,
+      industry_review: industryReview,
       market_pulse: marketPulseWithAlternatives,
     },
   };

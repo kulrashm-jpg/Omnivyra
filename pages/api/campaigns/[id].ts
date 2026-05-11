@@ -1,10 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../utils/supabaseClient.js';
 import { evaluateCampaignReadiness } from '../../../backend/services/campaignReadinessService';
-import { ALL_ROLES } from '../../../backend/services/rbacService';
-import { withRBAC } from '../../../backend/middleware/withRBAC';
+import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 
 const resolveCampaignCompanyId = async (campaignId: string) => {
+  const { data: campRow } = await supabase
+    .from('campaigns')
+    .select('company_id')
+    .eq('id', campaignId)
+    .maybeSingle();
+  const direct = (campRow as { company_id?: string | null } | null)?.company_id;
+  if (direct) return direct;
   const { data, error } = await supabase
     .from('campaign_versions')
     .select('company_id')
@@ -39,23 +45,32 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Campaign ID is required' });
   }
 
+  // SECURITY: derive the campaign's owning company from the resource itself,
+  // never trust ?companyId= from query/body. Without this gate, a caller could
+  // authenticate against their own company and then operate on another company's
+  // campaign by guessing the path id.
+  const campaignCompanyId = await resolveCampaignCompanyId(id);
+  if (!campaignCompanyId) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+  const tenantContext = await enforceCompanyAccess({
+    req,
+    res,
+    companyId: campaignCompanyId,
+  });
+  if (!tenantContext) return;
+
   if (req.method === 'GET') {
     try {
       const { data: campaign, error } = await supabase
         .from('campaigns')
-        .select('id, name, description, status, current_stage, start_date, end_date')
+        .select('id, name, description, status, current_stage, start_date, end_date, company_id')
         .eq('id', id)
         .maybeSingle();
       if (error || !campaign) {
         return res.status(404).json({ error: 'Campaign not found' });
       }
-      const { data: ver } = await supabase
-        .from('campaign_versions')
-        .select('company_id')
-        .eq('campaign_id', id)
-        .limit(1)
-        .maybeSingle();
-      const out = { ...campaign, company_id: (campaign as any).company_id ?? ver?.company_id };
+      const out = { ...campaign, company_id: (campaign as any).company_id ?? campaignCompanyId };
       return res.status(200).json({ campaign: out });
     } catch (err) {
       return res.status(500).json({ error: 'Failed to fetch campaign' });
@@ -103,11 +118,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
 
-      // Delete campaign itself
+      // Delete campaign itself (scoped by company for defense-in-depth)
       const { error } = await supabase
         .from('campaigns')
         .delete()
-        .eq('id', id);
+        .eq('id', id)
+        .eq('company_id', campaignCompanyId);
 
       if (error) {
         console.error('Error deleting campaign:', error);
@@ -143,11 +159,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         Object.prototype.hasOwnProperty.call(req.body || {}, 'viralityPlaybookId');
       const resolvedPlaybookId = virality_playbook_id ?? viralityPlaybookId ?? null;
       if (playbookFieldProvided && resolvedPlaybookId) {
-        const companyId = await resolveCampaignCompanyId(id);
-        if (!companyId) {
-          return res.status(400).json({ error: 'companyId required' });
-        }
-        const validation = await validatePlaybookReference(resolvedPlaybookId, companyId);
+        const validation = await validatePlaybookReference(resolvedPlaybookId, campaignCompanyId);
         if (!validation.ok) {
           return res.status(400).json({ error: 'INVALID_PLAYBOOK_REFERENCE' });
         }
@@ -167,7 +179,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
 
-      // Update campaign
+      // Update campaign (scoped by company for defense-in-depth)
       const { data: campaign, error } = await supabase
         .from('campaigns')
         .update({
@@ -183,6 +195,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           updated_at: new Date().toISOString()
         })
         .eq('id', id)
+        .eq('company_id', campaignCompanyId)
         .select()
         .single();
 
@@ -206,4 +219,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withRBAC(handler, ALL_ROLES);
+export default handler;

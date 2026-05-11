@@ -18,6 +18,7 @@ import StrategicAspectSelector from '../components/recommendations/engine-framew
 import OfferingFacetSelector from '../components/recommendations/engine-framework/OfferingFacetSelector';
 import { BoltCampaignChat } from '../components/bolt/BoltCampaignChat';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
+import { useBoltPlatformPicker } from './useBoltPlatformPicker';
 import {
   PRIMARY_OPTIONS,
   PERSONAL_BRAND_SECONDARY_GROUPS,
@@ -184,6 +185,20 @@ export function useIntelMix() {
     const d = new Date(); d.setDate(d.getDate() + 1);
     return d.toISOString().split('T')[0];
   });
+  // Round-6: capability-aware platform picker (intelligent-mix = union of all
+  // registry-known connected platforms; fail-closed on unknowns).
+  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const platformPicker = useBoltPlatformPicker(selectedCompanyId, 'intelligent-mix');
+  const togglePlatform = (p: string) =>
+    setSelectedPlatforms((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  useEffect(() => {
+    if (platformPicker.loading || platformPicker.supported.length === 0) return;
+    setSelectedPlatforms((prev) => {
+      const filtered = prev.filter((p) => platformPicker.supported.includes(p));
+      return filtered.length > 0 ? filtered : platformPicker.supported;
+    });
+  }, [platformPicker.loading, platformPicker.supported]);
+
   const [extraContext, setExtraContext] = useState('');
   const [communicationStyle, setCommunicationStyle] = useState<string[]>([]);
   const [contextMode, setContextMode] = useState<ContextMode>('FULL');
@@ -459,6 +474,12 @@ export function useIntelMix() {
     strategicText,
     suggestions,
     suggestionsLoading,
+    selectedPlatforms,
+    togglePlatform,
+    availablePlatforms: platformPicker.supported,
+    platformHidden: platformPicker.hidden,
+    platformsLoading: platformPicker.loading,
+    platformBlocked: platformPicker.blocked,
     textFormats,
     textFrequency,
     toggleSecondary,

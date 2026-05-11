@@ -1,33 +1,20 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-
-const requireSuperAdminAccess = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id) {
-    const isAdmin = await isPlatformSuperAdmin(user.id);
-    if (!isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN_ROLE' });
-      return false;
-    }
-    return true;
-  }
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_GRANT_FREE_CREDITS } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST' && req.method !== 'DELETE') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdminAccess(req, res))) return;
+  // Phase 2 mutation gate. Revoking usage-report access mirrors the
+  // grant capability for symmetry — both touch the same billing surface.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_GRANT_FREE_CREDITS,
+    reason: 'super-admin revokes usage-report access',
+  });
+  if (guard.ok !== true) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const organizationId = body.organization_id ?? body.organizationId;

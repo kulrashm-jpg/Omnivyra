@@ -12,6 +12,7 @@ import {
   sortPlatformsByPriority,
 } from '../utils/platformEligibility';
 import { getSocialPostingConfigs } from './externalApiService';
+import { getPlatformCapability } from '../../lib/shared/social/platformCapabilities';
 
 export type PlatformConfigItem = {
   platform: string;
@@ -28,29 +29,24 @@ function toDisplayPlatform(p: string): string {
   return n;
 }
 
+/**
+ * Compute the content_types a platform can publish, derived from the canonical
+ * capability registry (Round-3 Phase 1). Iterates the registry-backed
+ * CONTENT_PLATFORM_AFFINITY (itself derived from PLATFORM_CAPABILITY_REGISTRY)
+ * so there is exactly one source of truth.
+ *
+ * Fail-closed contract: a platform that is not present in the capability
+ * registry returns `[]`. Callers must NOT treat "no content types" as a
+ * synonym for "allow `post`" — that was the legacy drift this refactor
+ * eliminates.
+ */
 function getContentTypesForPlatform(platform: string): string[] {
   const p = platform.toLowerCase().replace(/^twitter$/i, 'x');
+  if (!getPlatformCapability(p)) return [];
   const types = new Set<string>();
   for (const [ct, platforms] of Object.entries(CONTENT_PLATFORM_AFFINITY)) {
-    const normalized = platforms.map((pl) => pl.toLowerCase().replace(/^twitter$/i, 'x'));
-    if (normalized.includes(p)) types.add(ct);
+    if (platforms.includes(p)) types.add(ct);
   }
-  const fallbacks: Record<string, string[]> = {
-    linkedin:  ['post', 'article', 'blog', 'newsletter', 'short_story', 'white_paper', 'carousel', 'video', 'poll'],
-    youtube:   ['video', 'short'],
-    twitter:   ['post', 'thread', 'poll', 'newsletter'],
-    x:         ['post', 'thread', 'poll', 'newsletter'],
-    instagram: ['post', 'reel', 'story', 'carousel', 'short_story'],
-    facebook:  ['post', 'video', 'story', 'carousel', 'blog', 'newsletter', 'short_story'],
-    tiktok:    ['video', 'short'],
-    reddit:    ['post', 'thread'],
-    pinterest: ['post', 'idea_pin'],
-    medium:    ['post', 'article', 'blog', 'newsletter', 'short_story', 'white_paper'],
-    devto:     ['post', 'article', 'blog', 'white_paper'],
-    blog:      ['post', 'article', 'blog'],
-  };
-  const fb = fallbacks[p] ?? ['post'];
-  fb.forEach((t) => types.add(t));
   return Array.from(types).sort();
 }
 

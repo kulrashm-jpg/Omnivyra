@@ -2,6 +2,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { isPlatformSuperAdmin } from '../../../backend/services/rbacService';
+import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
+import { requireCapability } from '../../../backend/security/requireCapability';
+import { INTELLIGENCE_OVERRIDE_MANAGE } from '../../../shared/contracts/security';
 
 type PolicyInput = {
   execution_enabled?: boolean;
@@ -9,7 +12,9 @@ type PolicyInput = {
   require_human_approval?: boolean;
 };
 
-const requireSuperAdmin = async (
+// READ guard: bridge accepted via centralized helper (signature-validated +
+// dry-run-aware). Mutations gate separately on `requireCapability`.
+const requireSuperAdminRead = async (
   req: NextApiRequest,
   res: NextApiResponse
 ): Promise<{ userId: string; email: string | null } | null> => {
@@ -18,9 +23,9 @@ const requireSuperAdmin = async (
     const isAdmin = await isPlatformSuperAdmin(user.id);
     if (isAdmin) return { userId: user.id, email: user.email || null };
   }
-  const hasSession = req.cookies?.super_admin_session === '1';
-  if (hasSession) {
-    return { userId: 'super_admin_session', email: 'superadmin' };
+  const legacy = getLegacySuperAdminSession(req);
+  if (legacy) {
+    return { userId: legacy.userId, email: 'superadmin' };
   }
   res.status(401).json({ error: 'UNAUTHORIZED' });
   return null;
@@ -47,10 +52,9 @@ const resolveUpdatedByEmail = async (userId?: string | null) => {
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const admin = await requireSuperAdmin(req, res);
-  if (!admin) return;
-
   if (req.method === 'GET') {
+    const admin = await requireSuperAdminRead(req, res);
+    if (!admin) return;
     const { policy, error } = await fetchCurrentPolicy();
     if (error) {
       // Table may not exist yet — return null policy rather than 500
@@ -67,6 +71,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // Phase 2 mutation gate. INTELLIGENCE_OVERRIDE_MANAGE is held only by
+  // canonical SUPER_ADMIN; bridge principals receive 403
+  // CAPABILITY_NOT_HELD.
+  const guard = await requireCapability(req, res, {
+    capability: INTELLIGENCE_OVERRIDE_MANAGE,
+    reason: 'community-AI platform policy mutation',
+  });
+  if (guard.ok !== true) return;
+  const admin = { userId: guard.principal.userId, email: guard.principal.email || null };
 
   const input = (req.body || {}) as PolicyInput;
   const allowedKeys = ['execution_enabled', 'auto_rules_enabled', 'require_human_approval'];

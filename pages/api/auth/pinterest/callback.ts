@@ -119,7 +119,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           username: userInfo.username || null,
           profile_picture_url: userInfo.profile_image || null,
           is_active: true,
-          permissions: tokenData.scope?.split(' ') || ['boards:read', 'boards:write', 'pins:read', 'pins:write'],
+          // `permissions` removed — column not on social_accounts (schema drift).
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -142,7 +142,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           username: userInfo.username || null,
           profile_picture_url: userInfo.profile_image || null,
           is_active: true,
-          permissions: tokenData.scope?.split(' ') || ['boards:read', 'boards:write', 'pins:read', 'pins:write'],
+          // `permissions` removed — column not on social_accounts (schema drift).
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           access_token: encryptedCols.access_token,

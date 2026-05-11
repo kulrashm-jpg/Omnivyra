@@ -19,6 +19,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { beginAuthentication } from '../../../../backend/security/webauthn/WebAuthnAuthenticationService';
 import { resolvePrincipal } from '../../../../backend/security/IdentityResolver';
+import { logger } from '../../../../backend/services/logger';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -45,6 +46,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     return res.status(200).json(result.options);
   } catch (err) {
+    // Server-side breadcrumb so the actual exception is recoverable from
+    // logs even if the client wrapper drops the `detail` field. Without
+    // this, a 500 here is invisible — the wrapper text "Could not start
+    // passkey authentication" tells you nothing about the underlying cause.
+    logger.error('webauthn_begin_authentication_failed', {
+      scopedUserId,
+      message: err instanceof Error ? err.message : String(err),
+      stack:   err instanceof Error ? err.stack : undefined,
+    });
     return res.status(500).json({
       error: 'Could not start passkey authentication',
       detail: err instanceof Error ? err.message : String(err),

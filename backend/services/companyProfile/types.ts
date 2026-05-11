@@ -16,6 +16,114 @@ export type RecommendationContext = {
   insights: Array<Record<string, unknown>>;
 };
 
+export type EntityArchetype =
+  | 'PRODUCT_COMPANY'
+  | 'SERVICE_COMPANY'
+  | 'ECOMMERCE_BRAND'
+  | 'PERSONAL_BRAND'
+  | 'CREATOR_EDUCATOR'
+  | 'CONSULTANT_OPERATOR'
+  | 'COMMUNITY_LED'
+  | 'THOUGHT_LEADER'
+  | 'MEDIA_NEWSLETTER'
+  | 'HYBRID_ENTITY';
+
+export type EntityArchetypeIntelligence = {
+  primary_archetype: EntityArchetype;
+  secondary_archetypes: EntityArchetype[];
+  confidence: number;
+  evidence: Array<{ signal: string; weight: number; snippet: string }>;
+  commercial_mode: string | null;
+  primary_value_surface: string | null;
+  audience_relationship: string | null;
+  identity_owner: string | null;
+  version?: number;
+  inferred_at?: string;
+  source?: 'heuristic';
+  evidence_count?: number;
+  stale_after?: string;
+};
+
+export type PreservedCompetitorIntelligence = {
+  name: string;
+  source?: string | null;
+  category?: string | null;
+  tier?: string | null;
+  score?: number | null;
+  confidence?: number | null;
+  rationale?: string | null;
+  archetype_peer_category?: string | null;
+  audience_overlap?: string | null;
+  narrative_overlap?: string | null;
+  trust_model?: string | null;
+  publication_identity?: string | null;
+  ecosystem_role?: string | null;
+  monetization_adjacency?: string | null;
+  creator_operator_identity?: string | null;
+  educational_role?: string | null;
+  worldview_adjacency?: string | null;
+  platform_native_context?: string | null;
+  reasoning?: string | null;
+};
+
+export type UserGuidanceCompetitorState =
+  | 'user_added'
+  | 'pinned'
+  | 'rejected'
+  | 'removed'
+  | 'restored';
+
+export type UserGuidanceStrategicSection =
+  | 'positioning'
+  | 'differentiation'
+  | 'messaging'
+  | 'audience_framing'
+  | 'strategic_narrative'
+  | 'authority_framing'
+  | 'transformation_framing';
+
+export type UserGuidedCompetitor = {
+  name: string;
+  domain?: string | null;
+  state: UserGuidanceCompetitorState;
+  source?: 'ai_generated' | 'user_guided' | 'approved' | 'rejected' | string | null;
+  rationale?: string | null;
+  original_source?: string | null;
+  original_rank?: number | null;
+  competitor_intelligence?: PreservedCompetitorIntelligence | null;
+  updated_at?: string | null;
+};
+
+export type UserGuidedStrategicField = {
+  ai_value?: string | null;
+  approved_value?: string | null;
+  edited_value?: string | null;
+  status?: 'ai_suggested' | 'approved' | 'edited' | 'rejected' | 'regenerate_requested';
+  guidance?: string | null;
+  updated_at?: string | null;
+};
+
+export type UserGuidedIntelligence = {
+  version?: number;
+  updated_at?: string | null;
+  competitors?: UserGuidedCompetitor[] | null;
+  messaging?: Partial<Record<UserGuidanceStrategicSection, UserGuidedStrategicField>> | null;
+  guidance_notes?: Array<{
+    id: string;
+    text: string;
+    category?: UserGuidanceStrategicSection | 'competitors' | 'tone' | 'identity' | null;
+    status?: 'active' | 'archived';
+    created_at?: string | null;
+  }> | null;
+  audit?: Array<{
+    action: string;
+    target?: string | null;
+    before?: unknown;
+    after?: unknown;
+    created_at?: string | null;
+  }> | null;
+};
+
 export type BusinessClassification = {
   level_1:
     | 'product_company'
@@ -159,9 +267,17 @@ export type CompanyProfile = {
       company_name?: string | null;
       website_domain?: string | null;
       business_type?: string | null;
+      industry?: string | null;
       geography?: string | null;
       social_links?: string[] | null;
       competitors?: string[] | null;
+    } | null;
+    industry_review?: {
+      conflict?: boolean | null;
+      user_industry?: string | null;
+      ai_suggested_industry?: string | null;
+      source?: string | null;
+      updated_at?: string | null;
     } | null;
     market_pulse?: {
       primary_operating_markets?: string[] | null;
@@ -174,6 +290,7 @@ export type CompanyProfile = {
       solution_domains?: string[] | null;
       competitor_details?: Array<{
         name: string;
+        domain?: string | null;
         category?: string | null;
         tier?: string | null;
         score?: number | null;
@@ -188,6 +305,7 @@ export type CompanyProfile = {
       } | null;
       market_alternatives?: Array<{
         name: string;
+        domain?: string | null;
         category?: string | null;
         tier?: string | null;
         score?: number | null;
@@ -215,6 +333,9 @@ export type CompanyProfile = {
       updated_at?: string | null;
     } | null;
     integrations?: Record<string, boolean> | null;
+    entity_archetype?: EntityArchetypeIntelligence | null;
+    competitor_intelligence?: PreservedCompetitorIntelligence[] | null;
+    user_guidance?: UserGuidedIntelligence | null;
     last_report_source?: string | null;
     last_uploaded_file_name?: string | null;
     updated_at?: string | null;
@@ -242,6 +363,8 @@ export type CompanyProfileRefinementDetails = {
   changed_fields: Array<{ field: string; before: any; after: any }>;
   created_at: string;
   extraction_output?: CompanyProfileExtractionOutput;
+  entity_archetype?: EntityArchetypeIntelligence;
+  competitor_intelligence?: PreservedCompetitorIntelligence[] | null;
   missing_fields_questions?: Array<{ field: string; question: string; options: string[]; allow_multiple?: boolean }>;
 };
 
@@ -294,6 +417,7 @@ export type ProblemTransformationPromptResult = {
 
 export type SaveProfileOptions = {
   source?: 'user' | 'ai_refined';
+  suppressUserLocks?: boolean;
 };
 
 // Inferred from zod schema; kept as a named type for internal use across sub-modules.

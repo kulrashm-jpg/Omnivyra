@@ -191,25 +191,71 @@ export async function decideCapabilityWithStepUp(
 // ── HTTP-shaped helpers ──────────────────────────────────────────────────────
 
 /**
- * Send a standard 403 response for a denied decision. The chosen status
- * code maps:
+ * Auth-denial diagnostics emitted alongside the deny reason. Phase 1 —
+ * Session Integrity Diagnostics. Every super-admin frontend should branch
+ * on `code` and surface `correlationId` to the operator so an engineer
+ * can find the matching capability_audit_log row.
+ */
+export interface AuthDeniedDiagnostics {
+  /** Per-request opaque id; matches what's logged in capability_audit_log. */
+  correlationId: string;
+  /**
+   * Resolved authentication mode at decision time:
+   *   - 'canonical': Supabase identity OR canonical auth_session
+   *   - 'bridge':    legacy cookie super-admin bridge principal
+   *   - 'unauthenticated': no principal could be resolved
+   */
+  authMode: 'canonical' | 'bridge' | 'unauthenticated';
+  /**
+   * Step-up applicability for this capability:
+   *   - 'not_required':   capability has no step-up policy
+   *   - 'required':       step-up needed; not satisfied
+   *   - 'satisfied':      step-up active and satisfies policy
+   *   - 'not_applicable': principal cannot ever satisfy step-up (e.g., bridge)
+   */
+  stepUpStatus: 'not_required' | 'required' | 'satisfied' | 'not_applicable';
+}
+
+/**
+ * Send a standard response for a denied decision. The chosen status code
+ * maps:
  *   NOT_AUTHENTICATED   → 401
  *   CAPABILITY_NOT_HELD → 403
  *   NOT_ORG_MEMBER      → 403
  *   STEP_UP_REQUIRED    → 401 with code STEP_UP_REQUIRED  (so the UI
  *                         knows to launch the step-up challenge)
+ *   BRIDGE_FACTOR_INSUFFICIENT → 403
  *   anything else       → 403
+ *
+ * Every body carries: { error, code, capability, correlationId, authMode,
+ * stepUpStatus }. Frontends MUST branch on `code`, NOT on the HTTP status,
+ * to differentiate session-expired vs missing-capability vs step-up-needed.
  */
-export function respondDenied(res: NextApiResponse, decision: Extract<AuthorizationDecision, { allowed: false }>): void {
+export function respondDenied(
+  res: NextApiResponse,
+  decision: Extract<AuthorizationDecision, { allowed: false }>,
+  diagnostics: AuthDeniedDiagnostics,
+): void {
+  // Echo the correlation id so client scripts can pin it without parsing
+  // the body. Cheap, never sensitive.
+  res.setHeader('x-omnivyra-correlation-id', diagnostics.correlationId);
+
+  const base = {
+    capability: decision.capability,
+    correlationId: diagnostics.correlationId,
+    authMode: diagnostics.authMode,
+    stepUpStatus: diagnostics.stepUpStatus,
+  };
+
   if (decision.reason === 'NOT_AUTHENTICATED') {
-    res.status(401).json({ error: 'Authorization required', code: 'NOT_AUTHENTICATED' });
+    res.status(401).json({ error: 'Authorization required', code: 'NOT_AUTHENTICATED', ...base });
     return;
   }
   if (decision.reason === 'STEP_UP_REQUIRED') {
     res.status(401).json({
       error: 'Step-up authentication required',
       code: 'STEP_UP_REQUIRED',
-      capability: decision.capability,
+      ...base,
     });
     return;
   }
@@ -217,13 +263,13 @@ export function respondDenied(res: NextApiResponse, decision: Extract<Authorizat
     res.status(403).json({
       error: 'Cookie bridge cannot satisfy elevated requirement',
       code: 'BRIDGE_FACTOR_INSUFFICIENT',
-      capability: decision.capability,
+      ...base,
     });
     return;
   }
   res.status(403).json({
     error: 'Forbidden',
     code: decision.reason,
-    capability: decision.capability,
+    ...base,
   });
 }

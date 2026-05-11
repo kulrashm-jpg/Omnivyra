@@ -7,6 +7,8 @@
 
 import type { CompanyProfile } from '../services/companyProfileService';
 import { supabase } from '../db/supabaseClient';
+import { PLATFORM_CAPABILITY_REGISTRY } from '../../lib/shared/social/platformCapabilities';
+import { normalizeContentCapability } from '../../lib/shared/social/contentCapability';
 
 const PLATFORM_URL_KEYS: Record<string, keyof CompanyProfile> = {
   linkedin: 'linkedin_url',
@@ -86,27 +88,39 @@ export function sortPlatformsByPriority(platforms: string[]): string[] {
 }
 
 /**
- * Content-type to platform affinity (which platforms suit which content).
- * Used for multi-platform posting eligibility.
+ * Content-type → platform affinity (which platforms suit which content).
+ *
+ * DERIVED (Round-2 Phase 1). This used to be a hand-maintained matrix that
+ * disagreed with the canonical capability registry (e.g. it listed Instagram
+ * under `post`, which is text-only). It is now computed at module load from
+ * `PLATFORM_CAPABILITY_REGISTRY` via `normalizeContentCapability`, so the
+ * registry is the single source of truth and this constant cannot drift.
+ *
+ * Consumers (boltPipelineService ranking, companyPlatformService content-type
+ * enumeration) keep their existing call sites; they just now see registry-
+ * correct values.
  */
-export const CONTENT_PLATFORM_AFFINITY: Record<string, string[]> = {
-  post:        ['linkedin', 'facebook', 'instagram', 'x', 'reddit', 'whatsapp'],
-  tweet:       ['x', 'twitter', 'linkedin', 'facebook'],
-  feed_post:   ['instagram', 'facebook', 'linkedin'],
-  article:     ['linkedin', 'facebook', 'medium', 'devto', 'github'],
-  blog:        ['linkedin', 'facebook', 'medium', 'devto'],
-  newsletter:  ['linkedin', 'medium', 'facebook', 'x'],
-  short_story: ['linkedin', 'facebook', 'instagram', 'x'],
-  white_paper: ['linkedin', 'medium', 'devto'],
-  video:       ['youtube', 'facebook', 'instagram', 'linkedin', 'tiktok'],
-  reel:        ['instagram', 'facebook'],
-  short:       ['youtube', 'instagram', 'facebook', 'tiktok'],
-  story:       ['instagram', 'facebook'],
-  carousel:    ['instagram', 'linkedin', 'facebook'],
-  poll:        ['linkedin', 'facebook', 'instagram', 'x'],
-  thread:      ['x', 'reddit'],
-  idea_pin:    ['pinterest'],
-};
+const KNOWN_CONTENT_TYPES = [
+  'post', 'tweet', 'feed_post', 'article', 'blog', 'newsletter',
+  'short_story', 'white_paper', 'video', 'reel', 'short', 'story',
+  'carousel', 'poll', 'thread', 'idea_pin',
+] as const;
+
+function buildContentPlatformAffinity(): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const contentType of KNOWN_CONTENT_TYPES) {
+    const capability = normalizeContentCapability({ contentType });
+    if (!capability) continue;
+    const platforms: string[] = [];
+    for (const [key, cfg] of Object.entries(PLATFORM_CAPABILITY_REGISTRY)) {
+      if (cfg.supportedContent.includes(capability)) platforms.push(key);
+    }
+    out[contentType] = sortPlatformsByPriority(platforms);
+  }
+  return out;
+}
+
+export const CONTENT_PLATFORM_AFFINITY: Record<string, string[]> = buildContentPlatformAffinity();
 
 /**
  * Max platforms per content piece for multi-platform posting.

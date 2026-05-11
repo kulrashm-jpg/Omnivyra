@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { getAuthToken } from '../utils/getAuthToken';
 import { useCompanyContext } from '@/components/CompanyContext';
 import StepTracker, { type StepDef, type StepTrackerAccent } from '@/components/progress/StepTracker';
+import { parseJsonResponse, type SafeFetchJsonResult } from '@/lib/utils/safeFetchJson';
 
 interface ReportFormModalProps {
   isOpen: boolean;
@@ -21,6 +22,17 @@ interface FormData {
   targetGeography: string;
   socialLinks: string;
 }
+
+type GenerateReportResponse = {
+  success?: boolean;
+  reportId?: string;
+  status?: 'generating';
+  message?: string;
+  error?: string;
+  code?: string;
+  requestId?: string;
+  correlationId?: string;
+};
 
 const REPORT_LABELS = {
   snapshot: {
@@ -129,6 +141,62 @@ function toSocialLinks(profile: Record<string, any> | null | undefined): string 
     .filter(Boolean);
 
   return Array.from(new Set(all)).join('\n');
+}
+
+function isReportDebugMode(): boolean {
+  if (process.env.NODE_ENV !== 'production') return true;
+  if (typeof window === 'undefined') return false;
+  return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+}
+
+function getCorrelationId(headers?: Headers, body?: unknown): string | null {
+  const typedBody = body as { correlationId?: unknown; requestId?: unknown } | null;
+  const fromBody =
+    typeof typedBody?.correlationId === 'string'
+      ? typedBody.correlationId
+      : typeof typedBody?.requestId === 'string'
+        ? typedBody.requestId
+        : null;
+
+  return (
+    fromBody ||
+    headers?.get('x-correlation-id') ||
+    headers?.get('x-request-id') ||
+    headers?.get('x-omnivyra-correlation-id') ||
+    null
+  );
+}
+
+function describeReportError(result: SafeFetchJsonResult<GenerateReportResponse>): string {
+  if (result.ok) return 'Report generation did not return a report id';
+
+  const errorResult = result.ok === false ? result : null;
+  const body = errorResult?.data as { error?: unknown; message?: unknown; code?: unknown } | null;
+  const backendMessage =
+    typeof body?.error === 'string'
+      ? body.error
+      : typeof body?.message === 'string'
+        ? body.message
+        : errorResult?.message || 'Report generation failed';
+
+  const code = typeof body?.code === 'string' ? ` (${body.code})` : '';
+  return `${backendMessage}${code}`;
+}
+
+function toUserFacingReportError(result: SafeFetchJsonResult<GenerateReportResponse>): string {
+  if (isReportDebugMode()) {
+    return describeReportError(result);
+  }
+
+  if (result.ok === false && result.reason === 'json_error' && result.status < 500) {
+    return result.message;
+  }
+
+  if (result.ok === false && result.reason === 'network_error') {
+    return 'We could not reach the report service. Please check your connection and try again.';
+  }
+
+  return 'We could not start the report. Please try again or contact support with the request id from the browser console.';
 }
 
 export default function ReportFormModal({
@@ -249,6 +317,80 @@ export default function ReportFormModal({
     return domainRegex.test(simpleDomain);
   };
 
+  const submitReportRequest = async (type: 'free' | 'premium'): Promise<SafeFetchJsonResult<GenerateReportResponse>> => {
+    const endpoint = '/api/reports/generate';
+    const payload = {
+      companyId: selectedCompanyId || undefined,
+      domain: formData.domain,
+      type,
+      reportCategory: resolvedReportCategory,
+      formData,
+      generationContext: generationContext || null,
+    };
+    const diagnostics = isReportDebugMode();
+
+    if (diagnostics) {
+      console.group(`[Report Submission] ${resolvedReportCategory}:${type}`);
+      console.info('endpoint', endpoint);
+      console.info('payload', payload);
+      console.info('context', {
+        reportType,
+        selectedCompanyId,
+        isFreeReport,
+        generationContext,
+      });
+      console.trace('stack');
+    }
+
+    try {
+      const token = await getAuthToken();
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      const result = await parseJsonResponse<GenerateReportResponse>(res, endpoint);
+      const responseBody = result.ok ? result.data : result.data;
+      const correlationId = getCorrelationId(res.headers, responseBody);
+
+      if (diagnostics) {
+        console.info('response status', res.status);
+        console.info('response body', responseBody);
+        console.info('request correlation id', correlationId);
+        if (result.ok === false) {
+          console.error('normalized error', {
+            status: result.status,
+            reason: result.reason,
+            message: result.message,
+            data: result.data,
+            correlationId,
+          });
+        }
+      }
+
+      return result;
+    } catch (error) {
+      if (diagnostics) {
+        console.error('request threw', error);
+      }
+      return {
+        ok: false,
+        status: 0,
+        reason: 'network_error',
+        contentType: null,
+        message: error instanceof Error ? error.message : String(error),
+        data: error instanceof Error ? { message: error.message, stack: error.stack } : String(error),
+      };
+    } finally {
+      if (diagnostics) {
+        console.groupEnd();
+      }
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -271,39 +413,17 @@ export default function ReportFormModal({
     // If FREE report, submit immediately
     if (isFreeReport) {
       setGenerationStartedAt(Date.now());
-      try {
-        const token = await getAuthToken();
-        const res = await fetch('/api/reports/generate', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            domain: formData.domain,
-            type: 'free',
-            reportCategory: resolvedReportCategory,
-            formData,
-            generationContext: generationContext || null,
-          }),
-        });
-        const data = await res.json();
-        if (res.ok && data.reportId) {
-          handleClose();
-          onSubmitSuccess();
-          router.push(`/reports/view/${data.reportId}?type=snapshot`);
-          return;
-        }
-        setSubmitError(data.error || 'Failed to generate report');
-        setIsSubmitting(false);
-        setGenerationStartedAt(null);
-        return;
-      } catch {
-        setSubmitError('Failed to generate report');
-        setIsSubmitting(false);
-        setGenerationStartedAt(null);
+      const result = await submitReportRequest('free');
+      if (result.ok && result.data.reportId) {
+        handleClose();
+        onSubmitSuccess();
+        router.push(`/reports/view/${result.data.reportId}?type=snapshot`);
         return;
       }
+      setSubmitError(toUserFacingReportError(result));
+      setIsSubmitting(false);
+      setGenerationStartedAt(null);
+      return;
     } else {
       // For PAID, show payment confirmation step
       setPaymentStep(true);
@@ -315,40 +435,18 @@ export default function ReportFormModal({
     setIsSubmitting(true);
     setSubmitError(null);
     setGenerationStartedAt(Date.now());
-    try {
-      const token = await getAuthToken();
-      const res = await fetch('/api/reports/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          domain: formData.domain,
-          type: 'premium',
-          reportCategory: resolvedReportCategory,
-          formData,
-          generationContext: generationContext || null,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok && data.reportId) {
-        const viewType = reportType === 'performance' ? 'performance' : reportType === 'market' ? 'growth' : 'snapshot';
-        handleClose();
-        onSubmitSuccess();
-        router.push(`/reports/view/${data.reportId}?type=${viewType}`);
-        return;
-      }
-      setSubmitError(data.error || 'Failed to generate report');
-      setIsSubmitting(false);
-      setGenerationStartedAt(null);
-      return;
-    } catch {
-      setSubmitError('Failed to generate report');
-      setIsSubmitting(false);
-      setGenerationStartedAt(null);
+    const result = await submitReportRequest('premium');
+    if (result.ok && result.data.reportId) {
+      const viewType = reportType === 'performance' ? 'performance' : reportType === 'market' ? 'growth' : 'snapshot';
+      handleClose();
+      onSubmitSuccess();
+      router.push(`/reports/view/${result.data.reportId}?type=${viewType}`);
       return;
     }
+    setSubmitError(toUserFacingReportError(result));
+    setIsSubmitting(false);
+    setGenerationStartedAt(null);
+    return;
   };
   
   // Helper to get submitted domain display

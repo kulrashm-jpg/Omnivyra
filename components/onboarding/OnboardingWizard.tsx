@@ -69,12 +69,13 @@ export default function OnboardingWizard({ ob, onNavigate }: OnboardingWizardPro
           <StepBusiness
             initialName={state.data.companyName}
             initialIndustry={state.data.industry}
+            initialBusinessTypes={state.data.businessTypes}
             initialGoal={state.data.goal}
             isLoading={isLoading}
             error={error}
-            onSave={async (name, industry, goal) => {
+            onSave={async (name, industry, businessTypes, goal) => {
               setError(null);
-              return saveBusinessContext(name, industry, goal);
+              return saveBusinessContext(name, industry, businessTypes, goal);
             }}
             onNext={nextStep}
             onBack={prevStep}

@@ -210,17 +210,8 @@ export async function publishToYouTube(
   }
 
   try {
-    // YouTube requires video file
-    if (!post.media_urls || post.media_urls.length === 0) {
-      return {
-        success: false,
-        error: {
-          code: 'YOUTUBE_NO_VIDEO',
-          message: 'YouTube posts require a video file',
-          retryable: false,
-        },
-      };
-    }
+    // Round-3 Phase 3: media-required check removed. Centralized validator in
+    // publishToPlatform rejects no-media payloads upstream as MEDIA_REQUIRED.
 
     // YouTube requires title
     if (!post.title || post.title.trim().length === 0) {

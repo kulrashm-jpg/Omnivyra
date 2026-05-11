@@ -8,15 +8,72 @@ import {
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
 import { processContent } from '@/backend/services/unifiedContentProcessor';
 import { supabase } from '@/backend/db/supabaseClient';
-import { hasEnoughCredits } from '@/backend/services/creditDeductionService';
-import { deductCreditsAwaited, executeWithCredits, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
+import { getCreditCost, type CreditAction } from '@/backend/services/creditDeductionService';
+import { executeWithCredits, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { assertOrgMembership } from '@/backend/services/requestAccessService';
 import { generateMasterContentStrict } from '@/backend/services/contentGeneration/blueprintGenerator';
 import { updateActivity } from '@/backend/services/executionPlannerPersistence';
 import { checkRateLimit } from '@/lib/auth/rateLimit';
+import { resolveMonetizationFeature } from '@/shared/monetization/featureRegistry';
 
 type WorkspaceAction = 'generate_master' | 'generate_variants' | 'refine_variant' | 'improve_variant' | 'improve_variant_all';
 type ImprovementType = 'IMPROVE_CTA' | 'IMPROVE_HOOK' | 'ADD_DISCOVERABILITY';
+
+class MonetizedWorkflowError extends Error {
+  statusCode: number;
+  payload: Record<string, unknown>;
+
+  constructor(statusCode: number, payload: Record<string, unknown>) {
+    super(String(payload.error ?? 'Monetized workflow failed'));
+    this.statusCode = statusCode;
+    this.payload = payload;
+  }
+}
+
+async function runReservedFixedWorkflow<T>(input: {
+  userId: string;
+  companyId: string | null;
+  action: CreditAction;
+  referenceId: string;
+  referenceType: string;
+  note: string;
+  multiplier?: number;
+  executor: () => Promise<T>;
+}): Promise<T> {
+  if (!input.companyId) {
+    throw new MonetizedWorkflowError(400, { error: 'Company context is required for billable content actions' });
+  }
+  const registryResolution = resolveMonetizationFeature({ action_key: input.action });
+  if (!registryResolution) {
+    throw new MonetizedWorkflowError(500, { error: `No monetization registry entry for ${input.action}` });
+  }
+  const baseCost = await getCreditCost(input.action);
+  const amountOverride = Math.round(baseCost * (input.multiplier ?? 1));
+  const result = await executeWithCredits<T>({
+    userId: input.userId,
+    orgId: input.companyId,
+    action: input.action,
+    referenceType: input.referenceType,
+    referenceId: input.referenceId,
+    idempotencyKey: makeIdempotencyKey(input.userId, input.action, input.referenceId, input.note),
+    amountOverride,
+    note: `${input.note} [feature=${registryResolution.feature_key}; pricing=${registryResolution.pricing_key}]`,
+    executor: input.executor,
+  });
+
+  if (result.status === 'executed') return result.result;
+  if (result.status === 'insufficient_credits') {
+    throw new MonetizedWorkflowError(402, {
+      error: 'Insufficient credits to generate content',
+      required: result.required,
+      balance: result.available,
+    });
+  }
+  if (result.status === 'not_a_member') throw new MonetizedWorkflowError(403, { error: 'ORG_SCOPE_VIOLATION' });
+  if (result.status === 'org_control_blocked') throw new MonetizedWorkflowError(403, { error: result.code, detail: result.reason });
+  if (result.status === 'no_credit_account') throw new MonetizedWorkflowError(402, { error: 'No credit account for org' });
+  throw new MonetizedWorkflowError(409, { error: `Credit reservation is already settled: ${result.status}` });
+}
 
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -167,7 +224,66 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Variant has no content to improve' });
       }
       const contentType = String(variant?.content_type || 'post').trim().toLowerCase();
+      const improvementTypes = [improvementType];
+      const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+      const improved_variant = await runReservedFixedWorkflow({
+        userId: user.id,
+        companyId,
+        action: 'content_rewrite',
+        referenceType: 'activity_content_improvement',
+        referenceId: `${activityDbId || platform}:all:${improvementTypes.join('+')}`,
+        note: `Improve all: ${improvementTypes.join(', ')}`,
+        executor: async () => {
+          let discoverabilityMeta: Record<string, unknown> | undefined;
+          if (improvementTypes.includes('ADD_DISCOVERABILITY')) {
+            discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
+          }
+          const contentImprovements = improvementTypes.filter((t) => t !== 'ADD_DISCOVERABILITY');
+          let revisedContent = currentContent;
+          if (contentImprovements.length > 0) {
+            const aiResult = await runCompletionWithOperation({
+              companyId,
+              model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+              operation: 'regenerateContent',
+              temperature: 0.2,
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are a social content editor. Apply all requested improvements in-place. Return plain text only.',
+                },
+                {
+                  role: 'user',
+                  content: JSON.stringify({
+                    platform,
+                    content_type: contentType,
+                    improvements: contentImprovements,
+                    current_content: currentContent,
+                  }),
+                },
+              ],
+            });
+            let revised = String(aiResult?.output || '').trim();
+            if (!revised) throw new Error('Improvement returned empty output');
+            const refinedImprove = await processContent({
+              content: revised,
+              platform,
+              card_type: 'platform_variant',
+              enforce_char_limit: true,
+            });
+            revisedContent = refinedImprove.content || revised;
+          }
+          const nextVariant = {
+            ...variant,
+            generated_content: revisedContent,
+            ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
+          };
+          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          return nextVariant;
+        },
+      });
+      return res.status(200).json({ success: true, improved_variant });
 
+      {
       if (improvementType === 'ADD_DISCOVERABILITY') {
         const discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
         // Store hashtags in discoverability_meta only — do NOT append to generated_content.
@@ -238,35 +354,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               'Output the complete revised content now:',
             ].join('\n');
 
-      const aiResult = await runCompletionWithOperation({
-        companyId,
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        operation: 'regenerateContent',
-        temperature: 0.2,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user',   content: userPrompt },
-        ],
-      });
-      let revised = String(aiResult?.output || '').trim();
-      if (!revised) {
-        return res.status(500).json({ error: 'Improvement returned empty output' });
-      }
-      const refinedImprove = await processContent({
-        content: revised,
-        platform,
-        card_type: 'platform_variant',
-        enforce_char_limit: true,
-      });
-      revised = refinedImprove.content || revised;
-      const improved_variant = {
-        ...variant,
-        generated_content: revised,
-      };
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
-      await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
-      if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: `Improve ${improvementType.toLowerCase()}` });
+      const improved_variant = await runReservedFixedWorkflow({
+        userId: user.id,
+        companyId,
+        action: 'content_rewrite',
+        referenceType: 'activity_content_improvement',
+        referenceId: `${activityDbId || executionId || platform}:${improvementType}`,
+        note: `Improve ${improvementType.toLowerCase()}`,
+        executor: async () => {
+          const aiResult = await runCompletionWithOperation({
+            companyId,
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            operation: 'regenerateContent',
+            temperature: 0.2,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user',   content: userPrompt },
+            ],
+          });
+          let revised = String(aiResult?.output || '').trim();
+          if (!revised) {
+            throw new Error('Improvement returned empty output');
+          }
+          const refinedImprove = await processContent({
+            content: revised,
+            platform,
+            card_type: 'platform_variant',
+            enforce_char_limit: true,
+          });
+          revised = refinedImprove.content || revised;
+          const nextVariant = {
+            ...variant,
+            generated_content: revised,
+          };
+          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          return nextVariant;
+        },
+      });
       return res.status(200).json({ success: true, improved_variant });
+      }
     }
 
     if (action === 'improve_variant_all') {
@@ -287,8 +414,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Variant has no content to improve' });
       }
       const contentType = String(variant?.content_type || 'post').trim().toLowerCase();
+      const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+      const improved_variant = await runReservedFixedWorkflow({
+        userId: user.id,
+        companyId,
+        action: 'content_rewrite',
+        referenceType: 'activity_content_improvement',
+        referenceId: `${activityDbId || platform}:all:${improvementTypes.join('+')}`,
+        note: `Improve all: ${improvementTypes.join(', ')}`,
+        executor: async () => {
+          let discoverabilityMeta: Record<string, unknown> | undefined;
+          if (improvementTypes.includes('ADD_DISCOVERABILITY')) {
+            discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
+          }
+          const contentImprovements = improvementTypes.filter((t) => t !== 'ADD_DISCOVERABILITY');
+          let revisedContent = currentContent;
+          if (contentImprovements.length > 0) {
+            const aiResult = await runCompletionWithOperation({
+              companyId,
+              model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+              operation: 'regenerateContent',
+              temperature: 0.2,
+              messages: [
+                { role: 'system', content: 'You are a social content editor. Apply all requested improvements in-place. Return plain text only.' },
+                { role: 'user', content: JSON.stringify({ platform, content_type: contentType, improvements: contentImprovements, current_content: currentContent }) },
+              ],
+            });
+            let revised = String(aiResult?.output || '').trim();
+            if (!revised) throw new Error('Improvement returned empty output');
+            const refinedImprove = await processContent({
+              content: revised,
+              platform,
+              card_type: 'platform_variant',
+              enforce_char_limit: true,
+            });
+            revisedContent = refinedImprove.content || revised;
+          }
+          const nextVariant = {
+            ...variant,
+            generated_content: revisedContent,
+            ...(discoverabilityMeta ? { discoverability_meta: discoverabilityMeta } : {}),
+          };
+          await persistVariantsToDb(activityDbId, [nextVariant], asObject((dailyExecutionItemRaw as any)?.master_content));
+          return nextVariant;
+        },
+      });
+      return res.status(200).json({ success: true, improved_variant });
 
       // ADD_DISCOVERABILITY is independent — generate hashtags separately
+      {
       let discoverabilityMeta: Record<string, unknown> | undefined;
       if (improvementTypes.includes('ADD_DISCOVERABILITY')) {
         discoverabilityMeta = await optimizeDiscoverabilityForPlatform(currentContent, platform, contentType);
@@ -374,8 +548,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
       await persistVariantsToDb(activityDbId, [improved_variant], asObject((dailyExecutionItemRaw as any)?.master_content));
-      if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: `Improve all: ${improvementTypes.join(', ')}` });
       return res.status(200).json({ success: true, improved_variant });
+      }
     }
 
     const activePlatformTargets = schedules
@@ -603,7 +777,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
       refined = refinedOutput.content || refined;
 
-      if (companyId) await deductCreditsAwaited(companyId, 'content_rewrite', { note: 'Content refinement' });
       const activityDbId = String((req.body as any)?.activity?.id || '').trim();
       await persistVariantsToDb(activityDbId, [{
         platform,
@@ -630,6 +803,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ? (String(creatorAsset.description ?? '').trim() || String(creatorAsset.transcript ?? '').trim() || String(creatorAsset.theme ?? '').trim() || String(item.topic ?? item.title ?? '').trim())
       : '';
 
+    const generatedVariantResult = await runReservedFixedWorkflow({
+      userId: user.id,
+      companyId,
+      action: 'content_basic',
+      referenceType: 'activity_platform_variants',
+      referenceId: activityDbId || String(item.execution_id || Date.now()),
+      note: 'Generated platform variants',
+      multiplier: Math.max(1, activePlatformTargets.length || schedules.length || 1),
+      executor: async () => {
+        let reservedItemWithMaster = item;
+        if (!item.master_content && !creatorMasterText) {
+          const generatedMaster = await generateMasterContentFromIntent(item);
+          await persistMasterToDb(activityDbId, generatedMaster);
+          reservedItemWithMaster = { ...item, master_content: generatedMaster };
+        } else if (creatorMasterText) {
+          reservedItemWithMaster = {
+            ...item,
+            master_content: {
+              id: `creator-${item.execution_id}`,
+              generated_at: new Date().toISOString(),
+              content: creatorMasterText,
+              generation_status: 'generated' as const,
+              generation_source: 'creator' as const,
+              content_type_mode: 'text' as const,
+            },
+          };
+        }
+
+        const reservedVariants = await buildPlatformVariantsFromMaster(reservedItemWithMaster);
+        const reservedSuccessfulVariants = reservedVariants.filter((v) => !isFailedVariant(v));
+        if (reservedSuccessfulVariants.length === 0 && reservedVariants.length > 0) {
+          const failure = new Error('Platform adaptation failed for all targets.');
+          (failure as Error & { code?: string }).code = 'VARIANT_GENERATION_FAILED';
+          throw failure;
+        }
+
+        await persistVariantsToDb(
+          activityDbId,
+          reservedSuccessfulVariants as Array<Record<string, unknown>>,
+          ((reservedItemWithMaster as any).master_content ?? null) as Record<string, unknown> | null
+        );
+
+        return {
+          platform_variants: reservedSuccessfulVariants,
+          master_content: (reservedItemWithMaster as any).master_content ?? null,
+        };
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      platform_variants: generatedVariantResult.platform_variants,
+      master_content: generatedVariantResult.master_content,
+    });
+
     // If no master yet: auto-generate it now (first repurpose button press on any platform).
     // Persist to DB immediately so every subsequent platform repurpose reuses the same master.
     let itemWithMaster = item;
@@ -651,13 +879,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
     }
 
-    if (companyId) {
-      const check = await hasEnoughCredits(companyId, 'content_basic');
-      if (!check.sufficient) {
-        return res.status(402).json({ error: 'Insufficient credits to generate content', required: check.required, balance: check.balance });
-      }
-    }
-
     const variants = await buildPlatformVariantsFromMaster(itemWithMaster);
 
     // Filter out failed/placeholder variants — never return error strings as content
@@ -677,12 +898,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ((itemWithMaster as any).master_content ?? null) as Record<string, unknown> | null
     );
 
-    // Charge content_basic per platform variant successfully generated
     if (companyId && successfulVariants.length > 0) {
-      await deductCreditsAwaited(companyId, 'content_basic', {
-        note: `Generated ${successfulVariants.length} platform variant${successfulVariants.length > 1 ? 's' : ''}`,
-        multiplier: successfulVariants.length,
-      });
+      // Legacy fallback retained unreachable during migration; reservation wrapper above owns accounting.
     }
 
     return res.status(200).json({
@@ -692,6 +909,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       master_content: (itemWithMaster as any).master_content ?? null,
     });
   } catch (error) {
+    if (error instanceof MonetizedWorkflowError) {
+      return res.status(error.statusCode).json(error.payload);
+    }
+    if ((error as Error & { code?: string })?.code === 'VARIANT_GENERATION_FAILED') {
+      return res.status(500).json({
+        error: 'VARIANT_GENERATION_FAILED',
+        message: error instanceof Error ? error.message : 'Platform adaptation failed for all targets.',
+      });
+    }
     console.error('activity-workspace content API error:', error);
     return res.status(500).json({ error: 'Failed to process activity content request' });
   }

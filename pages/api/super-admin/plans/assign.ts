@@ -1,26 +1,22 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
 import { createCredit, makeIdempotencyKey } from '../../../../backend/services/creditExecutionService';
-
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdmin(req, res))) return;
+  // Phase 2 mutation gate. Assigning a plan to an organization mints
+  // billing-relevant credits and changes the org's monthly budget —
+  // same blast radius as plan toggle / override.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_PLAN_MANAGE,
+    reason: 'super-admin assigns plan to organization',
+  });
+  if (guard.ok !== true) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const organizationId = body.organization_id ?? body.organizationId;

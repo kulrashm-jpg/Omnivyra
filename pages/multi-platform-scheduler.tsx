@@ -7,6 +7,8 @@ import { useCompanyContext } from '@/components/CompanyContext';
 import PlatformIcon from '@/components/ui/PlatformIcon';
 import { resolveSchedulerDraft } from '@/components/content/post-to-social/schedulerDraft';
 import PostToSocialPlatformPanel from '@/components/content/post-to-social/PostToSocialPlatformPanel';
+import { filterConnectedPlatformsForContent } from '@/lib/shared/social/platformContentFilter';
+import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '@/lib/shared/social/capabilityEvents';
 import { defaultScheduleValue, getContentTypeLabel, normalizePlatform, parseHashtags, resolveSocialPublishType, type ConnectedAccount, type DraftPayload, type PlatformConfigItem, type PlatformOption, type PlatformState } from '@/components/content/post-to-social/schedulerShared';
 import { clearThreadPublishLink, saveThreadPublishLink } from '@/lib/thread/threadStorage';
 import { getThreadContinuationLink } from '@/lib/thread/threadLinks';
@@ -115,7 +117,7 @@ export default function MultiPlatformSchedulerPage() {
       active = false;
     };
   }, [selectedCompanyId]);
-  const platformOptions = useMemo(() => {
+  const allPlatformOptions = useMemo(() => {
     const configMap = new Map(platformConfig.map((item) => [normalizePlatform(item.platform), item]));
     return connectedAccounts
       .map((account) => {
@@ -131,6 +133,65 @@ export default function MultiPlatformSchedulerPage() {
       })
       .filter(Boolean) as PlatformOption[];
   }, [connectedAccounts, platformConfig]);
+
+  // Capability-aware split (Round-3 Phase 2). Reuses the SAME filter helper
+  // ShortformResultPage uses, so both UI surfaces decide compatibility from
+  // the canonical registry. Incompatible-but-connected platforms remain
+  // visible as DISABLED chips with the registry-provided reason as tooltip;
+  // disconnected platforms are filtered out upstream (connectedAccounts).
+  const schedulerSourceContentType = String(draft?.sourceContentType || router.query.contentType || 'post').trim().toLowerCase();
+  const platformFilter = useMemo(() => {
+    return filterConnectedPlatformsForContent(
+      allPlatformOptions.map((opt) => opt.key),
+      { contentType: schedulerSourceContentType },
+    );
+  }, [allPlatformOptions, schedulerSourceContentType]);
+
+  const hiddenReasonByKey = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of platformFilter.hidden) m.set(h.platform, h.reason);
+    return m;
+  }, [platformFilter]);
+
+  // Round-4 Phase 4: unregistered (unknown-to-registry) platforms must NEVER
+  // render. They're filtered out of the displayable list entirely; hidden
+  // (registered-but-unsupported) platforms still render as disabled chips.
+  const unregisteredKeys = useMemo(
+    () => new Set(platformFilter.unregistered.map((u) => u.platform)),
+    [platformFilter],
+  );
+  const displayablePlatformOptions = useMemo(
+    () => allPlatformOptions.filter((opt) => !unregisteredKeys.has(opt.key)),
+    [allPlatformOptions, unregisteredKeys],
+  );
+
+  const platformOptions = useMemo(() => {
+    const supported = new Set(platformFilter.supported);
+    return allPlatformOptions.filter((opt) => supported.has(opt.key));
+  }, [allPlatformOptions, platformFilter]);
+
+  useEffect(() => {
+    if (allPlatformOptions.length === 0) return;
+    const payload: CapabilityLogPayload = {
+      surface: 'multi-platform-scheduler',
+      publishSource: 'multi-platform-scheduler',
+      resolvedCapability: platformFilter.capability,
+      connectedPlatforms: allPlatformOptions.map((o) => o.key),
+      supportedPlatforms: platformFilter.supported,
+      hiddenPlatforms: platformFilter.hidden.map((h) => h.platform),
+      unregisteredPlatforms: platformFilter.unregistered.map((u) => u.platform),
+      hiddenReasons: platformFilter.hidden.reduce<Record<string, string>>((acc, h) => {
+        acc[h.platform] = h.reason;
+        return acc;
+      }, {}),
+      unregisteredReasons: platformFilter.unregistered.reduce<Record<string, string>>((acc, u) => {
+        acc[u.platform] = u.reason;
+        return acc;
+      }, {}),
+    };
+    console.info(JSON.stringify({ event: CAPABILITY_LOG_EVENTS.FILTERED, ...payload }));
+  }, [allPlatformOptions, platformFilter]);
+
   useEffect(() => {
     if (platformOptions.length === 0) {
       setSelectedPlatform('');
@@ -168,7 +229,7 @@ export default function MultiPlatformSchedulerPage() {
 
   const selectedOption = platformOptions.find((item) => item.key === selectedPlatform) || null;
   const selectedState = selectedPlatform ? platformState[selectedPlatform] : null;
-  const sourceContentType = String(draft?.sourceContentType || router.query.contentType || 'post').trim().toLowerCase();
+  const sourceContentType = schedulerSourceContentType;
   const executionMode = typeof router.query.executionMode === 'string' ? router.query.executionMode.trim().toLowerCase() : '';
   const publishContentType = resolveSocialPublishType(sourceContentType, selectedOption);
   const sourceContentLabel = getContentTypeLabel(sourceContentType);
@@ -536,7 +597,7 @@ export default function MultiPlatformSchedulerPage() {
 
             <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-950">Connected platforms</h2>
-              {platformOptions.length === 0 ? (
+              {allPlatformOptions.length === 0 ? (
                 <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-600">
                   No connected social platform is available for this company yet.
                   <div className="mt-4">
@@ -545,26 +606,41 @@ export default function MultiPlatformSchedulerPage() {
                     </Link>
                   </div>
                 </div>
+              ) : platformFilter.capability === null ? (
+                <div className="mt-4 rounded-2xl border border-dashed border-amber-300 bg-amber-50/70 p-5 text-sm text-amber-800">
+                  Unable to determine compatible publishing platforms for this content type.
+                </div>
               ) : (
                 <>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    {platformOptions.map((option) => {
-                      const active = option.key === selectedPlatform;
+                    {displayablePlatformOptions.map((option) => {
+                      const disabled = hiddenReasonByKey.has(option.key);
+                      const reason = hiddenReasonByKey.get(option.key);
+                      const active = !disabled && option.key === selectedPlatform;
                       return (
                         <button
                           key={option.key}
                           type="button"
-                          onClick={() => setSelectedPlatform(option.key)}
+                          onClick={() => { if (!disabled) setSelectedPlatform(option.key); }}
+                          disabled={disabled}
+                          aria-disabled={disabled || undefined}
+                          title={disabled ? reason : undefined}
                           className={`rounded-2xl border p-4 text-left transition ${
-                            active ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:border-slate-300'
+                            disabled
+                              ? 'border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed'
+                              : active
+                                ? 'border-blue-300 bg-blue-50'
+                                : 'border-slate-200 bg-white hover:border-slate-300'
                           }`}
                         >
                           <div className="flex items-center gap-3">
                             <PlatformIcon platform={option.key} size={18} showLabel />
                             {active ? <CheckCircle2 className="ml-auto h-4 w-4 text-blue-600" /> : null}
                           </div>
-                          <p className="mt-3 text-sm font-semibold text-slate-900">{option.label}</p>
-                          <p className="mt-1 text-xs text-slate-500">{option.accountName || 'Connected account'}</p>
+                          <p className={`mt-3 text-sm font-semibold ${disabled ? 'text-slate-500' : 'text-slate-900'}`}>{option.label}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {disabled ? reason : option.accountName || 'Connected account'}
+                          </p>
                         </button>
                       );
                     })}

@@ -1,8 +1,14 @@
 
 /**
- * Public endpoint — no auth required.
- * Returns all published blog posts for a company (for embedding a blog feed).
- * CORS enabled so external sites can fetch the feed.
+ * Public endpoint — no auth required (BY DESIGN).
+ * Returns all published blog posts for a company (for embedding a blog feed
+ * on external marketing sites). CORS is intentionally open.
+ *
+ * KNOWN TRADE-OFF: callers with any company UUID can list that company's
+ * published blogs. This is the explicit cost of supporting a public feed.
+ * If you need to lock this down, gate by a `public_blog_feed_enabled` flag
+ * on the company profile rather than removing the endpoint — external
+ * embeds depend on it.
  *
  * Response: { blogs: BlogListing[] }
  */

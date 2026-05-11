@@ -1,4 +1,6 @@
 import type { CompanyProfile } from './companyProfile/types';
+import { isAudienceLedArchetype, isArchetypeInfluential, isBusinessFirstOnlyArchetype } from './companyProfile/entityArchetype';
+import type { EntityArchetypeIntelligence } from './companyProfile/types';
 import type { ResolvedReportInput } from './reportInputResolver';
 import {
   enrichCompetitorCandidateSync,
@@ -34,6 +36,7 @@ export type CompetitorSource =
   | 'serp_live'
   | 'known_category_dataset'
   | 'market_substitute'
+  | 'archetype_native_peer'
   | 'profile_ai'
   | 'inferred_keyword_peer'
   | 'serp_unavailable_fallback';
@@ -73,6 +76,22 @@ export type CompanyCompetitiveContext = {
   foundedYear: string | null;
   revenueRange: string | null;
   businessModel: string | null;
+  entityArchetype?: EntityArchetypeIntelligence | null;
+};
+
+export type CompetitorIntelligence = {
+  archetype_peer_category?: string | null;
+  audience_overlap?: string | null;
+  narrative_overlap?: string | null;
+  trust_model?: string | null;
+  publication_identity?: string | null;
+  ecosystem_role?: string | null;
+  monetization_adjacency?: string | null;
+  creator_operator_identity?: string | null;
+  educational_role?: string | null;
+  worldview_adjacency?: string | null;
+  platform_native_context?: string | null;
+  reasoning?: string | null;
 };
 
 export type CompetitorCandidate = {
@@ -94,6 +113,7 @@ export type CompetitorCandidate = {
   scaleSignals?: CompetitorScaleSignals | null;
   confidenceScore?: number | null;
   enrichment?: CompetitorEnrichmentProfile | null;
+  competitorIntelligence?: CompetitorIntelligence | null;
 };
 
 export type RankedCompetitor = {
@@ -117,6 +137,7 @@ export type RankedCompetitor = {
   enrichment: CompetitorEnrichmentProfile | null;
   enrichment_confidence_score: number;
   rationale: string;
+  competitor_intelligence: CompetitorIntelligence | null;
   fit_signals: {
     market_focus?: string | null;
     product_service?: string | null;
@@ -175,13 +196,14 @@ const SOURCE_BASE_SCORE: Record<CompetitorSource, number> = {
   serp_live: 58,
   known_category_dataset: 58,
   market_substitute: 52,
+  archetype_native_peer: 50,
   profile_ai: 14,
   inferred_keyword_peer: 0,
   serp_unavailable_fallback: 0,
 };
 
 export const FINAL_COMPETITOR_MIN_SCORE = 42;
-export const HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE = 90;
+export const HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE = 85;
 export const MARKET_SUBSTITUTE_MAX_COUNT = 3;
 const FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP = 0.5;
 const FINAL_COMPETITOR_MIN_ICP_OVERLAP = 0.4;
@@ -513,7 +535,72 @@ function candidateSignalText(candidate: CompetitorCandidate, domain: string | nu
     candidate.enrichment?.icp.age_group,
     candidate.enrichment?.icp.use_case,
     candidate.enrichment?.icp.user_intent,
+    candidate.competitorIntelligence?.archetype_peer_category,
+    candidate.competitorIntelligence?.audience_overlap,
+    candidate.competitorIntelligence?.narrative_overlap,
+    candidate.competitorIntelligence?.trust_model,
+    candidate.competitorIntelligence?.publication_identity,
+    candidate.competitorIntelligence?.ecosystem_role,
+    candidate.competitorIntelligence?.monetization_adjacency,
+    candidate.competitorIntelligence?.creator_operator_identity,
+    candidate.competitorIntelligence?.educational_role,
+    candidate.competitorIntelligence?.worldview_adjacency,
+    candidate.competitorIntelligence?.platform_native_context,
     ...(candidate.productSignals ?? []),
+  ].filter(Boolean).join(' ');
+}
+
+function compactText(value: unknown, max = 180): string | null {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.replace(/\s+/g, ' ').trim();
+  return cleaned ? cleaned.slice(0, max).trim() : null;
+}
+
+function inferCompetitorIntelligence(candidate: CompetitorCandidate, context: CompanyCompetitiveContext): CompetitorIntelligence | null {
+  const sourceIntelligence = candidate.competitorIntelligence ?? null;
+  const evidence = candidateSignalText(candidate, normalizeCompetitorDomain(candidate.domain ?? candidate.name)).toLowerCase();
+  if (candidate.source !== 'archetype_native_peer' && !sourceIntelligence) return null;
+  const category = compactText(sourceIntelligence?.archetype_peer_category ?? candidate.category);
+  const productSignals = (candidate.productSignals ?? []).filter(Boolean).join(', ');
+  const contextAudience = compactText(context.targetCustomer ?? context.idealCustomerProfile);
+  const useCase = compactText(candidate.useCase ?? candidate.enrichment?.icp?.use_case);
+  const businessModel = compactText(candidate.businessModel ?? candidate.enrichment?.business_model);
+  const description = compactText(candidate.description ?? candidate.enrichment?.description);
+  const isPublication = /\b(newsletter|publication|editorial|media|podcast|readers?|subscribers?)\b/.test(evidence);
+  const isCreator = /\b(creator|founder|operator|public builder|public building|personal brand|writer)\b/.test(evidence);
+  const isEducation = /\b(course|education|educator|learners?|students?|workshop|cohort|community|membership)\b/.test(evidence);
+  const isWorldview = /\b(worldview|thesis|framework|belief|manifesto|why|narrative|philosophy|systems thinking)\b/.test(evidence);
+  const isPlatformNative = /\b(substack|youtube|linkedin|podcast|newsletter|platform-native)\b/.test(evidence);
+  return {
+    archetype_peer_category: category,
+    audience_overlap: compactText(sourceIntelligence?.audience_overlap ?? contextAudience ?? candidate.targetCustomer),
+    narrative_overlap: compactText(sourceIntelligence?.narrative_overlap ?? (isWorldview ? description ?? productSignals : candidate.rationale)),
+    trust_model: compactText(sourceIntelligence?.trust_model ?? (isPublication ? 'recurring audience trust through publishing cadence' : isCreator ? 'person-led authority and audience trust' : isEducation ? 'expert-led learning trust' : null)),
+    publication_identity: compactText(sourceIntelligence?.publication_identity ?? (isPublication ? category ?? 'publication/media peer' : null)),
+    ecosystem_role: compactText(sourceIntelligence?.ecosystem_role ?? (isCreator ? 'creator/operator peer in the same audience ecosystem' : isEducation ? 'education/community peer' : null)),
+    monetization_adjacency: compactText(sourceIntelligence?.monetization_adjacency ?? businessModel),
+    creator_operator_identity: compactText(sourceIntelligence?.creator_operator_identity ?? (isCreator ? category ?? candidate.name : null)),
+    educational_role: compactText(sourceIntelligence?.educational_role ?? (isEducation ? useCase ?? category : null)),
+    worldview_adjacency: compactText(sourceIntelligence?.worldview_adjacency ?? (isWorldview ? useCase ?? description : null)),
+    platform_native_context: compactText(sourceIntelligence?.platform_native_context ?? (isPlatformNative ? productSignals || category : null)),
+    reasoning: compactText(sourceIntelligence?.reasoning ?? candidate.rationale),
+  };
+}
+
+function competitorIntelligenceText(intelligence: CompetitorIntelligence | null | undefined): string {
+  if (!intelligence) return '';
+  return [
+    intelligence.archetype_peer_category,
+    intelligence.audience_overlap,
+    intelligence.narrative_overlap,
+    intelligence.trust_model,
+    intelligence.publication_identity,
+    intelligence.ecosystem_role,
+    intelligence.monetization_adjacency,
+    intelligence.creator_operator_identity,
+    intelligence.educational_role,
+    intelligence.worldview_adjacency,
+    intelligence.platform_native_context,
   ].filter(Boolean).join(' ');
 }
 
@@ -581,8 +668,20 @@ function buildCompetitorPositioning(
   const threatLevel = threatLevelForCompetitor(breakdown);
   const brandStrength = breakdown.authority_signals.brand_strength;
   const searchVisibility = breakdown.authority_signals.search_visibility ?? `${brandStrength} brand visibility`;
+  const intelligence = inferCompetitorIntelligence(candidate, context);
+  const intelligenceSummary = competitorIntelligenceText(intelligence);
+  const audienceLedPeer = candidate.source === 'archetype_native_peer' && Boolean(intelligenceSummary);
 
   const strengths = uniqueNonEmpty([
+    audienceLedPeer && intelligence?.publication_identity
+      ? `${competitorName} competes as a ${intelligence.publication_identity}, with pressure from recurring media attention and audience trust.`
+      : '',
+    audienceLedPeer && intelligence?.worldview_adjacency
+      ? `${competitorName} overlaps on worldview or thesis territory: ${intelligence.worldview_adjacency}.`
+      : '',
+    audienceLedPeer && intelligence?.ecosystem_role
+      ? `${competitorName} occupies an adjacent ecosystem role: ${intelligence.ecosystem_role}.`
+      : '',
     breakdown.authority_score >= 0.65
       ? `${competitorName} has stronger market authority through ${brandStrength} brand strength and ${searchVisibility}.`
       : '',
@@ -601,6 +700,9 @@ function buildCompetitorPositioning(
   ]);
 
   const weaknesses = uniqueNonEmpty([
+    audienceLedPeer && intelligence?.monetization_adjacency
+      ? `${competitorName} may monetize through ${intelligence.monetization_adjacency}, so the company can separate through a sharper offer and trust promise.`
+      : '',
     breakdown.icp_overlap < 0.5
       ? `${competitorName} is less aligned to ${target} than the company's focused ICP.`
       : '',
@@ -622,6 +724,12 @@ function buildCompetitorPositioning(
   ]);
 
   const differentiation = (() => {
+    if (audienceLedPeer) {
+      const peerCategory = readableLabel(intelligence?.archetype_peer_category, category);
+      const trustModel = readableLabel(intelligence?.trust_model, 'audience trust');
+      const overlap = readableLabel(intelligence?.narrative_overlap ?? intelligence?.audience_overlap, target);
+      return `${competitorName} overlaps as a ${peerCategory} through ${trustModel} around ${overlap}, while the company can differentiate by combining ${companyFocus} with a sharper audience promise, worldview, and ecosystem role.`;
+    }
     if (breakdown.tier === 'Tier 3') {
       return `${competitorName} is a broader ${category} substitute, while the company can win on ${companyFocus} for ${target} instead of general-purpose demand.`;
     }
@@ -858,7 +966,13 @@ function withArchetypeEnrichment(candidate: CompetitorCandidate): CompetitorCand
     confidence_score: Number(candidate.confidenceScore ?? 0) >= FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE
       ? Number(candidate.confidenceScore)
       : 0.72,
-    sources: ['market_substitute_archetype'],
+    sources: [
+      candidate.source === 'archetype_native_peer'
+        ? 'archetype_native_peer'
+        : candidate.source === 'market_substitute'
+          ? 'market_substitute_archetype'
+          : 'trusted_inline_candidate',
+    ],
   };
 
   return {
@@ -901,6 +1015,19 @@ function contextTokens(context: CompanyCompetitiveContext): {
 export function extractCompetitiveContextFromProfile(profile: CompanyProfile | null | undefined): CompanyCompetitiveContext {
   const companyFacts = profile?.report_settings?.company_facts ?? null;
   const marketPulse = profile?.report_settings?.market_pulse ?? null;
+  const entityArchetype = profile?.report_settings?.entity_archetype ?? null;
+  const audienceLed = isAudienceLedArchetype(entityArchetype);
+  const archetypeInfluential = isArchetypeInfluential(entityArchetype);
+  const archetypeValueSurface = archetypeInfluential ? cleanText(entityArchetype?.primary_value_surface) : null;
+  const archetypeAudience = archetypeInfluential ? cleanText(entityArchetype?.audience_relationship) : null;
+  const archetypeCommercialMode = archetypeInfluential ? cleanText(entityArchetype?.commercial_mode) : null;
+  const archetypePositioning = archetypeInfluential
+    ? [
+        entityArchetype?.primary_archetype,
+        archetypeValueSurface,
+        archetypeAudience,
+      ].filter(Boolean).join('; ')
+    : null;
   const campaignPurpose = profile?.campaign_purpose_intent ?? null;
   const classification = profile?.business_classification ?? null;
   const classificationDomains = Array.isArray(classification?.level_3)
@@ -932,6 +1059,7 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
     firstFromList(profile?.products_services_list) ??
     firstFromList(marketPulse?.core_offerings ?? null) ??
     cleanText(profile?.products_services) ??
+    (audienceLed ? archetypeValueSurface : null) ??
     null;
   const primaryService = [
     primaryOffering,
@@ -942,12 +1070,14 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
     cleanText(profile?.brand_positioning),
     cleanText(profile?.unique_value),
     cleanText(campaignPurpose?.brand_positioning_angle),
+    archetypePositioning,
     ...solutionDomains,
     domainRole,
   ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index)
     .join('; ') || null;
   const idealCustomerProfile = [
     cleanText(profile?.ideal_customer_profile),
+    audienceLed ? archetypeAudience : null,
     ...solutionDomains,
   ].filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index)
     .join('; ') || null;
@@ -957,6 +1087,7 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
       cleanText(profile?.campaign_focus) ??
       cleanText(profile?.category) ??
       firstFromList(profile?.category_list) ??
+      (audienceLed ? archetypeValueSurface : null) ??
       classificationDomains[0] ??
       cleanText(profile?.industry) ??
       firstFromList(profile?.industry_list) ??
@@ -968,6 +1099,7 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
       cleanText(profile?.target_customer_segment) ??
       cleanText(profile?.target_audience) ??
       firstFromList(profile?.target_audience_list) ??
+      (audienceLed ? archetypeAudience : null) ??
       null,
     idealCustomerProfile,
     brandPositioning,
@@ -981,9 +1113,11 @@ export function extractCompetitiveContextFromProfile(profile: CompanyProfile | n
     revenueRange: cleanText(companyFacts?.revenue_range),
     businessModel:
       businessModel ??
+      (audienceLed ? archetypeCommercialMode : null) ??
       cleanText(profile?.sales_motion) ??
       cleanText(profile?.pricing_model) ??
       null,
+    entityArchetype,
   };
 }
 
@@ -1130,6 +1264,7 @@ function sourceEvidenceBoost(source: CompetitorSource): number {
   if (source === 'website' || source === 'social') return 0.45;
   if (source === 'serp_live' || source === 'known_category_dataset') return 0.35;
   if (source === 'market_substitute') return 0.35;
+  if (source === 'archetype_native_peer') return 0.32;
   return 0;
 }
 
@@ -1186,11 +1321,19 @@ export function evaluateCompetitorCandidate(
     problemOverlap = roundDimension(Math.max(problemOverlap, 0.58));
     icpOverlap = roundDimension(Math.max(icpOverlap, FINAL_COMPETITOR_MIN_ICP_OVERLAP));
   }
+  if (
+    enrichedCandidate.source === 'archetype_native_peer' &&
+    hasArchetypeNativePeerEvidence(candidateSignalText(enrichedCandidate, domain)) &&
+    hasArchetypeNativeContextEvidence(context)
+  ) {
+    problemOverlap = roundDimension(Math.max(problemOverlap, FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP));
+    icpOverlap = roundDimension(Math.max(icpOverlap, FINAL_COMPETITOR_MIN_ICP_OVERLAP));
+  }
   const marketOverlap = roundDimension((geographyOverlap * 0.55) + (segmentOverlap * 0.45));
   const productDepth = roundDimension(featureDepth);
   const revenue = revenueAdjustment(companyRevenueTier, competitorRevenueTier);
   const authority = computeCompetitorAuthorityScore(enrichedCandidate);
-  const finalScore = roundDimension(
+  let finalScore = roundDimension(
     (0.30 * problemOverlap) +
     (0.20 * icpOverlap) +
     (0.15 * marketOverlap) +
@@ -1198,6 +1341,13 @@ export function evaluateCompetitorCandidate(
     (0.10 * authority.authority_score) +
     (0.10 * revenue),
   );
+  if (
+    enrichedCandidate.source === 'archetype_native_peer' &&
+    hasArchetypeNativePeerEvidence(candidateSignalText(enrichedCandidate, domain)) &&
+    hasArchetypeNativeContextEvidence(context)
+  ) {
+    finalScore = roundDimension(Math.max(finalScore, FINAL_COMPETITOR_MIN_SCORE / 100));
+  }
 
   const tags = enrichedCandidate.tags ?? normalizeCompetitorTags({
     productType: enrichedCandidate.productType,
@@ -1254,6 +1404,13 @@ export function rankCompetitorCandidates(params: {
   return params.candidates
     .map((candidate) => {
       const enrichedCandidate = enrichCompetitorCandidateSync(candidate);
+      const businessFirstOnly = isBusinessFirstOnlyArchetype(params.context.entityArchetype);
+      const explicitlyValidatedArchetypePeer = Boolean(enrichedCandidate.competitorIntelligence?.reasoning);
+      if (
+        enrichedCandidate.source === 'archetype_native_peer' &&
+        businessFirstOnly &&
+        !explicitlyValidatedArchetypePeer
+      ) return null;
       const domain = normalizeCompetitorDomain(enrichedCandidate.domain ?? enrichedCandidate.name);
       const name = cleanText(enrichedCandidate.enrichment?.name) ?? cleanText(enrichedCandidate.name) ?? domainToName(domain);
       if (!name) return null;
@@ -1283,6 +1440,7 @@ export function rankCompetitorCandidates(params: {
         enrichment: enrichedCandidate.enrichment ?? null,
         enrichment_confidence_score: enrichedCandidate.confidenceScore ?? enrichedCandidate.enrichment?.confidence_score ?? 0.15,
         rationale: buildScoringRationale(baseRationale, breakdown),
+        competitor_intelligence: inferCompetitorIntelligence(enrichedCandidate, params.context),
         fit_signals: buildCompetitorFitSignals(params.context),
       } satisfies ScoredCompetitor;
     })
@@ -1421,11 +1579,37 @@ function competitorEvidenceText(competitor: Partial<RankedCompetitor>): string {
   ].filter(Boolean).join(' ');
 }
 
+function hasArchetypeNativePeerEvidence(value: string | null | undefined): boolean {
+  return /\b(newsletter|publication|podcast|creator|course|community|membership|author|speaker|thesis|worldview|operator|public builder|public building|audience-led|trust substitute|editorial|subscribers?|readers?)\b/.test(
+    String(value ?? '').toLowerCase(),
+  );
+}
+
+function hasArchetypeNativeContextEvidence(context: CompanyCompetitiveContext): boolean {
+  return hasArchetypeNativePeerEvidence([
+    context.marketFocus,
+    context.primaryService,
+    context.targetCustomer,
+    context.idealCustomerProfile,
+    context.brandPositioning,
+    context.businessModel,
+  ].filter(Boolean).join(' '));
+}
+
 function hasStrictCategoryFit(
   competitor: Partial<RankedCompetitor>,
   context: CompanyCompetitiveContext,
 ): boolean {
   if (UNRELATED_COMPETITOR_TEXT_PATTERN.test(competitorEvidenceText(competitor))) return false;
+  if (competitor.source === 'archetype_native_peer') {
+    const archetypePeerEvidence = hasArchetypeNativePeerEvidence(competitorEvidenceText(competitor));
+    if (
+      archetypePeerEvidence &&
+      hasArchetypeNativeContextEvidence(context) &&
+      Number(competitor.problem_overlap ?? 0) >= FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP &&
+      Number(competitor.icp_overlap ?? 0) >= FINAL_COMPETITOR_MIN_ICP_OVERLAP
+    ) return true;
+  }
   const topCategories = detectedCompanyCategories(context);
   if (topCategories.length === 0) return true;
   const competitorCategory = normalizeCompetitorCategory(
@@ -1482,6 +1666,26 @@ function finalCompetitorOutputLimit(max?: number): number {
   return Math.min(max ?? FINAL_COMPETITOR_MAX_COUNT, FINAL_COMPETITOR_MAX_COUNT);
 }
 
+function applyHybridCompositionPreservation(
+  sorted: RankedCompetitor[],
+  context: CompanyCompetitiveContext,
+  max?: number,
+): RankedCompetitor[] {
+  const limit = finalCompetitorOutputLimit(max);
+  const selected = sorted.slice(0, limit);
+  const archetype = context.entityArchetype ?? null;
+  if (!isArchetypeInfluential(archetype) || archetype?.primary_archetype !== 'HYBRID_ENTITY') return selected;
+  const hasAudiencePeer = selected.some((competitor) => competitor.source === 'archetype_native_peer');
+  const hasCommercialPeer = selected.some((competitor) => competitor.source !== 'archetype_native_peer' && competitor.source !== 'market_substitute');
+  const nextAudiencePeer = sorted.find((competitor) => competitor.source === 'archetype_native_peer' && !selected.includes(competitor));
+  const nextCommercialPeer = sorted.find((competitor) => competitor.source !== 'archetype_native_peer' && competitor.source !== 'market_substitute' && !selected.includes(competitor));
+  const replacement = !hasAudiencePeer ? nextAudiencePeer : !hasCommercialPeer ? nextCommercialPeer : null;
+  if (!replacement || selected.length === 0) return selected;
+  const last = selected[selected.length - 1];
+  if (Number(replacement.final_score ?? 0) + 0.08 < Number(last.final_score ?? 0)) return selected;
+  return [...selected.slice(0, -1), replacement].sort(sortFinalCompetitors);
+}
+
 function finalCompetitorRankingPoolSize(candidateCount: number, max?: number): number {
   return Math.min(
     candidateCount,
@@ -1534,13 +1738,13 @@ function filterFinalCompetitorsWithAudit(params: {
     filtered.push(boosted);
   }
 
-  const finalCompetitors = filtered
+  const sortedCompetitors = filtered
     .sort(sortFinalCompetitors)
     .filter((competitor, _index, sorted) => {
       if (competitor.source !== 'market_substitute') return true;
       return sorted.filter((item) => item.source === 'market_substitute').indexOf(competitor) < MARKET_SUBSTITUTE_MAX_COUNT;
-    })
-    .slice(0, finalCompetitorOutputLimit(params.max));
+    });
+  const finalCompetitors = applyHybridCompositionPreservation(sortedCompetitors, params.context, params.max);
   audit.final_count = finalCompetitors.length;
   console.info('[competitor-final-filter][audit]', audit);
   console.info('[competitor-feedback][trace]', {
@@ -1585,8 +1789,16 @@ export function hasPassedFinalCompetitorGate(
 }
 
 function toRevalidationCandidate(candidate: CompetitorCandidate): CompetitorCandidate {
-  const preserveInlineEnrichment = candidate.source === 'market_substitute';
-  return {
+  const hasStrategicInlineEvidence = Boolean(
+    cleanText(candidate.category) &&
+    (cleanText(candidate.description) || cleanText(candidate.useCase) || (candidate.productSignals?.length ?? 0) > 0) &&
+    (cleanText(candidate.targetCustomer) || cleanText(candidate.businessModel)),
+  );
+  const preserveInlineEnrichment =
+    candidate.source === 'market_substitute' ||
+    candidate.source === 'archetype_native_peer' ||
+    (TRUSTED_SOURCES.has(candidate.source) && hasStrategicInlineEvidence);
+  const revalidationCandidate = {
     ...candidate,
     name: candidate.name,
     domain: normalizeCompetitorDomain(candidate.domain ?? candidate.name),
@@ -1606,7 +1818,11 @@ function toRevalidationCandidate(candidate: CompetitorCandidate): CompetitorCand
     scaleSignals: preserveInlineEnrichment ? candidate.scaleSignals : undefined,
     confidenceScore: preserveInlineEnrichment ? candidate.confidenceScore : undefined,
     enrichment: preserveInlineEnrichment ? candidate.enrichment : undefined,
+    competitorIntelligence: preserveInlineEnrichment ? candidate.competitorIntelligence : undefined,
   };
+  return preserveInlineEnrichment && !revalidationCandidate.enrichment
+    ? withArchetypeEnrichment(revalidationCandidate)
+    : revalidationCandidate;
 }
 
 function hasHighConfidenceNamedCompetitor(competitors: RankedCompetitor[]): boolean {
@@ -1631,7 +1847,7 @@ function addMarketSubstitutesWhenNeeded(params: {
   const substitutes = inferCompetitorArchetypeCandidates(params.context, 'market_substitute');
   if (substitutes.length === 0) return params.candidates;
   console.info('[competitor-final-filter][market-substitutes-added]', {
-    reason: 'no_named_competitor_at_or_above_90',
+    reason: 'no_named_competitor_at_or_above_85',
     substitute_count: substitutes.length,
     substitutes: substitutes.map((candidate) => candidate.name),
   });
@@ -1652,6 +1868,33 @@ export function splitRankedCompetitorsForOutput(
       .filter((competitor) => competitor.source === 'market_substitute')
       .slice(0, alternativeMax),
   };
+}
+
+export function buildCompetitorIntelligenceContext(
+  competitors: Array<Pick<RankedCompetitor, 'name' | 'source' | 'category' | 'tier' | 'relevance_score' | 'rationale' | 'competitor_intelligence'>>,
+  options?: { max?: number; includeBusinessFirst?: boolean },
+): string {
+  const items = competitors
+    .filter((competitor) => options?.includeBusinessFirst || competitor.source === 'archetype_native_peer' || competitor.competitor_intelligence)
+    .slice(0, options?.max ?? 5)
+    .map((competitor) => {
+      const intelligence = competitor.competitor_intelligence;
+      return [
+        `${competitor.name} (${competitor.source}, ${competitor.category}, ${competitor.tier}, score ${competitor.relevance_score})`,
+        intelligence?.archetype_peer_category ? `peer category: ${intelligence.archetype_peer_category}` : null,
+        intelligence?.audience_overlap ? `audience overlap: ${intelligence.audience_overlap}` : null,
+        intelligence?.narrative_overlap ? `narrative overlap: ${intelligence.narrative_overlap}` : null,
+        intelligence?.trust_model ? `trust model: ${intelligence.trust_model}` : null,
+        intelligence?.publication_identity ? `publication identity: ${intelligence.publication_identity}` : null,
+        intelligence?.ecosystem_role ? `ecosystem role: ${intelligence.ecosystem_role}` : null,
+        intelligence?.monetization_adjacency ? `monetization adjacency: ${intelligence.monetization_adjacency}` : null,
+        intelligence?.creator_operator_identity ? `creator/operator identity: ${intelligence.creator_operator_identity}` : null,
+        intelligence?.educational_role ? `educational role: ${intelligence.educational_role}` : null,
+        intelligence?.worldview_adjacency ? `worldview adjacency: ${intelligence.worldview_adjacency}` : null,
+        intelligence?.platform_native_context ? `platform/native context: ${intelligence.platform_native_context}` : null,
+      ].filter(Boolean).join('; ');
+    });
+  return items.join('\n');
 }
 
 export function assertCompetitorOutputPartition(

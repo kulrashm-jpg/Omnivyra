@@ -1,0 +1,89 @@
+name: Auth Integrity
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/auth-integrity.yml'
+      - 'backend/security/**'
+      - 'backend/services/authResolver.ts'
+      - 'backend/services/supabaseAuthService.ts'
+      - 'components/CompanyContext.tsx'
+      - 'hooks/useOnboarding.ts'
+      - 'lib/auth/**'
+      - 'lib/supabaseBrowser.ts'
+      - 'pages/_app.tsx'
+      - 'pages/auth/**'
+      - 'pages/create-account.tsx'
+      - 'pages/login.tsx'
+      - 'pages/onboarding/**'
+      - 'pages/api/auth/**'
+      - 'scripts/check-auth-integrity-invariants.js'
+      - 'scripts/run-auth-integrity-tests.js'
+      - 'tests/auth/**'
+      - 'utils/authIntegrityGuards.ts'
+      - 'utils/authStorage.ts'
+      - 'utils/clearSupabaseSession.ts'
+  push:
+    branches: [main]
+    tags: ['v*', 'release-*']
+  release:
+    types: [published, prereleased]
+  workflow_dispatch:
+
+concurrency:
+  group: auth-integrity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  auth-integrity:
+    name: Auth integrity regression lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AUTH_E2E_BASE_URL: http://127.0.0.1:3000
+      AUTH_E2E_TIMEOUT_MS: '120000'
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install chromium
+
+      - name: Static auth integrity invariants
+        run: npm run check:auth-integrity-invariants
+
+      - name: Validate auth test environment
+        run: |
+          node -e "const required=['NEXT_PUBLIC_SUPABASE_URL','NEXT_PUBLIC_SUPABASE_ANON_KEY','SUPABASE_SERVICE_ROLE_KEY','SESSION_COOKIE_SECRET']; const missing=required.filter((key)=>!process.env[key]); if (missing.length) { console.error('Missing auth integrity CI env:', missing.join(', ')); process.exit(1); }"
+
+      - name: Start app server
+        run: |
+          npm run dev > auth-integrity-server.log 2>&1 &
+          node -e "const url=process.env.AUTH_E2E_BASE_URL; const deadline=Date.now()+120000; (async()=>{ while(Date.now()<deadline){ try{ const res=await fetch(url); if(res.status<500) return; }catch{} await new Promise(r=>setTimeout(r,1000)); } console.error('Auth integrity dev server did not become ready'); process.exit(1); })();"
+
+      - name: Auth integrity regression suite
+        run: npm run test:auth-integrity
+
+      - name: Upload auth integrity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-integrity-artifacts
+          path: |
+            auth-integrity-server.log
+            test-results/auth-integrity/**
+          if-no-files-found: ignore

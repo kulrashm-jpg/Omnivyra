@@ -7,11 +7,14 @@
  * Allowed: post, tweet, short_story, article, poll
  * Excluded formats: blog (800-1500 words, too long), white_paper (too formal/heavy),
  *   story (visual-first), and all media/visual content types.
- * Excluded platforms: YouTube, TikTok (video-first)
+ *
+ * Platform exclusions are NOT enumerated here. As of Round-5, platform-level
+ * filtering for BOLT (Text) routes through `filterConnectedPlatformsForContent`
+ * (lib/shared/social/platformContentFilter.ts) which derives compatibility
+ * from PLATFORM_CAPABILITY_REGISTRY. This module only handles content-type
+ * eligibility (text-vs-media), which is a separate concern from platform
+ * capability.
  */
-
-/** Platforms excluded from BOLT (video-first social platforms). */
-export const BOLT_EXCLUDED_PLATFORMS = new Set(['youtube', 'tiktok']);
 
 /** Content types allowed for BOLT (text-based, ≤800 words). */
 export const BOLT_TEXT_CONTENT_TYPES = new Set([
@@ -71,19 +74,6 @@ export function isBoltExcludedContentType(contentType: string): boolean {
   if (norm.includes('video') || norm.includes('reel') || norm.includes('carousel')) return true;
   if (norm.includes('image') || norm.includes('banner') || norm.includes('slider')) return true;
   return false;
-}
-
-/** Filter platforms to BOLT-eligible (text platforms only). Excludes YouTube, TikTok. */
-export function filterBoltPlatforms(platforms: string[]): string[] {
-  if (!Array.isArray(platforms) || platforms.length === 0) return [];
-  const seen = new Set<string>();
-  return platforms.filter((p) => {
-    const norm = String(p ?? '').trim().toLowerCase().replace(/^twitter$/i, 'x');
-    if (BOLT_EXCLUDED_PLATFORMS.has(norm)) return false;
-    if (seen.has(norm)) return false;
-    seen.add(norm);
-    return true;
-  });
 }
 
 /** Filter content types to BOLT-eligible (text-only). */

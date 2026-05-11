@@ -18,6 +18,7 @@
 import { supabase } from '../db/supabaseClient';
 import { checkDomainEligibility } from './domainEligibilityService';
 import { getTotalAvailable } from './creditPriorityService';
+import { getFeatureDisplayGroup, resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
 
 // ── Credit cost map ───────────────────────────────────────────────────────────
 
@@ -83,16 +84,18 @@ export const CREDIT_ACTIONS: CreditAction[] = [
 
 /** Returns the credit cost for an action from credit_cost_config. */
 export async function getCreditCost(action: CreditAction): Promise<number> {
+  const feature = resolveMonetizationFeature({ action_key: action });
+  const costConfigKey = feature?.feature.pricing_keys.credit_cost_config ?? action;
   const { data, error } = await supabase
     .from('credit_cost_config')
     .select('credits')
-    .eq('action_type', action)
+    .eq('action_type', costConfigKey)
     .maybeSingle();
   if (error) {
-    throw new Error(`[creditDeduction] credit cost lookup failed for ${action}: ${error.message}`);
+    throw new Error(`[creditDeduction] credit cost lookup failed for ${costConfigKey}: ${error.message}`);
   }
   if (!data || typeof (data as any).credits !== 'number') {
-    throw new Error(`[creditDeduction] missing credit cost config for ${action}`);
+    throw new Error(`[creditDeduction] missing credit cost config for ${costConfigKey}`);
   }
   return (data as any).credits as number;
 }
@@ -100,14 +103,16 @@ export async function getCreditCost(action: CreditAction): Promise<number> {
 // ── Smart Mode dedup windows (seconds) ────────────────────────────────────────
 // Skip re-running the same background action within this window.
 export async function getSmartModeDedupSeconds(action: CreditAction): Promise<number | undefined> {
+  const feature = resolveMonetizationFeature({ action_key: action });
+  const costConfigKey = feature?.feature.pricing_keys.credit_cost_config ?? action;
   const { data, error } = await supabase
     .from('credit_cost_config')
     .select('smart_dedup_seconds')
-    .eq('action_type', action)
+    .eq('action_type', costConfigKey)
     .maybeSingle();
 
   if (error) {
-    throw new Error(`[creditDeduction] dedup lookup failed for ${action}: ${error.message}`);
+    throw new Error(`[creditDeduction] dedup lookup failed for ${costConfigKey}: ${error.message}`);
   }
 
   const seconds = typeof (data as any)?.smart_dedup_seconds === 'number'
@@ -210,9 +215,10 @@ export async function getCreditCostTiers() {
 
   for (const row of (data ?? []) as Array<{ action_type: CreditAction; credits: number; category: string; description: string }>) {
     const bucket = buckets[row.category] ?? buckets.medium;
+    const registryDisplay = getFeatureDisplayGroup(row.action_type);
     bucket.actions.push({
       action: row.action_type,
-      label: row.description || row.action_type.replace(/_/g, ' '),
+      label: row.description || registryDisplay.label || row.action_type.replace(/_/g, ' '),
       credits: row.credits,
       ...(row.action_type === 'voice_per_minute' ? { unit: '/min' } : {}),
     });

@@ -11,8 +11,8 @@ import { getProfile } from '../../../backend/services/companyProfileService';
 import { buildCompanyContext } from '../../../backend/services/companyContextService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 import { processContent } from '../../../backend/services/unifiedContentProcessor';
-import { hasEnoughCredits } from '../../../backend/services/creditDeductionService';
-import { deductCreditsAwaited } from '../../../backend/services/creditExecutionService';
+import { getCreditCost } from '../../../backend/services/creditDeductionService';
+import { executeWithCredits, makeIdempotencyKey } from '../../../backend/services/creditExecutionService';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform specs: character limits, tone, optimal targets, hashtag counts
@@ -225,10 +225,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Credit check — 1 content_basic per platform requested
     const platformCount = (platforms as string[]).length;
-    const check = await hasEnoughCredits(companyId.trim(), 'content_basic', platformCount);
-    if (!check.sufficient) {
-      return res.status(402).json({ error: 'Insufficient credits to generate content', required: check.required, balance: check.balance });
-    }
+    const contentBasicCost = await getCreditCost('content_basic');
 
     // Load company profile for brand context
     const profile = await getProfile(companyId.trim(), { autoRefine: false, languageRefine: false });
@@ -285,51 +282,61 @@ ${platformBlocks}
 
 Return JSON: { "${(platforms as string[]).map((p) => p.toLowerCase()).join('": "...", "')}" : "..." }`;
 
-    const result = await runCompletionWithOperation({
-      companyId,
-      model: 'gpt-4o-mini',
-      temperature: 0.72,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      operation: 'generatePlatformVariants',
+    const charged = await executeWithCredits<Record<string, string>>({
+      userId: access.userId,
+      orgId: companyId.trim(),
+      action: 'content_basic',
+      referenceType: 'workspace_content_variants',
+      referenceId: `${companyId.trim()}:${topic.trim()}:${(platforms as string[]).join(',')}`,
+      idempotencyKey: makeIdempotencyKey(access.userId, 'content_basic', `${companyId.trim()}:${topic.trim()}:${(platforms as string[]).join(',')}`, 'workspace-content'),
+      amountOverride: Math.round(contentBasicCost * platformCount),
+      note: `Generated ${platformCount} platform variant${platformCount > 1 ? 's' : ''} (workspace)`,
+      executor: async () => {
+        const result = await runCompletionWithOperation({
+          companyId,
+          model: 'gpt-4o-mini',
+          temperature: 0.72,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          operation: 'generatePlatformVariants',
+        });
+
+        const raw = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? {});
+        const parsed = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''));
+        const rawVariants: Record<string, string> = {};
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'string') rawVariants[k.toLowerCase()] = v;
+        }
+
+        const variants: Record<string, string> = {};
+        await Promise.all(
+          Object.entries(rawVariants).map(async ([platform, content]) => {
+            const ct = ((contentTypes as Record<string, string> | undefined)?.[platform] ?? 'post').toLowerCase();
+            const processed = await processContent({
+              content,
+              platform,
+              content_type: ct,
+              card_type: 'platform_variant',
+            });
+            variants[platform] = processed.content;
+          })
+        );
+        return variants;
+      },
     });
 
-    let rawVariants: Record<string, string> = {};
-    try {
-      const raw = typeof result.output === 'string' ? result.output : JSON.stringify(result.output ?? {});
-      const parsed = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, ''));
-      for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === 'string') rawVariants[k.toLowerCase()] = v;
-      }
-    } catch {
-      return res.status(500).json({ error: 'AI returned malformed JSON' });
+    if (charged.status === 'insufficient_credits') {
+      return res.status(402).json({ error: 'Insufficient credits to generate content', required: charged.required, balance: charged.available });
     }
+    if (charged.status === 'not_a_member') return res.status(403).json({ error: 'ORG_SCOPE_VIOLATION' });
+    if (charged.status === 'org_control_blocked') return res.status(403).json({ error: charged.code, detail: charged.reason });
+    if (charged.status === 'no_credit_account') return res.status(402).json({ error: 'No credit account for org' });
+    if (charged.status !== 'executed') return res.status(409).json({ error: `Credit reservation is already settled: ${charged.status}` });
 
-    // Run every variant through the unified content processor before returning
-    const variants: Record<string, string> = {};
-    await Promise.all(
-      Object.entries(rawVariants).map(async ([platform, content]) => {
-        const ct = ((contentTypes as Record<string, string> | undefined)?.[platform] ?? 'post').toLowerCase();
-        const processed = await processContent({
-          content,
-          platform,
-          content_type: ct,
-          card_type: 'platform_variant',
-        });
-        variants[platform] = processed.content;
-      })
-    );
-
-    const variantCount = Object.keys(variants).length;
-    if (variantCount > 0) {
-      await deductCreditsAwaited(companyId.trim(), 'content_basic', {
-        note: `Generated ${variantCount} platform variant${variantCount > 1 ? 's' : ''} (workspace)`,
-        multiplier: variantCount,
-      });
-    }
+    const variants = charged.result;
 
     return res.status(200).json({ variants });
   } catch (err: unknown) {

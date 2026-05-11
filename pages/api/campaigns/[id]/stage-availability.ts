@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 
 /**
  * GET /api/campaigns/[id]/stage-availability?companyId=...
@@ -16,6 +17,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Campaign ID required' });
   }
+
+  // SECURITY: enforce caller has access to this campaign's company.
+  const access = await requireCampaignAccess(req, res, id);
+  if (!access) return;
 
   try {
     const campaignId = id;

@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { evaluateViralityGate } from '../../../../../backend/services/viralityGateService';
+import { requireCampaignAccess } from '../../../../../backend/services/campaignAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { id } = req.query;
@@ -11,6 +12,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  // SECURITY: enforce caller has access to this campaign's company.
+  const access = await requireCampaignAccess(req, res, id);
+  if (!access) return;
 
   try {
     const gateResult = await evaluateViralityGate(id);

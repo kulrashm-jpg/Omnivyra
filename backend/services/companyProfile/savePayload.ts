@@ -16,7 +16,7 @@ export function buildSavePayload(
   existing: CompanyProfile | null,
   companyId: string,
   source: 'user' | 'ai_refined',
-  lastRefinedAt: string,
+  lastRefinedAt: string | null,
   nowIso: string,
   confidenceScore: number
 ) {

@@ -11,8 +11,7 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { withRBAC } from '../../../../backend/middleware/withRBAC';
-import { Role } from '../../../../backend/services/rbacService';
+import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { decideNextAction } from '../../../../backend/lib/campaigns/continuityDecisionEngine';
 import { recognizePatterns, type CampaignRecord } from '../../../../backend/lib/campaigns/patternRecognitionEngine';
 import {
@@ -66,6 +65,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const companyId = versionRes.data?.company_id ?? null;
+  if (!companyId) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+  // SECURITY: enforce that the caller has an admin role on the campaign's
+  // owning company before returning data or persisting decisions. Without
+  // this gate (and given this handler also writes), any authenticated user
+  // could read or mutate another company's campaign continuity by guessing
+  // the id.
+  const access = await enforceRole({
+    req,
+    res,
+    companyId,
+    allowedRoles: [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN],
+  });
+  if (!access) return;
 
   // Derive post count from daily_plan for effort signal
   const snapshot = versionRes.data?.campaign_snapshot as any;
@@ -372,4 +386,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]);
+export default handler;

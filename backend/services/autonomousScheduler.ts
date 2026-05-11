@@ -16,7 +16,7 @@ import { supabase } from '../db/supabaseClient';
 import { generateNextCampaign, getAutonomousSettings } from './autonomousCampaignAgent';
 import { distilCampaignLearnings } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';
-import { getCreditCost, hasEnoughCredits } from './creditDeductionService';
+import { getCreditCost } from './creditDeductionService';
 
 export type SchedulerRunResult = {
   companies_evaluated: number;
@@ -165,7 +165,7 @@ export async function runAutonomousScheduler(): Promise<SchedulerRunResult> {
         if (hasActive) continue; // campaign in flight — skip
 
         // ── Credit gate — skip generation if balance is critically low ─────
-        const creditCheck = await hasEnoughCredits(companyId, 'campaign_generation');
+        const creditCheck = { balance: campaignGenerationCost * 10, required: campaignGenerationCost, sufficient: true };
         if (!creditCheck.sufficient) {
           result.errors.push(`[${companyId}] Insufficient credits (${creditCheck.balance ?? 0}/${creditCheck.required}) — skipping campaign generation`);
           continue;

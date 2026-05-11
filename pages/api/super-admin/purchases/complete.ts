@@ -15,18 +15,26 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { completePurchase, failPurchase } from '../../../../backend/services/purchaseService';
+import { completePurchase, failPurchase, recordPaymentProviderEvent } from '../../../../backend/services/purchaseService';
 import { requireCapability } from '../../../../backend/security/requireCapability';
 import { BILLING_PURCHASE } from '../../../../shared/contracts/security';
+import {
+  assertMonetizationExposureModeConfigured,
+  assertMonetizationOperationAllowed,
+  getMonetizationControlMode,
+} from '../../../../backend/services/monetizationOpsService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-  const { action = 'complete', purchase_id, reference_id } = body as {
+  const { action = 'complete', purchase_id, reference_id, provider, provider_event_id, event_type } = body as {
     action?: 'complete' | 'fail' | 'create';
     purchase_id?: string;
     reference_id?: string;
+    provider?: string;
+    provider_event_id?: string;
+    event_type?: string;
     // create fields
     organization_id?: string;
     package_id?: string;
@@ -45,6 +53,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     organizationId: body?.organization_id,
   });
   if (guard.ok !== true) return;
+
+  try {
+    assertMonetizationExposureModeConfigured();
+    assertMonetizationOperationAllowed('admin_mutation');
+  } catch (err) {
+    return res.status(403).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+
+  if (!getMonetizationControlMode().internalStagingOnly) {
+    return res.status(403).json({
+      error: 'legacy_manual_purchase_endpoint_disabled_for_external_beta',
+    });
+  }
 
   // ── action = 'create': create a pending purchase ───────────────────────────
   if (action === 'create') {
@@ -83,6 +104,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // ── action = 'complete': complete purchase and credit org ──────────────────
   if (!purchase_id) return res.status(400).json({ error: 'purchase_id is required' });
+
+  if (provider && provider_event_id) {
+    await recordPaymentProviderEvent({
+      provider,
+      providerEventId: provider_event_id,
+      eventType: event_type ?? action,
+      purchaseId: purchase_id,
+      payload: body,
+    });
+  }
 
   const result = await completePurchase(purchase_id, reference_id);
 

@@ -12,8 +12,7 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { withRBAC } from '../../../../backend/middleware/withRBAC';
-import { Role } from '../../../../backend/services/rbacService';
+import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { evaluateOutcome, getDefaultBenchmarks, type CampaignActuals } from '../../../../backend/lib/campaigns/outcomeEvaluator';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,11 +21,43 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'Campaign ID required' });
   }
 
+  // SECURITY: derive the campaign's owning company from the resource itself,
+  // never trust ?companyId= from query/body. Without this gate, any caller
+  // could authenticate against their own company and read another company's
+  // campaign by guessing the path id.
+  const { data: campRow } = await supabase
+    .from('campaigns')
+    .select('company_id')
+    .eq('id', id)
+    .maybeSingle();
+  let campaignCompanyId = (campRow as { company_id?: string | null } | null)?.company_id ?? null;
+  if (!campaignCompanyId) {
+    const { data: versionRow } = await supabase
+      .from('campaign_versions')
+      .select('company_id')
+      .eq('campaign_id', id)
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    campaignCompanyId = versionRow?.company_id ?? null;
+  }
+  if (!campaignCompanyId) {
+    return res.status(404).json({ error: 'Campaign not found' });
+  }
+  const access = await enforceRole({
+    req,
+    res,
+    companyId: campaignCompanyId,
+    allowedRoles: [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN],
+  });
+  if (!access) return;
+
   // Resolve campaign + goal config
   const { data: campaign, error: campErr } = await supabase
     .from('campaigns')
-    .select('id, goal_type, goal_benchmarks, topic_seed, source_blog_id')
+    .select('id, goal_type, goal_benchmarks, topic_seed, source_blog_id, company_id')
     .eq('id', id)
+    .eq('company_id', campaignCompanyId)
     .maybeSingle();
 
   if (campErr || !campaign) {
@@ -39,6 +70,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       .from('campaign_performance')
       .select('*')
       .eq('campaign_id', id)
+      .eq('company_id', campaignCompanyId)
       .order('recorded_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -54,20 +86,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   // ── POST ──────────────────────────────────────────────────────────────────
   if (req.method === 'POST') {
     const body = req.body ?? {};
-
-    // Resolve company_id from campaign_versions
-    const { data: versionRow } = await supabase
-      .from('campaign_versions')
-      .select('company_id')
-      .eq('campaign_id', id)
-      .order('version', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const companyId = versionRow?.company_id;
-    if (!companyId) {
-      return res.status(400).json({ error: 'Cannot resolve company for this campaign' });
-    }
+    const companyId = campaignCompanyId;
 
     const actuals: CampaignActuals = {
       total_reach:     typeof body.total_reach     === 'number' ? body.total_reach     : null,
@@ -130,4 +149,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   return res.status(405).json({ error: 'Method not allowed' });
 }
 
-export default withRBAC(handler, [Role.SUPER_ADMIN, Role.ADMIN, Role.COMPANY_ADMIN]);
+export default handler;

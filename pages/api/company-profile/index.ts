@@ -18,6 +18,8 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
+import { extractDomain } from '../../../backend/services/companyMatchService';
+import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
 
 const DEFAULT_STRATEGIC_ASPECTS = ['Growth', 'Awareness', 'Conversion'];
 
@@ -95,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // (which produced "you"/"there" placeholders when missing).
         const { data: userRow } = await supabase
           .from('users')
-          .select('name, email')
+          .select('name, email, active_company_id')
           .eq('id', user.id)
           .maybeSingle();
         const resolvedUserName =
@@ -105,15 +107,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Only companies this user has an active role for — Company Admin never sees other companies
         const { data: roleRows, error: roleError } = await supabase
           .from('user_company_roles')
-          .select('company_id, role, status')
+          .select('company_id, role, status, join_source, created_at')
           .eq('user_id', user.id)
-          .eq('status', 'active');
+          .eq('status', 'active')
+          .order('created_at', { ascending: false });
         if (roleError) {
           return res.status(500).json({ error: 'FAILED_TO_LOAD_COMPANIES' });
         }
-        const rows = roleRows || [];
+        const rawRows = roleRows || [];
+        const rawCompanyIds = Array.from(new Set(rawRows.map((r: { company_id?: string }) => r.company_id).filter(Boolean) as string[]));
+        const { data: companyRows } = rawCompanyIds.length
+          ? await supabase
+              .from('companies')
+              .select('id, name, website_domain, admin_email_domain')
+              .in('id', rawCompanyIds)
+          : { data: [] as any[] };
+        const companyById = new Map(
+          (companyRows || []).map((row: any) => [String(row.id), row])
+        );
+        const emailDomain = extractDomain(String(userRow?.email || user.email || ''));
+        const rows = filterCompatibleCompanyRoleRows({
+          rows: rawRows,
+          companyById,
+          userEmail: String(userRow?.email || user.email || ''),
+        });
+        if (rawRows.length !== rows.length) {
+          console.warn('[company-profile:list] filtered mismatched self-registered company role', {
+            userId: user.id,
+            emailDomain,
+            removed: rawRows.length - rows.length,
+          });
+        }
         const companyIdSet = new Set<string>(rows.map((r: { company_id?: string }) => r.company_id).filter(Boolean) as string[]);
-        const companyIds = Array.from(companyIdSet);
+        const activeCompanyId = String((userRow as any)?.active_company_id || '');
+        const unorderedCompanyIds = Array.from(companyIdSet);
+        const companyIds = activeCompanyId && companyIdSet.has(activeCompanyId)
+          ? [activeCompanyId, ...unorderedCompanyIds.filter((id) => id !== activeCompanyId)]
+          : unorderedCompanyIds;
+        const resolvedActiveCompanyId = companyIds[0] || null;
+        if (activeCompanyId && resolvedActiveCompanyId && activeCompanyId !== resolvedActiveCompanyId) {
+          await supabase
+            .from('users')
+            .update({ active_company_id: resolvedActiveCompanyId, updated_at: new Date().toISOString() })
+            .eq('id', user.id);
+        }
         const normalizeListRole = (r: string) => (r?.toUpperCase() === 'ADMIN' ? 'COMPANY_ADMIN' : r);
         const rolesByCompany = rows.map((row: { company_id: string; role: string }) => ({
           company_id: row.company_id,
@@ -132,9 +169,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({
           userId: user.id,
           userName: resolvedUserName,
+          activeCompanyId: resolvedActiveCompanyId,
           companies: profiles.map((profile) => ({
             company_id: profile.company_id,
-            name: profile.name || profile.company_id,
+            name: companyById.get(profile.company_id)?.name || profile.name || profile.company_id,
           })),
           rolesByCompany,
         });
@@ -240,8 +278,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!access) return;
       const existingProfile = await getProfile(resolvedCompanyId, { autoRefine: false, languageRefine: false });
       const normalizedRole = String(access.role ?? '').toUpperCase();
+      const canEditCanonicalWebsite = normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'CONTENT_ARCHITECT';
       const incomingReportSettings =
         (body.report_settings as CompanyProfile['report_settings'] | undefined) ?? undefined;
+      const incomingWebsite = typeof body.website_url === 'string' ? body.website_url.trim() : body.website_url;
+      const existingWebsite = existingProfile?.website_url ?? null;
+      if (!canEditCanonicalWebsite && incomingWebsite !== undefined && String(incomingWebsite || '').trim() !== String(existingWebsite || '').trim()) {
+        body.website_url = existingWebsite;
+      }
       const payload = {
         ...body,
         company_id: resolvedCompanyId,

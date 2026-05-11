@@ -57,6 +57,19 @@ export interface WebAuthnStepUpResult {
 }
 
 /**
+ * In-flight elevation tracker — shared by every entry point that triggers
+ * a WebAuthn ceremony so two parallel call sites (e.g. withStepUp from
+ * useSocialPlatforms AND runStepUpFlowIfNeeded from SocialPlatformsSection
+ * both reacting to the same 401) coalesce onto one OS dialog. Without
+ * this, the second ceremony fails with "operation not allowed" because
+ * the browser already has one passkey assertion in flight.
+ *
+ * Cleared on resolve OR reject — every caller starts fresh. NOT a result
+ * cache; the server remains the authority on whether step-up is active.
+ */
+let _inflightTrigger: Promise<WebAuthnStepUpResult> | null = null;
+
+/**
  * Run the WebAuthn step-up flow:
  *   1. POST /api/auth/passkeys/begin-authentication (scoped to the principal's user)
  *   2. navigator.credentials.get(...) via @simplewebauthn/browser
@@ -66,8 +79,18 @@ export interface WebAuthnStepUpResult {
  * the step-up session. The caller can then retry the original request.
  *
  * Throws on user cancellation (UserCancelled), expected by callers.
+ *
+ * Internally deduplicates concurrent calls — see `_inflightTrigger`.
  */
 export async function triggerWebAuthnStepUp(opts: {
+  scopedCapability?: string | null;
+}): Promise<WebAuthnStepUpResult> {
+  if (_inflightTrigger) return _inflightTrigger;
+  _inflightTrigger = _runWebAuthnStepUp(opts).finally(() => { _inflightTrigger = null; });
+  return _inflightTrigger;
+}
+
+async function _runWebAuthnStepUp(opts: {
   scopedCapability?: string | null;
 }): Promise<WebAuthnStepUpResult> {
   // 1. Begin authentication.
@@ -81,7 +104,16 @@ export async function triggerWebAuthnStepUp(opts: {
     },
   );
   if (beginResult.ok !== true) {
-    throw new Error(`step-up begin failed (${beginResult.status}, ${beginResult.reason}): ${beginResult.message}`);
+    // The 500 response from /api/auth/passkeys/begin-authentication carries
+    // the underlying exception text in `detail`. Without surfacing it here,
+    // every begin failure looks identical ("Could not start passkey
+    // authentication") and you have to read server logs to debug — which is
+    // not always available in deployed environments.
+    const detail = extractErrorDetail(beginResult.data);
+    const tail = detail ? ` — ${detail}` : '';
+    throw new Error(
+      `step-up begin failed (${beginResult.status}, ${beginResult.reason}): ${beginResult.message}${tail}`,
+    );
   }
   const options = beginResult.data;
 
@@ -160,8 +192,64 @@ export async function triggerTotpStepUp(opts: {
  * the server-authoritative gate; if step-up has expired between calls,
  * the caller will see another STEP_UP_REQUIRED.
  */
+/**
+ * Pull a server-provided `detail` field out of a JSON-error response body.
+ * Tolerates any shape — returns null if no usable detail is present.
+ */
+function extractErrorDetail(body: unknown): string | null {
+  if (body && typeof body === 'object' && 'detail' in body) {
+    const d = (body as { detail?: unknown }).detail;
+    if (typeof d === 'string' && d.length > 0) return d;
+  }
+  return null;
+}
+
+/**
+ * Trust the current browser fingerprint as a trusted_device for the
+ * authenticated principal. Idempotent — 409 ALREADY_TRUSTED is treated as
+ * success because the device is already in the desired state.
+ *
+ * Called by `withStepUp` and `runStepUpFlowIfNeeded` immediately AFTER a
+ * successful WebAuthn ceremony. Server-side `/api/auth/devices/trust`
+ * gates on `principal.stepUp.active === true`, so it can only succeed
+ * when a fresh step-up session exists. The result is: one passkey
+ * ceremony on a previously-untrusted browser establishes both
+ * `stepup_sessions` (proves identity now) AND `trusted_devices` (marks
+ * this fingerprint operationally trusted), satisfying the
+ * PHISHING_RESISTANT_TRUSTED_TENMIN policy that gates platform-OAuth
+ * mutation. Without this auto-step the user hits an infinite loop:
+ * every retry returns STEP_UP_REQUIRED because the server collapses
+ * TRUSTED_DEVICE_REQUIRED into the same client-facing code, and re-doing
+ * the passkey ceremony alone never adds the trusted_devices row.
+ *
+ * Returns true on success or already-trusted; false on any other
+ * outcome (network error, 401, etc.). Caller may proceed regardless —
+ * the subsequent retry of the original request will fail informatively
+ * if the auto-trust didn't take.
+ */
+async function ensureCurrentDeviceTrusted(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/auth/devices/trust', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({}),
+    });
+    if (res.ok) return true;
+    if (res.status === 409) return true; // ALREADY_TRUSTED — desired state
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /** Custom event name dispatched after successful step-up elevation. */
 export const STEP_UP_ELEVATED_EVENT = 'omnivyra:step-up-elevated';
+
+// Concurrent-ceremony deduplication is now baked into triggerWebAuthnStepUp
+// itself (see `_inflightTrigger` above). withStepUp and runStepUpFlowIfNeeded
+// both share the same singleton — fixes the previous bug where the two
+// helpers had separate dedup state and could race each other.
 
 export async function withStepUp<T extends Response>(
   doRequest: () => Promise<T>,
@@ -174,7 +262,29 @@ export async function withStepUp<T extends Response>(
   if (!stepUp) return first;
 
   // Server rejected with STEP_UP_REQUIRED. Launch the challenge.
-  await triggerWebAuthnStepUp({ scopedCapability: stepUp.capability });
+  //
+  // Pass `scopedCapability: null` so the minted stepup_sessions row is
+  // UNSCOPED — it covers every step-up-gated capability the user is
+  // permitted to exercise within the policy's freshness window
+  // (PHISHING_RESISTANT_TRUSTED_TENMIN → 10 min for platform-OAuth admin).
+  // Previously we passed `stepUp.capability` from the 401 body, which
+  // scoped each elevation narrowly: saving Facebook credentials, then
+  // toggling LinkedIn enabled, then deleting an X config all minted three
+  // separate scoped sessions and prompted three times. With null, the
+  // operator authenticates once and the next ~10 minutes of platform
+  // admin work proceeds without further prompts. Server-side authority
+  // is unchanged — decideCapabilityWithStepUp treats an unscoped session
+  // as satisfying any step-up policy the user's stepUp.policies includes.
+  await triggerWebAuthnStepUp({ scopedCapability: null });
+
+  // After successful passkey ceremony, also mark this browser as a
+  // trusted device. The PHISHING_RESISTANT_TRUSTED_TENMIN policy that
+  // gates platform-OAuth mutation requires BOTH step-up freshness AND
+  // a trusted_devices row — without this call, the retry below would
+  // re-hit STEP_UP_REQUIRED forever because the trusted-device gap is
+  // independent of the passkey ceremony. No-op (idempotent) when the
+  // device is already trusted.
+  await ensureCurrentDeviceTrusted();
 
   // Notify subscribers so they can refresh capability + session
   // projections (the auth_session may have been rotated server-side).

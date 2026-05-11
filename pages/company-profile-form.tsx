@@ -6,6 +6,7 @@ import CompanyStrategyProfileCard from '../components/company/CompanyStrategyPro
 import type { useCompanyProfileState } from '../hooks/useCompanyProfileState';
 import type { CompanyProfile } from './company-profile.types';
 import { dedupeSocialProfiles, joinList, normalizeProfileSocialUrl, splitToList } from './company-profile.types';
+import { isValidCanonicalWebsite } from '../utils/companyProfileValidation';
 
 type ProfileState = ReturnType<typeof useCompanyProfileState>;
 
@@ -518,6 +519,8 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     isCompanyLoading,
     isContentArchitect,
     isEditing,
+    isOnboardingMode,
+    isOnboardingResolving,
     isLoading,
     isRefining,
     isSaving,
@@ -535,6 +538,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     normalizeUrlField,
     notFound,
     notifyCompanyProfileUpdated,
+    onboardingContinuationVisible,
     openCampaignPurposePanel,
     openInferProblemTransformationPanel,
     openMarketingIntelligencePanel,
@@ -564,6 +568,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     router,
     saveProblemTransformation,
     saveProfile,
+    saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
     sendCampaignPurposeMessage,
@@ -620,6 +625,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     setTargetCustomerPanelOpen,
     showCompanyFactReviewPrompt,
     showCreateCompanyModal,
+    skipOnboardingRefinement,
     successMessage,
     targetCustomerInput,
     targetCustomerLoading,
@@ -638,11 +644,11 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   const marketPulseSettings = activeProfile.report_settings?.market_pulse ?? {};
   const marketAlternativeLabels = (marketPulseSettings.market_alternatives ?? [])
     .slice(0, 3)
-    .map((item) => [item.name, item.category].filter(Boolean).join(' - '))
+    .map((item) => [item.name, item.domain, item.category].filter(Boolean).join(' - '))
     .filter(Boolean);
   const competitorDetails = (marketPulseSettings.competitor_details ?? []).slice(0, 3);
   const competitorQuality = marketPulseSettings.competitor_quality ?? null;
-  const competitorScoreThreshold = Number(competitorQuality?.threshold ?? 90);
+  const competitorScoreThreshold = Number(competitorQuality?.threshold ?? 85);
   const topCompetitorScore = competitorQuality?.highest_score ?? (
     competitorDetails.length
       ? Math.max(...competitorDetails.map((item) => Number(item.score ?? 0)))
@@ -650,6 +656,16 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   );
   const competitorThresholdMet = competitorQuality?.threshold_met ?? (
     topCompetitorScore != null ? topCompetitorScore >= competitorScoreThreshold : null
+  );
+  const displayedCompetitorText =
+    joinList(activeProfile.competitors_list, activeProfile.competitors) ||
+    competitorDetails.map((competitor) => competitor.name).filter(Boolean).join(', ');
+  const lowConfidenceDomainContext = !competitorThresholdMet && (
+    Boolean(marketPulseSettings.provider_type) ||
+    Boolean(marketPulseSettings.domain_role) ||
+    Boolean(marketPulseSettings.operating_model) ||
+    Boolean((marketPulseSettings.solution_domains ?? []).length) ||
+    marketAlternativeLabels.length > 0
   );
   const businessClassification =
     activeProfile.business_classification && typeof activeProfile.business_classification === 'object'
@@ -677,11 +693,99 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   );
   const discoveredSocialProfiles = dedupeSocialProfiles(activeProfile.social_profiles)
     .filter((entry) => !primarySocialKeys.has(`${entry.platform}:${entry.url}`));
+  const hasValidCanonicalWebsite = React.useMemo(() => {
+    return isValidCanonicalWebsite(activeProfile.website_url);
+  }, [activeProfile.website_url]);
+  const showOnboardingContinuation = !isOnboardingMode
+    ? !isOnboardingResolving
+    : onboardingContinuationVisible;
+  const showStandardProfileActions = !isOnboardingMode || onboardingContinuationVisible;
+  const isOnboardingPreRefine = isOnboardingMode && !showOnboardingContinuation;
   const intelligenceSettings = activeProfile.report_settings?.intelligence ?? {};
+  const userGuidance = activeProfile.report_settings?.user_guidance ?? null;
+  const industryReview = activeProfile.report_settings?.industry_review ?? null;
+  const canEditWebsiteUrl = ['SUPER_ADMIN', 'CONTENT_ARCHITECT'].includes(String(userRole || '').toUpperCase());
+  const guidedCompetitors = userGuidance?.competitors ?? [];
+  const pinnedGuidedCompetitors = guidedCompetitors.filter((competitor) =>
+    ['pinned', 'user_added', 'restored'].includes(competitor.state)
+  );
+  const rejectedGuidedCompetitors = guidedCompetitors.filter((competitor) =>
+    ['rejected', 'removed'].includes(competitor.state)
+  );
+  const [guidedCompetitorName, setGuidedCompetitorName] = React.useState('');
+  const [guidedCompetitorNote, setGuidedCompetitorNote] = React.useState('');
+  const [identityGuidanceNote, setIdentityGuidanceNote] = React.useState('');
   const displayFieldValue = React.useCallback(
     (primary?: string | null, extracted?: string[] | null) => joinList(extracted, primary) || '',
     [],
   );
+  const guidanceCompetitorKey = (value?: string | null) =>
+    String(value || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+  const saveGuidanceDraft = (
+    nextGuidance: NonNullable<CompanyProfile['report_settings']>['user_guidance'],
+    action: string,
+    target?: string | null,
+  ) => saveUserGuidance(nextGuidance ?? null, action, target);
+  const updateGuidedCompetitor = (
+    name: string,
+    state: 'user_added' | 'pinned' | 'rejected' | 'removed' | 'restored',
+    rationale?: string | null,
+  ) => {
+    const normalizedName = name.trim();
+    if (!normalizedName) return;
+    const key = guidanceCompetitorKey(normalizedName);
+    const existing = guidedCompetitors.filter((competitor) => guidanceCompetitorKey(competitor.name) !== key);
+    saveGuidanceDraft({
+      ...(userGuidance || { version: 1 }),
+      competitors: [
+        ...existing,
+        {
+          name: normalizedName,
+          state,
+          source: state === 'rejected' || state === 'removed' ? 'rejected' : 'user_guided',
+          rationale: rationale?.trim() || null,
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    }, `competitor_${state}`, normalizedName);
+  };
+  const approveStrategicField = (
+    section: 'positioning' | 'differentiation' | 'messaging',
+    field: 'brand_positioning' | 'competitive_advantages' | 'key_messages',
+  ) => {
+    const value = String(activeProfile[field] || '').trim();
+    if (!value) return;
+    saveGuidanceDraft({
+      ...(userGuidance || { version: 1 }),
+      messaging: {
+        ...(userGuidance?.messaging || {}),
+        [section]: {
+          ai_value: value,
+          approved_value: value,
+          status: 'approved',
+          updated_at: new Date().toISOString(),
+        },
+      },
+    }, `approve_${section}`, field);
+  };
+  const addIdentityGuidance = () => {
+    const text = identityGuidanceNote.trim();
+    if (!text) return;
+    saveGuidanceDraft({
+      ...(userGuidance || { version: 1 }),
+      guidance_notes: [
+        ...(userGuidance?.guidance_notes || []),
+        {
+          id: `guidance-${Date.now()}`,
+          text,
+          category: 'identity',
+          status: 'active',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    }, 'add_identity_guidance', 'identity');
+    setIdentityGuidanceNote('');
+  };
   const actionableRefinementQuestions = React.useMemo(() => {
     const questions = latestRefinement?.missing_fields_questions ?? [];
     const seen = new Set<string>();
@@ -896,6 +1000,58 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     );
   };
 
+  const renderOnboardingRefineAction = () => (
+    <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5">
+      {isRefining ? (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
+            <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+            </svg>
+            Saving social links and enriching from your website
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100">
+            <div className="h-full w-1/2 animate-pulse rounded-full bg-indigo-500" />
+          </div>
+          <p className="text-xs text-slate-600">This can take a short moment. The website remains locked and will not be overwritten.</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="max-w-2xl">
+            <h3 className="text-base font-semibold text-slate-900">Refine company profile with AI</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Share the company website and any public social URLs first. AI will use those sources to generate category, industry details, audience, positioning, products, content themes, and follow-up questions.
+            </p>
+            {!hasValidCanonicalWebsite && (
+              <p className="mt-2 text-xs font-medium text-rose-700">A valid company website is required before refinement.</p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row md:shrink-0">
+            <button
+              type="button"
+              onClick={refineProfile}
+              disabled={isSaving || isRefining || !hasValidCanonicalWebsite}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Refine with AI
+            </button>
+            {isOnboardingMode && (
+              <button
+                type="button"
+                onClick={skipOnboardingRefinement}
+                disabled={isSaving || isRefining}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Skip for now
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <>
       <div className="mx-auto mt-6 max-w-5xl rounded-3xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
@@ -1020,16 +1176,239 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           </div>
         )}
 
-        {isLoading ? (
+        {isLoading || isOnboardingResolving ? (
           <div className="text-sm text-gray-500">Loading profile...</div>
         ) : (
           <div className="space-y-6">
             <SectionCard
-              title="Profile Basics"
-              description="Start with company identity, official links, brand assets, and core firmographic context so Content Architect has a reliable working base."
+              title="Brand Assets"
+              description="Upload official logo and favicon assets before editing profile basics so downstream content has the right brand marks."
+            >
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {(['logo_url', 'favicon_url'] as BrandAssetField[]).map((field) => {
+                  const spec = BRAND_ASSET_SPECS[field];
+                  const assetUrl = activeProfile[field] || '';
+                  const isUploading = brandAssetUploading[field];
+                  const uploadError = brandAssetErrors[field];
+                  const inputId = `brand-asset-${field}`;
+
+                  return (
+                    <div key={field} className="rounded-lg border border-slate-200 bg-white p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-900">{spec.label}</div>
+                          <div className="mt-1 text-xs text-slate-500">{spec.helper}</div>
+                          <div className="mt-1 text-xs font-medium text-slate-700">{spec.recommendedSize}</div>
+                        </div>
+                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                          {assetUrl ? (
+                            <img
+                              src={assetUrl}
+                              alt={spec.label}
+                              className="h-full w-full object-contain"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                              {field === 'logo_url' ? 'Logo' : 'Icon'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <input
+                        id={inputId}
+                        type="file"
+                        accept={BRAND_ASSET_ACCEPT}
+                        className="hidden"
+                        onChange={(event) => {
+                          void uploadBrandAsset(field, event.target.files?.[0] ?? null);
+                          event.currentTarget.value = '';
+                        }}
+                      />
+
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <label
+                          htmlFor={inputId}
+                          className={`inline-flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm font-medium ${
+                            !isUploading
+                              ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                              : 'bg-slate-200 text-slate-500'
+                          }`}
+                        >
+                          {isUploading ? 'Uploading...' : assetUrl ? `Replace ${spec.label}` : `Upload ${spec.label}`}
+                        </label>
+                        {assetUrl && isEditing && (
+                          <button
+                            type="button"
+                            onClick={() => clearBrandAsset(field)}
+                            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Remove
+                          </button>
+                        )}
+                        {assetUrl && (
+                          <a
+                            href={assetUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-medium text-indigo-600 hover:underline"
+                          >
+                            Open asset
+                          </a>
+                        )}
+                      </div>
+
+                      {uploadError && (
+                        <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                          {uploadError}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </SectionCard>
+
+            <SectionCard
+              title="Please Provide This Information"
+              description="Provide the company website and public URLs AI should use. The generated company profile sections appear below after refinement."
+            >
+              <div className="space-y-5">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">Website URL</label>
+                  <input
+                    value={activeProfile.website_url || ''}
+                    readOnly={!canEditWebsiteUrl}
+                    aria-readonly={!canEditWebsiteUrl}
+                    onChange={(e) => {
+                      if (canEditWebsiteUrl) handleChange('website_url', e.target.value);
+                    }}
+                    onBlur={(e) => {
+                      if (canEditWebsiteUrl) normalizeUrlField('website_url', e.target.value);
+                    }}
+                    placeholder="www.omnivyra.com"
+                    className={`mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm ${
+                      canEditWebsiteUrl
+                        ? 'bg-white text-slate-900'
+                        : 'bg-slate-100 text-slate-600 cursor-not-allowed'
+                    }`}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    {canEditWebsiteUrl
+                      ? 'Super admin and ContentArchi can update the canonical website. Other users can add social URLs but cannot edit this website.'
+                      : activeProfile.website_url
+                      ? 'Locked from company setup. For work emails, this is derived from the verified email domain and used as the canonical AI refinement source.'
+                      : 'No canonical website is available. This should only happen for a super-admin approved exception; ask a super admin to add or approve the website before AI refinement.'}
+                  </p>
+                </div>
+
+                <details className="rounded-xl border border-slate-200 bg-white p-4" open={isOnboardingPreRefine}>
+                  <summary className="cursor-pointer list-none">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Social Accounts & Digital Footprint</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Add LinkedIn, Facebook, Instagram, YouTube, blogs, newsletters, directories, communities, or other public URLs in one place. Refine with AI will also crawl the website and fill social accounts it discovers.
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {socialPreviewAccounts.map((account) => (
+                          <span
+                            key={account.field}
+                            className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
+                              account.value
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                : 'border-slate-200 bg-slate-50 text-slate-500'
+                            }`}
+                            title={account.value || `Add ${account.label}`}
+                          >
+                            {account.label}{account.value ? ' added' : ' pending'}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </summary>
+                  <div className="mt-4 space-y-5 border-t border-slate-100 pt-4">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {SOCIAL_ACCOUNT_FIELDS.map((account) => (
+                        <div key={account.field}>
+                          <label className="text-sm font-medium text-gray-700">{account.label}</label>
+                          <input
+                            value={String(activeProfile[account.field] || '')}
+                            onChange={(e) => handleChange(account.field, e.target.value)}
+                            onBlur={(e) => normalizeUrlField(account.field, e.target.value)}
+                            placeholder={account.placeholder}
+                            className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                          />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-medium text-slate-800">Other public URLs</div>
+                          <p className="mt-1 text-xs text-slate-500">Use this for blogs, newsletters, Crunchbase, G2, Clutch, podcasts, communities, or profile pages.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={addOtherSocial}
+                          className="rounded bg-white px-3 py-1 text-xs font-medium text-indigo-700 ring-1 ring-indigo-100 hover:bg-indigo-50"
+                        >
+                          + Add URL
+                        </button>
+                      </div>
+                      {(activeProfile.other_social_links || []).length === 0 && (
+                        <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-2 text-xs text-gray-500">
+                          No additional public URLs added.
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        {(activeProfile.other_social_links || []).map((item, index) => (
+                          <div key={`intake-social-${index}`} className="grid grid-cols-1 gap-2 md:grid-cols-5">
+                            <input
+                              value={item?.label || ''}
+                              onChange={(e) => updateOtherSocial(index, 'label', e.target.value)}
+                              placeholder="Label (e.g. Crunchbase)"
+                              className="md:col-span-2 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                            />
+                            <input
+                              value={item?.url || ''}
+                              onChange={(e) => updateOtherSocial(index, 'url', e.target.value)}
+                              placeholder="https://..."
+                              className="md:col-span-2 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                            />
+                            {isEditing && (
+                              <button
+                                type="button"
+                                onClick={() => removeOtherSocial(index)}
+                                className="text-xs font-medium text-red-600"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+              </div>
+            </SectionCard>
+
+            {renderOnboardingRefineAction()}
+
+            <SectionCard
+              title="AI-Populated Company Profile"
+              description={
+                isOnboardingPreRefine
+                  ? 'These fields appear after AI refinement uses the website and public URLs above.'
+                  : 'Start with company identity, official links, and core firmographic context so Content Architect has a reliable working base.'
+              }
             >
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div>
+              <div className={isOnboardingPreRefine ? 'md:col-span-2' : ''}>
                 <label className="text-sm font-medium text-gray-700">Company</label>
                 {canSelectMultipleCompanies && (
                   <input
@@ -1120,6 +1499,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   Viewing saved profile — click <strong className="text-gray-700 mx-1">Edit Profile</strong> below to make changes.
                 </div>
               )}
+              {!isOnboardingPreRefine && (
               <div>
                 <label className="text-sm font-medium text-gray-700">Company Name</label>
                 <input
@@ -1128,6 +1508,9 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
               </div>
+              )}
+              {!isOnboardingPreRefine && (
+                <>
               <div>
                 <label className="text-sm font-medium text-gray-700">Industry</label>
                 <input
@@ -1136,6 +1519,23 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
                 {renderInlineRefinementQuestions('industry')}
+                {industryReview?.conflict && (
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <div className="font-semibold">Industry review needed</div>
+                    <div className="mt-1">
+                      User profile industry is <span className="font-medium">{industryReview.user_industry || 'not set'}</span>, while website/social evidence suggests <span className="font-medium">{industryReview.ai_suggested_industry || 'a different industry'}</span>.
+                    </div>
+                    {industryReview.ai_suggested_industry ? (
+                      <button
+                        type="button"
+                        onClick={() => handleChange('industry', industryReview.ai_suggested_industry || '')}
+                        className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 font-medium text-amber-900 hover:bg-amber-100"
+                      >
+                        Use AI-suggested industry
+                      </button>
+                    ) : null}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-700">Category</label>
@@ -1146,7 +1546,9 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 />
                 {renderInlineRefinementQuestions('category')}
               </div>
-              {businessClassification && (
+                </>
+              )}
+              {!isOnboardingPreRefine && businessClassification && (
                 <div className="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <div className="text-sm font-semibold text-slate-900">Business Classification</div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -1167,156 +1569,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                   </div>
                 </div>
               )}
-              <div>
-                <label className="text-sm font-medium text-gray-700">Website URL</label>
-                <input
-                  value={activeProfile.website_url || ''}
-                  onChange={(e) => handleChange('website_url', e.target.value)}
-                  onBlur={(e) => normalizeUrlField('website_url', e.target.value)}
-                  placeholder="example.com"
-                  className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  AI refinement crawls this website, your social profiles, blog, and any additional profiles to enrich all fields below.
-                </p>
-              </div>
-              <div className="md:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex flex-col gap-1">
-                  <h3 className="text-sm font-semibold text-slate-900">Brand Assets</h3>
-                  <p className="text-xs text-slate-600">
-                    Upload a company logo and favicon so content generation can reuse official brand marks without pulling oversized files into the system. Brand assets stay proportional when rendered, and we do not intentionally recolor or distort them.
-                  </p>
-                </div>
-                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {(['logo_url', 'favicon_url'] as BrandAssetField[]).map((field) => {
-                    const spec = BRAND_ASSET_SPECS[field];
-                    const assetUrl = activeProfile[field] || '';
-                    const isUploading = brandAssetUploading[field];
-                    const uploadError = brandAssetErrors[field];
-                    const inputId = `brand-asset-${field}`;
-
-                    return (
-                      <div key={field} className="rounded-lg border border-slate-200 bg-white p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-sm font-medium text-slate-900">{spec.label}</div>
-                            <div className="mt-1 text-xs text-slate-500">{spec.helper}</div>
-                            <div className="mt-1 text-xs font-medium text-slate-700">{spec.recommendedSize}</div>
-                          </div>
-                          <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                            {assetUrl ? (
-                              <img
-                                src={assetUrl}
-                                alt={spec.label}
-                                className="h-full w-full object-contain"
-                              />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                                {field === 'logo_url' ? 'Logo' : 'Icon'}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <input
-                          id={inputId}
-                          type="file"
-                          accept={BRAND_ASSET_ACCEPT}
-                          className="hidden"
-                          onChange={(event) => {
-                            void uploadBrandAsset(field, event.target.files?.[0] ?? null);
-                            event.currentTarget.value = '';
-                          }}
-                        />
-
-                        <div className="mt-4 flex flex-wrap items-center gap-2">
-                          <label
-                            htmlFor={inputId}
-                            className={`inline-flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm font-medium ${
-                              !isUploading
-                                ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-                                : 'bg-slate-200 text-slate-500'
-                            }`}
-                          >
-                            {isUploading ? 'Uploading...' : assetUrl ? `Replace ${spec.label}` : `Upload ${spec.label}`}
-                          </label>
-                          {assetUrl && isEditing && (
-                            <button
-                              type="button"
-                              onClick={() => clearBrandAsset(field)}
-                              className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                            >
-                              Remove
-                            </button>
-                          )}
-                          {assetUrl && (
-                            <a
-                              href={assetUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-xs font-medium text-indigo-600 hover:underline"
-                            >
-                              Open asset
-                            </a>
-                          )}
-                        </div>
-
-                        {uploadError && (
-                          <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                            {uploadError}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <details className="md:col-span-2 rounded-xl border border-slate-200 bg-white p-4">
-                <summary className="cursor-pointer list-none">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900">Social Accounts</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        Add primary platform profiles used for crawling, publishing, and readiness checks.
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {socialPreviewAccounts.map((account) => (
-                        <span
-                          key={account.field}
-                          className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
-                            account.value
-                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                              : 'border-slate-200 bg-slate-50 text-slate-500'
-                          }`}
-                          title={account.value || `Add ${account.label}`}
-                        >
-                          {account.label}{account.value ? ' connected' : ' pending'}
-                        </span>
-                      ))}
-                      {filledSocialAccounts.length > 2 ? (
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500">
-                          +{filledSocialAccounts.length - 2} more
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                </summary>
-                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                  {SOCIAL_ACCOUNT_FIELDS.map((account) => (
-                    <div key={account.field}>
-                      <label className="text-sm font-medium text-gray-700">{account.label}</label>
-                      <input
-                        value={String(activeProfile[account.field] || '')}
-                        onChange={(e) => handleChange(account.field, e.target.value)}
-                        onBlur={(e) => normalizeUrlField(account.field, e.target.value)}
-                        placeholder={account.placeholder}
-                        className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </details>
+              {!isOnboardingPreRefine && (
               <div>
                 <label className="text-sm font-medium text-gray-700">Geography</label>
                 <input
@@ -1326,9 +1579,12 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 />
                 {renderInlineRefinementQuestions('geography')}
             </div>
+              )}
             </div>
             </SectionCard>
 
+            {showOnboardingContinuation ? (
+              <>
             <SectionCard
               title="Company Facts"
               description="These confirmed business facts support competitor analysis, market positioning, and downstream recommendation quality."
@@ -1385,57 +1641,6 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
             </SectionCard>
 
             <SectionCard
-              title="Digital Footprint"
-              description="Keep secondary communities, directories, newsletters, and public surfaces together so refinement has a clearer crawl map."
-            >
-            <div className="border rounded-xl p-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-semibold text-gray-800">Additional Digital Assets</h3>
-                <button
-                  type="button"
-                  onClick={addOtherSocial}
-                  className="px-3 py-1 bg-gray-100 text-gray-800 rounded text-xs hover:bg-gray-200"
-                >
-                  + Add asset
-                </button>
-              </div>
-              <p className="text-xs text-gray-500 mb-2">Add any other digital presence — communities (Slack, Discord, Circle), profile pages (Crunchbase, G2, Clutch), newsletters, podcasts, or other links. Refine with AI will crawl these too.</p>
-              {(activeProfile.other_social_links || []).length === 0 && (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-gray-500">
-                  No additional profiles added. Use Add asset to enter a label and URL.
-                </div>
-              )}
-              <div className="space-y-2">
-                {(activeProfile.other_social_links || []).map((item, index) => (
-                  <div key={`social-${index}`} className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                    <input
-                      value={item?.label || ''}
-                      onChange={(e) => updateOtherSocial(index, 'label', e.target.value)}
-                      placeholder="Label (e.g. Crunchbase)"
-                      className="md:col-span-2 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    />
-                    <input
-                      value={item?.url || ''}
-                      onChange={(e) => updateOtherSocial(index, 'url', e.target.value)}
-                      placeholder="https://..."
-                      className="md:col-span-3 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    />
-                    {isEditing && (
-                      <button
-                        type="button"
-                        onClick={() => removeOtherSocial(index)}
-                        className="md:col-span-1 text-xs text-red-600"
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-            </SectionCard>
-
-            <SectionCard
               title="Messaging & Audience"
               description="These are the main inputs Content Architect will keep revisiting when building messaging, themes, and competitor-aware campaign directions."
             >
@@ -1484,12 +1689,12 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               <div>
                 <label className="text-sm font-medium text-gray-700">Competitors</label>
                 <textarea
-                  value={joinList(activeProfile.competitors_list, activeProfile.competitors) || ''}
+                  value={displayedCompetitorText}
                   onChange={(e) => handleChange('competitors', e.target.value)}
                   rows={2}
                   className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                 />
-                {competitorDetails.length > 0 ? (
+                {(competitorDetails.length > 0 || lowConfidenceDomainContext) ? (
                   <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-slate-800">
@@ -1498,9 +1703,10 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                       <span className={`rounded-full px-2 py-0.5 font-semibold ${
                         competitorThresholdMet ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
                       }`}>
-                        {competitorThresholdMet ? '90%+ match' : `Below ${Math.round(competitorScoreThreshold)}%`}
+                        {competitorThresholdMet ? `${Math.round(competitorScoreThreshold)}%+ match` : `Below ${Math.round(competitorScoreThreshold)}%`}
                       </span>
                     </div>
+                    {competitorDetails.length > 0 ? (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {competitorDetails.map((competitor) => (
                         <span
@@ -1508,17 +1714,111 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                           className="rounded-full border border-slate-200 bg-white px-2 py-1"
                         >
                           {competitor.name}: {Math.round(Number(competitor.score ?? 0))}%
+                          {!competitorThresholdMet && competitor.domain ? (
+                            <span className="ml-1 text-slate-500">({competitor.domain})</span>
+                          ) : null}
                         </span>
                       ))}
                     </div>
-                    {!competitorThresholdMet && marketAlternativeLabels.length > 0 ? (
+                    ) : null}
+                    {lowConfidenceDomainContext ? (
                       <div className="mt-2">
-                        <div className="font-semibold text-slate-800">Expanded context</div>
-                        <div className="mt-1">{marketAlternativeLabels.join(', ')}</div>
+                        <div className="font-semibold text-slate-800">Domain context</div>
+                        <div className="mt-1 space-y-1">
+                          {marketPulseSettings.provider_type ? <div>Provider type: {marketPulseSettings.provider_type}</div> : null}
+                          {marketPulseSettings.domain_role ? <div>Domain role: {marketPulseSettings.domain_role}</div> : null}
+                          {marketPulseSettings.operating_model ? <div>Operating model: {marketPulseSettings.operating_model}</div> : null}
+                          {(marketPulseSettings.solution_domains ?? []).length > 0 ? (
+                            <div>Solution domains: {(marketPulseSettings.solution_domains ?? []).join(', ')}</div>
+                          ) : null}
+                          {marketAlternativeLabels.length > 0 ? (
+                            <div>Expanded context: {marketAlternativeLabels.join(', ')}</div>
+                          ) : null}
+                        </div>
                       </div>
                     ) : null}
                   </div>
                 ) : null}
+                <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-indigo-950">AI competitor corrections</div>
+                      <div className="text-xs text-indigo-800">Pin real competitors or mark weak suggestions so future refinement uses the signal.</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
+                    <input
+                      value={guidedCompetitorName}
+                      onChange={(e) => setGuidedCompetitorName(e.target.value)}
+                      placeholder="Competitor name or domain"
+                      className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm"
+                    />
+                    <input
+                      value={guidedCompetitorNote}
+                      onChange={(e) => setGuidedCompetitorNote(e.target.value)}
+                      placeholder="Why it matters, optional"
+                      className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateGuidedCompetitor(guidedCompetitorName, 'pinned', guidedCompetitorNote);
+                        setGuidedCompetitorName('');
+                        setGuidedCompetitorNote('');
+                      }}
+                      disabled={!guidedCompetitorName.trim() || isSaving}
+                      className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      Pin
+                    </button>
+                  </div>
+                  {competitorDetails.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {competitorDetails.map((competitor) => (
+                        <span key={`guide-${competitor.name}`} className="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-white px-2 py-1 text-xs text-indigo-900">
+                          {competitor.name}
+                          <button
+                            type="button"
+                            onClick={() => updateGuidedCompetitor(competitor.name, 'pinned', competitor.rationale || null)}
+                            className="font-semibold text-emerald-700"
+                          >
+                            Pin
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateGuidedCompetitor(competitor.name, 'rejected', 'Marked irrelevant by user.')}
+                            className="font-semibold text-rose-700"
+                          >
+                            Reject
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {(pinnedGuidedCompetitors.length > 0 || rejectedGuidedCompetitors.length > 0) && (
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-indigo-900 md:grid-cols-2">
+                      <div>
+                        <div className="font-semibold">Pinned</div>
+                        <div className="mt-1">{pinnedGuidedCompetitors.map((competitor) => competitor.name).join(', ') || 'None'}</div>
+                      </div>
+                      <div>
+                        <div className="font-semibold">Rejected</div>
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {rejectedGuidedCompetitors.length === 0 ? 'None' : rejectedGuidedCompetitors.map((competitor) => (
+                            <button
+                              key={`restore-${competitor.name}`}
+                              type="button"
+                              onClick={() => updateGuidedCompetitor(competitor.name, 'restored', 'Restored by user.')}
+                              className="rounded-full border border-indigo-200 bg-white px-2 py-1"
+                            >
+                              Restore {competitor.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             <div>
@@ -1554,39 +1854,6 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               onSuccess={setSuccessMessage}
               onError={setErrorMessage}
             />
-
-            <div className="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5">
-              {isRefining ? (
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-sm font-medium text-indigo-700">
-                    <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                    </svg>
-                    {REFINE_STEPS[(refineStep - 1) % REFINE_STEPS.length]}
-                  </div>
-                  <div className="flex gap-1">
-                    {REFINE_STEPS.map((_, i) => (
-                      <div
-                        key={i}
-                        className={`h-1 flex-1 rounded-full transition-all duration-500 ${
-                          i < refineStep ? 'bg-indigo-500' : 'bg-gray-200'
-                        }`}
-                      />
-                    ))}
-                  </div>
-                  <p className="text-xs text-gray-500">Step {refineStep} of {REFINE_STEPS.length} — this usually takes 20–45 seconds</p>
-                </div>
-              ) : (
-                <button
-                  onClick={refineProfile}
-                  disabled={isSaving}
-                  className="px-4 py-2 bg-gray-100 text-gray-900 rounded-lg text-sm font-medium disabled:opacity-50"
-                >
-                  Refine with AI
-                </button>
-              )}
-            </div>
 
             <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
               <h3 className="text-base font-semibold text-gray-900 mb-2">Commercial Strategy</h3>
@@ -1963,6 +2230,61 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
+                <div className="md:col-span-2 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-indigo-950">AI messaging corrections</div>
+                      <div className="text-xs text-indigo-800">Approve or guide the generated identity so future refinement keeps the intended positioning.</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => approveStrategicField('messaging', 'key_messages')}
+                        disabled={!String(activeProfile.key_messages || '').trim() || isSaving}
+                        className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-800 disabled:opacity-50"
+                      >
+                        Approve messages
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => approveStrategicField('positioning', 'brand_positioning')}
+                        disabled={!String(activeProfile.brand_positioning || '').trim() || isSaving}
+                        className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-800 disabled:opacity-50"
+                      >
+                        Approve positioning
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => approveStrategicField('differentiation', 'competitive_advantages')}
+                        disabled={!String(activeProfile.competitive_advantages || '').trim() || isSaving}
+                        className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-800 disabled:opacity-50"
+                      >
+                        Approve differentiation
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                    <input
+                      value={identityGuidanceNote}
+                      onChange={(e) => setIdentityGuidanceNote(e.target.value)}
+                      placeholder="Example: avoid corporate tone, publication-first, target operators not startups"
+                      className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={addIdentityGuidance}
+                      disabled={!identityGuidanceNote.trim() || isSaving}
+                      className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      Add guidance
+                    </button>
+                  </div>
+                  {(userGuidance?.guidance_notes?.length || Object.keys(userGuidance?.messaging || {}).length) ? (
+                    <div className="mt-2 text-xs text-indigo-900">
+                      Saved guidance active for future refinement.
+                    </div>
+                  ) : null}
+                </div>
                 <div className="md:col-span-2">
                   <label className="text-sm font-medium text-gray-700">Growth priorities</label>
                   <textarea
@@ -2179,8 +2501,14 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               </div>
             </div>
             )}
+              </>
+            ) : (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+                Add optional social links, then refine with AI to reveal the generated company profile sections and continue to business details.
+              </div>
+            )}
 
-            {discoveredSocialProfiles.length > 0 && (
+            {showOnboardingContinuation && discoveredSocialProfiles.length > 0 && (
               <div className="rounded-lg border border-gray-200 p-4">
                 <div className="text-sm font-semibold text-gray-800 mb-2">Discovered Social Profiles</div>
                 <ul className="text-xs text-gray-600 space-y-1">
@@ -2200,6 +2528,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               </div>
             )}
 
+            {showStandardProfileActions && (
             <div className="flex items-center gap-3 pt-2 border-t mt-6">
               {isEditing ? (
                 <>
@@ -2233,6 +2562,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 </button>
               )}
             </div>
+            )}
           </div>
         )}
       </div>

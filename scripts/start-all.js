@@ -250,10 +250,18 @@ async function runAppOnly(children) {
   // failure mode on this codebase. Set DEV_USE_WEBPACK=1 to opt back in.
   const useWebpack = process.env.DEV_USE_WEBPACK === '1';
   const bundlerFlag = useWebpack ? '--webpack' : '--turbopack';
+  // Previously this branch hard-coded `ENABLE_AUTO_WORKERS: '0'`, which
+  // defeated `.env.local` and prevented the instrumentation hook from
+  // booting workers under `npm run dev`. Restore inheritance: respect
+  // whatever .env.local loaded into process.env at script start (loaded
+  // ~line 31 above), and only fall back to '0' when the operator hasn't
+  // opted in. The dev:full branch lower in this file still hard-codes
+  // '0' on purpose — that path spawns workers in a separate process and
+  // must not let Next re-start them.
   const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', bundlerFlag], {
     env: {
       ...process.env,
-      ENABLE_AUTO_WORKERS: '0',
+      ENABLE_AUTO_WORKERS: process.env.ENABLE_AUTO_WORKERS || '0',
       ENABLE_REDIS_USAGE_MONITORING: process.env.ENABLE_REDIS_USAGE_MONITORING || '0',
     },
   });

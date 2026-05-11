@@ -12,6 +12,7 @@ import { acquireSchedulerLock, releaseSchedulerLock, SchedulerLockError } from '
 import { checkAndCompleteCampaignIfEligible } from '../../../../backend/services/CampaignCompletionService';
 import { recordGovernanceEvent } from '../../../../backend/services/GovernanceEventService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 
 const isScheduleEligibilityError = (error: unknown): error is ScheduleEligibilityError => {
   return typeof ScheduleEligibilityError === 'function' && error instanceof ScheduleEligibilityError;
@@ -43,6 +44,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!id || typeof id !== 'string') {
     return res.status(400).json({ error: 'Campaign ID is required' });
   }
+
+  // SECURITY: enforce caller has access to this campaign's company before
+  // any mutation, lock acquisition, or governance event is recorded.
+  const access = await requireCampaignAccess(req, res, id);
+  if (!access) return;
 
   const { plan } = req.body || {};
   if (!plan || !Array.isArray(plan.weeks)) {

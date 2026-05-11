@@ -1,6 +1,26 @@
 import { supabase } from '../db/supabaseClient';
 import type { OrchestratedReport } from './ReportOrchestrator';
 import { ownedDbTable } from '../db/writeOwner';
+import { assertNotGeneratingOnInsert } from './reportCardService';
+
+/**
+ * LIFECYCLE EXCEPTION — POST-ORCHESTRATION SHORTCUT
+ *
+ * This module persists orchestrated reports as already-completed rows for
+ * the /api/reports/execute path. It is the ONLY approved write site for
+ * the `reports` table outside reportCardService.ts and the requeue helper.
+ * It is permitted because:
+ *   - it never inserts a `generating` row (asserted at runtime), so it
+ *     does not bypass dedupe / heartbeat / retry-containment semantics;
+ *   - it uses a synthetic `internal.report.local` domain to avoid colliding
+ *     with the per-(company, domain) partial unique index used by the
+ *     user-initiated generation lifecycle.
+ *
+ * If you need to alter this insert: keep the `assertNotGeneratingOnInsert`
+ * guard in place. Routing this through createReport instead would force
+ * dedupe / retry semantics that do not match the post-orchestration use
+ * case (the orchestrator has already produced final output).
+ */
 
 export type PersistedReportRow = {
   id: string;
@@ -63,6 +83,10 @@ export async function persistOrchestratedReport(params: {
       schema: 'decision_orchestrated_v1',
     },
   };
+
+  // Guardrail: this path must never originate a generating row (would
+  // bypass dedupe + retry containment). See file header for rationale.
+  assertNotGeneratingOnInsert(payload);
 
   const { data, error } = await ownedDbTable('reports')
     .insert(payload)

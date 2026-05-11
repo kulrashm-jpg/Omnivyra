@@ -21,8 +21,12 @@ import { evaluateCampaignDecision } from './campaignDecisionEngine';
 import { getTopLearnings, formatLearningsForPrompt } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';
 import { predictCampaignOutcome } from './campaignPredictionEngine';
-import { hasEnoughCredits } from './creditDeductionService';
-import { deductCreditsAwaited } from './creditExecutionService';
+import {
+  confirmCreditReservation,
+  makeIdempotencyKey,
+  releaseCreditReservation,
+  reserveCreditsForWork,
+} from './creditExecutionService';
 
 export type AutonomousCampaignPlan = {
   company_id: string;
@@ -122,11 +126,27 @@ export async function getAutonomousSettings(companyId: string): Promise<{
  */
 export async function generateNextCampaign(companyId: string): Promise<AutonomousCampaignPlan> {
   // Credit gate — 50 credits required for autonomous campaign generation
-  const creditCheck = await hasEnoughCredits(companyId, 'campaign_generation');
-  if (!creditCheck.sufficient) {
-    throw new Error(`Insufficient credits for campaign_generation: need ${creditCheck.required}, have ${creditCheck.balance ?? 0}`);
+  const reservation = await reserveCreditsForWork({
+    userId: companyId,
+    orgId: companyId,
+    action: 'campaign_generation',
+    referenceType: 'autonomous_campaign_generation',
+    referenceId: companyId,
+    idempotencyKey: makeIdempotencyKey(companyId, 'campaign_generation', companyId, new Date().toISOString().slice(0, 10)),
+    note: 'Autonomous campaign generation',
+    validateMembership: false,
+  });
+  if (reservation.status === 'insufficient_credits') {
+    throw new Error(`Insufficient credits for campaign_generation: need ${reservation.required}, have ${reservation.available ?? 0}`);
+  }
+  if (reservation.status === 'no_credit_account') {
+    throw new Error('No credit account for autonomous campaign generation');
+  }
+  if (reservation.status !== 'reserved' && reservation.status !== 'already_reserved') {
+    throw new Error(`Campaign generation reservation failed: ${reservation.status}`);
   }
 
+  try {
   const [lastCampaign, company, settings] = await Promise.all([
     getLastCampaign(companyId),
     getCompanyProfile(companyId),
@@ -246,9 +266,6 @@ export async function generateNextCampaign(companyId: string): Promise<Autonomou
     }
   } catch (_) { /* non-blocking */ }
 
-  // Deduct credits after successful plan assembly
-  await deductCreditsAwaited(companyId, 'campaign_generation', { note: `Auto campaign #${campaignNumber}` });
-
   await logDecision({
     company_id:    companyId,
     campaign_id:   lastCampaignId,
@@ -262,7 +279,19 @@ export async function generateNextCampaign(companyId: string): Promise<Autonomou
     },
   });
 
+  await confirmCreditReservation({
+    ...reservation,
+    note: `Auto campaign #${campaignNumber}`,
+  });
+
   return plan;
+  } catch (error) {
+    await releaseCreditReservation({
+      ...reservation,
+      note: error instanceof Error ? error.message : 'Autonomous campaign generation failed',
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function getCampaignCount(companyId: string): Promise<number> {

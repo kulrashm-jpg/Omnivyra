@@ -3,6 +3,12 @@ import { useRouter } from 'next/router';
 import { getAuthToken } from '../utils/getAuthToken';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { isAccountDeleted } from '../utils/authErrors';
+import {
+  clearAuthScopedAppState,
+  getUserScopedLocalStorage,
+  setUserScopedLocalStorage,
+} from '../utils/authStorage';
+import { assertAuthBootstrapProbeSkipped, isAuthBootstrapPath } from '../utils/authIntegrityGuards';
 
 type UserContext = {
   userId: string;
@@ -87,11 +93,11 @@ type CompanyContextValue = {
 
 const CompanyContext = createContext<CompanyContextValue | null>(null);
 
-const resolveStoredCompanyId = (): string => {
+const resolveStoredCompanyId = (userId?: string | null): string => {
   if (typeof window === 'undefined') return '';
   return (
-    window.localStorage.getItem('selected_company_id') ||
-    window.localStorage.getItem('company_id') ||
+    getUserScopedLocalStorage('selected_company_id', userId) ||
+    getUserScopedLocalStorage('company_id', userId) ||
     ''
   );
 };
@@ -120,6 +126,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // launch overlapping fetches. NOT a "loaded" cache — the only authority
   // for "we already fetched" is companiesResolved.
   const refreshInFlightRef = useRef(false);
+  const authIdentityRef = useRef<string | null>(null);
   // Counter the effect watches so transient-failure retries (e.g. dev-mode
   // 404 before the API route compiles) re-fire the gating effect with
   // fresh state — avoids the stale-closure pitfall of reading
@@ -141,8 +148,8 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSelectedCompanyIdInternal(companyId);
     setUserRole(rolesByCompany[companyId] || null);
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem('selected_company_id', companyId);
-      window.localStorage.setItem('company_id', companyId);
+      setUserScopedLocalStorage('selected_company_id', user?.userId ?? null, companyId);
+      setUserScopedLocalStorage('company_id', user?.userId ?? null, companyId);
       window.localStorage.removeItem('selected_campaign_id');
     }
     if (process.env.NODE_ENV === 'development') {
@@ -282,6 +289,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const list: CompanyOption[] = listData?.companies || [];
       type RoleEntry = { company_id: string; role: string };
       const listRoles: RoleEntry[] = listData?.rolesByCompany || [];
+      const activeCompanyId = typeof listData?.activeCompanyId === 'string' ? listData.activeCompanyId : '';
 
       if (list.length === 0) {
         setUser(null);
@@ -312,8 +320,9 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       setUserName(resolvedName);
 
+      const resolvedUserId = listData?.userId || fbToken;
       const nextUser: UserContext = {
-        userId: listData?.userId || fbToken, // prefer DB id if returned by API
+        userId: resolvedUserId, // prefer DB id if returned by API
         role: firstRole === 'SUPER_ADMIN' || firstRole === 'COMPANY_ADMIN' ? 'admin' : 'user',
         companyIds,
         defaultCompanyId: companyIds[0] || '',
@@ -323,14 +332,19 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setCompanies(list);
       setRolesByCompany(rolesMap);
 
-      const stored = resolveStoredCompanyId();
-      const resolvedId = stored && list.some((c) => c.company_id === stored) ? stored : companyIds[0] || '';
+      const stored = resolveStoredCompanyId(resolvedUserId);
+      const resolvedId =
+        activeCompanyId && list.some((c) => c.company_id === activeCompanyId)
+          ? activeCompanyId
+          : stored && list.some((c) => c.company_id === stored)
+            ? stored
+            : companyIds[0] || '';
       setUserRole(rolesMap[resolvedId] || firstRole);
       if (resolvedId) {
         setSelectedCompanyIdInternal(resolvedId);
         if (typeof window !== 'undefined') {
-          window.localStorage.setItem('selected_company_id', resolvedId);
-          window.localStorage.setItem('company_id', resolvedId);
+          setUserScopedLocalStorage('selected_company_id', resolvedUserId, resolvedId);
+          setUserScopedLocalStorage('company_id', resolvedUserId, resolvedId);
         }
       }
       resolved = true;
@@ -379,14 +393,15 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setCompanies(list);
       setRolesByCompany(roles);
       setUserRole(isSuperAdmin ? 'SUPER_ADMIN' : 'CONTENT_ARCHITECT');
-      const stored = resolveStoredCompanyId();
+      const storageUserId = isSuperAdmin ? 'legacy_super_admin' : 'content_architect';
+      const stored = resolveStoredCompanyId(storageUserId);
       const fallbackId = companyIds[0] || '';
       const resolvedId = stored && companyIds.includes(stored) ? stored : fallbackId;
       if (resolvedId) {
         setSelectedCompanyIdInternal(resolvedId);
         if (typeof window !== 'undefined') {
-          window.localStorage.setItem('selected_company_id', resolvedId);
-          window.localStorage.setItem('company_id', resolvedId);
+          setUserScopedLocalStorage('selected_company_id', storageUserId, resolvedId);
+          setUserScopedLocalStorage('company_id', storageUserId, resolvedId);
         }
       }
       return true;
@@ -401,13 +416,29 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session) {
+        const nextAuthId = session.user?.id ?? null;
+        if (authIdentityRef.current && nextAuthId && authIdentityRef.current !== nextAuthId) {
+          clearAuthScopedAppState();
+          setCompaniesResolved(false);
+          setUser(null);
+          setUserName('');
+          setCompanies([]);
+          setSelectedCompanyIdInternal('');
+          setUserRole(null);
+          setRolesByCompany({});
+        }
+        authIdentityRef.current = nextAuthId;
         // On INITIAL_SESSION (page load with existing cookie-session) we
         // validate against the backend so ghost / soft-deleted sessions are
         // caught early.  For SIGNED_IN (magic-link, password login) we skip
         // the probe because the callback page hasn't had a chance to call
         // sync-supabase-user yet — probing would race and 401.
         // TOKEN_REFRESHED is also safe to skip.
-        if (event === 'INITIAL_SESSION') {
+        const currentPathname = typeof window !== 'undefined' ? window.location.pathname : '';
+        const isAuthBootstrapPage = isAuthBootstrapPath(currentPathname);
+        assertAuthBootstrapProbeSkipped(currentPathname, isAuthBootstrapPage);
+
+        if (event === 'INITIAL_SESSION' && !isAuthBootstrapPage) {
           probeInFlight = true;
           try {
             const probe = await fetch('/api/auth/post-login-route', {
@@ -431,6 +462,8 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
       // No session — but if a probe is in flight, skip this event (it's a transient null)
       if (probeInFlight) return;
+      authIdentityRef.current = null;
+      clearAuthScopedAppState();
       // No session — check for content-architect cookie session
       const asArchitect = await loadContentArchitectContext();
       setIsAuthenticated(asArchitect);

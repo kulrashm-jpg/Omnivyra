@@ -15,6 +15,7 @@ import type { BoltStrategyCard } from '../pages/api/bolt/strategy-cards';
 import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { saveCampaignResume } from '../lib/campaignResumeStore';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
+import { useBoltPlatformPicker } from './useBoltPlatformPicker';
 
 type ContentFormat = 'post' | 'tweet' | 'short_story' | 'article' | 'poll';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -591,9 +592,14 @@ export function useBoltStrategy() {
   // Campaign-level platform selection — user picks which connected platforms
   // this campaign should target. Defaults to all BOLT-eligible platforms configured
   // at company admin level once loaded.
-  const [availablePlatforms, setAvailablePlatforms] = useState<string[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
-  const [platformsLoading, setPlatformsLoading] = useState(false);
+  // Round-6: shared picker hook owns fetch + capability log emission. Selection
+  // state remains here for sessionStorage persistence.
+  const picker = useBoltPlatformPicker(companyId, 'bolt-text');
+  const availablePlatforms = picker.supported;
+  const platformHidden = picker.hidden;
+  const platformsLoading = picker.loading;
+  const platformBlocked = picker.blocked;
 
   // Campaign start date (YYYY-MM-DD) — defaults to today
   const [campaignStartDate, setCampaignStartDate] = useState<string>(
@@ -688,25 +694,16 @@ export function useBoltStrategy() {
   // On first load, default selectedPlatforms = all available (nothing deselected).
   // Restored state from sessionStorage is preserved and filtered to the current
   // available set (in case platforms were disconnected since last session).
+  // Reconcile sessionStorage selection against the shared picker's supported
+  // list whenever it changes. On first load we default to selecting all
+  // supported platforms (matches pre-Round-6 behavior).
   useEffect(() => {
-    if (!companyId) return;
-    let cancelled = false;
-    setPlatformsLoading(true);
-    fetchWithAuth(`/api/bolt/available-platforms?companyId=${encodeURIComponent(companyId)}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (cancelled) return;
-        const list = Array.isArray(data?.platforms) ? (data.platforms as string[]) : [];
-        setAvailablePlatforms(list);
-        setSelectedPlatforms((prev) => {
-          const filtered = prev.filter((p) => list.includes(p));
-          return filtered.length > 0 ? filtered : list;
-        });
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setPlatformsLoading(false); });
-    return () => { cancelled = true; };
-  }, [companyId]);
+    if (picker.loading || picker.supported.length === 0) return;
+    setSelectedPlatforms((prev) => {
+      const filtered = prev.filter((p) => picker.supported.includes(p));
+      return filtered.length > 0 ? filtered : picker.supported;
+    });
+  }, [picker.loading, picker.supported]);
 
   function togglePlatform(p: string) {
     setSelectedPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]);
@@ -1042,6 +1039,8 @@ export function useBoltStrategy() {
     sharingMode,
     showChat,
     availablePlatforms,
+    platformHidden,
+    platformBlocked,
     selectedPlatforms,
     setSelectedPlatforms,
     togglePlatform,

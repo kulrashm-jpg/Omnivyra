@@ -3,6 +3,13 @@ import { OAUTH_PLATFORMS } from '@/pages/super-admin.types';
 import { fetchWithAuth } from '../../community-ai/fetchWithAuth';
 import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 import {
+  classifyAuthFailure,
+  describeAuthFailure,
+  isRecoverableAuthFailure,
+  type AuthFailure,
+} from '@/lib/security/superAdminAuthFailure';
+import { runStepUpFlowIfNeeded, describeStepUpOutcome } from '@/lib/security/superAdminStepUp';
+import {
   AlertCircle,
   BarChart3,
   Check,
@@ -46,10 +53,63 @@ type PlatformCheckResult = {
   live_check_supported?: boolean;
 } | null;
 
+// Phase E — canonical operational health surface. Sourced from
+// /api/super-admin/integration-health. Shows the autonomous-lifecycle
+// state of every provider per tenant. Contains NO tokens or secrets.
+type IntegrationHealthPlatformRollup = {
+  platform_key: string;
+  configured: boolean;
+  enabled: boolean;
+  connected_count: number;
+  reauth_required_count: number;
+  refresh_required_count: number;
+  expired_count: number;
+  degraded_count: number;
+  rate_limited_count: number;
+};
+type IntegrationHealthSummary = {
+  platforms: IntegrationHealthPlatformRollup[];
+  tenants: Array<{
+    company_id: string;
+    company_name: string;
+    per_platform: Array<{
+      platform: string;
+      state: string;
+      expires_at: string | null;
+      last_live_check_at: string | null;
+      last_live_check_status: string | null;
+      last_provider_error: string | null;
+    }>;
+  }>;
+  generated_at: string;
+};
+
 type BadgeTone = 'neutral' | 'warning' | 'danger' | 'success' | 'info';
 
 const CALLBACK_PLATFORMS = ['linkedin', 'x', 'youtube', 'tiktok', 'pinterest', 'facebook'];
-const CONNECTOR_PLATFORMS = ['linkedin', 'x', 'facebook'];
+/**
+ * Platforms whose community-AI connector flow uses a distinct callback at
+ * /api/community-ai/connectors/{platform}/callback (separate from the
+ * publishing callback). The SUPER_ADMIN OAuth credentials panel surfaces
+ * these as additional "Connector (local) / Connector (app)" redirect rows
+ * so operators can register them in the provider's developer console.
+ *
+ * LinkedIn was previously in this list but is intentionally NOT here:
+ * the LinkedIn community-ai connector auth flow at
+ * pages/api/community-ai/connectors/linkedin/auth.ts sends OAuth to the
+ * publishing callback (/api/auth/linkedin/callback) — it does not use the
+ * connector callback path. Surfacing connector URLs for LinkedIn told
+ * operators to register URLs that no flow actually uses, contributing to
+ * the operator-confusion finding in the surface audit.
+ *
+ * X is excluded for the same reason it has been since this list was
+ * created (single-callback flow).
+ *
+ * Facebook (Meta) stays — its community-ai connector flow at
+ * pages/api/community-ai/connectors/meta/auth.ts genuinely uses the
+ * /api/community-ai/connectors/meta/callback path.
+ */
+const CONNECTOR_PLATFORMS = ['facebook'];
 
 const PLATFORM_ICONS: Record<string, string> = {
   linkedin:  '🔵',
@@ -194,6 +254,16 @@ function badgeClasses(tone: BadgeTone) {
 export default function SocialPlatformsSection() {
   const [socialPlatforms, setSocialPlatforms] = useState<any[]>(OAUTH_PLATFORMS);
   const [loadingSocialPlatforms, setLoadingSocialPlatforms] = useState(false);
+  // Hydration gates — credential metadata (`client_id_preview`,
+  // `has_client_secret`, `configured` badge, "Credentials saved" pill) renders
+  // ONLY after a successful authorized fetch returns. Until then, the UI shows
+  // a loading skeleton. This prevents previously-fetched values from a prior
+  // mount or any other React state from being visible at first paint, and
+  // gates all credential-adjacent display behind the same backend-authorization
+  // boundary that the fetch itself goes through (capability check + step-up
+  // when required). Reset to false on any auth failure so denied/lost-session
+  // states cannot keep showing data.
+  const [socialPlatformsLoaded, setSocialPlatformsLoaded] = useState(false);
   const [expandedPlatform, setExpandedPlatform] = useState<string | null>(null);
   const [oauthForm, setOauthForm] = useState<OAuthFormState>(createDefaultOauthForm);
   const [savingOauth, setSavingOauth] = useState<string | null>(null);
@@ -203,6 +273,7 @@ export default function SocialPlatformsSection() {
   const [checkingPlatform, setCheckingPlatform] = useState<string | null>(null);
   const [platformCheckResults, setPlatformCheckResults] = useState<Record<string, PlatformCheckResult>>({});
   const [analyticsProvider, setAnalyticsProvider] = useState<AnalyticsProviderConfigSummary | null>(null);
+  const [analyticsProviderLoaded, setAnalyticsProviderLoaded] = useState(false);
   const [analyticsProviderForm, setAnalyticsProviderForm] = useState<AnalyticsProviderFormState>({
     oauth_client_id: '',
     oauth_client_secret: '',
@@ -213,6 +284,107 @@ export default function SocialPlatformsSection() {
   const [analyticsProviderSaving, setAnalyticsProviderSaving] = useState(false);
   const [analyticsProviderMessage, setAnalyticsProviderMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAnalyticsSecret, setShowAnalyticsSecret] = useState(false);
+
+  // Phase E — canonical autonomous-lifecycle health summary.
+  const [integrationHealth, setIntegrationHealth] = useState<IntegrationHealthSummary | null>(null);
+  const [integrationHealthLoading, setIntegrationHealthLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setIntegrationHealthLoading(true);
+      try {
+        const res = await fetchWithAuth('/api/super-admin/integration-health');
+        if (cancelled) return;
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (cancelled || !data) return;
+        setIntegrationHealth(data as IntegrationHealthSummary);
+      } finally {
+        if (!cancelled) setIntegrationHealthLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /**
+   * Reset all credential-adjacent state to the unauthenticated baseline.
+   * Called when an auth failure (recoverable or session-lost) is observed
+   * so any previously-fetched preview, "configured" status, or in-flight
+   * form values are cleared from React state.
+   *
+   * Does NOT clear the savings/error message banner so the operator still
+   * sees what just failed.
+   */
+  const clearCredentialState = () => {
+    setSocialPlatforms(OAUTH_PLATFORMS);
+    setSocialPlatformsLoaded(false);
+    setAnalyticsProvider(null);
+    setAnalyticsProviderLoaded(false);
+    setAnalyticsProviderExpanded(false);
+    setOauthForm(createDefaultOauthForm());
+    setAnalyticsProviderForm({
+      oauth_client_id: '',
+      oauth_client_secret: '',
+      enabled: false,
+      redirect_uri: '',
+    });
+    setExpandedPlatform(null);
+    setShowSecretFor(null);
+    setShowAnalyticsSecret(false);
+    setPlatformCheckResults({});
+  };
+  // Phase 1 — Frontend Auth Failure Differentiation. Holds the LAST
+  // recoverable auth failure observed by any fetch on this section so the
+  // user sees a banner (not a forced logout) when capability/step-up is
+  // missing. Cleared on success.
+  const [authFailure, setAuthFailure] = useState<AuthFailure | null>(null);
+
+  // Centralized handler: classifies the response and decides whether to
+  // redirect (only on NOT_AUTHENTICATED) or surface a banner. Returns
+  // true when caller should treat the response as a hard auth failure
+  // and stop processing (the page state remains intact regardless).
+  const handleAuthFailure = async (res: Response): Promise<boolean> => {
+    const failure = await classifyAuthFailure(res);
+    if (failure.kind === 'ok') {
+      setAuthFailure(null);
+      return false;
+    }
+    if (failure.kind === 'not_authenticated') {
+      // True session loss — clear ALL credential state from React memory
+      // BEFORE redirecting so any in-flight render between now and the
+      // redirect cannot expose preview values or in-progress form input.
+      clearCredentialState();
+      // eslint-disable-next-line no-console
+      console.warn('[super-admin] auth failure → redirect to login', {
+        kind: failure.kind,
+        status: failure.status,
+        correlationId: failure.correlationId,
+      });
+      window.location.href = '/super-admin/login';
+      return true;
+    }
+    if (isRecoverableAuthFailure(failure)) {
+      // Recoverable failure (capability denied / step-up required / bridge-
+      // factor insufficient): the operator stays on the page, but any
+      // previously-fetched credential metadata MUST disappear because the
+      // current authorization no longer permits viewing it. The skeleton
+      // returns until a follow-up authorized fetch succeeds.
+      clearCredentialState();
+      setAuthFailure(failure);
+      // eslint-disable-next-line no-console
+      console.warn('[super-admin] recoverable auth failure', {
+        kind: failure.kind,
+        status: failure.status,
+        capability: 'capability' in failure ? failure.capability : null,
+        correlationId: failure.correlationId,
+      });
+      return true;
+    }
+    clearCredentialState();
+    setAuthFailure(failure);
+    return true;
+  };
 
   const appBaseUrl = useMemo(() => getPublicAppBaseUrl(), []);
 
@@ -278,6 +450,14 @@ export default function SocialPlatformsSection() {
     setLoadingSocialPlatforms(true);
     try {
       const response = await fetchWithAuth('/api/super-admin/platform-oauth-configs');
+      // Auth-failure check FIRST — clears credential state and (per
+      // handleAuthFailure) drops the load-gate to false, returning the UI
+      // to the skeleton. Only NOT_AUTHENTICATED bounces to login.
+      if (!response.ok) {
+        await handleAuthFailure(response);
+        return;
+      }
+      setAuthFailure(null);
       const parsed = await parseJsonResponse<{ platforms?: any[] }>(response, '/api/super-admin/platform-oauth-configs');
       if (parsed.ok === true) {
         const apiPlatforms: any[] = parsed.data.platforms || [];
@@ -305,8 +485,10 @@ export default function SocialPlatformsSection() {
           setSocialPlatforms(OAUTH_PLATFORMS);
           setPlatformCheckResults({});
         }
-      } else if (response.status === 403) {
-        window.location.href = '/super-admin/login';
+        // Flip the load-gate ONLY after a successful authorized fetch.
+        // From this point onward, credential metadata (preview, "configured"
+        // pill, "Credentials saved" badge) is permitted to render.
+        setSocialPlatformsLoaded(true);
       }
     } catch (error) {
       console.error('Failed to load platform OAuth configs', error);
@@ -334,21 +516,34 @@ export default function SocialPlatformsSection() {
         body.client_secret = form.client_secret;
       }
 
-      const response = await fetchWithAuth('/api/super-admin/platform-oauth-configs', {
+      // Phase 2 — Step-Up UX: capture the request shape so the step-up
+      // helper can re-fire it after a successful WebAuthn challenge
+      // without losing the form the operator was filling in.
+      const fire = () => fetchWithAuth('/api/super-admin/platform-oauth-configs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
 
-      if (response.ok) {
+      const initial = await fire();
+      const outcome = await runStepUpFlowIfNeeded(initial, fire, {
+        onChallengeStart: () => setOauthSaveMsg({ platform: platformKey, type: 'success', text: 'Confirm with your passkey to save…' }),
+      });
+
+      if (outcome.kind === 'success') {
+        setAuthFailure(null);
         setOauthSaveMsg({ platform: platformKey, type: 'success', text: 'Saved successfully' });
         setExpandedPlatform(null);
         await loadSocialPlatforms();
-      } else if (response.status === 403) {
-        window.location.href = '/super-admin/login';
+      } else if (outcome.kind === 'session_lost') {
+        await handleAuthFailure(outcome.response);
+      } else if (outcome.kind === 'step_up_user_cancelled' || outcome.kind === 'step_up_unavailable') {
+        setOauthSaveMsg({ platform: platformKey, type: 'error', text: describeStepUpOutcome(outcome) });
       } else {
-        const error = await response.json().catch(() => ({}));
-        setOauthSaveMsg({ platform: platformKey, type: 'error', text: error.error || 'Failed to save' });
+        // auth_banner: capability not held / bridge / unknown.
+        setAuthFailure(outcome.failure);
+        const errorBody = await outcome.response.json().catch(() => ({}));
+        setOauthSaveMsg({ platform: platformKey, type: 'error', text: errorBody.error || describeStepUpOutcome(outcome) });
       }
     } catch (error: any) {
       setOauthSaveMsg({ platform: platformKey, type: 'error', text: error.message });
@@ -360,11 +555,12 @@ export default function SocialPlatformsSection() {
   const loadAnalyticsProvider = async () => {
     try {
       const response = await fetchWithAuth('/api/super-admin/analytics-provider-config');
-      const parsed = await parseJsonResponse<{ config?: AnalyticsProviderConfigSummary }>(response, '/api/super-admin/analytics-provider-config');
-      if (parsed.ok !== true) {
-        if (parsed.status === 403) window.location.href = '/super-admin/login';
+      if (!response.ok) {
+        await handleAuthFailure(response);
         return;
       }
+      const parsed = await parseJsonResponse<{ config?: AnalyticsProviderConfigSummary }>(response, '/api/super-admin/analytics-provider-config');
+      if (parsed.ok !== true) return;
       const config = parsed.data?.config;
       if (!config) return;
       setAnalyticsProvider(config);
@@ -374,6 +570,9 @@ export default function SocialPlatformsSection() {
         enabled: config.enabled,
         redirect_uri: config.redirect_uri || '',
       });
+      // Flip the analytics-provider load-gate ONLY after a successful
+      // authorized fetch — same boundary as the platform OAuth section.
+      setAnalyticsProviderLoaded(true);
     } catch (error) {
       console.error('Failed to load analytics provider config', error);
     }
@@ -415,6 +614,90 @@ export default function SocialPlatformsSection() {
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      {authFailure && authFailure.kind !== 'ok' && authFailure.kind !== 'not_authenticated' && (
+        <div className="px-6 pt-4">
+          <div
+            role="alert"
+            className={`rounded-lg border px-4 py-3 text-sm ${
+              authFailure.kind === 'capability_not_held' || authFailure.kind === 'bridge_factor_insufficient'
+                ? 'border-amber-300 bg-amber-50 text-amber-900'
+                : 'border-blue-300 bg-blue-50 text-blue-900'
+            }`}
+          >
+            <div className="font-medium">{describeAuthFailure(authFailure)}</div>
+            {authFailure.correlationId && (
+              <div className="mt-1 text-xs text-gray-600">
+                Correlation id: <span className="font-mono">{authFailure.correlationId}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* Phase E — autonomous lifecycle health summary. Read-only,
+          no tokens or secrets. Driven by the integration-health endpoint
+          which is the canonical operational surface for SUPER_ADMIN. */}
+      <div className="px-6 pt-5">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Autonomous lifecycle health</h3>
+              <p className="text-xs text-slate-600">
+                Per-provider connection-state rollup across all tenants. Refreshed by the
+                {' '}<span className="font-mono">oauth-refresh</span> sweep on the analytics-ingestion cron tick.
+              </p>
+            </div>
+            {integrationHealthLoading && (
+              <RefreshCw className="h-4 w-4 animate-spin text-slate-400" />
+            )}
+          </div>
+          {integrationHealth && integrationHealth.platforms.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {integrationHealth.platforms.map((p) => {
+                const hasIssue = p.reauth_required_count > 0
+                              || p.expired_count > 0
+                              || p.degraded_count > 0
+                              || p.rate_limited_count > 0;
+                return (
+                  <div
+                    key={p.platform_key}
+                    className={`rounded-lg border p-3 text-xs ${hasIssue
+                      ? 'border-amber-300 bg-amber-50'
+                      : p.connected_count > 0
+                        ? 'border-emerald-200 bg-emerald-50'
+                        : 'border-slate-200 bg-white'}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-slate-900 capitalize">{p.platform_key}</div>
+                      <div className="flex items-center gap-1">
+                        {p.configured && <span className="text-[10px] uppercase tracking-wide text-slate-500">configured</span>}
+                        {p.enabled    && <span className="text-[10px] uppercase tracking-wide text-emerald-700">enabled</span>}
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-1 text-[11px]">
+                      <div><span className="font-semibold text-emerald-700">{p.connected_count}</span> connected</div>
+                      <div><span className="font-semibold text-amber-700">{p.refresh_required_count}</span> refreshing</div>
+                      <div><span className="font-semibold text-amber-700">{p.expired_count}</span> expired</div>
+                      <div><span className="font-semibold text-red-700">{p.reauth_required_count}</span> reauth</div>
+                      <div><span className="font-semibold text-amber-700">{p.degraded_count}</span> degraded</div>
+                      <div><span className="font-semibold text-amber-700">{p.rate_limited_count}</span> 429</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            !integrationHealthLoading && (
+              <div className="text-xs text-slate-500">No integrations recorded yet.</div>
+            )
+          )}
+          {integrationHealth && (
+            <div className="mt-3 text-[11px] text-slate-500">
+              Generated at <span className="font-mono">{new Date(integrationHealth.generated_at).toLocaleString()}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="px-6 py-5 border-b border-gray-200 bg-white">
         <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -431,24 +714,33 @@ export default function SocialPlatformsSection() {
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-medium ${
-                  analyticsProvider?.configured
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'border-gray-200 bg-white text-gray-500'
-                }`}>
-                  {analyticsProvider?.configured ? <CheckCircle className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
-                  {analyticsProvider?.configured ? 'Credentials saved' : 'Not configured'}
-                </span>
-                <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-medium ${
-                  analyticsProvider?.enabled
-                    ? 'border-blue-200 bg-blue-100 text-blue-700'
-                    : 'border-amber-200 bg-amber-50 text-amber-700'
-                }`}>
-                  {analyticsProvider?.enabled ? 'Enabled for companies' : 'Disabled for companies'}
-                </span>
-                {analyticsProvider?.client_id_preview && (
-                  <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-600">
-                    Client ID: {analyticsProvider.client_id_preview}
+                {analyticsProviderLoaded ? (
+                  <>
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-medium ${
+                      analyticsProvider?.configured
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : 'border-gray-200 bg-white text-gray-500'
+                    }`}>
+                      {analyticsProvider?.configured ? <CheckCircle className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                      {analyticsProvider?.configured ? 'Credentials saved' : 'Not configured'}
+                    </span>
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-medium ${
+                      analyticsProvider?.enabled
+                        ? 'border-blue-200 bg-blue-100 text-blue-700'
+                        : 'border-amber-200 bg-amber-50 text-amber-700'
+                    }`}>
+                      {analyticsProvider?.enabled ? 'Enabled for companies' : 'Disabled for companies'}
+                    </span>
+                    {analyticsProvider?.client_id_preview && (
+                      <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 font-medium text-slate-600">
+                        Client ID: {analyticsProvider.client_id_preview}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/60 px-2.5 py-1 font-medium text-slate-400">
+                    <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-slate-300" />
+                    Loading provider configuration…
                   </span>
                 )}
               </div>
@@ -457,10 +749,13 @@ export default function SocialPlatformsSection() {
             <button
               type="button"
               onClick={() => setAnalyticsProviderExpanded((current) => !current)}
-              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+              disabled={!analyticsProviderLoaded}
+              className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {analyticsProviderExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              {analyticsProvider?.configured ? 'Update Google Analytics' : 'Configure Google Analytics'}
+              {analyticsProviderLoaded
+                ? (analyticsProvider?.configured ? 'Update Google Analytics' : 'Configure Google Analytics')
+                : 'Loading…'}
             </button>
           </div>
 
@@ -475,6 +770,14 @@ export default function SocialPlatformsSection() {
                     onChange={(event) => setAnalyticsProviderForm((current) => ({ ...current, oauth_client_id: event.target.value }))}
                     placeholder={analyticsProvider?.configured ? 'Enter to replace the saved client ID' : 'Paste Google OAuth client ID'}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    // Defenses against browser autofill / password-manager hydration:
+                    // an empty `name` removes the correlation key the browser uses to
+                    // match saved credentials; `autoComplete="off"` is the spec hint;
+                    // `data-lpignore` and `data-1p-ignore` cover LastPass / 1Password.
+                    name=""
+                    autoComplete="off"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                   />
                 </div>
                 <div>
@@ -484,6 +787,13 @@ export default function SocialPlatformsSection() {
                       type={showAnalyticsSecret ? 'text' : 'password'}
                       value={analyticsProviderForm.oauth_client_secret}
                       onChange={(event) => setAnalyticsProviderForm((current) => ({ ...current, oauth_client_secret: event.target.value }))}
+                      // For password-type inputs, modern Chrome ignores autoComplete="off"
+                      // unless the value is `new-password`. Combined with empty `name`
+                      // this prevents both autofill AND save-prompt offers.
+                      name=""
+                      autoComplete="new-password"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
                       placeholder={analyticsProvider?.configured ? 'Enter to replace the saved client secret' : 'Paste Google OAuth client secret'}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
                     />
@@ -560,6 +870,24 @@ export default function SocialPlatformsSection() {
         </button>
       </div>
 
+      {!socialPlatformsLoaded ? (
+        // Skeleton — shown until the FIRST authorized fetch successfully
+        // returns. Prevents the OAUTH_PLATFORMS defaults (or any prior-mount
+        // state) from being rendered as if they were authoritative.
+        <div className="divide-y divide-gray-100">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-5 w-5 rounded bg-slate-100 animate-pulse" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-32 rounded bg-slate-100 animate-pulse" />
+                  <div className="h-3 w-48 rounded bg-slate-100 animate-pulse" />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="divide-y divide-gray-100">
         {socialPlatforms.map((platform) => {
           const checkResult = platformCheckResults[platform.platform_key];
@@ -773,6 +1101,13 @@ export default function SocialPlatformsSection() {
                         }
                         placeholder={platform.configured ? 'Enter to replace...' : 'Paste client ID...'}
                         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                        // Prevent browser password manager + LastPass / 1Password
+                        // from autofilling this field. Empty `name` removes the
+                        // correlation key; `autoComplete="off"` is the spec hint.
+                        name=""
+                        autoComplete="off"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
                       />
                     </div>
                     <div>
@@ -789,6 +1124,13 @@ export default function SocialPlatformsSection() {
                           }
                           placeholder="Paste client secret..."
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 pr-9 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                          // Chrome ignores autoComplete="off" on password inputs;
+                          // `new-password` is the canonical hint to block both
+                          // autofill AND save-password prompts.
+                          name=""
+                          autoComplete="new-password"
+                          data-lpignore="true"
+                          data-1p-ignore="true"
                         />
                         <button
                           type="button"
@@ -846,6 +1188,7 @@ export default function SocialPlatformsSection() {
           );
         })}
       </div>
+      )}
     </div>
   );
 }

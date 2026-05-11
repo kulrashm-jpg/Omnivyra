@@ -13,6 +13,7 @@ import { BoltCampaignChat } from '../../components/bolt/BoltCampaignChat';
 import type { BoltStrategyCard } from '../api/bolt/strategy-cards';
 import type { BOLTProgress } from '../../components/BOLTProgressModal';
 import { readCampaignSourcePayload } from '../../lib/content/launchCampaignFromContent';
+import { FORMATS_SUPPORTING_CROSS_PLATFORM } from '../../lib/shared/bolt/crossPlatformSharing';
 
 type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
@@ -26,8 +27,8 @@ const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: str
 
 const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
 
-// Creator formats that appear on 2+ platforms in CONTENT_PLATFORM_AFFINITY — eligible for cross-platform sharing
-const FORMATS_SUPPORTING_CROSS_PLATFORM = new Set<CreatorContentFormat>(['video', 'reel', 'short', 'story', 'carousel']);
+// Round-7 Phase 2: cross-platform-sharing eligibility moved to
+// `lib/shared/bolt/crossPlatformSharing.ts` (single source of truth).
 
 const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: string; hint: string }[] = [
   { value: 'video',    label: 'Video',    icon: '🎬', hint: 'Long-form video content' },

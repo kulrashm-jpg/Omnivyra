@@ -6,7 +6,7 @@
  * Creates a company record + links the authenticated user as ADMIN.
  * Idempotent: if user already has a company, returns the existing one.
  *
- * Body: { companyName, website, industry, companySize }
+ * Body: { companyName, website, industry, businessTypes, companySize }
  * Returns: { companyId }
  */
 
@@ -24,12 +24,26 @@ import {
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import { grantInitialFreeCredit } from '../../../backend/services/initialFreeCreditService';
 import { grantEarnCredit } from '../../../backend/services/earnCreditsService';
+import {
+  crawlWebsiteSources,
+  mergeDiscoveredSocialProfiles,
+} from '../../../backend/services/companyProfile/refinementHelpers';
+import {
+  SELF_REGISTERED_JOIN_SOURCE,
+  selectCompatibleCompanyRole,
+} from '../../../backend/services/companyMembershipIntegrityService';
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
   | { companyExists: true; matchedCompanyId: string; matchedCompanyName: string; adminName: string | null }
   | { code: string; error: string; limit?: number; current?: number | null }
   | { error: string };
+
+function deriveWebsiteFromEmail(email: string | null | undefined): string | null {
+  const domain = extractDomain(email ?? '');
+  if (!domain || isFreeEmailDomain(domain)) return null;
+  return `https://www.${domain}`;
+}
 
 /** Returns the display name of the first active COMPANY_ADMIN for a company. */
 async function fetchAdminName(
@@ -75,21 +89,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     companyName = '',
     website     = '',
     industry    = '',
+    businessType = '',
+    businessTypes = [],
     companySize = '',
     refCode     = '',
   } = body as {
     companyName?: string;
     website?: string;
     industry?: string;
+    businessType?: string;
+    businessTypes?: string[];
     companySize?: string;
     refCode?: string;
   };
+  const businessTypeLabels: Record<string, string> = {
+    product: 'Product company',
+    reseller: 'Reseller / distributor',
+    service: 'Service provider',
+    agency: 'Agency',
+  };
+  const normalizedBusinessTypes = Array.from(new Set(
+    [
+      ...(Array.isArray(businessTypes) ? businessTypes : []),
+      businessType,
+    ]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .map((item) => businessTypeLabels[item] ?? item),
+  ));
+  const businessTypeText = normalizedBusinessTypes.join(', ');
+  const { data: userProfileRow } = await supabase
+    .from('users')
+    .select('name, industry')
+    .eq('id', user.id)
+    .maybeSingle();
+  const typedUserProfileRow = userProfileRow as { name?: string | null; industry?: string | null } | null;
+  if (!String(typedUserProfileRow?.name || '').trim()) {
+    return res.status(409).json({ error: 'Please complete your personal profile before creating a company profile.' });
+  }
+  const userProfileIndustry = String(typedUserProfileRow?.industry || '').trim();
+  const profileIndustry = industry.trim() || userProfileIndustry;
+  const emailDerivedWebsite = deriveWebsiteFromEmail(user.email);
+  const canonicalWebsite = emailDerivedWebsite || website.trim();
 
   if (!companyName.trim()) return res.status(400).json({ error: 'companyName is required' });
 
   // ── Website validation: must be a real public URL ─────────────────────────
   // Skip for public-email users who join via invite (they don't create a company)
-  const websiteErr = validatePublicWebsite(website.trim());
+  const websiteErr = validatePublicWebsite(canonicalWebsite);
   if (websiteErr && !isFreeEmailDomain(extractDomain(user.email ?? '') ?? '')) {
     return res.status(400).json({ error: websiteErr });
   }
@@ -213,22 +260,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       .eq('role', 'SUPER_ADMIN');
 
     // ── 2. Check for existing company membership (idempotent) ────────────────
-    const { data: existing } = await supabase
+    const { data: existingRows } = await supabase
       .from('user_company_roles')
-      .select('company_id')
+      .select('company_id, join_source, created_at')
       .eq('user_id', user.id)
       .eq('status', 'active')
-      .limit(1)
-      .maybeSingle();
+      .order('created_at', { ascending: false });
 
-    if (existing?.company_id) {
-      return res.status(200).json({ companyId: existing.company_id });
+    if (existingRows?.length) {
+      const existingCompanyIds = Array.from(new Set(
+        existingRows.map((row: any) => row.company_id).filter(Boolean)
+      ));
+      const { data: existingCompanies } = existingCompanyIds.length
+        ? await supabase
+            .from('companies')
+            .select('id, website_domain, admin_email_domain')
+            .in('id', existingCompanyIds)
+        : { data: [] as any[] };
+      const existingCompanyById = new Map(
+        (existingCompanies || []).map((row: any) => [String(row.id), row])
+      );
+      const compatibleExisting = selectCompatibleCompanyRole({
+        rows: existingRows,
+        companyById: existingCompanyById,
+        userEmail: user.email ?? null,
+      });
+      if (compatibleExisting?.company_id) {
+        return res.status(200).json({ companyId: compatibleExisting.company_id });
+      }
+      console.warn('[setup-company] ignored mismatched self-registered company membership during onboarding', {
+        userId: user.id,
+        emailDomain: extractDomain(user.email ?? ''),
+        existingCompanyIds,
+      });
     }
 
     // ── 3. Check if a matching company already exists in the system ───────────
     const matched = await findMatchingCompany({
       companyName: companyName.trim(),
-      website: website.trim() || null,
+      website: canonicalWebsite || null,
       userEmail: user.email ?? null,
     });
 
@@ -267,7 +337,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     //   from the same domain signs up independently.
     // admin_email_domain: fallback for companies created without a real website.
     const websiteDomain = (() => {
-      const d = extractDomain(website.trim());
+      const d = extractDomain(canonicalWebsite);
       return d && !isFreeEmailDomain(d) ? d : null;
     })();
     const adminEmailDomain = (() => {
@@ -343,8 +413,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     const { error: companyErr } = await supabase.from('companies').insert({
       id:                 companyId,
       name:               companyName.trim(),
-      website:            website.trim() || companyId, // NOT NULL — use companyId as placeholder if blank
-      industry:           industry.trim() || null,
+      website:            canonicalWebsite || companyId, // NOT NULL — use companyId as placeholder if blank
+      industry:           profileIndustry || null,
       size:               companySize.trim() || null,
       status:             'active',
       website_domain:     websiteDomain,
@@ -395,7 +465,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       company_id:  companyId,
       role:        'COMPANY_ADMIN',
       status:      'active',
-      join_source: 'self_registered',
+      join_source: SELF_REGISTERED_JOIN_SOURCE,
       created_at:  now,
       updated_at:  now,
     });
@@ -409,13 +479,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       .eq('id', user.id);
 
     // ── 5. Create company_profiles row ────────────────────────────────────────
+    let discoveredSocialProfile: any = {};
+    if (canonicalWebsite) {
+      try {
+        const crawlResult = await crawlWebsiteSources(canonicalWebsite, new Set());
+        discoveredSocialProfile = mergeDiscoveredSocialProfiles(
+          { company_id: companyId, website_url: canonicalWebsite } as any,
+          crawlResult.social_links,
+        );
+      } catch (error) {
+        console.warn('[setup-company] initial social crawl failed:', error);
+      }
+    }
+
     await supabase.from('company_profiles').insert({
       company_id:  companyId,
       name:        companyName.trim(),
-      website_url: website.trim() || null,
-      industry:    industry.trim() || null,
+      website_url: canonicalWebsite || null,
+      industry:    profileIndustry || null,
       geography:   null,
+      linkedin_url: discoveredSocialProfile.linkedin_url ?? null,
+      facebook_url: discoveredSocialProfile.facebook_url ?? null,
+      instagram_url: discoveredSocialProfile.instagram_url ?? null,
+      x_url: discoveredSocialProfile.x_url ?? null,
+      youtube_url: discoveredSocialProfile.youtube_url ?? null,
+      tiktok_url: discoveredSocialProfile.tiktok_url ?? null,
+      reddit_url: discoveredSocialProfile.reddit_url ?? null,
+      pinterest_url: discoveredSocialProfile.pinterest_url ?? null,
+      whatsapp_url: discoveredSocialProfile.whatsapp_url ?? null,
+      other_social_links: discoveredSocialProfile.other_social_links ?? null,
+      social_profiles: discoveredSocialProfile.social_profiles ?? null,
       report_settings: {
+        default_inputs: {
+          company_name: companyName.trim(),
+          website_domain: websiteDomain,
+          canonical_website_source: emailDerivedWebsite ? 'email_domain' : 'user_input',
+          business_type: businessTypeText || null,
+          industry: profileIndustry || null,
+        },
+        market_pulse: {
+          business_model: businessTypeText || null,
+          provider_type: businessTypeText || null,
+          updated_at: now,
+        },
         company_facts: {
           team_size: companySize.trim() || null,
           updated_at: now,

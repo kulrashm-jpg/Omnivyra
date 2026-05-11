@@ -13,16 +13,65 @@ import { ownedDbTable } from '../db/writeOwner';
  * so retries from the gateway do not double-credit the organization.
  */
 
-import { supabase } from '../db/supabaseClient';
 import { createCredit, makeIdempotencyKey } from './creditExecutionService';
-
-function serviceSupabase() {
-  return supabase;
-}
+import { getRequestContext } from './requestContext';
 
 export type PurchaseResult =
   | { success: true; purchaseId: string; creditsGranted: number }
   | { success: false; reason: 'not_found' | 'already_completed' | 'already_failed' | 'error'; detail?: string };
+
+type PurchaseRow = {
+  id: string;
+  organization_id: string;
+  credits: number;
+  status: 'pending' | 'completed' | 'failed';
+  amount_paid: number;
+  currency: string;
+  fulfillment_status?: 'pending' | 'event_recorded' | 'completed' | 'failed' | null;
+};
+
+export async function recordPaymentProviderEvent(input: {
+  provider: string;
+  providerEventId: string;
+  eventType: string;
+  purchaseId?: string | null;
+  organizationId?: string | null;
+  payload?: Record<string, unknown>;
+}): Promise<{ id: string | null; duplicate: boolean; processingStatus?: string | null }> {
+  const ctx = getRequestContext();
+  const { data, error } = await ownedDbTable('payment_provider_events')
+    .insert({
+      provider: input.provider,
+      provider_event_id: input.providerEventId,
+      event_type: input.eventType,
+      purchase_id: input.purchaseId ?? null,
+      organization_id: input.organizationId ?? null,
+      payload: input.payload ?? {},
+      request_id: ctx.requestId ?? null,
+      correlation_id: ctx.correlationId ?? null,
+    })
+    .select('id, processing_status')
+    .maybeSingle();
+
+  if (!error) return {
+    id: (data as { id?: string } | null)?.id ?? null,
+    duplicate: false,
+    processingStatus: (data as { processing_status?: string | null } | null)?.processing_status ?? null,
+  };
+  if ((error as any).code === '23505') {
+    const { data: existing } = await ownedDbTable('payment_provider_events')
+      .select('id, processing_status')
+      .eq('provider', input.provider)
+      .eq('provider_event_id', input.providerEventId)
+      .maybeSingle();
+    return {
+      id: (existing as { id?: string } | null)?.id ?? null,
+      duplicate: true,
+      processingStatus: (existing as { processing_status?: string | null } | null)?.processing_status ?? null,
+    };
+  }
+  throw new Error(`[purchaseService] payment event record failed: ${error.message}`);
+}
 
 /**
  * Mark a pending purchase as completed and credit the organization.
@@ -43,18 +92,16 @@ export async function completePurchase(
   purchaseId: string,
   referenceId?: string,
 ): Promise<PurchaseResult> {
-  const sb = serviceSupabase();
-
   // ── 1. Reference-ID dedup — check before touching any state ───────────────
   // If the gateway already delivered this event and it was processed, return
   // success immediately. This is the primary guard against retry double-credits.
   if (referenceId) {
     const { data: existing } = await ownedDbTable('credit_purchases')
-      .select('id, credits, status')
+      .select('id, credits, status, fulfillment_status')
       .eq('reference_id', referenceId)
       .maybeSingle();
 
-    if (existing?.status === 'completed') {
+    if (existing?.status === 'completed' && existing.id !== purchaseId) {
       // Already processed — idempotent success, no re-crediting.
       return { success: true, purchaseId: existing.id, creditsGranted: existing.credits };
     }
@@ -72,38 +119,69 @@ export async function completePurchase(
 
   // ── 2. Fetch and validate the purchase by ID ───────────────────────────────
   const { data: purchase, error: fetchErr } = await ownedDbTable('credit_purchases')
-    .select('id, organization_id, credits, status, amount_paid, currency')
+    .select('id, organization_id, credits, status, amount_paid, currency, fulfillment_status')
     .eq('id', purchaseId)
     .maybeSingle();
 
   if (fetchErr || !purchase) {
     return { success: false, reason: 'not_found' };
   }
-  if (purchase.status === 'completed') {
-    return { success: true, purchaseId, creditsGranted: purchase.credits }; // idempotent
+  const purchaseRow = purchase as PurchaseRow;
+  if (purchaseRow.status === 'completed' && purchaseRow.fulfillment_status === 'completed') {
+    return { success: true, purchaseId, creditsGranted: purchaseRow.credits }; // idempotent
   }
-  if (purchase.status === 'failed') {
+  if (purchaseRow.status === 'failed') {
     return { success: false, reason: 'already_failed' };
   }
 
   // ── 3. Grant credits (idempotent on purchaseId) ────────────────────────────
+  if (purchaseRow.status === 'pending') {
+    const completionFields: Record<string, any> = {
+      status: 'completed',
+      fulfillment_status: 'event_recorded',
+      fulfillment_error: null,
+      updated_at: new Date().toISOString(),
+    };
+    if (referenceId) {
+      completionFields.reference_id = referenceId;
+      completionFields.provider_payment_id = referenceId;
+    }
+
+    const { data: updated, error: completionErr } = await ownedDbTable('credit_purchases')
+      .update(completionFields)
+      .eq('id', purchaseId)
+      .eq('status', 'pending')
+      .select('id')
+      .maybeSingle();
+
+    if (completionErr) return { success: false, reason: 'error', detail: completionErr.message };
+    if (!updated) return { success: false, reason: 'already_completed', detail: 'Purchase is no longer pending' };
+  }
+
   try {
     await createCredit({
-      orgId:          purchase.organization_id,
-      amount:         purchase.credits,
+      orgId:          purchaseRow.organization_id,
+      amount:         purchaseRow.credits,
       category:       'paid',
       referenceType:  'credit_purchase',
-      referenceId:    purchase.id,
-      note:           `Credit purchase — ${purchase.credits} credits ($${purchase.amount_paid} ${purchase.currency})`,
-      performedBy:    purchase.organization_id,
+      referenceId:    purchaseRow.id,
+      note:           `Credit purchase - ${purchaseRow.credits} credits ($${purchaseRow.amount_paid} ${purchaseRow.currency})`,
+      performedBy:    purchaseRow.organization_id,
       idempotencyKey: makeIdempotencyKey(
-        purchase.organization_id,
+        purchaseRow.organization_id,
         'credit_purchase',
-        purchase.id,
+        purchaseRow.id,
       ),
     });
   } catch (creditErr: any) {
     console.error('[purchaseService] createCredit failed:', creditErr.message);
+    await ownedDbTable('credit_purchases')
+      .update({
+        fulfillment_status: 'failed',
+        fulfillment_error: creditErr.message,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', purchaseId);
     return { success: false, reason: 'error', detail: creditErr.message };
   }
 
@@ -111,13 +189,16 @@ export async function completePurchase(
   // `status = 'pending'` guard prevents a concurrent completion from writing
   // twice. The UNIQUE index on reference_id prevents a second row from ever
   // claiming this gateway transaction ID.
-  const updateFields: Record<string, any> = { status: 'completed' };
-  if (referenceId) updateFields.reference_id = referenceId;
+  const updateFields: Record<string, any> = {
+    fulfillment_status: 'completed',
+    fulfillment_error: null,
+    fulfilled_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
 
   const { error: updateErr } = await ownedDbTable('credit_purchases')
     .update(updateFields)
-    .eq('id', purchaseId)
-    .eq('status', 'pending');
+    .eq('id', purchaseId);
 
   if (updateErr) {
     // Unique violation on reference_id (23505): a concurrent request already
@@ -130,7 +211,7 @@ export async function completePurchase(
     }
   }
 
-  return { success: true, purchaseId, creditsGranted: purchase.credits };
+  return { success: true, purchaseId, creditsGranted: purchaseRow.credits };
 }
 
 /**
@@ -140,8 +221,11 @@ export async function failPurchase(
   purchaseId: string,
   referenceId?: string,
 ): Promise<void> {
-  const sb = serviceSupabase();
-  const fields: Record<string, any> = { status: 'failed' };
+  const fields: Record<string, any> = {
+    status: 'failed',
+    fulfillment_status: 'failed',
+    updated_at: new Date().toISOString(),
+  };
   if (referenceId) fields.reference_id = referenceId;
   await ownedDbTable('credit_purchases').update(fields).eq('id', purchaseId).eq('status', 'pending');
 }

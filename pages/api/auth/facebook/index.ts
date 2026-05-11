@@ -22,10 +22,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const params = new URLSearchParams({
       client_id: credentials.client_id,
       redirect_uri: `${getBaseUrl(req)}/api/auth/facebook/callback`,
+      // Facebook-only scopes. Instagram-specific scopes (instagram_basic,
+      // instagram_content_publish, instagram_manage_insights, etc.) MUST
+      // NOT appear here — Meta rejects the consent dialog with "Invalid
+      // Scopes" when Instagram products aren't fully provisioned on the
+      // app, and we want clean separation regardless. Instagram is
+      // connected through /api/auth/instagram or /api/community-ai/
+      // connectors/instagram/auth, each of which requests its own scope set.
+      //
       // business_management is required when Pages are owned by a Business
-      // Portfolio — without it, /me/accounts returns empty for Business-owned
-      // Pages even when the OAuth user is admin.
-      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,instagram_basic,instagram_content_publish,public_profile,business_management',
+      // Portfolio — without it, /me/accounts returns empty for Business-
+      // owned Pages even when the OAuth user is admin.
+      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement,business_management,public_profile',
       response_type: 'code',
       state,
     });

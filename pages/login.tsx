@@ -13,6 +13,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
+import { clearBrowserAuthState } from '../utils/authStorage';
 
 type Mode = 'password' | 'forgot' | 'magic-link';
 type ResumeSignupStatus = {
@@ -113,6 +114,7 @@ export default function LoginPage() {
         });
         if (res.status === 401 || res.status === 403) {
           await supabase.auth.signOut();
+          clearBrowserAuthState({ preservePkce: false });
           done = true;
           setChecking(false);
           return;
@@ -200,7 +202,67 @@ export default function LoginPage() {
       return;
     }
 
-    if (data.session) router.replace('/auth/callback');
+    if (data.session) {
+      try {
+        const authHeaders = {
+          Authorization: `Bearer ${data.session.access_token}`,
+          'Content-Type': 'application/json',
+        };
+
+        const syncRes = await fetch('/api/auth/sync-supabase-user', {
+          method: 'POST',
+          headers: authHeaders,
+        });
+
+        if (syncRes.status === 403) {
+          await getSupabaseBrowser().auth.signOut();
+          clearBrowserAuthState({ preservePkce: false });
+          router.replace('/login?error=account_deleted');
+          return;
+        }
+
+        if (!syncRes.ok) throw new Error('sync_failed');
+
+        const syncJson = await syncRes.clone().json().catch(() => ({})) as {
+          mfa_required?: true;
+          factors?: ReadonlyArray<'totp' | 'webauthn'>;
+        };
+
+        if (syncJson.mfa_required === true) {
+          const factorParam = (syncJson.factors ?? []).join(',');
+          router.replace(factorParam
+            ? `/auth/mfa?factors=${encodeURIComponent(factorParam)}`
+            : '/auth/mfa');
+          return;
+        }
+
+        const routeRes = await fetch('/api/auth/post-login-route', {
+          method: 'GET',
+          headers: authHeaders,
+        });
+
+        if (routeRes.status === 403 || routeRes.status === 401) {
+          await getSupabaseBrowser().auth.signOut();
+          clearBrowserAuthState({ preservePkce: false });
+          router.replace(routeRes.status === 403
+            ? '/login?error=account_deleted'
+            : '/login?error=invalid_session');
+          return;
+        }
+
+        if (!routeRes.ok) throw new Error('route_failed');
+
+        const { route } = await routeRes.json() as { route?: string };
+        const dest = route ?? '/command-center';
+        const pinned = localStorage.getItem('pin_home') === 'true';
+        router.replace(dest === '/command-center' && pinned ? '/home' : dest);
+        return;
+      } catch {
+        await getSupabaseBrowser().auth.signOut();
+        clearBrowserAuthState({ preservePkce: false });
+        setError('Sign-in completed, but we could not load your workspace. Please try again.');
+      }
+    }
     setLoading(null);
   }
 

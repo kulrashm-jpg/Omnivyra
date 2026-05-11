@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { useCompanyContext } from './CompanyContext';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
+import { logoutCurrentSession } from '../lib/security/sessionClient';
+import { clearBrowserAuthState } from '../utils/authStorage';
 import { useCredits } from '@/hooks/useCredits';
 import { useTour } from './tour/TourContext';
 import { TourOverlay } from './tour/TourOverlay';
@@ -392,8 +394,12 @@ const Header: React.FC = () => {
   const handleLogout = async () => {
     setIsSigningOut(true);
     try {
+      await logoutCurrentSession();
+    } catch { /* ignore server-side logout cleanup failures */ }
+    try {
       await getSupabaseBrowser().auth.signOut();
     } catch { /* already signed out */ }
+    clearBrowserAuthState({ preservePkce: false });
     window.location.href = '/login';
   };
 

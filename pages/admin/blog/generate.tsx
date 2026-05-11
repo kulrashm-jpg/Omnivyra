@@ -97,11 +97,8 @@ export default function AdminBlogGeneratePage() {
         }));
         setCompanies(list);
 
-        const remembered = typeof window !== 'undefined' ? localStorage.getItem('selected_company_id') || '' : '';
         const queryChosen = prefillCompanyId && list.some((x) => x.id === prefillCompanyId) ? prefillCompanyId : '';
-        const initialCompany = queryChosen || (remembered && list.some((x) => x.id === remembered)
-          ? remembered
-          : (list[0]?.id || ''));
+        const initialCompany = queryChosen || list[0]?.id || '';
         setSelectedCompanyId(initialCompany);
         setSelectedIndustry(list.find((x) => x.id === initialCompany)?.industry || null);
 
@@ -139,10 +136,6 @@ export default function AdminBlogGeneratePage() {
     if (!selectedCompanyId) return;
     const company = companies.find((c) => c.id === selectedCompanyId);
     setSelectedIndustry(company?.industry || null);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('selected_company_id', selectedCompanyId);
-      localStorage.setItem('company_id', selectedCompanyId);
-    }
   }, [selectedCompanyId, companies]);
 
   const handleGenerated = (

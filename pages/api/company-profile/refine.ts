@@ -6,6 +6,8 @@ import {
   toLimitedCompanyProfile,
 } from '../../../backend/services/companyProfileService';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { normalizeCanonicalWebsite } from '../../../utils/companyProfileValidation';
 
 function stripCompetitorInputs(value: unknown): void {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
@@ -52,15 +54,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const effectiveCompanyId = resolvedCompanyId;
   try {
     let profile: any = null;
+    const onboardingMode =
+      req.query.onboarding === 'company-profile' ||
+      req.body?.onboarding === 'company-profile' ||
+      req.body?.onboardingMode === true;
+    const mergeLockedFields = (existingFields: unknown, field: string) =>
+      Array.from(new Set([...(Array.isArray(existingFields) ? existingFields : []), field]));
     profile = await getProfile(effectiveCompanyId, { autoRefine: false });
+    const { data: companyRow } = onboardingMode
+      ? await supabase.from('companies').select('website').eq('id', effectiveCompanyId).maybeSingle()
+      : { data: null };
+    const canonicalWebsite = onboardingMode
+      ? normalizeCanonicalWebsite(profile?.website_url) ??
+        normalizeCanonicalWebsite((companyRow as { website?: string } | null)?.website) ??
+        ''
+      : '';
+    if (onboardingMode && !canonicalWebsite) {
+      return res.status(400).json({ error: 'ONBOARDING_CANONICAL_WEBSITE_REQUIRED' });
+    }
     if (!profile) {
       const seedProfile = await saveProfile({
         ...(req.body?.profile || req.body || {}),
         company_id: effectiveCompanyId,
+        ...(canonicalWebsite ? { website_url: canonicalWebsite, user_locked_fields: ['website_url'] } : {}),
         source: 'user',
-      });
+      }, onboardingMode ? { source: 'user', suppressUserLocks: true } : undefined);
       profile = seedProfile;
-    } else if (req.body && Object.keys(req.body).length > 0) {
+    } else if (!onboardingMode && req.body && Object.keys(req.body).length > 0) {
       const hasSeedData = Object.values(req.body).some(
         (value) => value !== undefined && value !== null && value !== ''
       );
@@ -69,9 +89,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           ...profile,
           ...req.body,
           company_id: profile.company_id,
+          ...(canonicalWebsite
+            ? {
+                website_url: canonicalWebsite,
+                user_locked_fields: mergeLockedFields(profile.user_locked_fields, 'website_url'),
+              }
+            : {}),
           source: profile.source || 'user',
         });
       }
+    }
+    if (canonicalWebsite) {
+      profile = {
+        ...profile,
+        website_url: canonicalWebsite,
+        user_locked_fields: mergeLockedFields(profile.user_locked_fields, 'website_url'),
+      };
     }
     const refined = await refineProfileWithAIWithDetails(profile, { force: true });
     const responseProfile =

@@ -18,6 +18,8 @@ import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
 import { getPostLoginRoute as getUserPreferenceRoute, upsertUserPreferences } from '../../../backend/services/userPreferencesService';
+import { extractDomain } from '../../../backend/services/companyMatchService';
+import { selectCompatibleCompanyRole } from '../../../backend/services/companyMembershipIntegrityService';
 
 type RouteResponse = { route: string };
 type ErrorResponse = { error: string; code?: string };
@@ -89,16 +91,35 @@ export default async function handler(
   // Authority: user_company_roles is the canonical role + active-org store.
   // We do NOT back-fill users.company_id / users.role any more — both are
   // deprecated runtime authorities.
-  const { data: activeRoleRow } = await supabase
+  const { data: activeRoleRows } = await supabase
     .from('user_company_roles')
-    .select('role, company_id')
+    .select('role, company_id, join_source, created_at')
     .eq('user_id', userId)
     .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order('created_at', { ascending: false });
 
-  const roleRow = (activeRoleRow as { role?: string | null; company_id?: string | null } | null) ?? null;
+  const rawRoleRows = (activeRoleRows as Array<{ role?: string | null; company_id?: string | null; join_source?: string | null }> | null) ?? [];
+  const companyIds = Array.from(new Set(rawRoleRows.map((row) => row.company_id).filter(Boolean) as string[]));
+  const { data: companyRows } = companyIds.length
+    ? await supabase
+        .from('companies')
+        .select('id, website_domain, admin_email_domain')
+        .in('id', companyIds)
+    : { data: [] as any[] };
+  const companyById = new Map((companyRows || []).map((row: any) => [String(row.id), row]));
+  const emailDomain = extractDomain(email);
+  const roleRow = selectCompatibleCompanyRole({
+    rows: rawRoleRows,
+    companyById,
+    userEmail: email,
+  });
+  if (rawRoleRows.length > 0 && !roleRow) {
+    console.warn('[post-login-route] ignoring mismatched self-registered company role', {
+      userId,
+      emailDomain,
+      companyIds,
+    });
+  }
 
   if (!roleRow) {
     return res.status(200).json({ route: '/onboarding/company' });
@@ -110,6 +131,22 @@ export default async function handler(
   if (!resolvedRole) {
     console.warn('[post-login-route] Invalid or missing role', { userId });
     return res.status(200).json({ route: '/command-center' });
+  }
+
+  // ── 5a. Platform-operator routing — SUPER_ADMIN takes precedence ─────────
+  // SUPER_ADMINs are platform operators, not tenant users. They MUST land
+  // in the platform runtime (/super-admin/dashboard), never in the customer
+  // command-center / onboarding / free-credit funnels — those are tenant UX
+  // and would surface customer artefacts (300-credit prompts, onboarding
+  // modals, tenant company chrome) to a platform principal.
+  //
+  // This check sits AFTER role resolution so that a SUPER_ADMIN whose only
+  // user_company_roles row was somehow inactive still falls through to the
+  // standard command-center flow with no role; once they have an active
+  // SUPER_ADMIN role row (which is the canonical bootstrap shape) they go
+  // straight to the platform runtime regardless of user preferences.
+  if (resolvedRole === 'SUPER_ADMIN') {
+    return res.status(200).json({ route: '/super-admin/dashboard' });
   }
 
   // ── 6. Check user preferences for post-login landing page ────────────────

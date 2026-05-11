@@ -31,6 +31,9 @@ import { publishToSpotify } from './spotifyAdapter';
 import { publishToStarMaker } from './starmakerAdapter';
 import { publishToSuno } from './sunoAdapter';
 import { publishToPinterest } from './pinterestAdapter';
+import { validatePlatformContentCompatibility } from '../services/platformContentValidator';
+import { logger } from '../services/logger';
+import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
 import type { PublishResult } from './platformAdapterTypes';
 export type { PublishResult } from './platformAdapterTypes';
 
@@ -59,6 +62,43 @@ export async function publishToPlatform(
     const scheduledPost = await getScheduledPost(scheduledPostId);
     if (!scheduledPost) {
       throw new Error(`Scheduled post ${scheduledPostId} not found`);
+    }
+
+    // Step 1.5: Authoritative capability validation (Round-2 Phase 2). This
+    // is the lowest-shared layer — every publish path (queue worker,
+    // publishNow, API, scheduled jobs) routes through publishToPlatform, so
+    // wiring the check here guarantees no caller can bypass it.
+    const compatibility = validatePlatformContentCompatibility({
+      platform: scheduledPost.platform,
+      contentSignals: { contentType: scheduledPost.content_type },
+      payload: {
+        hasText: !!(scheduledPost.content && scheduledPost.content.trim().length > 0),
+        mediaUrls: scheduledPost.media_urls ?? [],
+      },
+    });
+    if (compatibility.ok === false) {
+      const failure = compatibility;
+      const eventName = failure.code === 'CAPABILITY_UNRESOLVED'
+        ? CAPABILITY_LOG_EVENTS.UNRESOLVED
+        : CAPABILITY_LOG_EVENTS.REJECTED;
+      const payload: CapabilityLogPayload = {
+        surface: 'publishToPlatform',
+        publishSource: 'adapter',
+        platform: failure.platform ?? scheduledPost.platform,
+        resolvedCapability: failure.capability,
+        contentType: scheduledPost.content_type,
+        code: failure.code,
+        scheduledPostId,
+      };
+      logger.warn(eventName, payload);
+      return {
+        success: false,
+        error: {
+          code: failure.code,
+          message: failure.message,
+          retryable: false,
+        },
+      };
     }
 
     // Step 2: Fetch social account

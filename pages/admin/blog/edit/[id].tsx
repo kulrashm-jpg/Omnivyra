@@ -57,8 +57,7 @@ export default function AdminBlogEditPage() {
     setError(null);
 
     try {
-      const fallbackCompanyId = typeof window !== 'undefined' ? (localStorage.getItem('selected_company_id') || '') : '';
-      const companyId = (typeof post?.company_id === 'string' ? post.company_id : fallbackCompanyId);
+      const companyId = typeof post?.company_id === 'string' ? post.company_id : '';
       if (!companyId) {
         jumpToImproveArea(area);
         setError('Company context is required for AI improvement.');

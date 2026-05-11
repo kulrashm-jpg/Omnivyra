@@ -123,17 +123,8 @@ export async function publishToPinterest(
       hashtags: post.hashtags || [],
     });
 
-    // Pinterest requires image media
-    if (!post.media_urls || post.media_urls.length === 0) {
-      return {
-        success: false,
-        error: {
-          code: 'MISSING_MEDIA',
-          message: 'Pinterest pins require an image',
-          retryable: false,
-        },
-      };
-    }
+    // Round-3 Phase 3: media-required check removed. Centralized validator in
+    // publishToPlatform rejects no-media payloads upstream as MEDIA_REQUIRED.
 
     const imageUrl = post.media_urls[0];
     const boardName = post.title || 'My Pins';

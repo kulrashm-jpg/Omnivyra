@@ -194,17 +194,8 @@ export async function publishToTikTok(
       hashtags: post.hashtags || [],
     });
 
-    // TikTok requires video media
-    if (!post.media_urls || post.media_urls.length === 0) {
-      return {
-        success: false,
-        error: {
-          code: 'MISSING_MEDIA',
-          message: 'TikTok posts require a video file',
-          retryable: false,
-        },
-      };
-    }
+    // Round-3 Phase 3: media-required check removed. Centralized validator in
+    // publishToPlatform rejects no-media payloads upstream as MEDIA_REQUIRED.
 
     const videoUrl = post.media_urls[0];
     const title = post.title || formattedContent.text.substring(0, 150) || 'TikTok Video';

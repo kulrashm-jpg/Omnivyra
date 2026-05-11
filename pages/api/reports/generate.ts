@@ -9,11 +9,23 @@ import {
   startAsyncReportGeneration,
 } from '../../../backend/services/reportCardService';
 import { resolveAnalyticsReportInput, persistAnalyticsReportInputs } from '../../../backend/services/analyticsInputResolver';
-import { hasEnoughCredits } from '../../../backend/services/creditDeductionService';
+import { getCreditCost } from '../../../backend/services/creditDeductionService';
 import { evaluateResolvedReportReadiness } from '../../../backend/services/reportReadinessService';
 import { ensureAutomationConfig } from '../../../backend/services/reportAutomationService';
 import { resolveSnapshotReportInput, persistSnapshotReportInputs } from '../../../backend/services/snapshotInputResolver';
 import { keepAliveAfterResponse } from '../../../lib/runtime/keepAlive';
+import { logger } from '../../../backend/services/logger';
+import {
+  getRequestContext,
+  seedRequestContextFromRequest,
+} from '../../../backend/services/requestContext';
+import { getReportChargingIdentity } from '../../../shared/monetization/featureRegistry';
+import {
+  makeIdempotencyKey,
+  releaseCreditReservation,
+  reserveCreditsForWork,
+} from '../../../backend/services/creditExecutionService';
+import { assertMonetizationBetaAccess } from '../../../backend/services/monetizationBetaAccessService';
 
 type GenerateReportRequest = {
   companyId?: string;
@@ -24,12 +36,6 @@ type GenerateReportRequest = {
   generationContext?: Record<string, unknown>;
 };
 
-function getCreditAction(reportCategory: ReportCategory): 'website_audit' | 'deep_analysis' | 'full_strategy' {
-  if (reportCategory === 'growth') return 'full_strategy';
-  if (reportCategory === 'performance') return 'deep_analysis';
-  return 'website_audit';
-}
-
 type GenerateReportResponse = {
   success?: boolean;
   reportId?: string;
@@ -37,6 +43,8 @@ type GenerateReportResponse = {
   message?: string;
   error?: string;
   code?: string;
+  requestId?: string;
+  correlationId?: string;
 };
 
 async function resolveCompanyId(userId: string, requestedCompanyId?: string): Promise<string | null> {
@@ -67,15 +75,37 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<GenerateReportResponse>,
 ) {
+  const initialContext = seedRequestContextFromRequest(req);
+  res.setHeader('x-request-id', initialContext.requestId || '');
+  res.setHeader('x-correlation-id', initialContext.correlationId || initialContext.requestId || '');
+
+  const withTrace = (payload: GenerateReportResponse): GenerateReportResponse => {
+    const ctx = getRequestContext();
+    return {
+      ...payload,
+      requestId: ctx.requestId,
+      correlationId: ctx.correlationId,
+    };
+  };
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' });
+    logger.warn('report_generate_method_not_allowed', { method: req.method });
+    return res.status(405).json(withTrace({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }));
   }
 
   const { user, error: authError } = await getSupabaseUserFromRequest(req);
   if (authError || !user) {
-    return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+    const normalizedAuthError: unknown = authError ?? 'missing user';
+    logger.warn('report_generate_unauthorized', {
+      message:
+        typeof normalizedAuthError === 'object' && normalizedAuthError !== null && 'message' in normalizedAuthError
+          ? String((normalizedAuthError as { message?: unknown }).message)
+          : String(normalizedAuthError),
+    });
+    return res.status(401).json(withTrace({ error: 'Unauthorized', code: 'UNAUTHORIZED' }));
   }
 
+  let pendingReportCreditReservation: Extract<Awaited<ReturnType<typeof reserveCreditsForWork>>, { status: 'reserved' | 'already_reserved' }> | null = null;
   try {
     const body = (req.body || {}) as GenerateReportRequest;
     const type = body.type === 'premium' ? 'premium' : 'free';
@@ -88,9 +118,31 @@ export default async function handler(
           ? 'snapshot'
           : 'performance';
     const companyId = await resolveCompanyId(user.id, body.companyId);
+    seedRequestContextFromRequest(req, { userId: user.id, orgId: companyId ?? undefined });
+
+    logger.info('report_generate_request_received', {
+      endpoint: '/api/reports/generate',
+      userId: user.id,
+      requestedCompanyId: body.companyId ?? null,
+      resolvedCompanyId: companyId,
+      type,
+      reportCategory,
+      domain: body.domain ?? null,
+      payload: {
+        domain: body.domain ?? null,
+        type: body.type ?? null,
+        reportCategory: body.reportCategory ?? null,
+        formData: body.formData ?? null,
+        generationContext: body.generationContext ?? null,
+      },
+    });
 
     if (!companyId) {
-      return res.status(403).json({ error: 'Access denied', code: 'ACCESS_DENIED' });
+      logger.warn('report_generate_access_denied', {
+        userId: user.id,
+        requestedCompanyId: body.companyId ?? null,
+      });
+      return res.status(403).json(withTrace({ error: 'Access denied', code: 'ACCESS_DENIED' }));
     }
 
     const requestPayload = {
@@ -112,12 +164,23 @@ export default async function handler(
           requestPayload,
         });
     const readiness = await evaluateResolvedReportReadiness(resolvedInput);
+    logger.info('report_generate_readiness_evaluated', {
+      companyId,
+      reportCategory,
+      ready: readiness.ready,
+      missingRequirements: readiness.missing_requirements,
+    });
 
     if (!readiness.ready) {
-      return res.status(400).json({
+      logger.warn('report_generate_not_ready', {
+        companyId,
+        reportCategory,
+        missingRequirements: readiness.missing_requirements,
+      });
+      return res.status(400).json(withTrace({
         error: `Report is not ready: ${readiness.missing_requirements.join('; ')}`,
         code: 'REPORT_NOT_READY',
-      });
+      }));
     }
 
     if (reportCategory === 'snapshot') {
@@ -126,14 +189,73 @@ export default async function handler(
       await persistAnalyticsReportInputs(resolvedInput);
     }
 
+    let reportChargingIdentity: ReturnType<typeof getReportChargingIdentity> | null = null;
+
     if (type === 'premium') {
-      const creditCheck = await hasEnoughCredits(companyId, getCreditAction(reportCategory));
-      if (!creditCheck.sufficient) {
-        return res.status(402).json({
+      const betaAccess = await assertMonetizationBetaAccess({
+        organizationId: companyId,
+        userId: user.id,
+        surface: 'paid_report_generation',
+      });
+      const chargingIdentity = getReportChargingIdentity({
+        requested_type: type,
+        report_category: reportCategory,
+        usage_context: {
+          endpoint: '/api/reports/generate',
+          user_id: user.id,
+          company_id: companyId,
+        },
+      });
+      reportChargingIdentity = chargingIdentity;
+      const requiredCredits = await getCreditCost(chargingIdentity.action_key);
+      const holdIdempotencyKey = makeIdempotencyKey(
+        user.id,
+        chargingIdentity.action_key,
+        initialContext.requestId,
+        'report-generation',
+      );
+      const reservation = await reserveCreditsForWork({
+        userId: user.id,
+        orgId: companyId,
+        action: chargingIdentity.action_key,
+        referenceType: chargingIdentity.feature_key,
+        referenceId: initialContext.requestId,
+        idempotencyKey: holdIdempotencyKey,
+        amountOverride: requiredCredits,
+        note: `${chargingIdentity.feature_key} report generation`,
+      });
+      logger.info('report_generate_credit_check', {
+        companyId,
+        reportCategory,
+        monetization: {
+          featureKey: chargingIdentity.feature_key,
+          pricingKey: chargingIdentity.pricing_key,
+          actionKey: chargingIdentity.action_key,
+          planTier: chargingIdentity.plan_tier,
+          betaCohort: betaAccess.beta_cohort,
+          betaAccessLevel: betaAccess.access_level,
+        },
+        reservationStatus: reservation.status,
+        required: requiredCredits,
+      });
+
+      if (reservation.status === 'insufficient_credits') {
+        return res.status(402).json(withTrace({
           error: 'Insufficient credits to generate this report',
           code: 'INSUFFICIENT_CREDITS',
-        });
+        }));
       }
+      if (reservation.status !== 'reserved' && reservation.status !== 'already_reserved') {
+        const statusCode = reservation.status === 'no_credit_account' ? 402 : 409;
+        return res.status(statusCode).json(withTrace({
+          error: reservation.status === 'no_credit_account'
+            ? 'No credit account is available for this organization'
+            : `Report generation cannot start: ${reservation.status}`,
+          code: reservation.status.toUpperCase(),
+        }));
+      }
+
+      pendingReportCreditReservation = reservation;
     }
 
     const report =
@@ -149,7 +271,37 @@ export default async function handler(
           requestPayload,
           resolvedInput: resolvedInput as unknown as Record<string, unknown>,
           readiness,
+          creditReservation: pendingReportCreditReservation && reportChargingIdentity
+            ? {
+              ...pendingReportCreditReservation,
+              feature_key: reportChargingIdentity.feature_key,
+              pricing_key: reportChargingIdentity.pricing_key,
+              plan_tier: reportChargingIdentity.plan_tier,
+              usage_context: reportChargingIdentity.usage_context,
+              pricing_snapshot: {
+                pricing_key: reportChargingIdentity.pricing_key,
+                required_credits: pendingReportCreditReservation.creditsReserved,
+                strategy: reportChargingIdentity.pricing_key,
+              },
+              registry_snapshot: reportChargingIdentity,
+              generation_context: {
+                request_id: initialContext.requestId,
+                correlation_id: initialContext.correlationId,
+                endpoint: '/api/reports/generate',
+              },
+            }
+            : undefined,
         });
+
+    logger.info('report_generate_report_created', {
+      companyId,
+      userId: user.id,
+      reportId: report.id,
+      reportCategory,
+      reportType: report.report_type,
+      domain: report.domain,
+    });
+    pendingReportCreditReservation = null;
 
     // Phase 3: hand the lifecycle Promise to a Vercel-aware keep-alive so the
     // background work survives HTTP response flush. Falls back to awaiting
@@ -170,24 +322,64 @@ export default async function handler(
         ? 'Lead & Growth Intelligence report generation started'
         : 'Report generation started';
 
-    return res.status(202).json({
+    logger.info('report_generate_response_sent', {
+      companyId,
+      userId: user.id,
+      reportId: report.id,
+      status: 202,
+      reportCategory,
+    });
+
+    return res.status(202).json(withTrace({
       success: true,
       reportId: report.id,
       status: 'generating',
       message: generationMessage,
-    });
+    }));
   } catch (error) {
     if (error instanceof ReportRequestError) {
-      return res.status(error.httpStatus).json({
+      if (pendingReportCreditReservation) {
+        await releaseCreditReservation({
+          ...pendingReportCreditReservation,
+          note: `Report request failed before generation: ${error.code}`,
+        }).catch((releaseError) => {
+          logger.error('report_generate_pre_creation_release_failed', {
+            message: releaseError instanceof Error ? releaseError.message : String(releaseError),
+            holdTransactionId: pendingReportCreditReservation?.holdTransactionId,
+          });
+        });
+      }
+      logger.warn('report_generate_request_error', {
+        status: error.httpStatus,
+        code: error.code,
+        message: error.message,
+        stack: process.env.NODE_ENV !== 'production' ? error.stack : undefined,
+      });
+      return res.status(error.httpStatus).json(withTrace({
         error: error.message,
         code: error.code,
-      });
+      }));
     }
 
-    console.error('[reports/generate] error:', error);
-    return res.status(500).json({
-      error: 'Failed to generate report',
-      code: 'SERVER_ERROR',
+    const message = error instanceof Error ? error.message : String(error);
+    if (pendingReportCreditReservation) {
+      await releaseCreditReservation({
+        ...pendingReportCreditReservation,
+        note: `Report request failed before generation: ${message}`,
+      }).catch((releaseError) => {
+        logger.error('report_generate_pre_creation_release_failed', {
+          message: releaseError instanceof Error ? releaseError.message : String(releaseError),
+          holdTransactionId: pendingReportCreditReservation?.holdTransactionId,
+        });
+      });
+    }
+    logger.error('report_generate_unhandled_error', {
+      message,
+      stack: error instanceof Error ? error.stack : undefined,
     });
+    return res.status(500).json(withTrace({
+      error: process.env.NODE_ENV !== 'production' ? message : 'Failed to generate report',
+      code: 'SERVER_ERROR',
+    }));
   }
 }

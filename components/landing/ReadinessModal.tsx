@@ -5,14 +5,27 @@ import { useCompanyContext } from '../CompanyContext';
 import { Loader2, CheckCircle, X } from 'lucide-react';
 
 const INDUSTRIES = [
-  'Technology',
-  'E-commerce',
-  'SaaS',
+  'Technology & Software',
+  'Marketing & Advertising',
+  'E-commerce & Retail',
+  'Finance & Banking',
+  'Banking',
+  'Insurance',
   'Healthcare',
-  'Finance',
   'Education',
-  'Media',
-  'Retail',
+  'Media & Entertainment',
+  'Professional Services',
+  'Manufacturing',
+  'Telecommunications',
+  'Energy & Utilities',
+  'Construction & Infrastructure',
+  'Logistics & Transportation',
+  'Automotive',
+  'Real Estate',
+  'Travel & Hospitality',
+  'Food & Beverage',
+  'Government & Public Sector',
+  'Nonprofit',
   'Other',
 ];
 

@@ -11,6 +11,7 @@ export interface OnboardingData {
   websiteUrl: string;
   companyName: string;
   industry: string;
+  businessTypes: string[];
   goal: 'traffic' | 'leads' | 'authority' | '';
 }
 
@@ -29,6 +30,7 @@ const INITIAL_DATA: OnboardingData = {
   websiteUrl: '',
   companyName: '',
   industry: '',
+  businessTypes: [],
   goal: '',
 };
 
@@ -45,10 +47,15 @@ const INITIAL_STATE: OnboardingState = {
 // LocalStorage helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function loadState(): OnboardingState {
+function getStorageKey(userId?: string | null, companyId?: string | null): string {
+  const owner = [userId, companyId].filter(Boolean).join(':');
+  return owner ? `${STORAGE_KEY}:${owner}` : STORAGE_KEY;
+}
+
+function loadState(storageKey: string): OnboardingState {
   if (typeof window === 'undefined') return INITIAL_STATE;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) return INITIAL_STATE;
     const parsed = JSON.parse(raw);
     return { ...INITIAL_STATE, ...parsed };
@@ -57,10 +64,11 @@ function loadState(): OnboardingState {
   }
 }
 
-function saveState(state: OnboardingState): void {
+function saveState(storageKey: string, state: OnboardingState): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(storageKey, JSON.stringify(state));
+    localStorage.removeItem(STORAGE_KEY);
   } catch { /* quota exceeded — silently ignore */ }
 }
 
@@ -69,7 +77,8 @@ function saveState(state: OnboardingState): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useOnboarding() {
-  const { selectedCompanyId, selectedCompanyName } = useCompanyContext();
+  const { user, selectedCompanyId, selectedCompanyName } = useCompanyContext();
+  const storageKey = getStorageKey(user?.userId ?? null, selectedCompanyId || null);
   const [state, setState] = useState<OnboardingState>(INITIAL_STATE);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -77,7 +86,7 @@ export function useOnboarding() {
 
   // Hydrate from localStorage on mount
   useEffect(() => {
-    const stored = loadState();
+    const stored = loadState(storageKey);
     setState(stored);
 
     // Pre-fill company name if we already have one from context
@@ -87,18 +96,18 @@ export function useOnboarding() {
         data: { ...stored.data, companyName: selectedCompanyName },
       };
       setState(updated);
-      saveState(updated);
+      saveState(storageKey, updated);
     }
-  }, [selectedCompanyName]);
+  }, [selectedCompanyName, storageKey]);
 
   // Persist every state change
   const updateState = useCallback((patch: Partial<OnboardingState>) => {
     setState((prev) => {
       const next = { ...prev, ...patch };
-      saveState(next);
+      saveState(storageKey, next);
       return next;
     });
-  }, []);
+  }, [storageKey]);
 
   const updateData = useCallback((patch: Partial<OnboardingData>) => {
     setState((prev) => {
@@ -106,10 +115,10 @@ export function useOnboarding() {
         ...prev,
         data: { ...prev.data, ...patch },
       };
-      saveState(next);
+      saveState(storageKey, next);
       return next;
     });
-  }, []);
+  }, [storageKey]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -128,10 +137,10 @@ export function useOnboarding() {
         ? ((prev.currentStep + 1) as OnboardingStep)
         : 3;
       const updated = { ...prev, currentStep: next };
-      saveState(updated);
+      saveState(storageKey, updated);
       return updated;
     });
-  }, []);
+  }, [storageKey]);
 
   const prevStep = useCallback(() => {
     setState((prev) => {
@@ -139,10 +148,10 @@ export function useOnboarding() {
         ? ((prev.currentStep - 1) as OnboardingStep)
         : 1;
       const updated = { ...prev, currentStep: next };
-      saveState(updated);
+      saveState(storageKey, updated);
       return updated;
     });
-  }, []);
+  }, [storageKey]);
 
   const completeOnboarding = useCallback(() => {
     updateState({
@@ -159,9 +168,9 @@ export function useOnboarding() {
 
   const resetOnboarding = useCallback(() => {
     setState(INITIAL_STATE);
-    saveState(INITIAL_STATE);
+    saveState(storageKey, INITIAL_STATE);
     setWizardOpen(false);
-  }, []);
+  }, [storageKey]);
 
   // ── API calls (uses existing endpoints) ──────────────────────────────────
 
@@ -215,6 +224,7 @@ export function useOnboarding() {
   const saveBusinessContext = useCallback(async (
     companyName: string,
     industry: string,
+    businessTypes: string[],
     goal: string,
   ): Promise<boolean> => {
     if (!selectedCompanyId) {
@@ -233,6 +243,15 @@ export function useOnboarding() {
           company_id: selectedCompanyId,
           name: companyName,
           industry,
+          report_settings: {
+            default_inputs: {
+              business_type: businessTypes.join(', ') || null,
+            },
+            market_pulse: {
+              business_model: businessTypes.join(', ') || null,
+              provider_type: businessTypes.join(', ') || null,
+            },
+          },
           goals: goal,
         }),
       });
@@ -242,7 +261,7 @@ export function useOnboarding() {
         throw new Error(err.error || 'Failed to save profile');
       }
 
-      updateData({ companyName, industry, goal: goal as OnboardingData['goal'] });
+      updateData({ companyName, industry, businessTypes, goal: goal as OnboardingData['goal'] });
       return true;
     } catch (err: any) {
       setError(err.message || 'Something went wrong');

@@ -1,12 +1,21 @@
 import { runCompletionWithOperation } from '../aiGateway';
 import {
   CompanyProfile,
+  EntityArchetypeIntelligence,
   ProblemTransformationQuestionsResult,
   ProblemTransformationRefinedOutput,
   ProblemTransformationExistingFields,
   ProblemTransformationPromptResult,
 } from './types';
 import { PROBLEM_TRANSFORMATION_FIELD_NAMES } from './fieldConstants';
+import { buildArchetypePromptContext } from './entityArchetype';
+import {
+  buildGroundedDifferentiationSignal,
+  buildStructuredCompetitorDimensionBlock,
+  shouldUseAudienceLedSynthesis,
+  validateAudienceLedGrounding,
+} from './competitorSynthesis';
+import { buildUserGuidanceContextBlock } from './userGuidance';
 
 export function buildProblemTransformationQuestions(): ProblemTransformationQuestionsResult {
   return {
@@ -43,10 +52,22 @@ const PT_FIELD_NAMES = [
 export function buildProblemTransformationStrategicPrompt(
   mode: 'fill' | 'refine',
   profile: CompanyProfile | null,
-  existingFields: ProblemTransformationExistingFields & { qaPairs?: Array<{ question: string; answer: string }> }
+  existingFields: ProblemTransformationExistingFields & { qaPairs?: Array<{ question: string; answer: string }> },
+  archetype?: EntityArchetypeIntelligence | null,
 ): ProblemTransformationPromptResult {
+  const effectiveArchetype = archetype ?? profile?.report_settings?.entity_archetype ?? null;
   const thinkFlow =
     'Follow this reasoning flow: THINK (absorb context) → ANALYZE (identify gaps/weaknesses) → STRUCTURE (organize) → OUTPUT (strict JSON only).';
+
+  const archetypeContext = buildArchetypePromptContext(effectiveArchetype);
+  const audienceLed = shouldUseAudienceLedSynthesis(effectiveArchetype, profile?.report_settings?.competitor_intelligence ?? null);
+  const competitorIntelligence = audienceLed
+    ? buildStructuredCompetitorDimensionBlock(profile?.report_settings?.competitor_intelligence ?? null)
+    : '';
+  const userGuidanceContext = buildUserGuidanceContextBlock(profile);
+  const archetypeInstruction = audienceLed
+    ? 'For this audience-led/entity-led profile, interpret customers as audience/readers/members/learners/subscribers/operators when the evidence supports it. Treat the solution as the mix of offers, media, education, advisory, community, trust, and worldview mechanics. Use structured competitor dimensions only to sharpen problem, trust, authority, and differentiation context. Do not turn peer traits into company facts unless company evidence supports them. At least one field should reflect a grounded trust, audience, ecosystem, monetization, publication, worldview, or narrative distinction.'
+    : '';
 
   const companyContext = profile
     ? [
@@ -57,6 +78,10 @@ export function buildProblemTransformationStrategicPrompt(
         `Brand positioning: ${profile.brand_positioning ?? ''}`,
         `Unique value: ${profile.unique_value ?? ''}`,
         `Authority domains (existing): ${(profile.authority_domains ?? []).join(', ') || 'none'}`,
+        archetypeContext ? `Entity archetype: ${archetypeContext}` : '',
+        competitorIntelligence ? `Structured competitor dimensions: ${competitorIntelligence}` : '',
+        userGuidanceContext,
+        archetypeInstruction,
       ]
         .filter(Boolean)
         .join('. ')
@@ -227,6 +252,31 @@ function mergeWithExisting(
   };
 }
 
+function enforceProblemTransformationGrounding(
+  result: ProblemTransformationRefinedOutput,
+  profile: CompanyProfile | null,
+  archetype?: EntityArchetypeIntelligence | null,
+): ProblemTransformationRefinedOutput {
+  if (!profile) return result;
+  if (validateAudienceLedGrounding([
+    result.core_problem_statement,
+    result.pain_symptoms,
+    result.awareness_gap,
+    result.problem_impact,
+    result.desired_transformation,
+    result.transformation_mechanism,
+    result.authority_domains,
+  ], profile, archetype ?? profile.report_settings?.entity_archetype ?? null)) return result;
+  const signal = buildGroundedDifferentiationSignal(profile.report_settings?.competitor_intelligence ?? null);
+  if (!signal) return result;
+  return {
+    ...result,
+    transformation_mechanism: [result.transformation_mechanism, `Ground differentiation in ${signal}.`]
+      .filter(Boolean)
+      .join(' '),
+  };
+}
+
 function isPartialOrEmpty(result: ProblemTransformationRefinedOutput): boolean {
   const hasCore = !!result.core_problem_statement;
   const hasAnyArray = (result.pain_symptoms?.length ?? 0) > 0 || (result.authority_domains?.length ?? 0) > 0;
@@ -243,7 +293,12 @@ function isPartialOrEmpty(result: ProblemTransformationRefinedOutput): boolean {
 
 export async function refineProblemTransformationAnswers(
   rawAnswers: (string | null | undefined)[],
-  options?: { companyId?: string; profile?: CompanyProfile | null; existingFields?: ProblemTransformationExistingFields }
+  options?: {
+    companyId?: string;
+    profile?: CompanyProfile | null;
+    existingFields?: ProblemTransformationExistingFields;
+    archetype?: EntityArchetypeIntelligence | null;
+  }
 ): Promise<ProblemTransformationRefinedOutput> {
   const profile = options?.profile ?? null;
   const companyId = options?.companyId ?? (profile?.company_id ? String(profile.company_id) : null);
@@ -261,7 +316,7 @@ export async function refineProblemTransformationAnswers(
     const built = buildProblemTransformationStrategicPrompt('fill', profile, {
       ...existingFields,
       qaPairs,
-    });
+    }, options?.archetype ?? profile.report_settings?.entity_archetype ?? null);
     systemPrompt = built.systemPrompt;
     userPrompt = built.userPrompt;
   } else {
@@ -295,7 +350,7 @@ export async function refineProblemTransformationAnswers(
   try {
     raw = await runLLM(false);
   } catch {
-    return mergeWithExisting(EMPTY_PT_OUTPUT, existingFields);
+    return enforceProblemTransformationGrounding(mergeWithExisting(EMPTY_PT_OUTPUT, existingFields), profile, options?.archetype ?? profile?.report_settings?.entity_archetype ?? null);
   }
 
   let parsed: Record<string, unknown>;
@@ -306,15 +361,15 @@ export async function refineProblemTransformationAnswers(
       raw = await runLLM(true);
       parsed = JSON.parse(raw);
     } catch {
-      return mergeWithExisting(EMPTY_PT_OUTPUT, existingFields);
+      return enforceProblemTransformationGrounding(mergeWithExisting(EMPTY_PT_OUTPUT, existingFields), profile, options?.archetype ?? profile?.report_settings?.entity_archetype ?? null);
     }
   }
 
   const result = parseAndNormalizePT(parsed);
   if (isPartialOrEmpty(result)) {
-    return mergeWithExisting(result, existingFields);
+    return enforceProblemTransformationGrounding(mergeWithExisting(result, existingFields), profile, options?.archetype ?? profile?.report_settings?.entity_archetype ?? null);
   }
-  return result;
+  return enforceProblemTransformationGrounding(result, profile, options?.archetype ?? profile?.report_settings?.entity_archetype ?? null);
 }
 
 // saveProblemTransformationAnswers is defined in dbOperations.ts to avoid circular deps

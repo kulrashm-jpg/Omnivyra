@@ -18,6 +18,7 @@ import StrategicAspectSelector from './recommendations/engine-framework/Strategi
 import OfferingFacetSelector from './recommendations/engine-framework/OfferingFacetSelector';
 import { BoltCampaignChat } from './bolt/BoltCampaignChat';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
+import BoltPlatformPicker from './bolt/BoltPlatformPicker';
 import {
   PRIMARY_OPTIONS,
   PERSONAL_BRAND_SECONDARY_GROUPS,
@@ -237,6 +238,12 @@ export default function IntelMixView({ d }: { d: S }) {
     toggleSecondary,
     totalPerWeek,
     user,
+    selectedPlatforms,
+    togglePlatform,
+    availablePlatforms,
+    platformHidden,
+    platformsLoading,
+    platformBlocked,
   } = d;
 
     return (
@@ -810,6 +817,21 @@ export default function IntelMixView({ d }: { d: S }) {
                 min={new Date().toISOString().split('T')[0]}
                 onChange={(e) => setStartDate(e.target.value)}
                 className="w-full sm:w-48 px-3 py-2 text-sm border border-gray-200 rounded-xl focus:outline-none focus:border-teal-400 focus:ring-1 focus:ring-teal-300 bg-white"
+              />
+            </div>
+
+            {/* Platforms — capability-aware picker (Round-6: intelligent-mix = registry union) */}
+            <div className="space-y-2 pt-2 border-t border-gray-100">
+              <BoltPlatformPicker
+                accent="teal"
+                loading={platformsLoading}
+                blocked={platformBlocked}
+                supported={availablePlatforms}
+                hidden={platformHidden ?? []}
+                selected={selectedPlatforms}
+                onToggle={togglePlatform}
+                hint="Intelligent Mix targets every connected platform that's registered for publishing."
+                emptyMessage="No registered platforms connected yet. Connect your social accounts to enable Intelligent Mix."
               />
             </div>
           </div>

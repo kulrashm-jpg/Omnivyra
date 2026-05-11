@@ -23,6 +23,7 @@ import type { NextApiRequest } from 'next';
 import { logger } from '../services/logger';
 import { logCookieSuperAdminUsage } from './audit/SecurityAuditService';
 import { legacyCookieSuperAdminCapabilities } from './capabilityRegistry';
+import { parseSignedBridgeCookie } from './bridgeCookie';
 import type { AuthenticatedPrincipal } from '../../shared/contracts/security';
 
 // ── Hard-expiry knob ─────────────────────────────────────────────────────────
@@ -94,12 +95,39 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
 ): Promise<AuthenticatedPrincipal | null> {
   const superAdminCookie = readCookie(req, SUPER_ADMIN_COOKIE);
   const contentArchitectCookie = readCookie(req, CONTENT_ARCHITECT_COOKIE);
-  const hasBridgeCookie = superAdminCookie === '1' || contentArchitectCookie === '1';
-
-  if (!hasBridgeCookie) return null;
-
+  // Phase 2: bridge cookie is now signed (see backend/security/bridgeCookie.ts).
+  // Static `=1` is the legacy Phase 1 format and is rejected here AFTER
+  // emitting an audit row so operators see when stale cookies persist.
   const ip = clientIp(req);
   const userAgent = (req.headers['user-agent'] as string | undefined) ?? null;
+
+  const bridgeParse = superAdminCookie != null ? parseSignedBridgeCookie(superAdminCookie) : { ok: false as const, reason: 'no_value' as const };
+  const hasContentArchitect = contentArchitectCookie === '1';
+  const hasBridgeCookie = bridgeParse.ok === true || hasContentArchitect;
+
+  // Tamper / legacy-format detection: log the failure mode before
+  // returning null so the resolver attribution shows up in audit even
+  // when the cookie is rejected.
+  if (superAdminCookie != null && bridgeParse.ok === false && bridgeParse.reason !== 'no_value') {
+    await logCookieSuperAdminUsage({
+      capability: 'super_admin.legacy',
+      decision: 'bridge_authority_rejected',
+      reason: `bridge cookie rejected: ${bridgeParse.reason}`,
+      ip,
+      userAgent,
+    });
+    logger.warn('legacy_super_admin_bridge_cookie_rejected', {
+      reason: bridgeParse.reason,
+      ip,
+      action: bridgeParse.reason === 'legacy_format'
+        ? 'operator must re-login to receive the Phase-2 signed bridge cookie'
+        : bridgeParse.reason === 'bad_signature'
+          ? 'possible tamper / wrong signing secret / forged cookie'
+          : 'see reason',
+    });
+  }
+
+  if (!hasBridgeCookie) return null;
 
   // Dry-run simulation: emit a rejection audit row so operators can see
   // every bridge dependency that WOULD break under Wave 3 removal, without
@@ -153,7 +181,9 @@ export async function resolveLegacyCookieSuperAdminPrincipal(
   await logCookieSuperAdminUsage({
     capability: 'super_admin.legacy',
     decision: 'bridge_used',
-    reason: superAdminCookie === '1' ? 'super_admin_session cookie' : 'content_architect_session cookie',
+    reason: bridgeParse.ok === true
+      ? `super_admin_session cookie (signed; issued ${new Date(bridgeParse.issuedAtUnix * 1000).toISOString()})`
+      : 'content_architect_session cookie',
     ip,
     userAgent,
   });

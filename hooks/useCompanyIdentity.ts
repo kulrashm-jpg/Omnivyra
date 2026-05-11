@@ -1,28 +1,42 @@
 /**
  * useCompanyIdentity — Fetches company identity for the ContentQualityPanel.
- * Lightweight hook that maps the company profile API response to CompanyIdentity.
- * Caches result per company ID to avoid redundant fetches.
+ * Cache is keyed by (userId, companyId) so a different signed-in user can never
+ * read another user's previously-cached identity for the same company.
  */
 import { useState, useEffect, useRef } from 'react';
 import type { CompanyIdentity } from '../lib/content/companyContextBlock';
+import { useCompanyContext } from '../components/CompanyContext';
 
 const _cache = new Map<string, CompanyIdentity>();
 
+const cacheKey = (userId: string, companyId: string) => `${userId}::${companyId}`;
+
 export function useCompanyIdentity(companyId: string | undefined): CompanyIdentity | undefined {
+  const { user } = useCompanyContext();
+  const userId = user?.userId;
+  const initialKey = userId && companyId ? cacheKey(userId, companyId) : null;
   const [identity, setIdentity] = useState<CompanyIdentity | undefined>(
-    companyId ? _cache.get(companyId) : undefined,
+    initialKey ? _cache.get(initialKey) : undefined,
   );
   const fetchedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!companyId || fetchedRef.current === companyId) return;
-    if (_cache.has(companyId)) {
-      setIdentity(_cache.get(companyId));
-      fetchedRef.current = companyId;
+    if (!companyId || !userId) {
+      // Identity not yet known — clear any prior render's value to prevent
+      // a previous user's cached company from bleeding into the current render.
+      setIdentity(undefined);
+      fetchedRef.current = null;
+      return;
+    }
+    const key = cacheKey(userId, companyId);
+    if (fetchedRef.current === key) return;
+    if (_cache.has(key)) {
+      setIdentity(_cache.get(key));
+      fetchedRef.current = key;
       return;
     }
 
-    fetchedRef.current = companyId;
+    fetchedRef.current = key;
     fetch(`/api/company-profile?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -43,11 +57,11 @@ export function useCompanyIdentity(companyId: string | undefined): CompanyIdenti
           keyMessages: profile.key_messages || undefined,
           brandVoice: profile.brand_voice || undefined,
         };
-        _cache.set(companyId, id);
+        _cache.set(key, id);
         setIdentity(id);
       })
       .catch(() => { /* non-blocking — panel works without it */ });
-  }, [companyId]);
+  }, [companyId, userId]);
 
   return identity;
 }

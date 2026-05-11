@@ -11,21 +11,21 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-import { isContentArchitectSession } from '../../../../backend/services/contentArchitectService';
-
-async function requireSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
-  if (req.cookies?.super_admin_session === '1' || isContentArchitectSession(req)) return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && await isPlatformSuperAdmin(user.id)) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-}
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (!(await requireSuperAdmin(req, res))) return;
+
+  // Phase 2 mutation gate. Toggling pricing-plan activation affects every
+  // tenant's ability to subscribe — gated by BILLING_PLAN_MANAGE which
+  // requires phishing-resistant + trusted-device step-up. Bridge / content-
+  // architect cookies cannot satisfy.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_PLAN_MANAGE,
+    reason: 'super-admin toggles pricing plan activation',
+  });
+  if (guard.ok !== true) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { plan_key, is_active } = body as { plan_key: string; is_active: boolean };

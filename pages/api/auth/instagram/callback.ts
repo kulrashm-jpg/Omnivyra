@@ -146,7 +146,7 @@ async function storeThreadsConnection(input: {
     access_token: encrypted.access_token,
     refresh_token: encrypted.refresh_token,
     is_active: true,
-    permissions: input.permissions,
+    // `permissions` removed — column not on social_accounts (schema drift).
     token_expires_at: input.expiresAt,
     last_sync_at: now,
     updated_at: now,

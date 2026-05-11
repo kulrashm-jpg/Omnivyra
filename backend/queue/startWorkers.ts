@@ -8,6 +8,16 @@
  */
 
 import os from 'os';
+import * as _diag_fs3 from 'fs';
+import * as _diag_path3 from 'path';
+// TEMP diagnostic — same sentinel file as instrumentation hook.
+function _diag(stage: string, extra?: Record<string, unknown>): void {
+  try {
+    const line = JSON.stringify({ ts: new Date().toISOString(), stage, ...extra }) + '\n';
+    _diag_fs3.appendFileSync(_diag_path3.join(process.cwd(), '.worker-bootstrap.log'), line);
+  } catch { /* never throw from diagnostics */ }
+}
+_diag('startWorkers.ts:module-loaded');
 import { getWorker, getUsageProtectionReady } from './bullmqClient';
 import { processPublishJob } from './jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from './jobProcessors/engagementPollingProcessor';
@@ -40,32 +50,41 @@ const shutdown = async () => {
  * Start all background workers. Call during server bootstrap.
  */
 export async function startWorkers(): Promise<void> {
+  _diag('startWorkers:entered');
   const boltConcurrency = Math.min(4, Math.max(1, os.cpus().length));
 
   // BUG#21 fix: await first usage-protection poll before registering workers.
   // This ensures _level is known and protection is enforced from job #1.
-  await getUsageProtectionReady();
+  try { await getUsageProtectionReady(); _diag('startWorkers:after-getUsageProtectionReady'); }
+  catch (e) { _diag('startWorkers:getUsageProtectionReady-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   // Initialize content generation queues (pre-flight checks, rate limiting, backpressure)
-  await initializeContentQueues();
+  try { await initializeContentQueues(); _diag('startWorkers:after-initializeContentQueues'); }
+  catch (e) { _diag('startWorkers:initializeContentQueues-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   // Start content generation workers (unified processor for all text content types)
-  await startContentWorkers(processContentGenerationJob);
+  try { await startContentWorkers(processContentGenerationJob); _diag('startWorkers:after-startContentWorkers'); }
+  catch (e) { _diag('startWorkers:startContentWorkers-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   // Start creator content workers (video, carousel, story)
-  await startCreatorContentWorkers(processCreatorContentJob);
+  try { await startCreatorContentWorkers(processCreatorContentJob); _diag('startWorkers:after-startCreatorContentWorkers'); }
+  catch (e) { _diag('startWorkers:startCreatorContentWorkers-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   // Start BOLT content job workers (async per-topic master+variant+schedule)
-  await startBoltContentWorkers(processBoltContentJob);
+  try { await startBoltContentWorkers(processBoltContentJob); _diag('startWorkers:after-startBoltContentWorkers'); }
+  catch (e) { _diag('startWorkers:startBoltContentWorkers-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   // Start WhatsApp broadcast workers (batched sends, tier-aware chunking)
-  await startWhatsAppBroadcastWorker(processWhatsAppBroadcastJob);
+  try { await startWhatsAppBroadcastWorker(processWhatsAppBroadcastJob); _diag('startWorkers:after-startWhatsAppBroadcastWorker'); }
+  catch (e) { _diag('startWorkers:startWhatsAppBroadcastWorker-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   // Start WhatsApp webhook event workers (async processing of Meta webhook payloads)
-  await startWhatsAppWebhookWorker(processWhatsAppWebhookJob);
+  try { await startWhatsAppWebhookWorker(processWhatsAppWebhookJob); _diag('startWorkers:after-startWhatsAppWebhookWorker'); }
+  catch (e) { _diag('startWorkers:startWhatsAppWebhookWorker-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   // Start analytics ingestion worker (daily growth + post-metric polls)
-  await startAnalyticsIngestionWorker(processAnalyticsIngestionJob);
+  try { await startAnalyticsIngestionWorker(processAnalyticsIngestionJob); _diag('startWorkers:after-startAnalyticsIngestionWorker'); }
+  catch (e) { _diag('startWorkers:startAnalyticsIngestionWorker-THREW', { error: e instanceof Error ? e.message : String(e) }); throw e; }
 
   publishWorker = getWorker('publish', processPublishJob);
   boltWorker = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });

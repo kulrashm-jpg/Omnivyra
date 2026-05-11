@@ -6,9 +6,7 @@
  * First onboarding step after Supabase auth + email verification.
  * Collects name / job title / industry, then calls /api/onboarding/profile
  * which saves the profile and routes to /onboarding/company. The company
- * + role + 300-credit grant happen later in /api/onboarding/setup-company
- * (or, for self-serve work-email signups, already happened during email
- * verification in /api/auth/sync-supabase-user).
+ * + role + 300-credit grant happen later in /api/onboarding/setup-company.
  */
 
 import { useState, useEffect } from 'react';
@@ -16,11 +14,31 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
+import { userScopedStorageKey } from '../../utils/authStorage';
 
 const INDUSTRIES = [
-  'Technology', 'Marketing & Advertising', 'E-commerce & Retail',
-  'Media & Entertainment', 'Finance & Banking', 'Healthcare',
-  'Education', 'Real Estate', 'Travel & Hospitality', 'Other',
+  'Technology & Software',
+  'Marketing & Advertising',
+  'E-commerce & Retail',
+  'Media & Entertainment',
+  'Finance & Banking',
+  'Banking',
+  'Insurance',
+  'Healthcare',
+  'Education',
+  'Manufacturing',
+  'Telecommunications',
+  'Energy & Utilities',
+  'Construction & Infrastructure',
+  'Logistics & Transportation',
+  'Automotive',
+  'Real Estate',
+  'Travel & Hospitality',
+  'Food & Beverage',
+  'Professional Services',
+  'Government & Public Sector',
+  'Nonprofit',
+  'Other',
 ];
 
 type Step = 'form' | 'done' | 'error';
@@ -36,6 +54,7 @@ export default function ProfilePage() {
   const [loading, setLoading]   = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [profileDraftKey, setProfileDraftKey] = useState(PROFILE_DRAFT_KEY);
 
   // Require Supabase session
   useEffect(() => {
@@ -45,12 +64,13 @@ export default function ProfilePage() {
         return;
       }
       setAccessToken(data.session.access_token);
+      setProfileDraftKey(userScopedStorageKey(PROFILE_DRAFT_KEY, data.session.user.id) ?? PROFILE_DRAFT_KEY);
     });
   }, [router]);
 
   useEffect(() => {
     try {
-      const draftRaw = localStorage.getItem(PROFILE_DRAFT_KEY);
+      const draftRaw = localStorage.getItem(profileDraftKey);
       if (!draftRaw) return;
       const draft = JSON.parse(draftRaw) as {
         fullName?: string;
@@ -63,18 +83,19 @@ export default function ProfilePage() {
     } catch {
       // Ignore unreadable draft state
     }
-  }, []);
+  }, [profileDraftKey]);
 
   useEffect(() => {
     try {
       localStorage.setItem(
-        PROFILE_DRAFT_KEY,
+        profileDraftKey,
         JSON.stringify({ fullName, jobTitle, industry }),
       );
+      localStorage.removeItem(PROFILE_DRAFT_KEY);
     } catch {
       // ignore storage failures
     }
-  }, [fullName, jobTitle, industry]);
+  }, [fullName, jobTitle, industry, profileDraftKey]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -106,6 +127,7 @@ export default function ProfilePage() {
       }
 
       try {
+        localStorage.removeItem(profileDraftKey);
         localStorage.removeItem(PROFILE_DRAFT_KEY);
       } catch {
         // ignore storage failures

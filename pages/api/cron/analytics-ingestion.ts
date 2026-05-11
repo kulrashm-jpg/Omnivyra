@@ -67,6 +67,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { jobId: `ga4-all-companies-${today}`, priority: 4 },
     );
     enqueued.push('ga4-all-companies');
+
+    // Phase C — autonomous OAuth lifecycle sweep folded into the same
+    // cron tick (Hobby plan caps total cron count at 2; a dedicated
+    // /api/cron/integrations-health is a follow-up after plan upgrade).
+    // Refreshes expiring social tokens, GA4 access tokens, and writes
+    // canonical connection_state across the integration tables.
+    await queue.add(
+      'oauth-refresh',
+      { type: 'oauth-refresh' },
+      { jobId: `oauth-refresh-${today}`, priority: 5 },
+    );
+    enqueued.push('oauth-refresh');
   } catch (err: any) {
     errors.push({ step: 'enqueue', message: err?.message ?? 'unknown' });
     console.error('[cron/analytics-ingestion] enqueue failed:', err?.message);

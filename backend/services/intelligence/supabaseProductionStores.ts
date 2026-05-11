@@ -292,7 +292,13 @@ export class SupabaseScanQueueStore implements ScanQueueStore {
       })
       .eq('id', candidate.id);
     ensureNoError('scan_queue.lease.update', error);
-    return { ...candidate, status: 'running', worker_id: params.worker_id, started_at: params.now };
+    return {
+      ...candidate,
+      status: 'running',
+      worker_id: params.worker_id,
+      started_at: params.now,
+      heartbeat_at: params.now,
+    };
   }
 
   /** Refresh the heartbeat — workers call every 10-30 seconds. */

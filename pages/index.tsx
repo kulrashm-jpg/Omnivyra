@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
+import { clearBrowserAuthState } from '../utils/authStorage';
 import MarketingLandingPage, { LANDING_FAQS } from '../components/landing/MarketingLandingPage';
 
 export default function Home() {
@@ -56,6 +57,7 @@ export default function Home() {
 
         if (!res || res.status === 401 || res.status === 403) {
           await supabase.auth.signOut();
+          clearBrowserAuthState({ preservePkce: false });
           setSessionFound(false);
           setLoading(false);
           return;

@@ -7,6 +7,7 @@ import { publishNow } from '../../../backend/services/publishNowService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
+import { validatePlatformContentCompatibility } from '../../../backend/services/platformContentValidator';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -50,6 +51,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         code: 'ACTION_NOT_SUPPORTED',
         platform: post.platform,
         action: 'post_create',
+      });
+    }
+
+    // Hard validation: platform × content-capability compatibility. Runs
+    // before account resolution so we never trigger a refresh / DB write on
+    // a publish that will be rejected (e.g. Instagram + text-only post).
+    const compatibility = validatePlatformContentCompatibility({
+      platform: post.platform,
+      contentSignals: { contentType: post.content_type },
+      payload: {
+        hasText: !!(post.content && post.content.trim().length > 0),
+        mediaUrls: post.media_urls ?? [],
+      },
+    });
+    if (compatibility.ok === false) {
+      const failure = compatibility;
+      void logAuditEvent({
+        operation: 'INSERT',
+        table: 'social_publish_rejected',
+        companyId: post.user_id ?? 'unknown',
+        userId: user.id,
+        success: false,
+        errorMessage: failure.message,
+        metadata: {
+          platform: failure.platform ?? post.platform,
+          capability: failure.capability,
+          code: failure.code,
+          post_id,
+        },
+      }).catch(() => {});
+      return res.status(400).json({
+        error: failure.message,
+        code: failure.code,
+        platform: failure.platform ?? post.platform,
+        capability: failure.capability,
       });
     }
 

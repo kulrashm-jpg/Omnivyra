@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/utils/supabaseClient';
 import type { CategoryUsage } from '@/components/ui/CreditMeter';
+import { getFeatureDisplayGroup } from '@/shared/monetization/featureRegistry';
 
 export interface CreditsState {
   totalCredits: number;
@@ -18,27 +19,6 @@ export interface CreditsState {
 }
 
 // Map reference_type → display group
-const ACTION_GROUP: Record<string, { label: string; color: string }> = {
-  // Low
-  ai_reply:            { label: 'AI Replies',         color: 'bg-emerald-400' },
-  auto_post:           { label: 'AI Replies',         color: 'bg-emerald-400' },
-  content_rewrite:     { label: 'Content Generation', color: 'bg-blue-400' },
-  content_basic:       { label: 'Content Generation', color: 'bg-blue-400' },
-  // Medium
-  trend_analysis:      { label: 'Insights & Trends',  color: 'bg-blue-500' },
-  market_insight_manual: { label: 'Insights & Trends', color: 'bg-blue-500' },
-  campaign_creation:   { label: 'Campaigns',          color: 'bg-violet-500' },
-  campaign_optimization: { label: 'Campaigns',        color: 'bg-violet-500' },
-  website_audit:       { label: 'Audits',             color: 'bg-amber-400' },
-  // High / background
-  lead_detection:      { label: 'Lead Detection',     color: 'bg-amber-500' },
-  daily_insight_scan:  { label: 'Insights & Trends',  color: 'bg-blue-500' },
-  // Heavy
-  voice_per_minute:    { label: 'Voice',              color: 'bg-violet-400' },
-  deep_analysis:       { label: 'Deep Analysis',      color: 'bg-violet-600' },
-  full_strategy:       { label: 'Campaigns',          color: 'bg-violet-500' },
-};
-
 function buildCategories(
   recentTx: Array<{ credits_delta: number; reference_type: string | null }>,
   totalConsumed: number,
@@ -50,7 +30,7 @@ function buildCategories(
   for (const tx of recentTx) {
     if (tx.credits_delta >= 0) continue; // skip grants
     const ref = tx.reference_type ?? 'other';
-    const group = ACTION_GROUP[ref] ?? { label: 'Other', color: 'bg-gray-400' };
+    const group = getFeatureDisplayGroup(ref);
     const existing = groupTotals.get(group.label);
     if (existing) {
       existing.credits += Math.abs(tx.credits_delta);

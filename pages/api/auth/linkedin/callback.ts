@@ -188,7 +188,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       account_name: accountName,
       username: profile.given_name || null,
       is_active: true,
-      permissions: tokenData.scope?.split(' ') || [],
+      // `permissions` removed — column does not exist on social_accounts
+      // (schema drift: was dropped without cleaning up writers). The
+      // entire insert/update was failing in Supabase REST cache with
+      // "Could not find the 'permissions' column of 'social_accounts'".
+      // Granted scopes are still implicit in the bearer token; the
+      // Meta-family records them separately in meta_oauth_connections.granted_scopes.
       token_expires_at: expiresAt,
       last_sync_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -225,7 +230,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         account_name: accountName,
         username: profile.given_name || null,
         is_active: true,
-        permissions: tokenData.scope?.split(' ') || [],
+        // `permissions` removed — column does not exist on social_accounts.
         token_expires_at: expiresAt,
         last_sync_at: new Date().toISOString(),
         access_token: encryptedCols.access_token,

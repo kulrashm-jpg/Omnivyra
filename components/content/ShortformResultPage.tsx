@@ -7,6 +7,9 @@ import { useRouter } from 'next/router';
 import { Check, Copy, Loader2 } from 'lucide-react';
 import { useCompanyContext } from '../CompanyContext';
 import PlatformIcon from '../ui/PlatformIcon';
+import { filterConnectedPlatformsForContent } from '../../lib/shared/social/platformContentFilter';
+import { PLATFORM_LABELS } from '../../lib/shared/platforms';
+import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
 
 type ShortformPayload = {
   output?: {
@@ -124,6 +127,44 @@ export default function ShortformResultPage({
   const masterTrace = payload?.output?.master_content?.decision_trace;
   const adaptationTrace = payload?.output?.platform_variant?.adaptation_trace;
   const topic = payload?.topic || `Generated ${contentType}`;
+
+  // Capability-aware platform filter (Phase 7). Routes connected platforms
+  // through the shared registry so Instagram/Pinterest/etc never appear for
+  // text-only or writer content.
+  const platformFilter = useMemo(() => {
+    return filterConnectedPlatformsForContent(
+      connectedPlatforms.map((p) => p.key),
+      {
+        formatFamily: adaptationTrace?.format_family,
+        contentType: payload?.output?.content_type ?? contentType,
+      },
+    );
+  }, [connectedPlatforms, adaptationTrace?.format_family, payload?.output?.content_type, contentType]);
+
+  useEffect(() => {
+    if (connectedPlatforms.length === 0) return;
+    const payload: CapabilityLogPayload = {
+      surface: 'shortform-result',
+      publishSource: 'shortform-result',
+      resolvedCapability: platformFilter.capability,
+      connectedPlatforms: connectedPlatforms.map((p) => p.key),
+      supportedPlatforms: platformFilter.supported,
+      hiddenPlatforms: platformFilter.hidden.map((h) => h.platform),
+      unregisteredPlatforms: platformFilter.unregistered.map((u) => u.platform),
+      hiddenReasons: platformFilter.hidden.reduce<Record<string, string>>((acc, h) => {
+        acc[h.platform] = h.reason;
+        return acc;
+      }, {}),
+      unregisteredReasons: platformFilter.unregistered.reduce<Record<string, string>>((acc, u) => {
+        acc[u.platform] = u.reason;
+        return acc;
+      }, {}),
+    };
+    console.info(JSON.stringify({ event: CAPABILITY_LOG_EVENTS.FILTERED, ...payload }));
+  }, [platformFilter, connectedPlatforms]);
+
+  const labelFor = (key: string) =>
+    connectedPlatforms.find((p) => p.key === key)?.label || PLATFORM_LABELS[key] || key;
   const platformLabel = useMemo(() => {
     const platform = payload?.output?.platform_variant?.platform || payload?.platform || 'linkedin';
     return platform === 'x' ? 'X' : platform.charAt(0).toUpperCase() + platform.slice(1);
@@ -293,24 +334,40 @@ export default function ShortformResultPage({
                   </p>
                   <div className="mt-4">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Repurpose For Connected Platforms</p>
-                    {connectedPlatforms.length > 0 ? (
+                    {connectedPlatforms.length === 0 ? (
+                      <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600">
+                        No connected social platforms were found for the currently selected company.
+                      </div>
+                    ) : platformFilter.capability === null ? (
+                      <div className="mt-3 rounded-2xl border border-dashed border-amber-200 bg-amber-50/70 p-4 text-sm text-amber-800">
+                        Unable to determine compatible publishing platforms for this content type.
+                      </div>
+                    ) : (
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {connectedPlatforms.map((platform) => (
+                        {platformFilter.supported.map((key) => (
                           <Link
-                            key={platform.key}
-                            href={`${socialWorkflowLinks.social}&platform=${encodeURIComponent(platform.key)}`}
+                            key={key}
+                            href={`${socialWorkflowLinks.social}&platform=${encodeURIComponent(key)}`}
                             target="_blank"
                             rel="noreferrer"
                             className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
                           >
-                            <PlatformIcon platform={platform.key} size={16} />
-                            {platform.label}
+                            <PlatformIcon platform={key} size={16} />
+                            {labelFor(key)}
                           </Link>
                         ))}
-                      </div>
-                    ) : (
-                      <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600">
-                        No connected social platforms were found for the currently selected company.
+                        {platformFilter.hidden.map(({ platform, reason }) => (
+                          <span
+                            key={platform}
+                            role="button"
+                            aria-disabled="true"
+                            title={reason}
+                            className="inline-flex cursor-not-allowed items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-400 opacity-70"
+                          >
+                            <PlatformIcon platform={platform} size={16} />
+                            {labelFor(platform)}
+                          </span>
+                        ))}
                       </div>
                     )}
                   </div>

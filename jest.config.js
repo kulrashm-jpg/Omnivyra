@@ -9,16 +9,19 @@ module.exports = {
   testEnvironment: 'node',
   
   // File patterns to test (exclude setupEnv.ts and other non-test files)
+  // Round-7 Phase 1: .tsx accepted for opt-in DOM rendering tests that use
+  // the `@jest-environment jsdom` pragma — the default env stays `node`.
   testMatch: [
-    '**/*.test.ts'
+    '**/*.test.ts',
+    '**/*.test.tsx',
   ],
-  
+
   // Module file extensions
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
-  
-  // Transform TypeScript files
+
+  // Transform TypeScript files (.ts + .tsx)
   transform: {
-    '^.+\\.ts$': 'ts-jest',
+    '^.+\\.tsx?$': 'ts-jest',
   },
   
   // TypeScript configuration

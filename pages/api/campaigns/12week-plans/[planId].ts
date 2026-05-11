@@ -1,6 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { getUnifiedCampaignBlueprint } from '../../../../backend/services/campaignBlueprintService';
+import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,11 +11,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { planId, campaignId } = req.query;
 
-    if (!planId || !campaignId) {
+    if (!planId || !campaignId || typeof campaignId !== 'string') {
       return res.status(400).json({ error: 'Plan ID and Campaign ID are required' });
     }
 
-    // Get campaign details
+    // SECURITY: enforce caller has access to the campaign's owning company
+    // before reading any campaign-scoped rows. Without this, any authenticated
+    // user could fetch another company's 12-week plan by guessing campaignId.
+    const access = await requireCampaignAccess(req, res, campaignId);
+    if (!access) return;
+
+    // Get campaign details (scoped by resolved company for defense-in-depth)
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
       .select('*')

@@ -1,18 +1,7 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { isPlatformSuperAdmin } from '../../../../backend/services/rbacService';
-
-const requireSuperAdmin = async (
-  req: NextApiRequest,
-  res: NextApiResponse
-): Promise<boolean> => {
-  if (req.cookies?.super_admin_session === '1') return true;
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (!error && user?.id && (await isPlatformSuperAdmin(user.id))) return true;
-  res.status(403).json({ error: 'NOT_AUTHORIZED' });
-  return false;
-};
+import { requireCapability } from '../../../../backend/security/requireCapability';
+import { BILLING_PLAN_MANAGE } from '../../../../shared/contracts/security';
 
 const RESOURCE_KEYS = ['llm_tokens', 'external_api_calls', 'automation_executions'];
 
@@ -21,7 +10,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!(await requireSuperAdmin(req, res))) return;
+  // Phase 2 mutation gate. Plan-limit overrides change a tenant's
+  // monthly resource budget — equivalent in blast radius to plan
+  // toggles. Same capability + step-up policy.
+  const guard = await requireCapability(req, res, {
+    capability: BILLING_PLAN_MANAGE,
+    reason: 'super-admin overrides organization plan limits',
+  });
+  if (guard.ok !== true) return;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const organizationId = body.organization_id ?? body.organizationId;

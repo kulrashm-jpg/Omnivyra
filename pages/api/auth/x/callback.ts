@@ -140,7 +140,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           account_name: accountName,
           username: userProfile.data.username || null,
           is_active: true,
-          permissions: tokenData.scope?.split(' ') || [],
+          // `permissions` removed — column not on social_accounts (schema drift).
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -158,7 +158,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           account_name: accountName,
           username: userProfile.data.username || null,
           is_active: true,
-          permissions: tokenData.scope?.split(' ') || [],
+          // `permissions` removed — column not on social_accounts (schema drift).
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           access_token: encryptedCols.access_token,

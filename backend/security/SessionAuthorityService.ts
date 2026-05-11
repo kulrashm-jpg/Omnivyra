@@ -57,10 +57,30 @@ function getCookieSecret(): string {
   return secret;
 }
 
+/**
+ * Canonicalize a timestamp string to a stable ISO 8601 form before signing.
+ *
+ * The store/read round-trip is asymmetric: createSession signs against
+ * `now.toISOString()` (`"2026-05-11T03:07:26.191Z"`), but the value Postgres
+ * returns through Supabase JS for the same column is a different text format
+ * (`"2026-05-11 03:07:26.191+00"`). Re-deriving the HMAC against the raw DB
+ * string produced a different digest than the cookie carried, which made
+ * every cookie fail BAD_SIGNATURE on the next request — `principal.sessionId`
+ * was always null and step-up never had an auth_session to bind to. This
+ * normalizes both ends to the same instant-in-time string.
+ */
+function canonicalizeCreatedAt(value: string): string {
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) {
+    throw new Error(`SessionAuthorityService: invalid created_at "${value}"`);
+  }
+  return new Date(ms).toISOString();
+}
+
 function signSessionPayload(sessionId: string, createdAtIso: string): string {
   const secret = getCookieSecret();
   return createHmac('sha256', secret)
-    .update(`${sessionId}|${createdAtIso}`)
+    .update(`${sessionId}|${canonicalizeCreatedAt(createdAtIso)}`)
     .digest('base64url');
 }
 

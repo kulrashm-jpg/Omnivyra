@@ -18,6 +18,7 @@ import {
   Coins,
   Globe,
   FileText,
+  Shield,
 } from 'lucide-react';
 import {
   type DeletionAudit,
@@ -34,7 +35,10 @@ import CompanyUsersTab from '../components/super-admin/tabs/CompanyUsersTab';
 import AnalyticsTab from '../components/super-admin/tabs/AnalyticsTab';
 import PlansTab from '../components/super-admin/tabs/PlansTab';
 import CommunityAiTab from '../components/super-admin/tabs/CommunityAiTab';
+import SecurityTab from '../components/super-admin/tabs/SecurityTab';
+import MonetizationOpsTab from '../components/super-admin/tabs/MonetizationOpsTab';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
+import { classifyAuthFailure, isRecoverableAuthFailure } from '../lib/security/superAdminAuthFailure';
 
 export default function SuperAdminPanel() {
   const router = useRouter();
@@ -74,15 +78,48 @@ export default function SuperAdminPanel() {
   const [plansSubTab, setPlansSubTab] = useState<'plans' | 'consumption'>('plans');
   const [externalApisHealth, setExternalApisHealth] = useState<{ healthy: number; warning: number; failed: number; status: string } | null>(null);
 
+  // Hydration-stability gate. The dashboard's tree depends on
+  // useCompanyContext (userRole, isAuthenticated), router state, and async
+  // probes — all of which differ between SSR and the first client render
+  // and were producing the lucide icon mismatches when conditional
+  // sub-trees re-flowed during hydration. Holding the entire panel behind
+  // a single `mounted` flag makes the SSR HTML and the first client render
+  // identical (both render the placeholder), so React never sees a tree
+  // mismatch. After the effect fires we know hydration has settled and
+  // can safely render the auth-dependent UI.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    // Auth probe: must accept the legacy super_admin_session bridge cookie set by
-    // /api/super-admin/login, otherwise env-credential operators bounce back here.
-    // platform-oauth-configs uses requireCapability (canonical-session-only) which
-    // rejects the bridge cookie — analytics-summary still honors it.
-    fetchWithAuth('/api/super-admin/analytics-summary')
-      .then((r) => { if (r.status === 403) window.location.href = '/super-admin/login'; })
-      .catch(() => { window.location.href = '/super-admin/login'; });
+    // Phase 1 — Session Integrity Diagnostics: probe the bridge-honoring
+    // analytics-summary endpoint to confirm the operator has SOME super-admin
+    // authority. We only redirect to login on a real NOT_AUTHENTICATED
+    // response. Capability/step-up failures and network blips no longer
+    // boot the operator — those surface inline via the per-tab auth banner.
+    void (async () => {
+      try {
+        const r = await fetchWithAuth('/api/super-admin/analytics-summary');
+        if (r.ok) return;
+        const failure = await classifyAuthFailure(r);
+        if (failure.kind === 'not_authenticated') {
+          // eslint-disable-next-line no-console
+          console.warn('[super-admin] initial probe → not_authenticated, redirecting', {
+            correlationId: failure.correlationId,
+          });
+          window.location.href = '/super-admin/login';
+          return;
+        }
+        if (isRecoverableAuthFailure(failure)) {
+          setAuthError(`Initial super-admin probe denied (${failure.kind}${'capability' in failure && failure.capability ? `: ${failure.capability}` : ''}).`);
+        }
+      } catch (err) {
+        // Network blip — DO NOT log the operator out. Surface a banner;
+        // the user can hit refresh.
+        // eslint-disable-next-line no-console
+        console.warn('[super-admin] initial probe network error (preserving session)', err);
+        setAuthError('Network error contacting super-admin API. Check your connection and retry.');
+      }
+    })();
     loadSuperAdminData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -264,6 +301,17 @@ export default function SuperAdminPanel() {
     }
   };
 
+  if (!mounted) {
+    // Stable placeholder — IDENTICAL on SSR and first client render so React
+    // hydration finds no mismatch. The full dashboard renders on the next
+    // tick once `setMounted(true)` runs in the effect above.
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
@@ -314,10 +362,12 @@ export default function SuperAdminPanel() {
             { id: 'analytics',      label: 'Analytics',         icon: BarChart3  },
             { id: 'company-users',  label: 'Companies & Users',  icon: Users      },
             { id: 'plans',          label: 'Pricing & Plans',    icon: DollarSign },
+            { id: 'monetization-ops', label: 'Monetization Ops',  icon: Coins      },
             { id: 'community-ai',   label: 'Engagement',         icon: Activity   },
             { id: 'cost-analysis',  label: 'Cost Analysis',      icon: DollarSign },
             { id: 'audit',          label: 'Audit Logs',         icon: Eye        },
             { id: 'social-platforms', label: 'APIs',             icon: Globe      },
+            { id: 'security',       label: 'Security',           icon: Shield     },
             { id: 'blog',           label: 'Blog',               icon: FileText   },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -385,8 +435,16 @@ export default function SuperAdminPanel() {
           />
         )}
 
+        {activeTab === 'monetization-ops' && (
+          <MonetizationOpsTab />
+        )}
+
         {activeTab === 'social-platforms' && (
           <ApisPlatformsTab authError={authError} />
+        )}
+
+        {activeTab === 'security' && (
+          <SecurityTab />
         )}
 
         {activeTab === 'cost-analysis' && (
