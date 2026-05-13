@@ -83,6 +83,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const scopes = Array.isArray(req.body?.scopes) && req.body.scopes.length > 0
         ? req.body.scopes.filter((scope: unknown): scope is string => typeof scope === 'string' && scope.trim().length > 0)
         : getDefaultAnalyticsProviderScopes('google_analytics');
+      const capabilityRedirectInput = req.body?.capability_redirect_uris && typeof req.body.capability_redirect_uris === 'object'
+        ? req.body.capability_redirect_uris as Record<string, unknown>
+        : {};
+      const capabilityRedirectUris = {
+        google_analytics: typeof capabilityRedirectInput.google_analytics === 'string'
+          ? capabilityRedirectInput.google_analytics.trim()
+          : redirectUri,
+        google_search_console: typeof capabilityRedirectInput.google_search_console === 'string'
+          ? capabilityRedirectInput.google_search_console.trim()
+          : redirectUri,
+      };
 
       await upsertAnalyticsProviderConfig({
         provider: 'google_analytics',
@@ -90,6 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         oauth_client_id: clientId,
         oauth_client_secret: clientSecret,
         redirect_uri: redirectUri,
+        capability_redirect_uris: capabilityRedirectUris,
         scopes,
         status: enabled ? 'active' : 'disabled',
       });

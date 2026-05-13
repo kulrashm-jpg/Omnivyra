@@ -21,6 +21,7 @@ import {
 import { buildPublicDomainAuditDecisions } from './publicDomainAuditService';
 import { buildDecisionBusinessImpact } from './businessImpactFormatter';
 import { getAnalyticsReadiness } from './analyticsDataReadinessService';
+import { getGoogleProviderReadiness } from './googleProviderReadinessService';
 import {
   getTrafficSources,
   getTopPages,
@@ -56,8 +57,27 @@ import {
 } from './performanceHtmlRenderer';
 import {
   mapPerformanceReportData,
+  type PerformanceSnapshotFoundation,
   type PerformanceReportMappedData,
 } from './performanceReportMapper';
+import {
+  buildPerformanceSearchIntelligence,
+  type PerformanceSearchIntelligence,
+} from './performanceSearchIntelligenceService';
+import {
+  buildPerformanceBehaviorIntelligence,
+  type PerformanceBehaviorIntelligence,
+} from './performanceBehaviorIntelligenceService';
+import {
+  buildSharedPerformanceIntelligencePrimitives,
+  getCreatorIntelligenceCompatibility,
+  type CreatorCompatibilityAssessment,
+  type SharedIntelligencePrimitive,
+} from './sharedPerformanceIntelligencePrimitivesService';
+import {
+  evaluatePerformanceReportForRealUserReview,
+  type PerformanceReportEvaluation,
+} from './performanceReportEvaluationService';
 
 const PERFORMANCE_SECTION_DEFINITIONS = [
   {
@@ -77,6 +97,16 @@ const PERFORMANCE_SECTION_DEFINITIONS = [
 const PERFORMANCE_IU_IDS: Set<string> = new Set(
   PERFORMANCE_SECTION_DEFINITIONS.flatMap((section) => section.IU_ids),
 );
+
+function uniqueReportWarnings(warnings: string[]): string[] {
+  const seen = new Set<string>();
+  return warnings.filter((warning) => {
+    const key = warning.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 type PerformanceInsight = {
   decision_id: string;
@@ -328,9 +358,11 @@ export type BehaviorReportResponse =
       status: 'no_data' | 'low_data';
       message: string;
       readiness: {
+        status: string;
         reason: string;
         last_successful_ingestion_at: string | null;
         events_last_30_days: number;
+        confidence: 'none' | 'low' | 'medium' | 'high';
       };
     }
   | ({ status: 'partial'; generated_at: string; window_days: number; warnings: string[] } & BehaviorReportData)
@@ -342,10 +374,13 @@ export type PerformanceIntelligenceReportResponse =
       status: 'no_data' | 'low_data';
       message: string;
       readiness: {
+        status: string;
         reason: string;
         last_successful_ingestion_at: string | null;
         events_last_30_days: number;
+        confidence: 'none' | 'low' | 'medium' | 'high';
       };
+      provider_readiness?: Awaited<ReturnType<typeof getGoogleProviderReadiness>>;
       html: string;
     }
   | {
@@ -358,13 +393,75 @@ export type PerformanceIntelligenceReportResponse =
       competitive_pressure_analysis: CompetitivePressureAnalysis | null;
       mapped_data: PerformanceReportMappedData;
       html: string;
+      provider_readiness?: Awaited<ReturnType<typeof getGoogleProviderReadiness>>;
       source_data: BehaviorReportData;
+      snapshot_foundation?: PerformanceSnapshotFoundation | null;
+      search_intelligence?: PerformanceSearchIntelligence;
+      behavior_intelligence?: PerformanceBehaviorIntelligence;
+      shared_intelligence_primitives?: SharedIntelligencePrimitive[];
+      creator_compatibility?: CreatorCompatibilityAssessment[];
+      real_user_review_evaluation?: PerformanceReportEvaluation;
     };
 
 type ReadyBehaviorReportResponse = Extract<BehaviorReportResponse, { status: 'ready' | 'partial' }>;
 
 function isReadyBehaviorReportResponse(value: BehaviorReportResponse): value is ReadyBehaviorReportResponse {
   return value.status === 'ready' || value.status === 'partial';
+}
+
+async function buildSnapshotFoundationForPerformance(params: {
+  companyId: string;
+  resolvedInput?: ResolvedReportInput | null;
+}): Promise<PerformanceSnapshotFoundation | null> {
+  try {
+    const { composeSnapshotReport } = await import('./snapshotReportService');
+    const snapshot = await composeSnapshotReport(params.companyId, {
+      resolvedInput: params.resolvedInput ?? null,
+      readiness: null,
+    });
+    const canonical = snapshot.canonical;
+    const overview = canonical?.authority_overview;
+    const executive = canonical?.executive_insights;
+
+    return {
+      authority_score: overview?.overall_score?.value ?? snapshot.score?.value ?? null,
+      authority_band: overview?.overall_score?.band ?? snapshot.score?.label ?? 'insufficient',
+      maturity_label: canonical?.maturity_stage?.label ?? String(snapshot.system_maturity ?? 'Baseline forming'),
+      headline:
+        executive?.headline_thesis?.text ||
+        snapshot.decision_snapshot?.primary_focus_area ||
+        snapshot.summary ||
+        'Authority baseline is available as the foundation for this performance read.',
+      primary_constraint:
+        executive?.primary_constraint?.text ||
+        snapshot.decision_snapshot?.whats_broken ||
+        snapshot.primary_problem ||
+        'Primary authority constraint is still being classified.',
+      market_position: snapshot.company_context?.market_position_statement ?? snapshot.company_context?.market_position ?? null,
+      positioning: snapshot.company_context?.positioning ?? snapshot.company_context?.positioning_narrative ?? null,
+      top_priorities: (snapshot.top_priorities ?? []).slice(0, 3).map((item) => ({
+        title: item.title || 'Priority action',
+        why_now: item.why_now || item.expected_outcome || 'This action came from the Digital Snapshot foundation.',
+        impact: item.impact || item.expected_upside || 'Authority and conversion readiness',
+        confidence: (() => {
+          const value = Number(item.confidence_score ?? item.impact_score ?? 0);
+          return value > 0 && value <= 1 ? value * 100 : value;
+        })(),
+      })),
+      pillar_scores: Object.values(canonical?.pillars ?? {}).slice(0, 5).map((pillar) => ({
+        label: pillar.label,
+        value: pillar.score.value,
+        band: pillar.score.band,
+        primary_signal: pillar.primary_signal,
+      })),
+    };
+  } catch (error) {
+    console.warn('[performance-report][snapshot-foundation-failed]', {
+      company_id: params.companyId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 /**
@@ -381,10 +478,12 @@ export async function composeBehaviorReport(
   opts?: BehaviorQueryOpts,
 ): Promise<BehaviorReportResponse> {
   const readiness = await getAnalyticsReadiness(companyId);
-  if (!readiness.ready) {
+  if (!readiness.ready && readiness.events_last_30_days === 0) {
     return {
-      status: readiness.events_last_30_days === 0 ? 'no_data' : 'low_data',
-      message: readiness.events_last_30_days === 0 ? 'No analytics data available' : 'Not enough data yet',
+      status: 'no_data',
+      message: readiness.status === 'sync_in_progress'
+        ? 'Google Analytics sync is still in progress'
+        : 'No analytics data available',
       readiness,
     };
   }
@@ -398,6 +497,9 @@ export async function composeBehaviorReport(
     getConversionSummary(companyId, opts),
   ]);
   const warnings: string[] = [];
+  if (!readiness.ready) {
+    warnings.push(`Analytics confidence is limited: ${readiness.reason}.`);
+  }
   if (funnel.inferred_entry) {
     warnings.push('Funnel entry inferred from first event per session because session_start was missing.');
   }
@@ -424,7 +526,7 @@ export async function composeBehaviorReport(
   const recommendations = generateBehaviorRecommendations(insights, reportData);
 
   return {
-    status: warnings.length > 0 ? 'partial' : 'ready',
+    status: readiness.ready && warnings.length === 0 ? 'ready' : 'partial',
     generated_at: new Date().toISOString(),
     window_days: opts?.sinceDays ?? 30,
     warnings,
@@ -455,6 +557,7 @@ export async function composePerformanceIntelligenceReport(
   opts?: PerformanceIntelligenceOptions,
 ): Promise<PerformanceIntelligenceReportResponse> {
   const base = await composeBehaviorReport(companyId, opts);
+  const providerReadiness = await getGoogleProviderReadiness(companyId).catch(() => null);
 
   if (base.status === 'no_data' || base.status === 'low_data') {
     return {
@@ -462,6 +565,7 @@ export async function composePerformanceIntelligenceReport(
       status: base.status,
       message: base.message,
       readiness: base.readiness,
+      provider_readiness: providerReadiness ?? undefined,
       html: renderPerformanceStateDocument({
         status: base.status,
         message: base.message,
@@ -474,10 +578,54 @@ export async function composePerformanceIntelligenceReport(
   }
 
   const reportData: ReadyBehaviorReportResponse = base;
+  const searchIntelligence = await buildPerformanceSearchIntelligence({
+    companyId,
+    behaviorData: reportData,
+    windowDays: reportData.window_days,
+  }).catch((error) => {
+    console.warn('[performance-report][search-intelligence-failed]', {
+      company_id: companyId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  });
+  const behaviorIntelligence = await buildPerformanceBehaviorIntelligence({
+    companyId,
+    currentData: reportData,
+    windowDays: reportData.window_days,
+  }).catch((error) => {
+    console.warn('[performance-report][behavior-intelligence-failed]', {
+      company_id: companyId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  });
+  const sharedPrimitives = buildSharedPerformanceIntelligencePrimitives({
+    behavior: behaviorIntelligence,
+    search: searchIntelligence,
+  });
+  // Pre-drill calibration: condense provider warnings. The trio of "GSC
+  // disconnected" / "Search intelligence: limited" / "Search Console
+  // unavailable" used to fire together. Suppress the secondary "Search
+  // intelligence" line when GSC is already flagged so the warnings panel
+  // doesn't repeat the same root cause.
+  const providerWarningsRaw = [
+    ...(providerReadiness?.google_analytics?.connected ? [] : [`Google Analytics: ${providerReadiness?.google_analytics?.message ?? 'availability could not be verified'}`]),
+    ...(providerReadiness?.google_search_console?.connected ? [] : [`Google Search Console: ${providerReadiness?.google_search_console?.message ?? 'availability could not be verified'}`]),
+    ...(searchIntelligence && !searchIntelligence.readiness.ready ? [`Search intelligence: ${searchIntelligence.readiness.reason}`] : []),
+  ];
+  const gscDisconnected = !providerReadiness?.google_search_console?.connected;
+  const providerWarnings = gscDisconnected
+    ? providerWarningsRaw.filter((w) => !/^Search intelligence:/.test(w))
+    : providerWarningsRaw;
   const resolvedInput = await resolveInputForCompetitorStrategy({
     companyId,
     reportCategory: 'performance',
     resolvedInput: opts?.resolvedInput ?? null,
+  });
+  const snapshotFoundation = await buildSnapshotFoundationForPerformance({
+    companyId,
+    resolvedInput,
   });
   const competitivePressure = buildCompetitivePressureSafely({
     decisions: [],
@@ -485,26 +633,41 @@ export async function composePerformanceIntelligenceReport(
   }).pressure;
   const mappedData = mapPerformanceReportData(reportData, {
     competitivePressureAnalysis: competitivePressure,
+    searchIntelligence,
+    behaviorIntelligence,
+    snapshotFoundation,
   });
 
-  return {
+  const warnings = uniqueReportWarnings([...reportData.warnings, ...providerWarnings]);
+  const response: PerformanceIntelligenceReportResponse = {
     report_type: 'performance_intelligence',
     status: reportData.status,
     generated_at: reportData.generated_at,
     window_days: reportData.window_days,
-    warnings: reportData.warnings,
+    warnings,
     sections: performanceSections,
     competitive_pressure_analysis: competitivePressure,
     mapped_data: mappedData,
     html: renderPerformanceDocument(
       performanceSections.map((sectionKey) => performanceRendererMap[sectionKey](mappedData)).join(''),
       {
+        companyName: resolvedInput?.resolved.companyName ?? resolvedInput?.profile?.name ?? null,
         dateRangeLabel: `Last ${reportData.window_days} days`,
-        warning: reportData.status === 'partial'
-          ? 'Some sections are incomplete. Review the warnings before acting on this report.'
+        warning: reportData.status === 'partial' || warnings.length > 0
+          ? 'Some sections are incomplete or still syncing. Treat low-confidence findings as directional.'
           : null,
       },
     ),
+    provider_readiness: providerReadiness ?? undefined,
     source_data: reportData,
+    snapshot_foundation: snapshotFoundation,
+    search_intelligence: searchIntelligence ?? undefined,
+    behavior_intelligence: behaviorIntelligence ?? undefined,
+    shared_intelligence_primitives: sharedPrimitives,
+    creator_compatibility: getCreatorIntelligenceCompatibility(),
+  };
+  return {
+    ...response,
+    real_user_review_evaluation: evaluatePerformanceReportForRealUserReview(response),
   };
 }

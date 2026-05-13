@@ -1,6 +1,7 @@
 import { supabase } from '../../db/supabaseClient';
 import { enqueueScheduledPostAt } from '../../scheduler/schedulerService';
 import { createHash } from 'crypto';
+import { config } from '@/config';
 import { getCreatorSystemPrompt } from '../../prompts/creatorContentPromptsV1';
 import {
   repurposeCarouselForPlatforms,
@@ -14,6 +15,7 @@ import { validateCreatorExecutionOutput, validateCreatorSchedulingContract } fro
 import { validateAssetReadiness } from '../creatorAssetValidationService';
 import { checkCapability, normalizeCreatorPlatform } from '../creatorCapabilityMap';
 import { renderAsset } from '../creatorAssetRenderer';
+import { supportsAutonomousExecution, normalizeCreatorFormat } from '../../../lib/shared/creatorGovernanceRegistry';
 import type {
 
   CanonicalCreatorOutput,
@@ -24,12 +26,10 @@ import type {
 } from './types';
 import { ownedDbTable } from '../../db/writeOwner';
 
-type CreatorBlueprintType = 'video_script' | 'carousel' | 'story' | 'post_blueprint' | 'thread_blueprint';
+type CreatorBlueprintType = 'video_script' | 'carousel' | 'story';
 
 function inferBlueprintType(assetType: string, contentType: string): CreatorBlueprintType {
   if (assetType === 'carousel') return 'carousel';
-  if (assetType === 'post_with_asset') return 'post_blueprint';
-  if (assetType === 'thread_with_asset') return 'thread_blueprint';
   if (String(contentType || '').toLowerCase() === 'story') return 'story';
   return 'video_script';
 }
@@ -53,27 +53,6 @@ function toArrayOfObjects(value: unknown): Record<string, unknown>[] {
     : [];
 }
 
-function toThreadSequenceItems(value: unknown): Array<{ index: number; role?: string; text: string }> {
-  if (!Array.isArray(value)) return [];
-  const items = value
-    .map((item, index) => {
-      if (typeof item === 'string') {
-        return { index: index + 1, text: item };
-      }
-      if (item && typeof item === 'object' && !Array.isArray(item)) {
-        const objectItem = item as Record<string, unknown>;
-        return {
-          index: Number(objectItem.index ?? objectItem.tweet_number ?? objectItem.slide_number ?? index + 1),
-          role: objectItem.role == null ? undefined : String(objectItem.role),
-          text: String(objectItem.text ?? objectItem.body_text ?? objectItem.tweet ?? objectItem.headline ?? ''),
-        };
-      }
-      return null;
-    })
-    .filter(Boolean);
-  return items as Array<{ index: number; role?: string; text: string }>;
-}
-
 function extractSequenceForTemplateValidation(assetType: string, blueprint: Record<string, unknown>): Record<string, unknown>[] {
   if (assetType === 'carousel') {
     return toArrayOfObjects(blueprint.slides);
@@ -81,16 +60,6 @@ function extractSequenceForTemplateValidation(assetType: string, blueprint: Reco
   if (assetType === 'video') {
     const scenes = toArrayOfObjects(blueprint.scenes);
     return scenes.length > 0 ? scenes : toArrayOfObjects(blueprint.frames);
-  }
-  if (assetType === 'thread_with_asset') {
-    const thread = toThreadSequenceItems(blueprint.thread);
-    const tweets = toThreadSequenceItems(blueprint.tweets);
-    const slides = toThreadSequenceItems(blueprint.slides);
-    const sequence = thread.length > 0 ? thread : tweets.length > 0 ? tweets : slides;
-    if (sequence.length === 0) {
-      throw new Error('Blueprint does not match template structure');
-    }
-    return sequence.map((item) => ({ index: item.index, role: item.role ?? 'supporting_asset', text: item.text }));
   }
   return [];
 }
@@ -100,6 +69,10 @@ function validateBlueprintAgainstTemplate(input: {
   blueprint: Record<string, unknown>;
   template: { structure_schema?: Record<string, unknown> };
 }): void {
+  if (input.assetType === 'image') {
+    return;
+  }
+
   const structure = safeObject(input.template.structure_schema);
   const sequence = extractSequenceForTemplateValidation(input.assetType, input.blueprint);
   const expectedFrameCount = structure.frame_count == null ? null : Number(structure.frame_count);
@@ -156,6 +129,25 @@ function buildTemplateAlignmentInstruction(input: {
   }
 
   return 'Template contract is mandatory. Return a blueprint that matches the provided structure_schema exactly.';
+}
+
+function extractAnalyticsIntelligence(input: CreatorGenerationContext): {
+  promptBlock: string | null;
+  readiness: string | null;
+  primitiveCount: number;
+  lowConfidenceNote: string | null;
+} {
+  const analytics = safeObject(safeObject(input.enrichedIntent).analytics_intelligence);
+  const promptBlock = typeof analytics.prompt_block === 'string' && analytics.prompt_block.trim()
+    ? analytics.prompt_block.trim()
+    : null;
+  const primitives = Array.isArray(analytics.primitives) ? analytics.primitives : [];
+  return {
+    promptBlock,
+    readiness: typeof analytics.readiness === 'string' ? analytics.readiness : null,
+    primitiveCount: primitives.length,
+    lowConfidenceNote: typeof analytics.low_confidence_note === 'string' ? analytics.low_confidence_note : null,
+  };
 }
 
 function alignCarouselBlueprintToTemplate(
@@ -268,9 +260,14 @@ function normalizeCreatorAssetPayload(input: {
   assetType: string;
   blueprint: Record<string, unknown>;
   overrideAsset?: Record<string, unknown>;
+  creatorCard?: Record<string, unknown>;
+  topic?: string;
+  objective?: string;
+  summary?: string;
 }): Record<string, unknown> {
   const { assetType, blueprint, overrideAsset } = input;
   const override = safeObject(overrideAsset);
+  const overlayText = safeObject(input.creatorCard?.overlay_text);
 
   if (assetType === 'carousel') {
     const sourceSlides = toArrayOfObjects(blueprint.slides);
@@ -292,43 +289,35 @@ function normalizeCreatorAssetPayload(input: {
   }
 
   if (assetType === 'image') {
+    const firstScene = toArrayOfObjects(blueprint.scenes)[0] ?? toArrayOfObjects(blueprint.frames)[0] ?? {};
+    const hookScene = safeObject(blueprint.hook_scene);
+    const fallbackHeadline = String(input.topic || blueprint.content_theme || blueprint.narrative_intent || 'Creator visual').trim();
+    const fallbackBody = String(
+      input.summary ||
+      input.objective ||
+      blueprint.summary ||
+      blueprint.narrative_intent ||
+      'A focused creator visual direction with clear hierarchy and platform-ready composition.'
+    ).trim();
     return {
       asset_kind: 'image',
       visual_descriptor: {
-        headline: String(blueprint.headline ?? blueprint.title ?? blueprint.story_title ?? ''),
-        visual_description: String(blueprint.visual_description ?? blueprint.visual ?? safeObject(blueprint.hook_scene).visual ?? ''),
+        headline: String(overlayText.headline ?? blueprint.headline ?? blueprint.title ?? blueprint.story_title ?? hookScene.text ?? firstScene.headline ?? firstScene.dialogue ?? fallbackHeadline),
+        visual_description: String(
+          blueprint.visual_description ??
+          blueprint.visual ??
+          hookScene.visual ??
+          firstScene.visual_description ??
+          firstScene.visual ??
+          firstScene.text ??
+          firstScene.dialogue ??
+          fallbackBody
+        ),
         color_palette: Array.isArray(blueprint.color_palette) ? blueprint.color_palette.map(String) : [],
         composition: String(blueprint.design_note ?? blueprint.layout ?? 'single focal composition'),
       },
+      overlay_text: overlayText,
       media_bundle: override,
-    };
-  }
-
-  if (assetType === 'post_with_asset' || assetType === 'thread_with_asset') {
-    const threadSequence = assetType === 'thread_with_asset'
-      ? (() => {
-          const sequence = toThreadSequenceItems(blueprint.thread);
-          const tweets = toThreadSequenceItems(blueprint.tweets);
-          const slides = toThreadSequenceItems(blueprint.slides);
-          const normalizedSequence = sequence.length > 0 ? sequence : tweets.length > 0 ? tweets : slides;
-          if (normalizedSequence.length === 0) {
-            throw new Error('Blueprint does not match template structure');
-          }
-          return normalizedSequence.map((item, index) => ({
-            index: Number(item.index ?? index + 1),
-            text: String(item.text ?? ''),
-          }));
-        })()
-      : undefined;
-    return {
-      asset_kind: assetType === 'post_with_asset' ? 'image' : 'carousel',
-      media_bundle: override,
-      caption_blueprint: {
-        hook: String(safeObject(blueprint.hook_scene).text ?? blueprint.headline ?? blueprint.story_title ?? ''),
-        body: String(blueprint.summary ?? blueprint.carousel_theme ?? blueprint.narrative_intent ?? ''),
-        cta: String(safeObject(blueprint.cta_scene).text ?? safeObject(blueprint.cta_slide).cta_text ?? safeObject(blueprint.resolution_frame).cta_action ?? ''),
-      },
-      ...(threadSequence ? { thread_sequence: threadSequence } : {}),
     };
   }
 
@@ -393,6 +382,9 @@ const PLATFORM_RULES: Record<string, PlatformRule> = {
   pinterest: { captionPrefix: 'Save-worthy idea:', hashtagLimit: 8, aspectRatio: '1000:1500', slideLimit: 6 },
   x: { captionPrefix: 'Quick take:', hashtagLimit: 3, pacing: 'tight' },
   twitter: { captionPrefix: 'Quick take:', hashtagLimit: 3, pacing: 'tight' },
+  facebook: { captionPrefix: 'Community angle:', hashtagLimit: 5, aspectRatio: '1:1', slideLimit: 8 },
+  threads: { captionPrefix: 'Thread-ready idea:', hashtagLimit: 3, aspectRatio: '1:1', pacing: 'tight' },
+  reddit: { captionPrefix: 'Discussion starter:', hashtagLimit: 2, aspectRatio: '1:1', slideLimit: 8 },
 };
 
 function adaptPackagingForPlatform(
@@ -427,6 +419,7 @@ async function generateBlueprint(context: CreatorGenerationContext): Promise<Rec
     tone: context.creatorCard?.tone,
     audience: context.creatorCard?.audience,
     visual_intent: context.creatorCard?.visual_intent,
+    supporting_asset_type: context.creatorCard?.supporting_asset_type,
     constraints: context.creatorCard?.constraints,
   };
   const creatorContext = {
@@ -435,13 +428,15 @@ async function generateBlueprint(context: CreatorGenerationContext): Promise<Rec
     brand_visual_tone: String(context.creatorCard?.brand_visual_tone || context.enrichedIntent?.brand_voice || template.style_schema.preferred_layout || 'professional'),
     visual_style: String(template.style_schema.preferred_layout || 'modern professional'),
     target_platforms: context.targetPlatforms,
+    supporting_asset_type: String(context.creatorCard?.supporting_asset_type || context.contentType || assetType),
     slide_count: Number((template.structure_schema.frame_count as number | undefined) || 5),
-    narrative_arc: String(context.creatorCard?.narrative_arc || 'problem → insight → action'),
+    narrative_arc: String(context.creatorCard?.narrative_arc || 'problem -> insight -> action'),
     platform_specs: context.creatorCard?.platform_specs && typeof context.creatorCard.platform_specs === 'object'
       ? context.creatorCard.platform_specs
       : undefined,
   };
   const systemPrompt = getCreatorSystemPrompt(blueprintType, creatorContext);
+  const analyticsIntelligence = extractAnalyticsIntelligence(context);
   const promptInput = {
     topic: context.topic,
     asset_type: assetType,
@@ -462,14 +457,20 @@ async function generateBlueprint(context: CreatorGenerationContext): Promise<Rec
 Input:
 ${JSON.stringify(promptInput, null, 2)}
 
+Analytics intelligence guidance:
+${analyticsIntelligence.promptBlock ?? 'No analytics/search intelligence is available. Use only the supplied creator and campaign context.'}
+${analyticsIntelligence.lowConfidenceNote ? `\nConfidence note: ${analyticsIntelligence.lowConfidenceNote}` : ''}
+
 Template alignment rule:
 ${buildTemplateAlignmentInstruction({ assetType, template })}
+
+${assetType === 'image' ? 'Single-image output rule: include top-level "headline" and "visual_description" fields. The visual_description must describe the actual preview composition, focal object, layout, palette, hierarchy, and intended viewer reaction. Do not return only generic placeholder language.' : ''}
 
 Return JSON only.`;
 
   const result = await runCompletionWithOperation({
     companyId: context.companyId,
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    model: config.OPENAI_MODEL,
     operation: `creator_execution_blueprint_${assetType}`,
     temperature: 0,
     response_format: { type: 'json_object' },
@@ -487,11 +488,14 @@ Return JSON only.`;
   });
   return {
     ...aligned,
-    metadata: {
-      ...(safeObject(aligned.metadata)),
-      template_id: template.id,
-      asset_type: assetType,
-    },
+      metadata: {
+        ...(safeObject(aligned.metadata)),
+        template_id: template.id,
+        asset_type: assetType,
+        analytics_intelligence_applied: Boolean(analyticsIntelligence.promptBlock),
+        analytics_intelligence_readiness: analyticsIntelligence.readiness,
+        analytics_intelligence_primitive_count: analyticsIntelligence.primitiveCount,
+      },
   };
 }
 
@@ -554,6 +558,7 @@ async function withRenderedMedia(output: CanonicalCreatorOutput): Promise<Canoni
   const renderedMedia = await renderAsset(safeObject(output.asset_payload), {
     campaignId: String(output.metadata.campaign_id || '') || null,
     userId: String(output.metadata.user_id || '') || null,
+    companyId: String(output.metadata.company_id || '') || null,
   });
 
   const mediaBundle = safeObject(safeObject(output.asset_payload).media_bundle);
@@ -639,6 +644,10 @@ function assertCapability(input: { platforms: string[]; assetType: string }): vo
 export function createCreatorExecutionEngine(): CreatorExecutionEngine {
   return {
     async generateFromIntent(intent, _context, config) {
+      const normalizedContentType = normalizeCreatorFormat(intent.contentType);
+      if (!supportsAutonomousExecution(normalizedContentType)) {
+        throw new Error(`Creator format "${normalizedContentType || intent.contentType}" is guidance-only or unsupported and cannot enter autonomous creator execution`);
+      }
       const assetType = deriveCreatorAssetTypeFromIntent({
         contentType: intent.contentType,
         targetPlatforms: intent.targetPlatforms,
@@ -673,6 +682,10 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
         assetType,
         blueprint,
         overrideAsset: assetOverride,
+        creatorCard: intent.creatorCard ?? undefined,
+        topic: intent.topic,
+        objective: intent.objective,
+        summary: intent.summary,
       });
 
       const output: CanonicalCreatorOutput = {
@@ -687,6 +700,23 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
         asset_payload: {
           ...assetPayload,
           validation_result: validation,
+          media_bundle: {
+            ...safeObject(assetPayload.media_bundle),
+            metadata: {
+              ...safeObject(safeObject(assetPayload.media_bundle).metadata),
+              topic: intent.topic,
+              summary: intent.summary ?? null,
+              objective: intent.objective ?? null,
+              content_type: intent.contentType,
+              platform: intent.targetPlatforms[0] ?? null,
+              tenant_id: intent.companyId ?? null,
+              company_id: intent.companyId ?? null,
+              user_id: intent.userId ?? null,
+              overlay_text: safeObject(intent.creatorCard?.overlay_text),
+              selected_brand_assets: safeObject(safeObject(intent.creatorCard?.brand_context).overrides),
+              brand_context: safeObject(intent.creatorCard?.brand_context),
+            },
+          },
         },
         packaging: {
           ...packaging,
@@ -695,12 +725,14 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
         generation_prompt: `creator:${assetType}:${intent.topic}`,
         metadata: {
           campaign_id: intent.campaignId,
+          tenant_id: intent.companyId ?? null,
           company_id: intent.companyId ?? null,
           user_id: intent.userId ?? null,
           content_type: intent.contentType,
           target_platforms: intent.targetPlatforms,
           validation_result: validation,
           template_id: template.id,
+          analytics_intelligence_applied: Boolean(safeObject(intent.enrichedIntent).analytics_intelligence),
         },
       };
       assertValidExecutionOutput(output);
@@ -739,7 +771,7 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
               : slides,
           platform_metadata: safeObject(variant.platform_metadata),
         };
-      } else if (assetType === 'video' || assetType === 'post_with_asset' || assetType === 'thread_with_asset') {
+      } else if (assetType === 'video') {
         const variants = await repurposeVideoScriptForPlatforms(baseBlueprint, [normalizedPlatform]);
         const variant = safeObject(variants[normalizedPlatform]);
         adaptedAssetPayload = {
@@ -791,6 +823,18 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
     },
 
     async schedule(output, row): Promise<CreatorScheduleResult> {
+      const normalizedContentType = normalizeCreatorFormat(row.contentType || output.metadata.content_type);
+      if (!supportsAutonomousExecution(normalizedContentType)) {
+        return {
+          scheduledPostId: null,
+          status: 'failed',
+          publish_source: 'unknown',
+          platform_id: null,
+          verified: false,
+          published: false,
+          failure_reason: `Creator format "${normalizedContentType || row.contentType}" is guidance-only or unsupported and cannot be scheduled`,
+        };
+      }
       const renderedOutput = await withRenderedMedia(output).catch(() => output);
       assertValidExecutionOutput(renderedOutput);
       const contractValidation = validateCreatorSchedulingContract({

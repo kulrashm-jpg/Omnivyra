@@ -5,6 +5,14 @@ import { useRouter } from 'next/router';
 import ReportFormModal from '@/components/ReportFormModal';
 import { useCompanyContext } from '@/components/CompanyContext';
 
+function integrationKeyForName(name: string): string {
+  if (name === 'Google Analytics') return 'google_analytics';
+  if (name === 'Google Search Console') return 'google_search_console';
+  if (name === 'LinkedIn Ads') return 'linkedin_ads';
+  if (name === 'Facebook / Meta Ads') return 'meta_ads';
+  return 'shopify';
+}
+
 export default function PerformanceIntelligencePage() {
   const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
@@ -42,20 +50,52 @@ export default function PerformanceIntelligencePage() {
     () => Object.values(manualData).some((value) => String(value || '').trim().length > 0),
     [manualData],
   );
+  const liveProviderReady = Boolean(
+    readiness?.provider_readiness?.google_analytics?.connected ||
+    readiness?.provider_readiness?.google_search_console?.connected ||
+    readiness?.integration_state?.google_analytics?.connected ||
+    readiness?.integration_state?.google_search_console?.connected,
+  );
   const integrationsConnected =
     (dataTab === 'upload' && Boolean(uploadedFile)) ||
     (dataTab === 'manual' && hasManualData) ||
-    Boolean(readiness?.reports?.performance?.ready);
+    liveProviderReady;
+  const reportReady = Boolean(readiness?.reports?.performance?.ready);
   const readinessStatus = readiness?.reports?.performance?.ready
     ? 'ready'
     : readiness?.reports?.performance?.missing_requirements?.length
       ? 'no_data'
       : 'low_data';
-  const readinessLabel = integrationsConnected
+  const readinessLabel = reportReady
     ? 'Ready to generate'
+    : integrationsConnected
+      ? 'Analytics connected. Report can generate with available data.'
     : readinessStatus === 'no_data'
       ? 'No analytics data available'
       : 'Not enough data yet';
+  const getCapabilityStatus = (key: string) => {
+    const provider = readiness?.provider_readiness?.[key];
+    if (provider) {
+      return {
+        connected: Boolean(provider.connected),
+        label: provider.connected ? 'Ready for Reports' : String(provider.action_label || 'Setup required'),
+      };
+    }
+
+    const connected = Boolean(readiness?.integration_state?.[key]?.connected);
+    return {
+      connected,
+      label: connected
+        ? 'Connected'
+        : key === 'google_search_console'
+          ? 'Search Console setup required'
+          : key === 'google_analytics'
+            ? 'Connect Google Analytics'
+            : 'Not connected',
+    };
+  };
+  const googleAnalyticsStatus = getCapabilityStatus('google_analytics');
+  const searchConsoleStatus = getCapabilityStatus('google_search_console');
 
   return (
     <>
@@ -141,7 +181,7 @@ export default function PerformanceIntelligencePage() {
                 </span>
               )}
             </p>
-            <p className="text-xs text-gray-400">Takes 3–5 minutes to generate • PDF download included</p>
+            <p className="text-xs text-gray-400">Takes 3–5 minutes to generate • HTML report with PDF export</p>
         </div>
 
         {/* When to Use This */}
@@ -330,50 +370,33 @@ export default function PerformanceIntelligencePage() {
                   { icon: '💼', name: 'LinkedIn Ads', desc: 'Campaign-level demand context for source comparisons', required: false },
                   { icon: '🟦', name: 'Facebook / Meta Ads', desc: 'Campaign-level demand context for source comparisons', required: false },
                   { icon: '🛒', name: 'Shopify / WooCommerce', desc: 'Conversion outcomes that support page and source analysis', required: false },
-                ].map((item) => (
-                  <div key={item.name} className="flex items-center gap-4 rounded-xl bg-gray-50 p-4 border border-gray-200">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white border border-gray-200 text-2xl flex-shrink-0">
-                      {item.icon}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-gray-900 text-sm">{item.name}</h3>
-                        {item.required && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">Required</span>}
-                        {!item.required && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Optional</span>}
+                ].map((item) => {
+                  const status = getCapabilityStatus(integrationKeyForName(item.name));
+                  return (
+                    <div key={item.name} className="flex items-center gap-4 rounded-xl bg-gray-50 p-4 border border-gray-200">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white border border-gray-200 text-2xl flex-shrink-0">
+                        {item.icon}
                       </div>
-                      <p className="text-xs text-gray-500 mt-0.5">{item.desc}</p>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-bold text-gray-900 text-sm">{item.name}</h3>
+                          {item.required && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">Required</span>}
+                          {!item.required && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Optional</span>}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-0.5">{item.desc}</p>
+                      </div>
+                      <span
+                        className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+                          status.connected
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {status.label}
+                      </span>
                     </div>
-                    <span
-                      className={`px-4 py-2 rounded-lg text-sm font-semibold ${
-                        readiness?.integration_state?.[
-                          item.name === 'Google Analytics'
-                            ? 'google_analytics'
-                            : item.name === 'Google Search Console'
-                              ? 'google_search_console'
-                              : item.name === 'LinkedIn Ads'
-                                ? 'linkedin_ads'
-                                : item.name === 'Facebook / Meta Ads'
-                                  ? 'meta_ads'
-                                  : 'shopify'
-                        ]?.connected
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-gray-100 text-gray-600'
-                      }`}
-                    >
-                      {readiness?.integration_state?.[
-                        item.name === 'Google Analytics'
-                          ? 'google_analytics'
-                          : item.name === 'Google Search Console'
-                            ? 'google_search_console'
-                            : item.name === 'LinkedIn Ads'
-                              ? 'linkedin_ads'
-                              : item.name === 'Facebook / Meta Ads'
-                                ? 'meta_ads'
-                                : 'shopify'
-                      ]?.connected ? 'Connected' : 'Not connected'}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
                 <p className="text-xs text-center text-gray-400 mt-4">
                   🔒 All integrations are read-only. We never modify or store your account data.
                 </p>
@@ -479,8 +502,8 @@ export default function PerformanceIntelligencePage() {
                     <h3 className="font-bold text-gray-900">Google Analytics</h3>
                     <p className="text-sm text-gray-600">Traffic data, user behavior, conversions</p>
                   </div>
-                  <div className={`px-3 py-1 rounded text-sm font-medium ${integrationsConnected ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
-                    {integrationsConnected ? '✓ Connected' : 'Required'}
+                  <div className={`px-3 py-1 rounded text-sm font-medium ${googleAnalyticsStatus.connected ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
+                    {googleAnalyticsStatus.connected ? 'Ready for Reports' : googleAnalyticsStatus.label}
                   </div>
                 </div>
 
@@ -492,10 +515,19 @@ export default function PerformanceIntelligencePage() {
                     <h3 className="font-bold text-gray-900">Google Search Console</h3>
                     <p className="text-sm text-gray-600">Organic search performance and keywords</p>
                   </div>
-                  <div className={`px-3 py-1 rounded text-sm font-medium ${integrationsConnected ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
-                    {integrationsConnected ? '✓ Connected' : 'Required'}
+                  <div className={`px-3 py-1 rounded text-sm font-medium ${searchConsoleStatus.connected ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
+                    {searchConsoleStatus.connected ? 'Ready for Reports' : searchConsoleStatus.label}
                   </div>
                 </div>
+                {!searchConsoleStatus.connected && (
+                  <button
+                    type="button"
+                    onClick={() => router.push('/integrations?focus=data')}
+                    className="inline-flex items-center gap-2 text-sm font-medium text-blue-700 hover:text-blue-800"
+                  >
+                    Configure Search Console in Integrations <ArrowRight className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -603,9 +635,11 @@ export default function PerformanceIntelligencePage() {
 
             <p className="mt-6 text-xs text-blue-200">
               {integrationsConnected ? (
-                '✓ Integrations connected. Ready to proceed.'
+                searchConsoleStatus.connected
+                  ? 'GA + Search Console ready. Full Performance Intelligence available.'
+                  : 'Google Analytics ready. Search Console can be added later for richer organic search insights.'
               ) : (
-                'Toggle integrations above to enable this button'
+                'Connect Google Analytics, upload data, or enter manual data to enable this button.'
               )}
             </p>
           </div>

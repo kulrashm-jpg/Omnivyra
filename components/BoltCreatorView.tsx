@@ -16,14 +16,15 @@ import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromCont
 import BoltPlatformPicker from './bolt/BoltPlatformPicker';
 import { isCrossPlatformShareableFormat } from '../lib/shared/bolt/crossPlatformSharing';
 
-type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
+type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story' | 'banner' | 'infographic' | 'pdf' | 'slider' | 'post' | 'thread';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
-type OutcomeView = 'week_plan' | 'daily_plan';
+type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
 type SharingMode = 'shared' | 'unique' | 'ai';
 
 const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: string }[] = [
   { value: 'week_plan',  label: 'Week Plan',  icon: '📋', hint: 'High-level weekly content blueprint' },
   { value: 'daily_plan', label: 'Daily Plan',  icon: '📅', hint: 'Break the plan into day-by-day actions' },
+  { value: 'schedule',   label: 'Schedule',   icon: 'Cal', hint: 'Available only when every selected creator format is schedulable' },
 ];
 
 const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
@@ -40,6 +41,15 @@ const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: strin
   { value: 'short',    label: 'Short',    icon: '⚡', hint: 'YouTube / TikTok short' },
   { value: 'story',    label: 'Story',    icon: '📱', hint: '24hr ephemeral story format' },
 ];
+
+CONTENT_FORMATS.push(
+  { value: 'banner',   label: 'Banner',   icon: 'Banner', hint: 'Promotional visual asset' },
+  { value: 'infographic', label: 'Infographic', icon: 'Info', hint: 'Visual explainer asset' },
+  { value: 'pdf',      label: 'PDF',      icon: 'PDF', hint: 'Document-style creator asset' },
+  { value: 'slider',   label: 'Slider',   icon: 'Slide', hint: 'Presentation-style slide asset' },
+  { value: 'post',     label: 'Post',     icon: 'Post', hint: 'Platform-ready creator post' },
+  { value: 'thread',   label: 'Thread',   icon: 'Thread', hint: 'Connected social sequence' },
+);
 
 const DURATION_OPTIONS = [
   { value: 1, label: '1 Week' },
@@ -126,6 +136,7 @@ const BOLT_PIPELINE: { stage: string; label: string }[] = [
   { stage: 'ai/plan',                  label: 'Creating week plan' },
   { stage: 'commit-plan',              label: 'Saving blueprint' },
   { stage: 'generate-weekly-structure', label: 'Creating daily activity plan' },
+  { stage: 'creator-asset-generation', label: 'Generating creator assets' },
 ];
 
 function stageIndex(stage: string | undefined): number {
@@ -133,6 +144,7 @@ function stageIndex(stage: string | undefined): number {
   const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
   if (exact !== -1) return exact;
   if (stage.startsWith('generate-weekly-structure')) return 3;
+  if (stage.startsWith('render-creator')) return 4;
   return -1;
 }
 
@@ -349,6 +361,9 @@ export default function BoltCreatorView({ d }: { d: S }) {
     isLoading,
     offerings,
     outcomeView,
+    hasGuidanceOnlyFormats,
+    supportsScheduling,
+    supportsAutonomousCreatorExecution,
     router,
     companyId,
     selectedIds,
@@ -654,20 +669,34 @@ export default function BoltCreatorView({ d }: { d: S }) {
             <div className="px-5 pt-4 pb-2 border-t border-gray-100">
               <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-2">View In</label>
               <div className="flex gap-2">
-                {VIEW_OPTIONS.map((opt) => (
-                  <label key={opt.value} className="flex items-center gap-1.5 cursor-pointer select-none">
+                {VIEW_OPTIONS.map((opt) => {
+                  const disabled = opt.value === 'schedule' && !supportsScheduling;
+                  return (
+                  <label key={opt.value} className={`flex items-center gap-1.5 select-none ${disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer'}`}>
                     <input
                       type="radio"
                       name="outcomeView"
                       value={opt.value}
                       checked={outcomeView === opt.value}
-                      onChange={() => setOutcomeView(opt.value)}
+                      disabled={disabled}
+                      onChange={() => !disabled && setOutcomeView(opt.value)}
                       className="accent-blue-500 w-3.5 h-3.5"
                     />
                     <span className={`text-xs font-medium ${outcomeView === opt.value ? 'text-blue-700' : 'text-gray-600'}`}>{opt.label}</span>
                   </label>
-                ))}
+                  );
+                })}
               </div>
+              {hasGuidanceOnlyFormats && (
+                <p className="mt-2 text-[11px] leading-snug text-blue-700">
+                  Daily-plan-only creator formats are selected. BOLT will produce production guidance and keep scheduling disabled.
+                </p>
+              )}
+              {!hasGuidanceOnlyFormats && contentFormats.length > 0 && supportsAutonomousCreatorExecution && (
+                <p className="mt-2 text-[11px] leading-snug text-emerald-700">
+                  Selected formats support autonomous creator execution.
+                </p>
+              )}
             </div>
 
             {/* Generate button */}

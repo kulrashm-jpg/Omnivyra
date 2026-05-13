@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, X, CheckCheck, Users } from 'lucide-react';
 import { getAuthToken } from '../utils/getAuthToken';
+import { runSharedPoll } from '../utils/pollingGuards';
 
 type AppNotification = {
   id: string;
@@ -37,22 +38,31 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const fetchInFlightRef = useRef<Promise<void> | null>(null);
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
 
   const fetchNotifications = useCallback(async () => {
-    const token = await getAuthToken();
-    if (!token) return;
-    try {
-      const res = await fetch('/api/notifications', {
-        headers: { Authorization: `Bearer ${token}` },
+    if (fetchInFlightRef.current) return fetchInFlightRef.current;
+    fetchInFlightRef.current = runSharedPoll<void>('notifications:list', async () => {
+      try {
+        const token = await getAuthToken();
+        if (!token) return;
+        const res = await fetch('/api/notifications', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        setNotifications(json.notifications ?? []);
+      } catch {
+        // non-fatal
+      }
+    }, { startupDelayMs: 1500, minIntervalMs: 5000 })
+      .then(() => undefined)
+      .finally(() => {
+        fetchInFlightRef.current = null;
       });
-      if (!res.ok) return;
-      const json = await res.json();
-      setNotifications(json.notifications ?? []);
-    } catch {
-      // non-fatal
-    }
+    return fetchInFlightRef.current;
   }, []);
 
   // Initial fetch + 60 s poll

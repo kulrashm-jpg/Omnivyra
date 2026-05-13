@@ -20,6 +20,8 @@ import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
 import { getPostLoginRoute as getUserPreferenceRoute, upsertUserPreferences } from '../../../backend/services/userPreferencesService';
 import { extractDomain } from '../../../backend/services/companyMatchService';
 import { selectCompatibleCompanyRole } from '../../../backend/services/companyMembershipIntegrityService';
+import { sendAuthError } from '../../../backend/services/sendAuthError';
+import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 
 type RouteResponse = { route: string };
 type ErrorResponse = { error: string; code?: string };
@@ -38,7 +40,8 @@ export default async function handler(
     supabaseUid = verified.id;
     email       = verified.email;
   } catch {
-    return res.status(401).json({ error: 'Invalid or missing session token', code: 'INVALID_SESSION' });
+    sendAuthError(res, AUTH_ERROR_CODE.INVALID_SESSION);
+    return;
   }
 
   // ── 2. Look up user row ───────────────────────────────────────────────────
@@ -58,7 +61,10 @@ export default async function handler(
     void logAuthEvent('ghost_session_detected', {
       metadata: { reason: 'user_not_found_in_db', endpoint: 'post-login-route' },
     });
-    return res.status(401).json({ error: 'Invalid or missing session token', code: 'INVALID_SESSION' });
+    sendAuthError(res, AUTH_ERROR_CODE.USER_NOT_FOUND, {
+      details: 'Your session is valid but your profile is not synced yet.',
+    });
+    return;
   }
 
   if ((userRow as any).is_deleted) {
@@ -67,7 +73,8 @@ export default async function handler(
       userId:   (userRow as any).id,
       metadata: { reason: 'user_is_soft_deleted', endpoint: 'post-login-route' },
     });
-    return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+    sendAuthError(res, AUTH_ERROR_CODE.ACCOUNT_DELETED);
+    return;
   }
 
   const userId: string = (userRow as any).id;

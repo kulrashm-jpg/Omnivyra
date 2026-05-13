@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
-import { saveSelectedProperty } from '../../../backend/services/analyticsIntegrationService';
+import { saveSelectedProperty, saveSelectedSearchConsoleProperty } from '../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -19,6 +19,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const companyId = typeof req.body?.companyId === 'string' ? req.body.companyId : '';
   const propertyId = typeof req.body?.propertyId === 'string' ? req.body.propertyId : '';
+  const capability = req.body?.capability === 'google_search_console' || req.body?.capability === 'gsc'
+    ? 'google_search_console'
+    : 'google_analytics';
 
   if (!(await requireCompanyAccess(user.id, companyId, res))) return;
   if (!propertyId) {
@@ -26,7 +29,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const property = await saveSelectedProperty(companyId, propertyId);
+    const property = capability === 'google_search_console'
+      ? await saveSelectedSearchConsoleProperty(companyId, propertyId)
+      : await saveSelectedProperty(companyId, propertyId);
     return res.status(200).json({
       status: 'connected',
       initial_sync: 'started',
@@ -35,7 +40,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (error) {
     return res.status(500).json({
       status: 'error',
-      message: 'Failed to connect Google Analytics',
+      message: capability === 'google_search_console'
+        ? 'Failed to connect Search Console'
+        : 'Failed to connect Google Analytics',
     });
   }
 }

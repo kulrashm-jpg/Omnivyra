@@ -1,17 +1,19 @@
 import { createHash, createHmac } from 'crypto';
 import { supabase } from '../db/supabaseClient';
-import { sendInvite } from './emailService';
 import { getRequestContext } from './requestContext';
 import { ownedDbTable } from '../db/writeOwner';
+import { enqueueEmailJob } from './emailJobsService';
+import { logger } from './logger';
+import { config } from '@/config';
 
 const INVITE_EXPIRY_DAYS = 7;
 
 function getAppUrl(): string {
-  return (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  return (config.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
 }
 
 function getInvitationSecret(): string {
-  return process.env.INVITATION_TOKEN_SECRET?.trim() || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || 'local-dev-invite-secret';
+  return config.INVITATION_TOKEN_SECRET?.trim() || config.SUPABASE_SERVICE_ROLE_KEY?.trim() || 'local-dev-invite-secret';
 }
 
 export function hashInvitationToken(token: string): string {
@@ -119,6 +121,26 @@ export async function createInvitation(input: {
   return { id: data.id as string, rawToken, inviteLink, expiresAt, replayed: false };
 }
 
+/**
+ * Phase 2.A.1 — async delivery.
+ *
+ * Previously called `sendInvite` synchronously and threw on failure (which
+ * the caller would translate to a 500 + invitation revoke). The async
+ * pipeline replaces that with an email_jobs enqueue: the row is created
+ * atomically alongside the invitation, the cron worker drains it with
+ * exponential backoff + dead-lettering, and delivery state is observable
+ * via /api/super-admin/invitations.
+ *
+ * Behavior preserved:
+ *   - return shape is unchanged (callers see `{ id, inviteLink, expiresAt,
+ *     replayed }` — only the "did the email leave the building" semantic
+ *     changed from "yes, synchronously" to "yes, queued").
+ *
+ * Behavior changed:
+ *   - we no longer auto-revoke the invitation on send failure, because
+ *     there IS no synchronous send. If the enqueue itself fails (rare —
+ *     DB error), we revoke and throw, matching the old contract.
+ */
 export async function createAndSendInvitation(input: {
   email: string;
   companyId: string;
@@ -127,13 +149,56 @@ export async function createAndSendInvitation(input: {
   idempotencyKey?: string;
 }): Promise<{ id: string; inviteLink: string; expiresAt: string; replayed: boolean }> {
   const invitation = await createInvitation(input);
+  const requestIdempotencyKey = input.idempotencyKey ?? getRequestContext().idempotencyKey ?? null;
+  const correlationId = requestIdempotencyKey ?? `invitation:${invitation.id}`;
+
+  // Best-effort lookups for the email body — null is acceptable for both.
+  let companyName: string | null = null;
+  let recipientName: string | null = null;
   try {
-    await sendInvite(
-      input.email.toLowerCase(),
-      invitation.inviteLink,
-      input.idempotencyKey ?? getRequestContext().idempotencyKey ?? undefined,
-    );
-  } catch (error) {
+    const { data: companyRow } = await supabase
+      .from('companies')
+      .select('name')
+      .eq('id', input.companyId)
+      .maybeSingle();
+    companyName = (companyRow as any)?.name ?? null;
+
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('name')
+      .eq('email', input.email.toLowerCase())
+      .maybeSingle();
+    recipientName = (userRow as any)?.name ?? null;
+  } catch (err: any) {
+    logger.warn('invitation_metadata_lookup_failed', {
+      invitationId: invitation.id,
+      message: err?.message ?? String(err),
+    });
+  }
+
+  try {
+    await enqueueEmailJob({
+      templateKey: 'team_invite_magic_link',
+      recipientEmail: input.email.toLowerCase(),
+      invitationId: invitation.id,
+      correlationId,
+      idempotencyKey: requestIdempotencyKey
+        ? `${requestIdempotencyKey}:email:magic_link`
+        : undefined,
+      payload: {
+        recipientEmail: input.email.toLowerCase(),
+        recipientName,
+        companyName,
+        role: input.role,
+        inviteUrl: invitation.inviteLink,
+        invitationId: invitation.id,
+        correlationId,
+      },
+    });
+  } catch (error: any) {
+    // Enqueue failure is rare (DB-level) — match the old contract by
+    // revoking a freshly-created invitation and rethrowing. Replayed
+    // invitations are left alone (the original enqueue may still drain).
     if (!invitation.replayed) {
       await ownedDbTable('invitations')
         .update({ revoked_at: new Date().toISOString() })
@@ -141,6 +206,7 @@ export async function createAndSendInvitation(input: {
     }
     throw error;
   }
+
   return {
     id: invitation.id,
     inviteLink: invitation.inviteLink,

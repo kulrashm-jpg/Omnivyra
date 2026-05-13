@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { randomUUID } from 'crypto';
+import { config as appConfig } from '@/config';
 import { supabase } from '../db/supabaseClient';
 
 import { logUsageEvent, resolveLlmCost } from './usageLedgerService';
@@ -135,13 +136,21 @@ const _inFlight = new Map<string, Promise<GatewayResponse<string>>>();
 
 // ── Shared timing helper (used by semaphore + retry) ─────────────────────────
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const LLM_PROVIDER_TIMEOUT_MS = 30_000;
+
+function timeoutError(label: string): Error & { code?: string; status?: number } {
+  const error = new Error(`${label} timed out after ${LLM_PROVIDER_TIMEOUT_MS}ms`) as Error & { code?: string; status?: number };
+  error.code = 'PROVIDER_TIMEOUT';
+  error.status = 504;
+  return error;
+}
 
 // ── Concurrency semaphore ─────────────────────────────────────────────────────
 // Prevents API overload by capping simultaneous LLM calls per process.
 // Uses local memory — not distributed. Sufficient for single-instance deployments.
 const MAX_CONCURRENT_LLM_CALLS = Math.max(
   1,
-  parseInt(process.env.MAX_LLM_CONCURRENCY ?? '5', 10) || 5,
+  appConfig.MAX_LLM_CONCURRENCY || 5,
 );
 let _activeLlmCalls = 0;
 
@@ -169,11 +178,11 @@ function releaseSlot(): void {
 
 const getOpenAiClient = (apiKey?: string): OpenAI => {
   // BYOK: create an ephemeral client so it never pollutes the singleton.
-  if (apiKey && apiKey !== process.env.OPENAI_API_KEY) {
+  if (apiKey && apiKey !== appConfig.OPENAI_API_KEY) {
     return new OpenAI({ apiKey });
   }
   if (!_openAiClient) {
-    const key = process.env.OPENAI_API_KEY;
+    const key = appConfig.OPENAI_API_KEY;
     if (!key) throw new Error('Missing OPENAI_API_KEY');
     _openAiClient = new OpenAI({ apiKey: key });
   }
@@ -195,8 +204,8 @@ type ResolvedLlmConfig = {
 function platformDefault(): ResolvedLlmConfig {
   return {
     provider: 'openai',
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    apiKey: process.env.OPENAI_API_KEY || '',
+    model: appConfig.OPENAI_MODEL,
+    apiKey: appConfig.OPENAI_API_KEY || '',
     isByok: false,
     isCompanyConfig: false,
   };
@@ -247,7 +256,7 @@ async function callOpenAi(params: {
     response_format: params.response_format,
     messages: params.messages,
     ...(params.max_tokens ? { max_tokens: params.max_tokens } : {}),
-  });
+  }, { timeout: LLM_PROVIDER_TIMEOUT_MS });
   const content = completion.choices?.[0]?.message?.content?.trim() || '';
   const u = completion.usage;
   return {
@@ -269,21 +278,32 @@ async function callAnthropic(params: {
   const systemMsg = params.messages.find((m) => m.role === 'system');
   const userMessages = params.messages.filter((m) => m.role !== 'system');
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': params.apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: params.model,
-      max_tokens: params.max_tokens ?? 4096,
-      temperature: params.temperature,
-      ...(systemMsg ? { system: systemMsg.content } : {}),
-      messages: userMessages.map((m) => ({ role: m.role, content: m.content })),
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(timeoutError('Anthropic request')), LLM_PROVIDER_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'x-api-key': params.apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: params.model,
+        max_tokens: params.max_tokens ?? 4096,
+        temperature: params.temperature,
+        ...(systemMsg ? { system: systemMsg.content } : {}),
+        messages: userMessages.map((m) => ({ role: m.role, content: m.content })),
+      }),
+    });
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') throw timeoutError('Anthropic request');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
@@ -364,8 +384,8 @@ async function getFallbackConfig(
 
     // Platform key for fallback provider (BYOK not applied to fallback)
     const envMap: Record<string, string | undefined> = {
-      openai:    process.env.OPENAI_API_KEY,
-      anthropic: process.env.ANTHROPIC_API_KEY,
+      openai:    appConfig.OPENAI_API_KEY,
+      anthropic: appConfig.ANTHROPIC_API_KEY,
     };
     const apiKey = envMap[name] ?? '';
 
@@ -976,7 +996,7 @@ export const generatePrePlanningExplanation = async (
   try {
     const result = await executeGatewayCompletion({
       companyId,
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model: appConfig.OPENAI_MODEL,
       temperature: 0.3,
       operation: 'prePlanningExplanation',
       messages: [
@@ -1020,7 +1040,7 @@ export const suggestDurationForOpportunity = async (input: {
 
     const result = await executeGatewayCompletion({
       companyId: input.companyId,
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model: appConfig.OPENAI_MODEL,
       temperature: 0.4,
       response_format: { type: 'json_object' },
       operation: 'suggestDuration',
@@ -1091,7 +1111,7 @@ export const suggestDurationFromQuestionnaire = async (input: {
 
     const result = await executeGatewayCompletion({
       companyId: input.companyId,
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model: appConfig.OPENAI_MODEL,
       temperature: 0.3,
       response_format: { type: 'json_object' },
       operation: 'suggestDuration',
@@ -1139,7 +1159,7 @@ export const moderateChatMessage = async (input: {
     const ctx = input.chatContext || 'general';
     const result = await executeGatewayCompletion({
       companyId: null,
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model: appConfig.OPENAI_MODEL,
       temperature: 0,
       response_format: { type: 'json_object' },
       operation: 'chatModeration',

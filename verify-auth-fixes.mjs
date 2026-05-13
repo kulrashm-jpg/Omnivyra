@@ -84,7 +84,7 @@ for (const check of checks) {
       failed++;
     }
   } catch (e) {
-    console.log(`  ❌ ${check.name} (Error: ${(e as Error).message})`);
+    console.log(`  ❌ ${check.name} (Error: ${e instanceof Error ? e.message : String(e)})`);
     failed++;
   }
 }

@@ -19,7 +19,7 @@ import { normalizeCreatorPlatform } from '@/backend/services/creatorCapabilityMa
 import { validateAssetReadiness } from '@/backend/services/creatorAssetValidationService';
 
 export type CreatorAssetInput = {
-  type: 'video' | 'image' | 'carousel' | 'post_with_asset' | 'thread_with_asset';
+  type: 'video' | 'image' | 'carousel';
   url?: string;
   files?: string[];
   thumbnail?: string;
@@ -79,19 +79,6 @@ function validateCreatorAssetOverride(input: {
               metadata: input.creatorAsset.metadata ?? {},
             },
           }
-      : input.creatorAsset.type === 'post_with_asset' || input.creatorAsset.type === 'thread_with_asset'
-        ? {
-            asset_bundle: {
-              url: input.creatorAsset.url,
-              files: input.creatorAsset.files,
-              metadata: input.creatorAsset.metadata ?? {},
-            },
-            caption_blueprint: {
-              hook: '',
-              body: input.creatorAsset.description ?? input.creatorAsset.transcript ?? input.creatorAsset.theme ?? '',
-              cta: '',
-            },
-          }
         : {
             scenes: [{}],
             duration_seconds: input.creatorAsset.metadata?.duration_seconds,
@@ -129,14 +116,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    if (!creatorAssetRaw || !['video', 'image', 'carousel', 'post_with_asset', 'thread_with_asset'].includes(String(creatorAssetRaw.type ?? ''))) {
+    if (!creatorAssetRaw || !['video', 'image', 'carousel'].includes(String(creatorAssetRaw.type ?? ''))) {
       return res.status(400).json({
-        error: 'Invalid creator_asset: must have type (video | image | carousel | post_with_asset | thread_with_asset)',
+        error: 'Invalid creator_asset: must have type (video | image | carousel)',
       });
     }
 
     const creatorAsset: CreatorAssetInput = {
-      type: creatorAssetRaw.type as 'video' | 'image' | 'carousel' | 'post_with_asset' | 'thread_with_asset',
+      type: creatorAssetRaw.type as 'video' | 'image' | 'carousel',
       url: typeof creatorAssetRaw.url === 'string' ? creatorAssetRaw.url : undefined,
       files: Array.isArray(creatorAssetRaw.files) ? creatorAssetRaw.files as string[] : undefined,
       thumbnail: typeof creatorAssetRaw.thumbnail === 'string' ? creatorAssetRaw.thumbnail : undefined,

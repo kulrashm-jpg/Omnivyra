@@ -68,11 +68,11 @@ const REPORT_GEN_PROGRESS: Record<'snapshot' | 'performance' | 'market', { stage
     accent: 'sky',
     stages: [
       { key: 'load',       label: 'Loading performance data',         etaSeconds: 20 },
-      { key: 'analyze',    label: 'Analyzing campaigns',              etaSeconds: 45 },
-      { key: 'benchmark',  label: 'Benchmarking against industry',    etaSeconds: 45 },
-      { key: 'gaps',       label: 'Identifying gaps',                 etaSeconds: 30 },
-      { key: 'recommend',  label: 'Drafting recommendations',         etaSeconds: 30 },
-      { key: 'finalize',   label: 'Finalizing PDF',                   etaSeconds: 10 },
+      { key: 'analyze',    label: 'Analyzing behavior signals',       etaSeconds: 45 },
+      { key: 'benchmark',  label: 'Joining snapshot foundation',      etaSeconds: 45 },
+      { key: 'gaps',       label: 'Identifying performance gaps',     etaSeconds: 30 },
+      { key: 'recommend',  label: 'Drafting intelligence sections',   etaSeconds: 30 },
+      { key: 'finalize',   label: 'Opening HTML report',              etaSeconds: 10 },
     ],
   },
   market: {
@@ -84,7 +84,7 @@ const REPORT_GEN_PROGRESS: Record<'snapshot' | 'performance' | 'market', { stage
       { key: 'competitors', label: 'Comparing competitors',         etaSeconds: 60 },
       { key: 'opportunity', label: 'Identifying opportunities',     etaSeconds: 45 },
       { key: 'draft',       label: 'Drafting strategic report',     etaSeconds: 30 },
-      { key: 'finalize',    label: 'Finalizing PDF',                etaSeconds: 15 },
+      { key: 'finalize',    label: 'Finalizing report',             etaSeconds: 15 },
     ],
   },
 };
@@ -432,6 +432,7 @@ export default function ReportFormModal({
   };
 
   const handleConfirmPayment = async () => {
+    if (isSubmitting) return;
     setIsSubmitting(true);
     setSubmitError(null);
     setGenerationStartedAt(Date.now());
@@ -456,6 +457,8 @@ export default function ReportFormModal({
 
   const handleBackToForm = () => {
     setPaymentStep(false);
+    setSubmitError(null);
+    setGenerationStartedAt(null);
   };
 
   const handleClose = () => {

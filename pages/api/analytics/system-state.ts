@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getGoogleAnalyticsStatus } from '../../../backend/services/analyticsIntegrationService';
+import { getGoogleAnalyticsStatus, getGoogleSearchConsoleStatus } from '../../../backend/services/analyticsIntegrationService';
+import { getGoogleProviderReadiness, type GoogleCapabilityReadiness } from '../../../backend/services/googleProviderReadinessService';
 import { resolveOrganizationPlanLimits, type ResolvedPlanLimits } from '../../../backend/services/planResolutionService';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 
@@ -95,8 +96,10 @@ type SystemStateResponse = {
     apis: IntegrationApi[];
     flags: {
       googleAnalyticsConnected: boolean;
+      googleSearchConsoleConnected: boolean;
       crmConnected: boolean;
     };
+    providerReadiness: Record<string, GoogleCapabilityReadiness>;
   };
   trafficState: TrafficState;
   systemUsage: {
@@ -411,6 +414,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const googleAnalyticsStatus = await getGoogleAnalyticsStatus(companyId).catch(() => null);
   const googleAnalyticsConnected = googleAnalyticsStatus?.ready === true;
+  const [googleSearchConsoleStatus, googleProviderReadiness] = await Promise.all([
+    getGoogleSearchConsoleStatus(companyId).catch(() => null),
+    getGoogleProviderReadiness(companyId).catch(() => ({} as Record<string, GoogleCapabilityReadiness>)),
+  ]);
+  const googleSearchConsoleConnected = googleProviderReadiness.google_search_console?.connected === true;
 
   const apis: IntegrationApi[] = [
     ...companyIntegrations.map((row) => ({
@@ -434,6 +442,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           category: 'analytics',
           status: (googleAnalyticsConnected ? 'active' : googleAnalyticsStatus.integration.status === 'error' ? 'error' : 'disconnected') as HealthState,
           lastSyncAt: mostRecentDate(googleAnalyticsStatus.integration.updated_at ?? null),
+        }]
+      : []),
+    ...(googleSearchConsoleStatus?.integration
+      ? [{
+          id: `analytics:${googleSearchConsoleStatus.integration.id}`,
+          name: 'Google Search Console',
+          category: 'analytics',
+          status: (googleSearchConsoleConnected ? 'active' : googleSearchConsoleStatus.integration.status === 'error' ? 'error' : 'disconnected') as HealthState,
+          lastSyncAt: mostRecentDate(googleSearchConsoleStatus.integration.updated_at ?? null),
         }]
       : []),
   ].filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
@@ -615,8 +632,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       apis: apis.sort((left, right) => left.name.localeCompare(right.name)),
       flags: {
         googleAnalyticsConnected,
+        googleSearchConsoleConnected,
         crmConnected,
       },
+      providerReadiness: googleProviderReadiness,
     },
     trafficState,
     systemUsage: {

@@ -1,6 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../db/supabaseClient';
-import { resolveUserContext } from './userContextService';
 import {
 
   getCompanyRoleIncludingInvited,
@@ -69,6 +67,11 @@ export const PERMISSIONS: RbacPermissions = {
 
 const RBAC_CACHE_TTL_MS = 30000;
 let rbacCache: { value: RbacConfig; fetchedAt: number } | null = null;
+
+async function resolvePermissionUserContext(req: NextApiRequest) {
+  const { resolveUserContext } = await import('./userContextService');
+  return resolveUserContext(req);
+}
 
 const normalizePermissionKey = (value: string) =>
   value.trim().toUpperCase().replace(/\s+/g, '_');
@@ -225,7 +228,7 @@ export const getUserCompanyRole = async (
   req: NextApiRequest,
   companyId: string
 ): Promise<{ role: Role | null; userId: string | null }> => {
-  const user = await resolveUserContext(req);
+  const user = await resolvePermissionUserContext(req);
   if (!user?.userId) {
     return { role: null, userId: null };
   }
@@ -269,7 +272,7 @@ export const enforceRole = async (input: {
   companyId?: string | null;
   allowedRoles: Role[];
 }): Promise<{ userId: string; role: Role } | null> => {
-  const user = await resolveUserContext(input.req);
+  const user = await resolvePermissionUserContext(input.req);
   const companyId = input.companyId;
   if (!companyId) {
     input.res.status(400).json({ error: 'companyId required' });

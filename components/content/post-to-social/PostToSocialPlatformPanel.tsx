@@ -13,6 +13,7 @@ type Props = {
   onPublish: () => void;
   onDelete: () => void;
   minScheduleValue: string;
+  assetAction?: React.ReactNode;
 };
 
 export default function PostToSocialPlatformPanel({
@@ -26,6 +27,7 @@ export default function PostToSocialPlatformPanel({
   onPublish,
   onDelete,
   minScheduleValue,
+  assetAction,
 }: Props) {
   const adapting = adaptingPlatform === selectedOption.key;
   const disabled = selectedState.busy || adapting;
@@ -102,6 +104,7 @@ export default function PostToSocialPlatformPanel({
       ) : null}
 
       <div className="flex flex-wrap gap-3">
+        {assetAction}
         <button
           type="button"
           onClick={onSchedule}

@@ -3,6 +3,11 @@ import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware
 import { getGoogleAnalyticsStatusPayload } from '../../../backend/services/googleAnalyticsExperienceService';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
+function statusErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : '';
+  return process.env.NODE_ENV !== 'production' && message ? message : fallback;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
@@ -14,7 +19,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({
       connected: false,
       status: 'error',
-      message: 'Failed to connect Google Analytics',
+      message: 'Sign in again to view Google integration status.',
+      detail: process.env.NODE_ENV !== 'production' ? authError ?? 'No authenticated user found' : undefined,
       property: null,
       last_sync: null,
     });
@@ -27,10 +33,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const status = await getGoogleAnalyticsStatusPayload(companyId);
     return res.status(200).json(status);
   } catch (error) {
+    console.error('[analytics-status] failed', {
+      company_id: companyId || null,
+      user_id: user.id,
+      message: error instanceof Error ? error.message : String(error),
+      stack: process.env.NODE_ENV !== 'production' && error instanceof Error ? error.stack : undefined,
+    });
     return res.status(500).json({
       connected: false,
       status: 'error',
-      message: 'Failed to connect Google Analytics',
+      message: statusErrorMessage(error, 'Failed to load Google integration status'),
       property: null,
       last_sync: null,
     });

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import EmptyState from '../../shared/EmptyState';
+import LeadsCapabilityStatusPanel from './LeadsCapabilityStatusPanel';
 import type { OpportunityTabProps } from './types';
 
 type SourceType = 'engagement' | 'listening';
@@ -266,6 +267,7 @@ export default function CanonicalActiveLeadsTab({
 
   return (
     <div className="space-y-6">
+      <LeadsCapabilityStatusPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
       <section className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>

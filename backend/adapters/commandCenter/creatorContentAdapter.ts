@@ -18,9 +18,7 @@ import { makeStableJobId } from '../../queue/bullmqClient';
 export type CreatorContentType =
   | 'video_script'
   | 'carousel'
-  | 'story'
-  | 'post_blueprint'
-  | 'thread_blueprint';
+  | 'story';
 
 export interface CreatorContextEnrichment {
   // Theme & narrative

@@ -1,4 +1,5 @@
 import { supabase } from '../db/supabaseClient';
+import { getGoogleSearchConsoleReadiness } from './googleProviderReadinessService';
 import { getProfile, saveProfile, type CompanyProfile } from './companyProfileService';
 import {
   assertCompetitorOutputPartition,
@@ -211,7 +212,6 @@ async function loadCompanyIntegrationState(
     if (row.type === 'custom_blog_api') markConnected(integrations, 'custom_blog_api', 'company_integrations');
     if (row.type === 'lead_webhook') markConnected(integrations, 'lead_webhook', 'company_integrations');
 
-    if (includesKeyword(row, ['search console', 'gsc'])) markConnected(integrations, 'google_search_console', 'company_integrations');
     if (includesKeyword(row, ['google ads'])) markConnected(integrations, 'google_ads', 'company_integrations');
     if (includesKeyword(row, ['linkedin ads'])) markConnected(integrations, 'linkedin_ads', 'company_integrations');
     if (includesKeyword(row, ['meta ads', 'facebook ads'])) markConnected(integrations, 'meta_ads', 'company_integrations');
@@ -237,9 +237,15 @@ async function loadCompanyIntegrationState(
   }
 
   for (const key of Object.keys(integrations) as ReportIntegrationKey[]) {
+    if (key === 'google_analytics' || key === 'google_search_console') continue;
     if (storedFlags[key] === true) {
       markConnected(integrations, key, 'company_profile');
     }
+  }
+
+  const searchConsoleReadiness = await getGoogleSearchConsoleReadiness(companyId);
+  if (searchConsoleReadiness.connected) {
+    markConnected(integrations, 'google_search_console', 'system');
   }
 
   const source = normalizeString(payload.generationContext?.source)?.toLowerCase();

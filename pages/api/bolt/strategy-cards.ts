@@ -12,6 +12,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { generateRichThemesForCampaignWeeks } from '../../../backend/services/strategicThemeEngine';
 import { generateThemeFromTopic } from '../../../backend/services/themeAngleEngine';
+import {
+  refineCampaignTopicForHeadlines,
+  refineStrategicCardTitle,
+  refineGeneratedText,
+} from '../../../backend/services/editorialTextRefinementService';
 
 export interface BoltStrategyCard {
   id: string;
@@ -179,12 +184,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const titleTopic = (() => {
       const compact = compactTopic(cleanTopic);
-      if (!looksLikeQuestionOrFragment(compact)) return compact;
+      if (!looksLikeQuestionOrFragment(compact)) return refineCampaignTopicForHeadlines(compact);
       // Fallback: derive a readable noun phrase from goals + audience
       if (goalsArray.length > 0 && typeof audience === 'string' && audience.trim()) {
-        return `${goalsArray[0]} for ${audience.trim().split(',')[0].trim()}`;
+        return refineCampaignTopicForHeadlines(`${goalsArray[0]} for ${audience.trim().split(',')[0].trim()}`);
       }
-      if (goalsArray.length > 0) return goalsArray[0];
+      if (goalsArray.length > 0) return refineCampaignTopicForHeadlines(goalsArray[0]);
       return 'Your Campaign';
     })();
 
@@ -198,21 +203,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         phases: ['Awareness', 'Education', 'Solution', 'Conversion'],
         titleAngle: 0,    // trend angle
         summary: (t: string, w: number) =>
-          `${w}-week journey: introduce ${t}, build understanding, present your solution, and drive action.`,
+          refineGeneratedText(`${w}-week journey: introduce ${t}, build understanding, present your solution, and drive action.`),
       },
       {
         name: 'Challenger',
         phases: ['Problem', 'Proof', 'Solution', 'Conversion'],
         titleAngle: 3,    // contrarian angle
         summary: (t: string, w: number) =>
-          `${w}-week arc: expose the real problem with ${t}, back it with proof, reveal the fix, and convert.`,
+          refineGeneratedText(`${w}-week arc: expose the real problem with ${t}, back it with proof, reveal the fix, and convert.`),
       },
       {
         name: 'Visionary',
         phases: ['Awareness', 'Problem', 'Education', 'Proof'],
         titleAngle: 4,    // future angle
         summary: (t: string, w: number) =>
-          `${w}-week campaign: paint the future of ${t}, challenge the status quo, educate deeply, and prove results.`,
+          refineGeneratedText(`${w}-week campaign: paint the future of ${t}, challenge the status quo, educate deeply, and prove results.`),
       },
     ];
 
@@ -264,7 +269,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const phaseLabels = themes.map((t) => t.phase_label ?? '').filter(Boolean);
       const uniquePhases = Array.from(new Set(phaseLabels));
 
-      const title = generateThemeFromTopic(titleTopic, undefined, arch.titleAngle);
+      const title = refineStrategicCardTitle(
+        generateThemeFromTopic(titleTopic, undefined, arch.titleAngle),
+        cleanTopic,
+        idx
+      );
       const angle = uniquePhases.slice(0, 4).join(' → ') || cleanTopic;
       const summary = arch.summary(titleTopic, weeks);
 

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizePlatform } from '@/utils/platformIcons';
+import { runSharedPoll } from '@/utils/pollingGuards';
 
 type ExtensionAuthState = {
   isAuthenticated?: boolean;
@@ -175,26 +176,29 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
   const [error, setError] = useState<string | null>(null);
   const [updatingPlatform, setUpdatingPlatform] = useState<string | null>(null);
   const [authenticating, setAuthenticating] = useState(false);
+  const commandPollInFlightRef = useRef<Promise<unknown> | null>(null);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    await runSharedPoll('extension:status', async () => {
+      setLoading(true);
+      setError(null);
 
-    try {
-      const [nextStatus, nextAuth] = await Promise.all([
-        requestExtensionStatus(),
-        requestAuthState()
-      ]);
+      try {
+        const [nextStatus, nextAuth] = await Promise.all([
+          requestExtensionStatus(),
+          requestAuthState()
+        ]);
 
-      setStatus(nextStatus);
-      setAuth(nextAuth);
-    } catch (err) {
-      setStatus(null);
-      setAuth(null);
-      setError(err instanceof Error ? err.message : 'Unable to reach the Omnivyra extension');
-    } finally {
-      setLoading(false);
-    }
+        setStatus(nextStatus);
+        setAuth(nextAuth);
+      } catch (err) {
+        setStatus(null);
+        setAuth(null);
+        setError(err instanceof Error ? err.message : 'Unable to reach the Omnivyra extension');
+      } finally {
+        setLoading(false);
+      }
+    }, { startupDelayMs: 2000, minIntervalMs: 5000 });
   }, []);
 
   useEffect(() => {
@@ -307,12 +311,18 @@ export function useExtensionBridge(configuredPlatforms: string[]) {
   );
 
   const pollExtensionCommandsNow = useCallback(async () => {
-    const result = await pollExtensionCommandsNowRequest();
-    if (!result?.success) {
-      throw new Error(result?.message || 'Unable to trigger extension command dispatch');
-    }
-    await refresh();
-    return result;
+    if (commandPollInFlightRef.current) return commandPollInFlightRef.current;
+    commandPollInFlightRef.current = runSharedPoll('extension:command-poll', async () => {
+      const result = await pollExtensionCommandsNowRequest();
+      if (!result?.success) {
+        throw new Error(result?.message || 'Unable to trigger extension command dispatch');
+      }
+      await refresh();
+      return result;
+    }).finally(() => {
+      commandPollInFlightRef.current = null;
+    });
+    return commandPollInFlightRef.current;
   }, [refresh]);
 
   const mergedPlatforms = useMemo(() => {

@@ -22,9 +22,30 @@ const { spawn, execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
+const {
+  acquireDevLock,
+  updateDevLock,
+  releaseDevLock,
+  printDevStatus,
+  assertCleanupAllowed,
+} = require('./dev-runtime-guard');
 
 const args = process.argv.slice(2);
 const APP_ONLY = args.includes('--app-only') || process.env.DEV_APP_ONLY === '1';
+const SKIP_PRESTART_CLEAN = args.includes('--no-clean') || process.env.DEV_SKIP_PRESTART_CLEAN === '1';
+const FORCE_TURBOPACK = args.includes('--turbopack') || args.includes('--turbo');
+
+function readPortArg(argv) {
+  const explicitIndex = argv.findIndex((arg) => arg === '--port' || arg === '-p');
+  if (explicitIndex >= 0 && argv[explicitIndex + 1]) {
+    return argv[explicitIndex + 1];
+  }
+  const inline = argv.find((arg) => arg.startsWith('--port=') || arg.startsWith('-p='));
+  if (inline) {
+    return inline.split('=')[1];
+  }
+  return process.env.PORT || '3000';
+}
 
 // Load .env.local
 const envPath = path.join(process.cwd(), '.env.local');
@@ -53,7 +74,9 @@ const REDIS_RETRY_INTERVAL_MS = 500;
 const AUTO_START_REDIS = process.env.DEV_AUTO_START_REDIS === '1';
 const FALLBACK_APP_ONLY = process.env.DEV_FALLBACK_APP_ONLY !== '0'; // default true
 const FORCE_UNLOCK_NEXT = process.env.DEV_FORCE_UNLOCK_NEXT === '1';
-const DEV_PORT = parseInt(process.env.PORT || '3000', 10);
+const parsedPort = parseInt(readPortArg(args), 10);
+const DEV_PORT = Number.isFinite(parsedPort) ? parsedPort : 3000;
+const DEFAULT_DEV_PORT = 3000;
 
 function isPortInUse(port) {
   return new Promise((resolve) => {
@@ -64,7 +87,7 @@ function isPortInUse(port) {
     tester.once('listening', () => {
       tester.close(() => resolve(false));
     });
-    tester.listen(port, '127.0.0.1');
+    tester.listen(port);
   });
 }
 
@@ -154,9 +177,18 @@ function spawnProcess(name, command, args, opts = {}) {
 }
 
 async function cleanNextCache() {
+  if (SKIP_PRESTART_CLEAN) {
+    console.log('   ⚠️  Skipping .next cleanup because pre-start clean was disabled for this QA run.\n');
+    return;
+  }
   if (await isDevServerRunning()) {
     console.log(`   ⚠️  Skipping .next cleanup because port ${DEV_PORT} is already in use.`);
     console.log('      A Next.js dev server is already running in this workspace.\n');
+    return;
+  }
+  if (DEV_PORT !== DEFAULT_DEV_PORT && await isPortInUse(DEFAULT_DEV_PORT)) {
+    console.log('   ⚠️  Skipping .next cleanup because another Next.js dev server is already using the workspace.');
+    console.log(`      Continue on http://localhost:${DEV_PORT} without deleting shared dev artifacts.\n`);
     return;
   }
   const cleanScript = path.join(process.cwd(), 'scripts', 'clean.js');
@@ -169,8 +201,16 @@ async function cleanNextCache() {
 }
 
 async function cleanupStaleNextLockArtifacts() {
+  if (SKIP_PRESTART_CLEAN) {
+    console.log('   ⚠️  Skipping stale .next/dev cleanup because pre-start clean was disabled for this QA run.\n');
+    return;
+  }
   if (await isDevServerRunning()) {
     console.log(`   ⚠️  Skipping stale .next/dev cleanup because port ${DEV_PORT} is already in use.\n`);
+    return;
+  }
+  if (DEV_PORT !== DEFAULT_DEV_PORT && await isPortInUse(DEFAULT_DEV_PORT)) {
+    console.log('   ⚠️  Skipping stale .next/dev cleanup because another workspace dev server is active.\n');
     return;
   }
   const lockPaths = [
@@ -182,7 +222,7 @@ async function cleanupStaleNextLockArtifacts() {
   for (const target of lockPaths) {
     try {
       if (!fs.existsSync(target)) continue;
-      fs.rmSync(target, { force: true });
+      fs.rmSync(target, { recursive: true, force: true });
       console.log(`   🧽 Removed stale Next artifact: ${path.relative(process.cwd(), target)}`);
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
@@ -209,6 +249,31 @@ async function cleanupStaleNextLockArtifacts() {
       }
     }
   }
+}
+
+async function cleanNextCacheSafelyForDevStart() {
+  if (SKIP_PRESTART_CLEAN) {
+    console.log('   Skipping .next cleanup because pre-start clean was disabled for this QA run.\n');
+    return;
+  }
+  assertCleanupAllowed({
+    trigger: 'dev-start',
+    excludePids: [process.pid],
+    allowLockOwnerPid: process.pid,
+  });
+  for (const target of [path.join(process.cwd(), 'dist'), path.join(process.cwd(), '.vercel')]) {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+  const nextPath = path.join(process.cwd(), '.next');
+  const lockPath = path.join(nextPath, 'dev-server.lock');
+  if (fs.existsSync(nextPath)) {
+    for (const entry of fs.readdirSync(nextPath)) {
+      const target = path.join(nextPath, entry);
+      if (path.resolve(target) === path.resolve(lockPath)) continue;
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  }
+  console.log('   Cleaned build artifacts before startup while preserving dev-server.lock.\n');
 }
 
 function tryStartRedisViaDocker() {
@@ -239,42 +304,61 @@ function tryStartRedisViaDocker() {
 
 async function runAppOnly(children) {
   console.log('\n⚠️  Running Next.js only (no workers). BOLT and background jobs will not work.\n');
-  await cleanNextCache();
-  await cleanupStaleNextLockArtifacts();
-  console.log('   App: http://localhost:3000');
-  console.log('   To enable workers: start Redis and run npm run dev:full\n');
-  // Use Turbopack instead of webpack: webpack on Windows + Fast Refresh
-  // chronically corrupts .next/dev/server manifests (ENOENT on
-  // _document.js / webpack-api-runtime.js mid-session), forcing a full
-  // .next wipe + restart every few edits. Turbopack does not have this
-  // failure mode on this codebase. Set DEV_USE_WEBPACK=1 to opt back in.
-  const useWebpack = process.env.DEV_USE_WEBPACK === '1';
+  const FORCE_WEBPACK = args.includes('--webpack');
+  const DEFAULT_WEBPACK = process.platform === 'win32' || process.env.DEV_DEFAULT_WEBPACK === '1';
+  const useWebpack = !FORCE_TURBOPACK && process.env.DEV_USE_TURBOPACK !== '1' && (FORCE_WEBPACK || DEFAULT_WEBPACK);
   const bundlerFlag = useWebpack ? '--webpack' : '--turbopack';
-  // Previously this branch hard-coded `ENABLE_AUTO_WORKERS: '0'`, which
-  // defeated `.env.local` and prevented the instrumentation hook from
-  // booting workers under `npm run dev`. Restore inheritance: respect
-  // whatever .env.local loaded into process.env at script start (loaded
-  // ~line 31 above), and only fall back to '0' when the operator hasn't
-  // opted in. The dev:full branch lower in this file still hard-codes
-  // '0' on purpose — that path spawns workers in a separate process and
-  // must not let Next re-start them.
-  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', bundlerFlag], {
+  let lock = acquireDevLock({
+    port: DEV_PORT,
+    mode: bundlerFlag.replace(/^--/, ''),
+    command: `${process.execPath} ${process.argv.join(' ')}`,
+  });
+  await cleanNextCacheSafelyForDevStart();
+  await cleanupStaleNextLockArtifacts();
+  if (await isDevServerRunning()) {
+    releaseDevLock();
+    console.error(`   Port ${DEV_PORT} is already in use after lock acquisition. Refusing to start a duplicate dev server.`);
+    process.exit(1);
+  }
+  console.log(`   App: http://localhost:${DEV_PORT}`);
+  console.log('   To enable workers: start Redis and run npm run dev:full\n');
+  printDevStatus(lock);
+  // Prefer webpack on Windows for this workspace. Turbopack currently exits
+  // without a JavaScript stack while compiling super-admin routes on some
+  // Windows machines, which shows up in the browser as ERR_CONNECTION_REFUSED.
+  // Pass --turbopack/--turbo or DEV_USE_TURBOPACK=1 when specifically testing
+  // Turbopack behavior.
+  const nextProc = spawnProcess('next', process.execPath, [nextBin, 'dev', bundlerFlag, '-p', String(DEV_PORT)], {
     env: {
       ...process.env,
-      ENABLE_AUTO_WORKERS: process.env.ENABLE_AUTO_WORKERS || '0',
-      ENABLE_REDIS_USAGE_MONITORING: process.env.ENABLE_REDIS_USAGE_MONITORING || '0',
+      ENABLE_AUTO_WORKERS: '0',
+      ENABLE_REDIS_USAGE_MONITORING: '0',
+      // Raise V8 old-space to 8 GB so cold compiles of large pages (e.g. anything
+      // touching _app.tsx + CompanyContext + AppLayout) don't OOM-abort with
+      // Windows exit code 4294967295. Append, do not replace, in case the user
+      // already set NODE_OPTIONS for inspector/etc.
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ? process.env.NODE_OPTIONS + ' ' : ''}--max-old-space-size=8192`,
     },
   });
+  lock = updateDevLock({ childPid: nextProc.pid }) || lock;
   children.push(nextProc);
-  nextProc.on('exit', (code) => process.exit(code ?? 0));
+  let shuttingDown = false;
+  const shutdown = (code = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    releaseDevLock();
+    process.exit(code);
+  };
+  nextProc.on('exit', (code) => shutdown(code ?? 0));
   process.on('SIGINT', () => {
     nextProc.kill('SIGTERM');
-    process.exit(0);
+    shutdown(0);
   });
   process.on('SIGTERM', () => {
     nextProc.kill('SIGTERM');
-    process.exit(0);
+    shutdown(0);
   });
+  process.on('exit', releaseDevLock);
 }
 
 async function main() {
@@ -327,6 +411,11 @@ async function main() {
     }
   }
 
+  let lock = acquireDevLock({
+    port: DEV_PORT,
+    mode: 'webpack',
+    command: `${process.execPath} ${process.argv.join(' ')}`,
+  });
   const children = [];
 
   // 2. Start workers (skipped when ENABLE_AUTO_WORKERS=0)
@@ -367,15 +456,21 @@ async function main() {
   await new Promise((r) => setTimeout(r, 2000));
 
   // 4. Start Next.js (foreground - user sees this)
-  await cleanNextCache();
+  await cleanNextCacheSafelyForDevStart();
   await cleanupStaleNextLockArtifacts();
   console.log('4️⃣  Starting Next.js dev server...\n');
-  console.log('   App: http://localhost:3000');
+  console.log(`   App: http://localhost:${DEV_PORT}`);
   console.log('   Press Ctrl+C to stop all services\n');
+  printDevStatus(lock);
 
-  const next = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack'], {
-    env: { ...process.env, ENABLE_AUTO_WORKERS: '0' },
+  const next = spawnProcess('next', process.execPath, [nextBin, 'dev', '--webpack', '-p', String(DEV_PORT)], {
+    env: {
+      ...process.env,
+      ENABLE_AUTO_WORKERS: '0',
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ? process.env.NODE_OPTIONS + ' ' : ''}--max-old-space-size=8192`,
+    },
   });
+  lock = updateDevLock({ childPid: next.pid }) || lock;
   children.push(next);
 
   next.on('exit', (code) => {
@@ -385,6 +480,7 @@ async function main() {
 
   const cleanup = () => {
     console.log('\n\n🛑 Stopping all services...');
+    releaseDevLock();
     children.forEach((c) => {
       try {
         c.kill('SIGTERM');
@@ -396,15 +492,18 @@ async function main() {
           c.kill('SIGKILL');
         } catch {}
       });
+      releaseDevLock();
       process.exit(0);
     }, 3000);
   };
 
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
+  process.on('exit', releaseDevLock);
 }
 
 main().catch((err) => {
+  releaseDevLock();
   console.error('\n' + '═'.repeat(60));
   console.error('  ❌ STARTUP FAILED');
   console.error('═'.repeat(60));

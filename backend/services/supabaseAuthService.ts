@@ -32,9 +32,17 @@ export const getSupabaseUserFromRequest = async (
 ): Promise<{ user: { id: string; email?: string | null } | null; error: string | null }> => {
   const result = await resolveAuthenticatedUser(req);
   if (result.error === null) {
+    // Phase 2.B — invited users surface to legacy callers as INVALID_AUTH so
+    // the existing 401 → re-auth UX kicks in. Routes that want to allow
+    // invited principals must use resolveAuthenticatedUser directly.
+    if (result.user.status === 'invited') {
+      return { user: null, error: 'ACCOUNT_INVITED' };
+    }
     return { user: { id: result.user.id, email: result.user.email }, error: null };
   }
   if (result.error === 'NO_TOKEN') return { user: null, error: 'MISSING_AUTH' };
   if (result.error === 'ACCOUNT_DELETED') return { user: null, error: 'ACCOUNT_DELETED' };
+  if (result.error === 'ACCOUNT_SUSPENDED') return { user: null, error: 'ACCOUNT_SUSPENDED' };
+  if (result.error === 'SESSION_REVOKED') return { user: null, error: 'SESSION_REVOKED' };
   return { user: null, error: 'INVALID_AUTH' };
 };

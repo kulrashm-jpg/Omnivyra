@@ -1,10 +1,13 @@
 import { getAnalyticsReadiness } from './analyticsDataReadinessService';
 import {
   getGoogleAnalyticsStatus,
+  getGoogleSearchConsoleStatus,
   listGoogleAnalyticsProperties,
+  listSearchConsoleProperties,
   type AnalyticsPropertyRecord,
 } from './analyticsIntegrationService';
 import { getLatestCompletedRun } from './ingestionRunService';
+import { getGoogleProviderReadiness, type GoogleCapabilityReadiness } from './googleProviderReadinessService';
 
 export type GoogleAnalyticsUiStatus =
   | 'not_connected'
@@ -13,6 +16,9 @@ export type GoogleAnalyticsUiStatus =
   | 'waiting_for_data'
   | 'ready'
   | 'low_data'
+  | 'limited_coverage'
+  | 'property_unverified'
+  | 'domain_mapping_required'
   | 'error';
 
 export type GoogleAnalyticsStatusPayload = {
@@ -26,6 +32,30 @@ export type GoogleAnalyticsStatusPayload = {
   message: string;
   last_sync: string | null;
   events_last_30_days: number;
+  properties: Array<{
+    id: string;
+    name: string;
+    account_id: string | null;
+    active: boolean;
+  }>;
+  reconnect_required: boolean;
+  provider_readiness?: Record<string, GoogleCapabilityReadiness>;
+  search_console?: GoogleSearchConsoleStatusPayload;
+};
+
+export type GoogleSearchConsoleStatusPayload = {
+  connected: boolean;
+  provider_authenticated: boolean;
+  capability_ready: boolean;
+  readiness_status: string;
+  property: {
+    id: string;
+    name: string;
+    account_id: string | null;
+  } | null;
+  status: GoogleAnalyticsUiStatus | 'setup_required';
+  message: string;
+  last_sync: string | null;
   properties: Array<{
     id: string;
     name: string;
@@ -47,12 +77,14 @@ function mapProperty(property: AnalyticsPropertyRecord | null) {
 export async function getGoogleAnalyticsStatusPayload(
   companyId: string,
 ): Promise<GoogleAnalyticsStatusPayload> {
-  const [connectionStatus, readiness, lastCompletedRun, properties] = await Promise.all([
+  const [connectionStatus, readiness, lastCompletedRun, properties, providerReadiness] = await Promise.all([
     getGoogleAnalyticsStatus(companyId),
     getAnalyticsReadiness(companyId),
     getLatestCompletedRun(companyId, 'ga4'),
     listGoogleAnalyticsProperties(companyId, { syncRemote: false }).catch(() => []),
+    getGoogleProviderReadiness(companyId),
   ]);
+  const searchConsole = await getGoogleSearchConsoleStatusPayload(companyId, providerReadiness.google_search_console);
 
   const mappedProperties = properties.map((property) => ({
     id: property.property_id,
@@ -71,6 +103,8 @@ export async function getGoogleAnalyticsStatusPayload(
       events_last_30_days: 0,
       properties: mappedProperties,
       reconnect_required: false,
+      provider_readiness: providerReadiness,
+      search_console: searchConsole,
     };
   }
 
@@ -84,6 +118,8 @@ export async function getGoogleAnalyticsStatusPayload(
       events_last_30_days: readiness.events_last_30_days,
       properties: mappedProperties,
       reconnect_required: true,
+      provider_readiness: providerReadiness,
+      search_console: searchConsole,
     };
   }
 
@@ -97,6 +133,8 @@ export async function getGoogleAnalyticsStatusPayload(
       events_last_30_days: readiness.events_last_30_days,
       properties: mappedProperties,
       reconnect_required: false,
+      provider_readiness: providerReadiness,
+      search_console: searchConsole,
     };
   }
 
@@ -110,6 +148,8 @@ export async function getGoogleAnalyticsStatusPayload(
       events_last_30_days: readiness.events_last_30_days,
       properties: mappedProperties,
       reconnect_required: false,
+      provider_readiness: providerReadiness,
+      search_console: searchConsole,
     };
   }
 
@@ -128,6 +168,8 @@ export async function getGoogleAnalyticsStatusPayload(
       events_last_30_days: readiness.events_last_30_days,
       properties: mappedProperties,
       reconnect_required: false,
+      provider_readiness: providerReadiness,
+      search_console: searchConsole,
     };
   }
 
@@ -138,6 +180,106 @@ export async function getGoogleAnalyticsStatusPayload(
     message: 'Google Analytics connected',
     last_sync: readiness.last_successful_ingestion_at,
     events_last_30_days: readiness.events_last_30_days,
+    properties: mappedProperties,
+    reconnect_required: false,
+    provider_readiness: providerReadiness,
+    search_console: searchConsole,
+  };
+}
+
+export async function getGoogleSearchConsoleStatusPayload(
+  companyId: string,
+  readiness?: GoogleCapabilityReadiness,
+): Promise<GoogleSearchConsoleStatusPayload> {
+  const [connectionStatus, properties, lastCompletedRun] = await Promise.all([
+    getGoogleSearchConsoleStatus(companyId),
+    listSearchConsoleProperties(companyId, { syncRemote: false }).catch(() => []),
+    getLatestCompletedRun(companyId, 'gsc').catch(() => null),
+  ]);
+  const capabilityReadiness = readiness ?? (await getGoogleProviderReadiness(companyId)).google_search_console;
+  const providerAuthenticated = capabilityReadiness.provider_authenticated;
+  const baseReadiness = {
+    provider_authenticated: providerAuthenticated,
+    capability_ready: capabilityReadiness.capability_ready,
+    readiness_status: capabilityReadiness.status,
+  };
+  const mappedProperties = properties.map((property) => ({
+    id: property.property_id,
+    name: property.property_name,
+    account_id: property.account_id,
+    active: property.is_active,
+  }));
+
+  if (!connectionStatus.integration) {
+    return {
+      connected: false,
+      ...baseReadiness,
+      property: null,
+      status: 'setup_required',
+      message: 'Search Console setup required',
+      last_sync: null,
+      properties: mappedProperties,
+      reconnect_required: false,
+    };
+  }
+
+  if (connectionStatus.integration.status === 'error' || !connectionStatus.tokenValid) {
+    return {
+      connected: false,
+      ...baseReadiness,
+      property: mapProperty(connectionStatus.activeProperty),
+      status: 'error',
+      message: capabilityReadiness.message || 'Reconnect Search Console',
+      last_sync: lastCompletedRun?.completed_at ?? null,
+      properties: mappedProperties,
+      reconnect_required: true,
+    };
+  }
+
+  if (!connectionStatus.activeProperty) {
+    return {
+      connected: false,
+      ...baseReadiness,
+      property: null,
+      status: mappedProperties.length > 0 ? 'property_selection' : 'setup_required',
+      message: mappedProperties.length > 0 ? 'Select Search Console property' : 'No verified Search Console properties found',
+      last_sync: lastCompletedRun?.completed_at ?? null,
+      properties: mappedProperties,
+      reconnect_required: false,
+    };
+  }
+
+  const nonReadyStatus: GoogleSearchConsoleStatusPayload['status'] =
+    capabilityReadiness.status === 'limited_coverage'
+      ? 'limited_coverage'
+      : capabilityReadiness.status === 'property_unverified'
+        ? 'property_unverified'
+        : capabilityReadiness.status === 'domain_mapping_required'
+          ? 'domain_mapping_required'
+          : capabilityReadiness.status === 'ingestion_pending'
+            ? 'waiting_for_data'
+            : 'error';
+
+  if (!capabilityReadiness.capability_ready) {
+    return {
+      connected: false,
+      ...baseReadiness,
+      property: mapProperty(connectionStatus.activeProperty),
+      status: nonReadyStatus,
+      message: capabilityReadiness.message,
+      last_sync: lastCompletedRun?.completed_at ?? null,
+      properties: mappedProperties,
+      reconnect_required: capabilityReadiness.status === 'missing_scope',
+    };
+  }
+
+  return {
+    connected: true,
+    ...baseReadiness,
+    property: mapProperty(connectionStatus.activeProperty),
+    status: 'ready',
+    message: 'Ready for Reports',
+    last_sync: lastCompletedRun?.completed_at ?? null,
     properties: mappedProperties,
     reconnect_required: false,
   };

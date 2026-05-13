@@ -1,5 +1,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import {
+  CREATOR_DAILY_GUIDANCE_FIELDS,
+  getCreatorGovernance,
+  isGuidanceOnlyFormat,
+  normalizeCreatorFormat,
+} from '../../../lib/shared/creatorGovernanceRegistry';
 
 import { getUnifiedCampaignBlueprint } from '../../../backend/services/campaignBlueprintService';
 import {
@@ -63,6 +69,23 @@ export type DailyPlanItem = {
   kpiTarget: string;
   /** Stable id for one logical content piece (optional, backward compatible). */
   masterContentId?: string;
+};
+
+export type CreativeGuidance = {
+  theme: string;
+  hook: string;
+  visual_direction: string;
+  shot_guidance: string[];
+  scene_direction: string;
+  CTA_direction: string;
+  platform_adaptation: Record<string, string>;
+  repurposing_guidance: string[];
+  caption_direction: string;
+  posting_guidance: string;
+  production_notes: string[];
+  production_checklist: string[];
+  talking_points: string[];
+  b_roll_ideas: string[];
 };
 
 type DailyObjectiveRefinement = {
@@ -317,6 +340,105 @@ export function deriveSceneDirection(topic: string, contentType: string): string
     ].join('\n');
   }
   return `Open with hook about ${safe} → deliver core value in 3 clear beats → close with CTA.`;
+}
+
+export function requiresCreatorCreativeGuidance(contentType: string): boolean {
+  const normalized = normalizeCreatorFormat(contentType);
+  const governance = getCreatorGovernance(normalized);
+  return Boolean(
+    governance?.guidance_only ||
+    governance?.requires_human_production ||
+    CREATOR_DAILY_GUIDANCE_FIELDS.length > 0 && ['video', 'reel', 'short', 'story', 'podcast'].includes(normalized)
+  );
+}
+
+function platformGuidance(platforms: string[], contentType: string): Record<string, string> {
+  const normalizedType = normalizeCreatorFormat(contentType);
+  const targets = platforms.length > 0 ? platforms : ['linkedin'];
+  return Object.fromEntries(targets.map((platform) => {
+    const p = normalizePlatformKey(platform);
+    const guidance =
+      p === 'instagram' || p === 'instagram_reels'
+        ? `Adapt ${normalizedType} for visual-first pacing, short caption support, and a clear first-frame hook.`
+        : p === 'tiktok'
+          ? `Adapt ${normalizedType} for fast opening motion, direct creator delivery, and concise on-screen beats.`
+          : p === 'youtube' || p === 'youtube_shorts'
+            ? `Adapt ${normalizedType} for search-friendly title framing, clear retention beats, and a direct close.`
+            : p === 'x'
+              ? `Adapt ${normalizedType} into a concise caption/thread angle with the strongest hook first.`
+              : `Adapt ${normalizedType} with a professional caption, clear value promise, and direct CTA.`;
+    return [p, guidance];
+  }));
+}
+
+export function buildCreativeGuidance(input: {
+  week: any;
+  item: DailyPlanItem;
+  enrichedItem: any;
+  creatorCard?: CreatorCard | null;
+}): CreativeGuidance | null {
+  const contentType = normalizeCreatorFormat(input.item?.contentType || input.enrichedItem?.content_type || input.enrichedItem?.contentType || '');
+  if (!requiresCreatorCreativeGuidance(contentType)) return null;
+
+  const creatorCard = input.creatorCard ?? buildCreatorCard(input.week, input.item, input.enrichedItem);
+  const intent = (input.enrichedItem?.intent ?? input.item?.writerBrief ?? {}) as Record<string, unknown>;
+  const topic = String(input.item?.topicTitle || input.enrichedItem?.topic || '').trim();
+  const theme = String(creatorCard.theme || input.week?.theme || input.week?.phase_label || input.item?.briefSummary || topic).trim();
+  const cta = String(input.item?.desiredAction || intent.cta_type || creatorCard.intent?.cta_type || 'Guide the audience to the next useful step').trim();
+  const platforms = Array.isArray(input.item?.platformTargets) ? input.item.platformTargets.map(String).filter(Boolean) : [];
+  const visualHook = String(creatorCard.visual_hook || deriveVisualHook(topic, contentType)).trim();
+  const sceneDirection = String(creatorCard.scene_direction || deriveSceneDirection(topic, contentType)).trim();
+  const talkingPoints = [
+    String(intent.pain_point || input.item?.whatProblemAreWeAddressing || '').trim(),
+    String(intent.outcome_promise || input.item?.whatShouldReaderLearn || '').trim(),
+    String(input.item?.dailyObjective || creatorCard.objective || '').trim(),
+  ].filter(Boolean);
+  const repurposeGuidance = [
+    `Turn the core idea into platform-native captions for ${platforms.length > 0 ? platforms.join(', ') : 'the selected platforms'}.`,
+    `Keep the same hook and CTA while changing pacing, length, and caption framing per platform.`,
+    `Reuse the strongest talking point as the caption opener for non-video placements.`,
+  ];
+
+  return {
+    theme,
+    hook: visualHook,
+    visual_direction: String(creatorCard.image_prompt || deriveImagePrompt(topic, contentType, platforms)).trim(),
+    shot_guidance: [
+      `Open with a direct visual or spoken hook: ${visualHook}`,
+      `Show the problem or contrast behind ${topic || theme}.`,
+      `Move into the practical insight or proof point.`,
+      `Close with the CTA: ${cta}`,
+    ],
+    scene_direction: sceneDirection,
+    CTA_direction: cta,
+    platform_adaptation: platformGuidance(platforms, contentType),
+    repurposing_guidance: repurposeGuidance,
+    caption_direction: `Write a caption that leads with "${visualHook}", supports the idea with one concrete detail, and ends with "${cta}".`,
+    posting_guidance: `Publish as a production-ready creator brief. Do not schedule or publish automatically until human-produced media is attached.`,
+    production_notes: [
+      `Human production required for ${contentType}.`,
+      `Keep the first three seconds focused on the hook.`,
+      `Capture enough visual coverage to create shorter repurposed cuts and still-image excerpts.`,
+    ],
+    production_checklist: [
+      'Confirm final hook and CTA before recording.',
+      'Capture primary talking-head or product/action shot.',
+      'Capture supporting b-roll for each talking point.',
+      'Prepare platform-native caption and hashtags.',
+      'Attach finished media before any scheduling or publishing step.',
+    ],
+    talking_points: talkingPoints.length > 0 ? talkingPoints : [
+      input.item?.briefSummary || topic || theme,
+      input.item?.dailyObjective || 'Explain the practical value clearly.',
+      cta,
+    ].filter(Boolean),
+    b_roll_ideas: [
+      `Close-up or screen capture showing ${topic || theme}.`,
+      'Behind-the-scenes production shot.',
+      'Visual proof, example, workflow, or result that supports the claim.',
+      'CTA end-frame or branded closing visual.',
+    ],
+  };
 }
 
 export function normalizeTopicKey(topic: string): string {
@@ -605,7 +727,9 @@ export function buildCreatorCard(
 
   const topicStr = typeof item?.topicTitle === 'string' ? item.topicTitle.trim() : '';
   const contentType = String(item?.contentType || enrichedItem?.content_type || enrichedItem?.contentType || '').toLowerCase();
-  const requiresMediaBrief = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts', 'tiktok'].includes(contentType);
+  const requiresMediaBrief =
+    ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'short', 'shorts', 'tiktok', 'podcast', 'image'].includes(contentType) ||
+    requiresCreatorCreativeGuidance(contentType);
 
   // Keywords: enrich from topic + objective
   const keywords: string[] = Array.isArray(enrichedItem?.keywords)

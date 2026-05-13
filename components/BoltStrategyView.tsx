@@ -1086,8 +1086,8 @@ export default function BoltStrategyView({ d }: { d: S }) {
     {/* ── Pre-execution confirmation modal ────────────────────────────────── */}
 
     {confirmingCard && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm px-4 py-4">
+        <div className="flex max-h-[calc(100dvh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
           {/* Header */}
           <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-4">
             <div className="flex items-center gap-2 mb-1">
@@ -1097,6 +1097,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
             <p className="text-amber-100 text-xs">Review your inputs before we start. BOLT will build exactly this.</p>
           </div>
 
+          <div className="min-h-0 flex-1 overflow-y-auto">
           {/* Strategy being launched */}
           <div className="px-6 pt-5 pb-2">
             <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Strategy</p>
@@ -1118,13 +1119,13 @@ export default function BoltStrategyView({ d }: { d: S }) {
                     const freq = formatFrequency[fmt] ?? 3;
                     const total = freq * duration;
                     return (
-                      <div key={fmt} className="flex items-center justify-between text-xs">
+                      <div key={fmt} className="flex items-center justify-between gap-3 text-xs">
                         <span className="text-gray-700 font-medium">{fmtMeta?.icon} {fmtMeta?.label ?? fmt}</span>
                         <span className="text-amber-700 font-bold">{freq}×/wk × {duration}wk = <strong>{total} pieces</strong></span>
                       </div>
                     );
                   })}
-                  <div className="border-t border-amber-200 pt-1.5 mt-1.5 flex justify-between text-xs font-bold">
+                  <div className="border-t border-amber-200 pt-1.5 mt-1.5 flex justify-between gap-3 text-xs font-bold">
                     <span className="text-gray-600">Total</span>
                     <span className="text-amber-800">
                       {contentFormats.reduce((sum, f) => sum + (formatFrequency[f] ?? 3), 0)}×/wk ×
@@ -1187,8 +1188,10 @@ export default function BoltStrategyView({ d }: { d: S }) {
             )}
           </div>
 
+          </div>
+
           {/* Actions */}
-          <div className="flex gap-3 px-6 pb-6 pt-2">
+          <div className="flex shrink-0 gap-3 border-t border-gray-100 bg-white px-6 pb-6 pt-4">
             <button
               type="button"
               onClick={() => setConfirmingCard(null)}

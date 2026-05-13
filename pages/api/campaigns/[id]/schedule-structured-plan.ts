@@ -13,6 +13,12 @@ import { checkAndCompleteCampaignIfEligible } from '../../../../backend/services
 import { recordGovernanceEvent } from '../../../../backend/services/GovernanceEventService';
 import { syncCampaignVersionStage } from '../../../../backend/db/campaignVersionStore';
 import { requireCampaignAccess } from '../../../../backend/services/campaignAccessService';
+import {
+  CreatorScheduleGovernanceError,
+  assertCreatorFormatsSchedulable,
+  assertNoUnschedulableCreatorDailyPlans,
+  getCreatorFormatsFromStructuredPlanWeeks,
+} from '../../../../lib/shared/creatorGovernanceRegistry';
 
 const isScheduleEligibilityError = (error: unknown): error is ScheduleEligibilityError => {
   return typeof ScheduleEligibilityError === 'function' && error instanceof ScheduleEligibilityError;
@@ -26,6 +32,29 @@ async function getCompanyId(campaignId: string): Promise<string | null> {
     .limit(1)
     .maybeSingle();
   return (data as any)?.company_id ?? null;
+}
+
+async function getCampaignVersionContext(campaignId: string): Promise<{
+  companyId: string | null;
+  executionProfile: string;
+}> {
+  const { data } = await supabase
+    .from('campaign_versions')
+    .select('company_id, campaign_snapshot')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const snapshot = (data as any)?.campaign_snapshot ?? {};
+  const executionConfig = snapshot.execution_config ?? snapshot.executionConfig ?? {};
+  return {
+    companyId: (data as any)?.company_id ?? null,
+    executionProfile: String(executionConfig.campaign_mode || executionConfig.campaignMode || 'text').trim().toLowerCase(),
+  };
+}
+
+function sendCreatorGovernanceError(res: NextApiResponse, error: CreatorScheduleGovernanceError) {
+  return res.status(error.statusCode).json(error.payload);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -53,6 +82,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { plan } = req.body || {};
   if (!plan || !Array.isArray(plan.weeks)) {
     return res.status(400).json({ error: 'Structured plan is required' });
+  }
+
+  const versionContext = await getCampaignVersionContext(id);
+  if (versionContext.executionProfile === 'creator') {
+    try {
+      assertCreatorFormatsSchedulable(getCreatorFormatsFromStructuredPlanWeeks(plan.weeks));
+      const { data: dailyPlansForGovernance, error: dailyPlansGovernanceError } = await supabase
+        .from('daily_content_plans')
+        .select('content_type')
+        .eq('campaign_id', id);
+      if (dailyPlansGovernanceError) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to validate creator schedule governance.',
+        });
+      }
+      assertNoUnschedulableCreatorDailyPlans(Array.isArray(dailyPlansForGovernance) ? dailyPlansForGovernance : []);
+    } catch (error) {
+      if (error instanceof CreatorScheduleGovernanceError) {
+        return sendCreatorGovernanceError(res, error);
+      }
+      throw error;
+    }
   }
 
   let lockId: string | null = null;

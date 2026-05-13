@@ -2,13 +2,60 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { useRouter } from 'next/router';
 import { getAuthToken } from '../utils/getAuthToken';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
-import { isAccountDeleted } from '../utils/authErrors';
+import {
+  AUTH_ERROR_CODE,
+  getAuthErrorCode,
+  shouldForceSignOut,
+  type AuthErrorCode,
+} from '../utils/authErrors';
 import {
   clearAuthScopedAppState,
   getUserScopedLocalStorage,
   setUserScopedLocalStorage,
 } from '../utils/authStorage';
 import { assertAuthBootstrapProbeSkipped, isAuthBootstrapPath } from '../utils/authIntegrityGuards';
+import {
+  initialAuthFsm,
+  transitionAuthFsm,
+  type AuthFsmContext,
+  type AuthFsmEvent,
+  type AuthFsmState,
+} from '../utils/authStateMachine';
+import { singleFlight } from '../lib/auth/singleFlightRefresh';
+
+/**
+ * Retry-guard configuration for the /api/company-profile?mode=list probe.
+ *
+ * Why this exists
+ * ───────────────
+ * The pre-Phase-2.B context treated EVERY 401 as a ghost session, ran
+ * `signOut()` synchronously, and let the Next.js router redirect to /login.
+ * When /login then validated the persisted Supabase session, it would
+ * INSTANTLY redirect back to /command-center — and the cycle repeated until
+ * the user closed the tab. Any auth bug that was actually a 401 (schema
+ * drift, USER_NOT_FOUND, USER_INVITED) presented as an indistinguishable
+ * "log in works, then sends you back to the login page" loop.
+ *
+ * The retry guard cuts the loop at three places:
+ *   1. **Single-flight**: only one company-profile fetch in flight at a
+ *      time, via {@link refreshInFlightRef}. (Pre-existing — kept.)
+ *   2. **Sign-out gating**: only INVALID_SESSION / ACCOUNT_DELETED /
+ *      ACCOUNT_DISABLED responses call signOut(). Everything else
+ *      preserves the session and surfaces a visible error in the UI.
+ *   3. **Refresh cap**: a hard cap on consecutive non-OK responses before
+ *      we stop hammering the endpoint and tell the user.
+ */
+const REFRESH_FAILURE_CAP = 4;
+const REFRESH_FAILURE_COOLDOWN_MS = 30_000;
+
+export interface AuthErrorState {
+  /** Canonical code so the UI can render specific copy. */
+  code:    AuthErrorCode;
+  /** Server-supplied details (already user-safe). */
+  details: string | null;
+  /** When the error landed — drives the retry-cooldown display. */
+  occurredAt: number;
+}
 
 type UserContext = {
   userId: string;
@@ -86,6 +133,19 @@ type CompanyContextValue = {
    */
   companiesResolved: boolean;
   isAdmin: boolean;
+  /**
+   * Set when /api/company-profile returned a non-OK response that should
+   * NOT force a sign-out (USER_NOT_FOUND, USER_INVITED, SCHEMA_MISMATCH,
+   * PROFILE_LOAD_FAILED, transient failures). Consumers render a visible
+   * error UI keyed on `code`, NEVER redirect-loop.
+   */
+  authError: AuthErrorState | null;
+  /** Auth FSM snapshot — debugging / dev panel surface. */
+  authFsm: AuthFsmContext;
+  /** Convenient shorthand for FSM state. */
+  authFsmState: AuthFsmState;
+  /** Clear the auth-error state and trigger a fresh fetch. */
+  retryAuthError: () => void;
   setSelectedCompanyId: (companyId: string) => void;
   refreshCompanies: () => Promise<void>;
   hasPermission: (action: PermissionAction) => boolean;
@@ -121,12 +181,61 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // because the ref-based gate could leave the app stuck on a spinner
   // forever if a refresh failed transiently.
   const [companiesResolved, setCompaniesResolved] = useState(false);
+  const [authError, setAuthError] = useState<AuthErrorState | null>(null);
+  const [authFsm, setAuthFsm] = useState<AuthFsmContext>(() => initialAuthFsm());
+
+  /**
+   * Single funnel for FSM transitions. Every state change goes through here
+   * so we get structured event logging + illegal-transition detection in
+   * one place. Avoids the "five booleans encoding a state" anti-pattern.
+   */
+  const dispatchAuth = (event: AuthFsmEvent) => {
+    setAuthFsm((prev) => {
+      const { next, changed, illegal } = transitionAuthFsm(prev, event);
+      if (illegal && typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+        // Dev-mode only; prod just sees the no-op.
+        console.warn('[auth_fsm_illegal_transition]', illegal);
+      }
+      if (changed) {
+        if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+          console.debug('[auth_fsm_transition]', {
+            event:  event.type,
+            from:   prev.state,
+            to:     next.state,
+            count:  next.transitionCount,
+          });
+        }
+      }
+      return next;
+    });
+  };
+
+  // Online/offline event listener — drives the FSM's offline decoration so
+  // a flaky network blip doesn't trigger destructive sign-outs.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline  = () => dispatchAuth({ type: 'ONLINE' });
+    const handleOffline = () => dispatchAuth({ type: 'OFFLINE' });
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    // Seed the FSM with the current online state.
+    if (!navigator.onLine) dispatchAuth({ type: 'OFFLINE' });
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
   // Single-flight guard for refreshCompanies — ensures concurrent effect
   // fires (e.g. pathname + auth-state changing in the same tick) do not
   // launch overlapping fetches. NOT a "loaded" cache — the only authority
   // for "we already fetched" is companiesResolved.
   const refreshInFlightRef = useRef(false);
   const authIdentityRef = useRef<string | null>(null);
+  // Retry-guard state. Tracks consecutive non-OK fetches so we can stop
+  // hammering /api/company-profile after REFRESH_FAILURE_CAP attempts.
+  // Cleared on success or on explicit retryAuthError().
+  const consecutiveFailureRef = useRef(0);
+  const failureCooldownUntilRef = useRef<number>(0);
   // Counter the effect watches so transient-failure retries (e.g. dev-mode
   // 404 before the API route compiles) re-fire the gating effect with
   // fresh state — avoids the stale-closure pitfall of reading
@@ -221,23 +330,40 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           clearTimeout(t);
         }
       };
-      let listRes: Response | null = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          listRes = await fetchWithTimeout(
-            '/api/company-profile?mode=list',
-            {
-              credentials: 'include',
-              headers: { Authorization: `Bearer ${fbToken}` },
-            },
-            8000,
-          );
-        } catch {
-          // Network/abort error — treat as transient and retry.
-          listRes = null;
-        }
-        if (listRes && listRes.status !== 404 && listRes.status < 500) break;
-        if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      // Wrap the actual /api/company-profile fetch in two reliability
+      // primitives:
+      //   1. singleFlight('company-profile-list') — concurrent callers
+      //      (e.g. a route change firing while a retry is mid-flight)
+      //      share the same Promise instead of starting parallel fetches.
+      //   2. The existing 3-attempt loop — kept as-is for transient 404 /
+      //      5xx handling. The retryPolicy module is available for
+      //      callers that want exponential backoff; this loop is the
+      //      lightweight in-context variant.
+      const listRes = await singleFlight<Response | null>(
+        'company-profile-list',
+        async () => {
+          let attemptRes: Response | null = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              attemptRes = await fetchWithTimeout(
+                '/api/company-profile?mode=list',
+                {
+                  credentials: 'include',
+                  headers: { Authorization: `Bearer ${fbToken}` },
+                },
+                8000,
+              );
+            } catch {
+              attemptRes = null;
+            }
+            if (attemptRes && attemptRes.status !== 404 && attemptRes.status < 500) break;
+            if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+          }
+          return attemptRes;
+        },
+      );
+      if (authFsm.state === 'degraded' || authFsm.state === 'blocked') {
+        dispatchAuth({ type: 'RETRY' });
       }
 
       if (!listRes) {
@@ -254,7 +380,6 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
 
       if (!listRes.ok) {
-        // Parse the error body once for AUTH_001 detection.
         let errData: unknown = null;
         try { errData = await listRes.json(); } catch { /* non-JSON — ignore */ }
 
@@ -264,16 +389,41 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           (window.location.pathname.startsWith('/auth/') ||
            window.location.pathname.startsWith('/onboarding/'));
 
-        if (isAccountDeleted(listRes, errData)) {
-          // ACCOUNT_DELETED: the DB user was soft-deleted. Force full sign-out
-          // so the user cannot linger in a half-authenticated state.
+        // Sign-out gating — ONLY codes in the SESSION_FATAL set trigger
+        // signOut. USER_INVITED, USER_NOT_FOUND, SCHEMA_MISMATCH,
+        // PROFILE_LOAD_FAILED, and uncoded 401/403 responses preserve
+        // the session and surface a visible error the user can retry.
+        if (shouldForceSignOut(listRes, errData)) {
           try { await getSupabaseBrowser().auth.signOut(); } catch { /* ignore */ }
           setIsAuthenticated(false);
           setAuthChecked(true);
-        } else if (listRes.status === 401 && !isOnAuthFlow) {
-          // Ghost session: token is valid but DB user no longer exists.
-          try { await getSupabaseBrowser().auth.signOut(); } catch { /* ignore */ }
-          setIsAuthenticated(false);
+          setAuthError(null);
+          const fatalCode = getAuthErrorCode(listRes, errData) ?? AUTH_ERROR_CODE.INVALID_SESSION;
+          dispatchAuth({ type: 'AUTH_FAIL_FATAL', code: fatalCode });
+        } else {
+          // Non-fatal failure — preserve session, surface a visible error
+          // unless we're inside the auth callback / onboarding flow (those
+          // pages drive their own UI and a banner here would be confusing).
+          const code = getAuthErrorCode(listRes, errData)
+            ?? (listRes.status >= 500
+              ? AUTH_ERROR_CODE.PROFILE_LOAD_FAILED
+              : AUTH_ERROR_CODE.USER_NOT_FOUND);
+          const details = (typeof errData === 'object' && errData !== null && typeof (errData as Record<string, unknown>).details === 'string')
+            ? ((errData as Record<string, unknown>).details as string)
+            : null;
+          if (!isOnAuthFlow) {
+            setAuthError({ code, details, occurredAt: Date.now() });
+          }
+          // Trip the retry guard. After REFRESH_FAILURE_CAP consecutive
+          // non-OK responses, refuse further auto-retries for the
+          // cooldown window — the user must click "Retry".
+          consecutiveFailureRef.current += 1;
+          if (consecutiveFailureRef.current >= REFRESH_FAILURE_CAP) {
+            failureCooldownUntilRef.current = Date.now() + REFRESH_FAILURE_COOLDOWN_MS;
+            dispatchAuth({ type: 'RETRY_EXHAUSTED' });
+          } else {
+            dispatchAuth({ type: 'AUTH_FAIL_RETRYABLE', code, details: details ?? undefined });
+          }
         }
         setUser(null);
         setUserName('');
@@ -284,6 +434,11 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         resolved = true;
         return;
       }
+      // Success — reset retry-guard counters.
+      consecutiveFailureRef.current = 0;
+      failureCooldownUntilRef.current = 0;
+      if (authError) setAuthError(null);
+      dispatchAuth({ type: 'AUTH_SUCCESS' });
 
       const listData = await listRes.json();
       const list: CompanyOption[] = listData?.companies || [];
@@ -510,12 +665,23 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (companiesResolved) return;
     // Single-flight guard. If a refresh is already in flight, skip.
     if (refreshInFlightRef.current) return;
+    // Retry-guard cooldown — after REFRESH_FAILURE_CAP consecutive failures,
+    // pause auto-retries until the user clicks "Retry" or the cooldown
+    // window expires. Stops auth-error redirect storms before they start.
+    if (Date.now() < failureCooldownUntilRef.current) return;
     refreshInFlightRef.current = true;
     refreshCompanies().finally(() => {
       refreshInFlightRef.current = false;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, authChecked, router.pathname, companiesResolved, transientRetryTick]);
+
+  const retryAuthError = (): void => {
+    consecutiveFailureRef.current = 0;
+    failureCooldownUntilRef.current = 0;
+    setAuthError(null);
+    setCompaniesResolved(false);
+    setTransientRetryTick((t) => t + 1);
+  };
 
   const value = useMemo(
     () => ({
@@ -530,11 +696,15 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       authChecked,
       companiesResolved,
       isAdmin: userRole === 'SUPER_ADMIN' || userRole === 'COMPANY_ADMIN',
+      authError,
+      authFsm,
+      authFsmState: authFsm.state,
+      retryAuthError,
       setSelectedCompanyId,
       refreshCompanies,
       hasPermission: (action: PermissionAction) => hasPermissionForRole(userRole, action),
     }),
-    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked, companiesResolved]
+    [user, userName, userRole, companies, selectedCompanyId, selectedCompanyName, isLoading, isAuthenticated, authChecked, companiesResolved, authError, authFsm]
   );
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;

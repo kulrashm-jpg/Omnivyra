@@ -30,11 +30,10 @@ import {
 } from '../../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import {
-  grantAdminCreditExtension,
   ADMIN_GRANT_REASON_TYPES,
   type AdminGrantResult,
   type AdminGrantReasonType,
-} from '../../../../backend/services/creditAdminGrantService';
+} from '../../../../backend/services/creditAdminGrantContract';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
 import { logger } from '../../../../backend/services/logger';
 
@@ -91,6 +90,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   let result: AdminGrantResult;
   try {
+    const { grantAdminCreditExtension } = await import('../../../../backend/services/creditAdminGrantService');
     result = await grantAdminCreditExtension({
       organizationId,
       credits:     credits as number,

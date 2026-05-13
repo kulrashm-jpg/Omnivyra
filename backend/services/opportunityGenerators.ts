@@ -3,6 +3,11 @@ import { buildUnifiedContext } from './contextResolver';
 import type { FocusModule } from './contextResolver';
 import { runDiagnosticPrompt } from './llm/openaiAdapter';
 import { getStrategicThemesAsOpportunities } from './strategicThemeEngine';
+import {
+  hasExecutorContextSignal,
+  renderExecutorContextForPrompt,
+  type MarketPulseExecutorContext,
+} from './marketPulse/executorContext';
 
 export type GeneratorOptions = { regions?: string[] | null };
 
@@ -199,6 +204,13 @@ export type MarketPulseContextPayload = {
   focused_modules?: FocusModule[];
   additional_direction?: string;
   insight_source?: 'api' | 'llm' | 'hybrid';
+  /**
+   * Phase 1A: company-aware enrichment block. When present, the prompt is
+   * augmented with named competitors, regulatory sensitivity, growth
+   * priorities, etc. so findings adapt to the calling company. Absence
+   * preserves the legacy generic prompt.
+   */
+  executor_context?: MarketPulseExecutorContext | null;
 };
 
 export async function generateMarketPulseForRegion(
@@ -213,9 +225,17 @@ export async function generateMarketPulseForRegion(
     additionalDirection: contextPayload?.additional_direction,
   });
 
+  // Phase 1A: append the executor context block so the LLM scores topics
+  // relative to THIS company's competitors / priorities / regulatory frame
+  // — not just the generic mission. Absence => legacy prompt.
+  const executorContext = contextPayload?.executor_context ?? null;
+  const executorBlock = hasExecutorContextSignal(executorContext)
+    ? renderExecutorContextForPrompt(executorContext!)
+    : '';
+
   const systemPrompt = `You are a market pulse analyst. Identify trending conversations and execution-ready signals for the given region.
 ${missionBlock ? `\n${missionBlock}\n` : ''}
-
+${executorBlock ? `\n${executorBlock}\n` : ''}
 Output valid JSON only in this exact shape:
 {
   "topics": [
@@ -252,10 +272,37 @@ Exclude:
 - Celebrity gossip
 - Surface keyword trends
 
-Examples: Australian Open → ignore. Mental health seminar → ignore. Rising anxiety among working professionals → accept.`;
+${executorBlock ? `COMPANY-AWARE PRIORITIZATION (REQUIRED — do not skip):
+- A signal that DIRECTLY involves a Named Competitor or Adjacent Alternative listed above must score priority_score >= 0.7 and be returned even if its category overlap is small.
+- A signal that intersects Solution Domains, Core Offerings, Growth Priorities, Partnership Priorities, Critical Hiring, or Regulatory Sensitivity must have priority_score boosted ≥ 0.15 over a generic equivalent.
+- For risk_level: escalate to HIGH whenever the signal materially threatens a Growth Priority, a Primary Market, or a Regulatory Sensitivity area for THIS company.
+- For shelf_life_days: shorten when the signal is competitor-action-driven (decisions are time-bounded).
+- DEMOTE generic industry chatter that does not intersect the listed company context — keep priority_score below 0.4.
+- Do NOT echo the company-context lines back in your output; use them only to filter and rank.
+- If competitor_scope is "profile_only", ignore competitor signals not on the Named Competitors list.
+
+` : ''}Examples: Australian Open → ignore. Mental health seminar → ignore. Rising anxiety among working professionals → accept.`;
 
   const userPrompt = JSON.stringify(
-    { company_id: companyId, region },
+    {
+      company_id: companyId,
+      region,
+      // Echo the structured context to the user message too so the model
+      // can re-anchor mid-generation if the system prompt scrolls out of
+      // attention. Trimmed to the load-bearing fields.
+      ...(executorContext && hasExecutorContextSignal(executorContext)
+        ? {
+            company_focus: {
+              named_competitors: executorContext.named_competitors ?? [],
+              growth_priorities: executorContext.growth_priorities ?? [],
+              regulatory_policy_sensitivity: executorContext.regulatory_policy_sensitivity ?? [],
+              solution_domains: executorContext.solution_domains ?? [],
+              objective: executorContext.objective ?? null,
+              competitor_scope: executorContext.competitor_scope ?? null,
+            },
+          }
+        : {}),
+    },
     null,
     2
   );

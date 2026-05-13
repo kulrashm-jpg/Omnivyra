@@ -147,6 +147,11 @@ export const envSchema = z.object({
     .string()
     .default('gpt-4o-mini')
     .describe('Default OpenAI model for responses'),
+
+  OPENAI_MODEL: z
+    .string()
+    .default('gpt-4o-mini')
+    .describe('Legacy/default OpenAI model alias used by older services'),
   
   OPENAI_TIMEOUT: z
     .number()
@@ -154,6 +159,13 @@ export const envSchema = z.object({
     .min(1000)
     .default(60000)
     .describe('OpenAI request timeout in ms'),
+
+  MAX_LLM_CONCURRENCY: z
+    .number()
+    .int()
+    .min(1)
+    .default(5)
+    .describe('Max concurrent LLM calls per process'),
   
   // ── Encryption (required) ──────────────────────────────────────────────────
   ENCRYPTION_KEY: z
@@ -174,6 +186,8 @@ export const envSchema = z.object({
     .url('NEXT_PUBLIC_APP_URL must be a valid URL')
     .default('https://www.omnivyra.com')
     .describe('Public app URL'),
+
+  APP_URL: z.string().url('APP_URL must be a valid URL').optional(),
   
   OMNIVYRA_ENV: z
     .enum(['development', 'staging', 'production'])
@@ -190,6 +204,23 @@ export const envSchema = z.object({
     .transform((v) => v === '1' || v === 'true')
     .default('true')
     .describe('Auto-start workers in development'),
+
+  COST_REQUEST_THRESHOLD_USD: z
+    .number()
+    .min(0)
+    .default(1)
+    .describe('Per-request cost anomaly threshold in USD'),
+
+  INVITATION_TOKEN_SECRET: z.string().optional(),
+  DEFAULT_USER_ID: z.string().optional(),
+  META_DEBUG: z
+    .enum(['true', 'false', 'TRUE', 'FALSE', '0', '1'])
+    .transform((v) => v === 'true' || v === 'TRUE' || v === '1')
+    .default('false'),
+
+  CHROME_PATH: z.string().optional(),
+  CHROMIUM_PATH: z.string().optional(),
+  GOOGLE_CHROME_BIN: z.string().optional(),
 
   USE_MOCK_PLATFORMS: z
     .enum(['true', 'false', 'TRUE', 'FALSE', '0', '1'])
@@ -296,7 +327,9 @@ export function validateEnv(): EnvConfig {
       // OpenAI
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       OPENAI_RESPONSES_MODEL: process.env.OPENAI_RESPONSES_MODEL,
+      OPENAI_MODEL: process.env.OPENAI_MODEL || process.env.OPENAI_RESPONSES_MODEL,
       OPENAI_TIMEOUT: process.env.OPENAI_TIMEOUT ? parseInt(process.env.OPENAI_TIMEOUT, 10) : undefined,
+      MAX_LLM_CONCURRENCY: process.env.MAX_LLM_CONCURRENCY ? parseInt(process.env.MAX_LLM_CONCURRENCY, 10) : undefined,
       
       // Encryption
       ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
@@ -304,9 +337,19 @@ export function validateEnv(): EnvConfig {
       
       // App config
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+      APP_URL: process.env.APP_URL,
       OMNIVYRA_ENV: process.env.OMNIVYRA_ENV || process.env.DRISHIQ_ENV,
       OMNIVYRA_AI_MODE: process.env.OMNIVYRA_AI_MODE || process.env.DRISHIQ_AI_MODE,
       ENABLE_AUTO_WORKERS: process.env.ENABLE_AUTO_WORKERS,
+      COST_REQUEST_THRESHOLD_USD: process.env.COST_REQUEST_THRESHOLD_USD
+        ? Number(process.env.COST_REQUEST_THRESHOLD_USD)
+        : undefined,
+      INVITATION_TOKEN_SECRET: process.env.INVITATION_TOKEN_SECRET,
+      DEFAULT_USER_ID: process.env.DEFAULT_USER_ID,
+      META_DEBUG: process.env.META_DEBUG,
+      CHROME_PATH: process.env.CHROME_PATH,
+      CHROMIUM_PATH: process.env.CHROMIUM_PATH,
+      GOOGLE_CHROME_BIN: process.env.GOOGLE_CHROME_BIN,
       USE_MOCK_PLATFORMS: process.env.USE_MOCK_PLATFORMS,
       Mode: process.env.Mode,
       

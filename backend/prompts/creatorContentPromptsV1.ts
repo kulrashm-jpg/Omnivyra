@@ -146,34 +146,6 @@ export const CREATOR_CONTENT_SYSTEM_PROMPTS: Record<CreatorContentType, (context
   }
 }`,
 
-  post_blueprint: (creatorContext: any) => `You are creating a single social post with one supporting asset.
-
-Return JSON only in this shape:
-{
-  "headline": "post hook",
-  "summary": "main post body",
-  "cta_scene": {
-    "text": "call to action"
-  },
-  "visual_description": "supporting asset visual",
-  "design_note": "visual direction"
-}`,
-
-  thread_blueprint: (creatorContext: any) => `You are creating a social thread with a supporting carousel-style asset.
-
-Return JSON only in this shape:
-{
-  "headline": "thread hook",
-  "summary": "thread summary",
-  "tweets": [
-    { "index": 1, "role": "supporting_asset", "text": "thread item 1" }
-  ],
-  "cta_scene": {
-    "text": "call to action"
-  },
-  "visual_description": "supporting asset visual",
-  "design_note": "visual direction"
-}`,
 };
 
 /**
@@ -217,15 +189,5 @@ export const CREATOR_VALIDATION_RULES: Record<CreatorContentType, any> = {
     required_narrative_arc: true,
     required_cta: true,
     required_emotional_beats: true,
-  },
-  post_blueprint: {
-    required_hook: true,
-    required_cta: true,
-  },
-  thread_blueprint: {
-    min_frames: 1,
-    max_frames: 20,
-    required_hook: true,
-    required_cta: true,
   },
 };

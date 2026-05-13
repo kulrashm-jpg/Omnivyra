@@ -31,6 +31,9 @@ import { logDomainUnverifiedUsageForCompany } from '../../../backend/services/do
 import { logDomainEvent } from '../../../backend/services/domainEventLogger';
 import { issueMfaIntent, userHasVerifiedMfaFactor } from '../../../backend/security/MfaIntent';
 import { SELF_REGISTERED_JOIN_SOURCE } from '../../../backend/services/companyMembershipIntegrityService';
+import { sendAuthError } from '../../../backend/services/sendAuthError';
+import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
+import { incrementAuthMetric } from '../../../backend/services/authMetrics';
 
 type BootstrapRejection = {
   code:
@@ -97,7 +100,8 @@ export default async function handler(
     email       = verified.email;
     seedRequestContextFromRequest(req, { userId: supabaseUid });
   } catch {
-    return res.status(401).json({ error: 'Invalid or expired session' });
+    sendAuthError(res, AUTH_ERROR_CODE.INVALID_SESSION);
+    return;
   }
 
   // Extract client IP once — used to rate-limit domain canonical resolution.
@@ -200,7 +204,8 @@ export default async function handler(
       userId:     (existingByUid as any).id,
       metadata:   { reason: 'user_is_soft_deleted', endpoint: 'sync-supabase-user' },
     });
-    return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+    sendAuthError(res, AUTH_ERROR_CODE.ACCOUNT_DELETED);
+    return;
   }
 
   if (!existingByUid) {
@@ -216,7 +221,8 @@ export default async function handler(
         userId:   (existingByEmail as any).id,
         metadata: { reason: 'email_is_soft_deleted', endpoint: 'sync-supabase-user' },
       });
-      return res.status(403).json({ error: 'ACCOUNT_DELETED', code: 'AUTH_001' });
+      sendAuthError(res, AUTH_ERROR_CODE.ACCOUNT_DELETED);
+      return;
     }
   }
 
@@ -257,6 +263,22 @@ export default async function handler(
       .from('users')
       .update({ is_email_verified: true, last_sign_in_at: now, has_password: hasPassword })
       .eq('supabase_uid', supabaseUid);
+    // Lifecycle transition: a status='invited' row that successfully completes
+    // Supabase auth has, by definition, "completed first authenticated session"
+    // (migration 20260638's stated trigger). Atomically flip to 'active' and
+    // stamp activated_at — both predicated on status='invited' in the WHERE
+    // clause, so:
+    //   * the flip is idempotent across repeat logins (second call matches 0
+    //     rows once the first completes),
+    //   * activated_at is written exactly once per user,
+    //   * 'suspended' and 'deleted' rows are never touched.
+    // Wrapped in tryFlipInvitedToActive so a missing column on legacy schemas
+    // (e.g. before 20260641) gracefully degrades — never 500s the sync.
+    await tryFlipInvitedToActive({
+      filterColumn: 'supabase_uid',
+      filterValue:  supabaseUid,
+      userId:       existingUserId,
+    });
     // Best-effort credit-bookkeeping reconciliation. grantInitialFreeCredit
     // self-heals: if the wallet already has the grant but the claim or stamp
     // is missing, it repairs them without re-granting. If the org already
@@ -298,6 +320,12 @@ export default async function handler(
     }
     await supabase.from('users').update(updatePayload).eq('id', (byEmail as any).id);
     const existingUserIdByEmail = (byEmail as { id: string }).id;
+    // Lifecycle transition — see by-uid branch above for rationale.
+    await tryFlipInvitedToActive({
+      filterColumn: 'id',
+      filterValue:  existingUserIdByEmail,
+      userId:       existingUserIdByEmail,
+    });
     // Same reconciliation as the by-uid branch: heal any drift between the
     // wallet, claim row, and company stamp on every login. Best-effort.
     void reconcileInitialFreeCreditForUser(existingUserIdByEmail, normalizedEmail);
@@ -309,49 +337,168 @@ export default async function handler(
     return res.status(200).json({ ok: true });
   }
 
-  // Third: brand-new user — INSERT
-  // Pre-link to invitation company if one exists for this email
-  const { error: insertError } = await supabase.from('users').insert({
-    supabase_uid:      supabaseUid,
-    email:             normalizedEmail,
-    is_email_verified: true,
-    last_sign_in_at:   now,
-    has_password:      hasPassword,
-  });
+  // Third: brand-new user — INSERT with id returned in the same round-trip.
+  // Pre-Phase-2.B-G this issued INSERT + a separate SELECT to read back the
+  // id; the round-trip is now collapsed. If supabase-js returns no row
+  // (extremely rare; would indicate a server-side INSERT-without-RETURNING
+  // bug), we fall back to the by-uid lookup so projectSession can still mint
+  // the canonical auth_session.
+  const { data: inserted, error: insertError } = await supabase
+    .from('users')
+    .insert({
+      supabase_uid:      supabaseUid,
+      email:             normalizedEmail,
+      is_email_verified: true,
+      last_sign_in_at:   now,
+      has_password:      hasPassword,
+    })
+    .select('id')
+    .maybeSingle();
 
   if (insertError) {
     logger.error('auth_sync_insert_failed', { email: normalizedEmail, message: insertError.message });
-    return res.status(500).json({ error: 'Failed to sync user to database' });
+    sendAuthError(res, AUTH_ERROR_CODE.PROFILE_LOAD_FAILED, {
+      errorOverride: 'Failed to sync user to database',
+    });
+    return;
   }
 
-  let freshlyInsertedUserId: string | null = null;
+  let freshlyInsertedUserId: string | null = (inserted as { id?: string } | null)?.id ?? null;
 
-  // Look the row up separately (instead of chaining .select() onto the
-  // insert) so the success/failure of the insert is decoupled from any
-  // read-back semantics. The bootstrap is best-effort — wrapped in its
-  // own try/catch — but we still safeguard the call so a thrown promise
-  // here cannot 500 the sync endpoint.
-  try {
-    const { data: insertedUser } = await supabase
-      .from('users')
-      .select('id')
-      .eq('supabase_uid', supabaseUid)
-      .maybeSingle();
-    if (insertedUser) {
-      const insertedUserId = (insertedUser as { id: string }).id;
-      freshlyInsertedUserId = insertedUserId;
+  if (!freshlyInsertedUserId) {
+    // INSERT succeeded but returned no row — defensive fallback to a single
+    // by-uid read. Should never fire in practice.
+    try {
+      const { data: insertedUser } = await supabase
+        .from('users')
+        .select('id')
+        .eq('supabase_uid', supabaseUid)
+        .maybeSingle();
+      if (insertedUser) freshlyInsertedUserId = (insertedUser as { id: string }).id;
+    } catch (err) {
+      logger.warn('auth_sync_post_insert_lookup_failed', {
+        email: normalizedEmail,
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
-  } catch (err) {
-    logger.warn('auth_sync_post_insert_lookup_failed', {
-      email: normalizedEmail,
-      message: err instanceof Error ? err.message : String(err),
-    });
   }
 
   if (freshlyInsertedUserId) {
     await projectSession(freshlyInsertedUserId);
   }
   return res.status(200).json({ ok: true });
+}
+
+/**
+ * Atomic, idempotent invited → active lifecycle transition.
+ *
+ * Issues `UPDATE users SET status='active', activated_at=NOW() WHERE
+ * <filter> AND status='invited'`. The `status='invited'` predicate is the
+ * idempotency guard — once the row flips, subsequent calls match zero rows
+ * and the update is a no-op (no overwritten timestamps, no duplicate events).
+ *
+ * Error-tolerant by design:
+ *   - missing `status` column → logged as schema_fallback, sync continues
+ *   - missing `activated_at` column → retried without the timestamp so
+ *     environments that have 20260638 applied but not 20260641 still
+ *     flip the status
+ *   - any other DB error → logged but never thrown
+ *
+ * Returns true when a row was actually flipped (for telemetry / tests).
+ *
+ * Exported for test coverage — the production call sites above are the
+ * only non-test consumers.
+ */
+export async function tryFlipInvitedToActive(input: {
+  filterColumn: 'supabase_uid' | 'id';
+  filterValue:  string;
+  userId:       string;
+}): Promise<boolean> {
+  const baseFilter = supabase
+    .from('users')
+    .update({ status: 'active', activated_at: new Date().toISOString() })
+    .eq(input.filterColumn, input.filterValue)
+    .eq('status', 'invited')
+    .select('id');
+
+  try {
+    const { data, error } = await baseFilter;
+    if (!error) {
+      const flipped = Array.isArray(data) && data.length > 0;
+      if (flipped) {
+        logger.info('invited_user_activated', {
+          userId: input.userId,
+          mode:   'with_activated_at',
+        });
+        incrementAuthMetric('auth.lifecycle.invited_to_active', { mode: 'with_activated_at' });
+      } else {
+        incrementAuthMetric('auth.lifecycle.invited_flip_noop', {});
+      }
+      return flipped;
+    }
+
+    const msg = (error.message ?? '').toLowerCase();
+    const missingActivatedAt = msg.includes("could not find the 'activated_at' column");
+    const missingStatus = msg.includes("could not find the 'status' column");
+
+    if (missingStatus) {
+      logger.warn('auth_schema_fallback', {
+        area: 'auth',
+        type: 'schema_fallback',
+        resolver: 'auth_sync.invited_to_active',
+        missingColumns: ['status'],
+        rawMessage: error.message,
+      });
+      return false;
+    }
+
+    if (missingActivatedAt) {
+      logger.warn('auth_schema_fallback', {
+        area: 'auth',
+        type: 'schema_fallback',
+        resolver: 'auth_sync.invited_to_active',
+        missingColumns: ['activated_at'],
+        rawMessage: error.message,
+      });
+      const retry = await supabase
+        .from('users')
+        .update({ status: 'active' })
+        .eq(input.filterColumn, input.filterValue)
+        .eq('status', 'invited')
+        .select('id');
+      if (retry.error) {
+        logger.warn('auth_sync_status_flip_failed', {
+          userId:  input.userId,
+          message: retry.error.message,
+        });
+        incrementAuthMetric('auth.lifecycle.invited_flip_failed', { reason: 'retry_failed' });
+        return false;
+      }
+      const retryFlipped = Array.isArray(retry.data) && retry.data.length > 0;
+      if (retryFlipped) {
+        logger.info('invited_user_activated', {
+          userId: input.userId,
+          mode:   'status_only',
+        });
+        incrementAuthMetric('auth.lifecycle.invited_to_active', { mode: 'status_only' });
+      } else {
+        incrementAuthMetric('auth.lifecycle.invited_flip_noop', {});
+      }
+      return retryFlipped;
+    }
+
+    logger.warn('auth_sync_status_flip_failed', {
+      userId:  input.userId,
+      message: error.message,
+    });
+    return false;
+  } catch (err) {
+    logger.warn('auth_sync_status_flip_threw', {
+      userId:  input.userId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 /**

@@ -15,15 +15,22 @@ import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import { useBoltPlatformPicker } from './useBoltPlatformPicker';
 import { FORMATS_SUPPORTING_CROSS_PLATFORM } from '../lib/shared/bolt/crossPlatformSharing';
+import {
+  getCreatorGovernance,
+  isDailyPlanOnlyFormat,
+  isGuidanceOnlyFormat,
+  supportsAutonomousExecution,
+} from '../lib/shared/creatorGovernanceRegistry';
 
-type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story';
+type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story' | 'banner' | 'infographic' | 'pdf' | 'slider' | 'post' | 'thread';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
-type OutcomeView = 'week_plan' | 'daily_plan';
+type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
 type SharingMode = 'shared' | 'unique' | 'ai';
 
 const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: string }[] = [
   { value: 'week_plan',  label: 'Week Plan',  icon: '📋', hint: 'High-level weekly content blueprint' },
   { value: 'daily_plan', label: 'Daily Plan',  icon: '📅', hint: 'Break the plan into day-by-day actions' },
+  { value: 'schedule',   label: 'Schedule',   icon: 'Cal', hint: 'Generate and schedule autonomous creator assets when all selected formats support it' },
 ];
 
 const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
@@ -41,6 +48,15 @@ const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: strin
   { value: 'short',    label: 'Short',    icon: '⚡', hint: 'YouTube / TikTok short' },
   { value: 'story',    label: 'Story',    icon: '📱', hint: '24hr ephemeral story format' },
 ];
+
+CONTENT_FORMATS.push(
+  { value: 'banner',   label: 'Banner',   icon: 'Banner', hint: 'Promotional visual asset' },
+  { value: 'infographic', label: 'Infographic', icon: 'Info', hint: 'Visual explainer asset' },
+  { value: 'pdf',      label: 'PDF',      icon: 'PDF', hint: 'Document-style creator asset' },
+  { value: 'slider',   label: 'Slider',   icon: 'Slide', hint: 'Presentation-style slide asset' },
+  { value: 'post',     label: 'Post',     icon: 'Post', hint: 'Platform-ready creator post' },
+  { value: 'thread',   label: 'Thread',   icon: 'Thread', hint: 'Connected social sequence' },
+);
 
 const DURATION_OPTIONS = [
   { value: 1, label: '1 Week' },
@@ -127,6 +143,7 @@ const BOLT_PIPELINE: { stage: string; label: string }[] = [
   { stage: 'ai/plan',                  label: 'Creating week plan' },
   { stage: 'commit-plan',              label: 'Saving blueprint' },
   { stage: 'generate-weekly-structure', label: 'Creating daily activity plan' },
+  { stage: 'creator-asset-generation', label: 'Generating creator assets' },
 ];
 
 function stageIndex(stage: string | undefined): number {
@@ -134,6 +151,7 @@ function stageIndex(stage: string | undefined): number {
   const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
   if (exact !== -1) return exact;
   if (stage.startsWith('generate-weekly-structure')) return 3;
+  if (stage.startsWith('render-creator')) return 4;
   return -1;
 }
 
@@ -364,6 +382,24 @@ export function useBoltCreator() {
 
   // View selector
   const [outcomeView, setOutcomeView] = useState<OutcomeView>('week_plan');
+  const selectedGovernance = contentFormats
+    .map((format) => getCreatorGovernance(format))
+    .filter(Boolean);
+  const hasGuidanceOnlyFormats = contentFormats.some((format) => isGuidanceOnlyFormat(format) || isDailyPlanOnlyFormat(format));
+  const supportsScheduling =
+    contentFormats.length > 0 &&
+    selectedGovernance.length === contentFormats.length &&
+    contentFormats.every((format) => getCreatorGovernance(format)?.schedulable === true) &&
+    !hasGuidanceOnlyFormats;
+  const supportsAutonomousCreatorExecution =
+    contentFormats.length > 0 &&
+    contentFormats.some((format) => supportsAutonomousExecution(format));
+
+  useEffect(() => {
+    if (!supportsScheduling && outcomeView === 'schedule') {
+      setOutcomeView('daily_plan');
+    }
+  }, [supportsScheduling, outcomeView]);
 
   // BOLT execution
   const [executing, setExecuting] = useState(false);
@@ -398,8 +434,8 @@ export function useBoltCreator() {
       if (s.hasGenerated)      setHasGenerated(s.hasGenerated);
       if (s.outcomeView)       setOutcomeView(s.outcomeView);
       if (s.campaignStartDate) setCampaignStartDate(s.campaignStartDate);
+      if (s.selectedPlatforms) setSelectedPlatforms(s.selectedPlatforms);
     } catch {}
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -414,10 +450,10 @@ export function useBoltCreator() {
       sessionStorage.setItem(BOLT_STATE_KEY, JSON.stringify({
         topic, goals, audience, strategicFocus, offerings,
         contentFormats, formatFrequency, duration, themeSource,
-        cards, hasGenerated, outcomeView, sharingMode, campaignStartDate,
+        cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms,
       }));
     } catch {}
-  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate]);
+  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms]);
 
   useEffect(() => {
     if (authChecked && !user?.userId) router.replace('/login');
@@ -450,7 +486,6 @@ export function useBoltCreator() {
         setFormatFrequency((fq) => { const next = { ...fq }; delete next[f]; return next; });
         return prev.filter((x) => x !== f);
       }
-      if (prev.length >= 2) return prev;
       setFormatFrequency((fq) => ({ ...fq, [f]: fq[f] ?? 3 }));
       return [...prev, f];
     });
@@ -475,6 +510,11 @@ export function useBoltCreator() {
   async function handleConfirmLaunch() {
     const card = confirmingCard;
     if (!card || executing) return;
+    if (outcomeView === 'schedule' && !supportsScheduling) {
+      setExecError('Schedule is disabled because one or more selected creator formats are daily-plan-only or unsupported for autonomous scheduling.');
+      setConfirmingCard(null);
+      return;
+    }
     setConfirmingCard(null);
 
     setSelectedIds([card.id]);
@@ -523,6 +563,8 @@ export function useBoltCreator() {
       campaign_mode: 'creator',
       communication_style: ['visual'],
       content_formats: contentFormats,
+      selected_platforms: selectedPlatforms,
+      creator_governance: Object.fromEntries(contentFormats.map((format) => [format, getCreatorGovernance(format)])),
       cross_platform_sharing: sharingMode === 'shared'
         ? { enabled: true }
         : sharingMode === 'unique'
@@ -554,7 +596,7 @@ export function useBoltCreator() {
       if (!runId) throw new Error('No run_id returned from BOLT');
 
       const POLL_INTERVAL_MS = 2500;
-      const DEADLINE = Date.now() + 6 * 60 * 1000; // 6 min — no AI content gen needed
+      const DEADLINE = Date.now() + (outcomeView === 'schedule' ? 15 : 6) * 60 * 1000;
       let completedCampaignId: string | null = null;
       let done = false;
 
@@ -598,6 +640,8 @@ export function useBoltCreator() {
       const qs = new URLSearchParams({ companyId: companyId ?? '' });
       if (outcomeView === 'daily_plan') {
         router.push(`/campaign-daily-plan/${completedCampaignId}?${qs.toString()}`);
+      } else if (outcomeView === 'schedule') {
+        router.push(`/campaign-calendar/${completedCampaignId}?${qs.toString()}`);
       } else {
         router.push(`/campaign-details/${completedCampaignId}?mode=fast&${qs.toString()}`);
       }
@@ -684,6 +728,9 @@ export function useBoltCreator() {
     isLoading,
     offerings,
     outcomeView,
+    hasGuidanceOnlyFormats,
+    supportsScheduling,
+    supportsAutonomousCreatorExecution,
     router,
     companyId,
     selectedIds,

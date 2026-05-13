@@ -1,7 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireCompanyAccess } from '../../../backend/middleware/authMiddleware';
-import { getActiveProperty } from '../../../backend/services/analyticsIntegrationService';
+import { getActiveProperty, getActiveSearchConsoleProperty } from '../../../backend/services/analyticsIntegrationService';
 import { runIngestionForCompany } from '../../../backend/services/ingestionScheduler';
+import { buildGscHistoricalBackfillOverride } from '../../../backend/services/gscIngestionService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 
@@ -24,14 +25,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const companyId = typeof req.body?.companyId === 'string' ? req.body.companyId : '';
+  const capability = req.body?.capability === 'google_search_console' || req.body?.capability === 'gsc'
+    ? 'google_search_console'
+    : 'google_analytics';
+  const source = capability === 'google_search_console' ? 'gsc' : 'ga4';
+  const statusSource = capability === 'google_search_console' ? 'gsc' : 'ga';
   if (!companyId) {
     return res.status(400).json({ status: 'error', error: 'company_id_required' });
   }
   if (!(await requireCompanyAccess(user.id, companyId, res))) return;
 
-  const activeProperty = await getActiveProperty(companyId);
+  const activeProperty = capability === 'google_search_console'
+    ? await getActiveSearchConsoleProperty(companyId)
+    : await getActiveProperty(companyId);
   if (!activeProperty) {
-    return res.status(400).json({ status: 'error', error: 'no_active_property' });
+    return res.status(400).json({
+      status: 'error',
+      error: capability === 'google_search_console' ? 'no_active_search_console_property' : 'no_active_property',
+    });
   }
 
   // Note: we deliberately do NOT call saveSelectedProperty here. The active
@@ -49,12 +60,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // so a genuine bug never surfaces as an unhandled rejection on the server.
   void runIngestionForCompany({
     companyId,
-    sources: ['ga4'],
+    sources: [source],
     force: true,
-    reason: 'manual_force_sync',
+    overrides: capability === 'google_search_console'
+      ? { gsc: buildGscHistoricalBackfillOverride() }
+      : undefined,
+    reason: capability === 'google_search_console' ? 'manual_gsc_force_sync' : 'manual_force_sync',
   }).catch((err) => {
-    console.error('[GA-FORCE-SYNC] background run threw', {
+    console.error('[ANALYTICS-FORCE-SYNC] background run threw', {
       companyId,
+      capability,
       message: err instanceof Error ? err.message : String(err),
     });
   });
@@ -73,7 +88,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .from('data_source_status')
       .select('status, last_synced_at, error_message')
       .eq('company_id', companyId)
-      .eq('source', 'ga')
+      .eq('source', statusSource)
       .maybeSingle();
 
     if (data) {
@@ -101,7 +116,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .from('ingestion_runs')
       .select('records_inserted')
       .eq('company_id', companyId)
-      .eq('source', 'ga4')
+      .eq('source', source)
       .eq('status', 'completed')
       .order('completed_at', { ascending: false })
       .limit(1)
@@ -110,8 +125,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // TEMP verification log — remove once force-sync is observed working in prod.
-  console.log('[GA-FORCE-SYNC]', {
+  console.log('[ANALYTICS-FORCE-SYNC]', {
     companyId,
+    capability,
     propertyId: activeProperty.property_id,
     observed_status: observedStatus,
     last_synced_at: lastSyncedAt,
@@ -123,7 +139,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       status: 'synced',
       last_synced_at: lastSyncedAt,
-      sessions_written: sessionsWritten,
+      sessions_written: capability === 'google_analytics' ? sessionsWritten : undefined,
+      records_written: sessionsWritten,
     });
   }
 

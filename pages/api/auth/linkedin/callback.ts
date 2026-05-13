@@ -7,6 +7,8 @@ import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
+import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
+import { config } from '@/config';
 
 /** Derives base URL from the actual request host — never the NEXT_PUBLIC_APP_URL env var.
  *  This ensures the redirect_uri used in token exchange exactly matches what was sent
@@ -133,7 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+    const userId = user?.id || stateUserId || config.DEFAULT_USER_ID || '';
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
@@ -255,6 +257,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Save encrypted tokens using tokenStore
     await setToken(accountId, tokenObj);
+
+    // Phase 0 — persist actually-granted scopes. LinkedIn returns the granted
+    // scope set as a space-separated `scope` string on the token response;
+    // fall back to the originally-requested scopes if absent (LinkedIn omits
+    // `scope` when the granted set equals the request).
+    const requestedLinkedinScopes = 'openid profile email w_member_social';
+    const grantedLinkedinScopes = normaliseScopes(
+      tokenData.scope ?? requestedLinkedinScopes,
+      'space',
+    );
+    await persistGrantedScopes({
+      socialAccountId: accountId,
+      platform: 'linkedin',
+      grantedScopes: grantedLinkedinScopes,
+    });
 
     // NOTE: LinkedIn connection count (r_network scope) requires LinkedIn Partner Program
     // approval and cannot be fetched with standard OAuth scopes. Connection count will

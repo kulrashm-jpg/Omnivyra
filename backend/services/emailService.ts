@@ -42,7 +42,21 @@ type InboundSignupNoticePayload = {
   supportEmail: string;
 };
 
-type EmailPayload = InvitePayload | CompanyReferralPayload | InboundSignupNoticePayload;
+type InviteCredentialsPayload = {
+  type: 'team_invite_credentials';
+  recipientEmail: string;
+  fullName: string | null;
+  companyName: string | null;
+  role: string;
+  loginUrl: string;
+  temporaryPassword: string;
+};
+
+type EmailPayload =
+  | InvitePayload
+  | CompanyReferralPayload
+  | InboundSignupNoticePayload
+  | InviteCredentialsPayload;
 
 async function invokeEdgeFunction(payload: EmailPayload, context: { idempotencyKey?: string }): Promise<void> {
   const { error } = await supabase.functions.invoke('send-transactional-email', {
@@ -87,6 +101,40 @@ export async function sendCompanyAdminReferral(
       admin: opts.admin,
       companyName: opts.companyName,
       supportEmail: opts.supportEmail,
+    },
+    { idempotencyKey },
+  );
+}
+
+/**
+ * Send an invite that contains a one-time temporary password.
+ *
+ * Used by the Super-Admin "Create User" flow when `inviteMode === 'temp_password'`.
+ * The temporary password is rendered in the email body and MUST never appear
+ * in any other log, audit, or persisted record — the caller's responsibility
+ * is to generate it server-side, hand it to Supabase Auth via admin.createUser,
+ * pass it here for one-shot delivery, and then discard it.
+ */
+export async function sendInviteWithCredentials(
+  opts: {
+    recipientEmail: string;
+    fullName: string | null;
+    companyName: string | null;
+    role: string;
+    loginUrl: string;
+    temporaryPassword: string;
+  },
+  idempotencyKey?: string,
+): Promise<void> {
+  await invokeEdgeFunction(
+    {
+      type: 'team_invite_credentials',
+      recipientEmail: opts.recipientEmail,
+      fullName: opts.fullName,
+      companyName: opts.companyName,
+      role: opts.role,
+      loginUrl: opts.loginUrl,
+      temporaryPassword: opts.temporaryPassword,
     },
     { idempotencyKey },
   );

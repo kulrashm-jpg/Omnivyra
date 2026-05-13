@@ -11,6 +11,11 @@ import {
   XCircle,
   CheckCircle,
   Trash2,
+  Mail,
+  RefreshCw,
+  Ban,
+  Power,
+  LogOut,
 } from 'lucide-react';
 import RbacTab from './RbacTab';
 import CompaniesTable from './CompaniesTable';
@@ -33,7 +38,43 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
   const [userSearch, setUserSearch] = useState('');
   const [showAllUsers, setShowAllUsers] = useState(true);
   const [companyForm, setCompanyForm] = useState({ name: '', website: '', industry: '' });
-  const [companyAdminForm, setCompanyAdminForm] = useState({ email: '', companyId: '', role: 'COMPANY_ADMIN' });
+  const [companyAdminForm, setCompanyAdminForm] = useState<{
+    email: string;
+    fullName: string;
+    companyId: string;
+    role: string;
+    allowPersonalEmail: boolean;
+    inviteMode: 'magic_link' | 'temp_password';
+    sendInvite: boolean;
+  }>({
+    email: '',
+    fullName: '',
+    companyId: '',
+    role: 'COMPANY_ADMIN',
+    allowPersonalEmail: false,
+    inviteMode: 'magic_link',
+    sendInvite: true,
+  });
+  const [createUserResult, setCreateUserResult] = useState<{
+    email: string;
+    mode: string;
+    deliveryStatus: string;
+    jobId: string | null;
+    queueError: string | null;
+  } | null>(null);
+
+  // Map of pending invitations keyed by lower-cased email. Populated by
+  // /api/super-admin/invitations alongside the user list. Used to overlay
+  // delivery state and show the resend button next to invited users.
+  type InviteDelivery = {
+    invitationId: string;
+    deliveryState: 'queued' | 'sending' | 'sent' | 'retrying' | 'failed' | 'dead' | 'none';
+    retryCount: number | null;
+    maxRetries: number | null;
+    nextAttemptAt: string | null;
+    lastError: string | null;
+  };
+  const [invitesByEmail, setInvitesByEmail] = useState<Record<string, InviteDelivery>>({});
 
   const loadData = async () => {
     setIsLoading(true);
@@ -45,6 +86,26 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
       const usersResponse = await fetchWithAuth('/api/super-admin/users');
       const usersParsed = await parseJsonResponse<{ users?: any[] }>(usersResponse, '/api/super-admin/users');
       if (usersParsed.ok === true) setAppUsers(usersParsed.data.users || []);
+
+      // Pending invitations + delivery state (Phase 2.A.1).
+      const invitesResponse = await fetchWithAuth('/api/super-admin/invitations?status=pending');
+      const invitesParsed = await parseJsonResponse<{ invitations?: any[] }>(invitesResponse, '/api/super-admin/invitations');
+      if (invitesParsed.ok === true && Array.isArray(invitesParsed.data.invitations)) {
+        const map: Record<string, InviteDelivery> = {};
+        for (const inv of invitesParsed.data.invitations) {
+          const email = String(inv.email || '').toLowerCase();
+          if (!email) continue;
+          map[email] = {
+            invitationId: inv.id,
+            deliveryState: inv.delivery_state,
+            retryCount: inv.latest_job?.retry_count ?? null,
+            maxRetries: inv.latest_job?.max_retries ?? null,
+            nextAttemptAt: inv.latest_job?.next_attempt_at ?? null,
+            lastError: inv.latest_job?.last_error ?? null,
+          };
+        }
+        setInvitesByEmail(map);
+      }
     } catch (error) {
       console.error('Error loading company/user data:', error);
     } finally {
@@ -52,9 +113,97 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
     }
   };
 
+  const handleLifecycleAction = async (
+    action: 'suspend' | 'resume' | 'force-logout',
+    userId: string,
+    email: string,
+  ) => {
+    const labels: Record<typeof action, { confirm: string; reasonPrompt: string; verb: string }> = {
+      suspend: {
+        confirm: `Suspend ${email}? They will be signed out immediately and cannot sign in until resumed.`,
+        reasonPrompt: 'Reason for suspension (required, recorded in audit log):',
+        verb: 'suspend',
+      },
+      resume: {
+        confirm: `Resume ${email}? They will be able to sign in again.`,
+        reasonPrompt: 'Reason for resuming (optional):',
+        verb: 'resume',
+      },
+      'force-logout': {
+        confirm: `Force-logout ${email}? All their active sessions will be revoked. Their account stays active and they can sign in again.`,
+        reasonPrompt: 'Reason for force-logout (recorded in audit log):',
+        verb: 'force-logout',
+      },
+    };
+    const cfg = labels[action];
+    if (!confirm(cfg.confirm)) return;
+    const reason = action === 'resume'
+      ? (prompt(cfg.reasonPrompt, '') ?? '').trim()
+      : (prompt(cfg.reasonPrompt, '') ?? '').trim();
+    if (action !== 'resume' && !reason) {
+      alert(`A reason is required to ${cfg.verb}.`);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await fetchWithAuth(
+        `/api/super-admin/users/${encodeURIComponent(userId)}/${action}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        },
+      );
+      if (!response.ok) {
+        const r = await response.json().catch(() => ({}));
+        alert(`${cfg.verb} failed: ${r.details || r.error || response.statusText}`);
+        return;
+      }
+      const body = await response.json().catch(() => ({}));
+      if (action === 'force-logout') {
+        alert(`Sessions revoked: ${body.revoked_sessions ?? 0}. The user can sign in again.`);
+      }
+      await loadData();
+    } catch (error) {
+      console.error(`Error on ${action}:`, error);
+      alert(`Failed to ${cfg.verb}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResendInvite = async (invitationId: string, email: string) => {
+    if (!confirm(`Resend invitation email to ${email}?`)) return;
+    setIsLoading(true);
+    try {
+      const idempotencyKey =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+      const response = await fetchWithAuth(`/api/super-admin/invitations/${encodeURIComponent(invitationId)}/resend`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
+      });
+      if (!response.ok) {
+        const r = await response.json().catch(() => ({}));
+        alert(`Resend failed: ${r.details || r.error || response.statusText}`);
+        return;
+      }
+      await loadData();
+    } catch (error) {
+      console.error('Error resending invitation:', error);
+      alert('Failed to resend invitation');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCreateCompany = async () => {
@@ -91,23 +240,59 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
       return;
     }
     setIsLoading(true);
+    setCreateUserResult(null);
     try {
-      const response = await fetchWithAuth('/api/super-admin/users', {
+      // Per-request idempotency key — required by withIdempotency wrapper.
+      const idempotencyKey =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+
+      const response = await fetchWithAuth('/api/super-admin/users/create', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: companyAdminForm.email, companyId: companyAdminForm.companyId, role: companyAdminForm.role }),
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify({
+          email: companyAdminForm.email.trim(),
+          fullName: companyAdminForm.fullName.trim() || null,
+          companyId: companyAdminForm.companyId,
+          role: companyAdminForm.role,
+          allowPersonalEmail: companyAdminForm.allowPersonalEmail,
+          inviteMode: companyAdminForm.inviteMode,
+          sendInvite: companyAdminForm.sendInvite,
+        }),
       });
-      const parsed = await parseJsonResponse(response, '/api/super-admin/users');
+      const parsed = await parseJsonResponse<{
+        user?: { email: string; status: string };
+        invitation?: { mode: string; id: string | null };
+        delivery?: { status: string; job_id: string | null; queue_error: string | null };
+      }>(response, '/api/super-admin/users/create');
       if (parsed.ok === true) {
-        setCompanyAdminForm({ email: '', companyId: '', role: 'COMPANY_ADMIN' });
-        setShowCreateCompanyAdminModal(false);
+        setCreateUserResult({
+          email: parsed.data.user?.email ?? companyAdminForm.email,
+          mode: parsed.data.invitation?.mode ?? companyAdminForm.inviteMode,
+          deliveryStatus: parsed.data.delivery?.status ?? 'unknown',
+          jobId: parsed.data.delivery?.job_id ?? null,
+          queueError: parsed.data.delivery?.queue_error ?? null,
+        });
+        setCompanyAdminForm({
+          email: '',
+          fullName: '',
+          companyId: companyAdminForm.companyId,
+          role: 'COMPANY_ADMIN',
+          allowPersonalEmail: false,
+          inviteMode: 'magic_link',
+          sendInvite: true,
+        });
         loadData();
       } else {
-        alert(parsed.message || 'Failed to create company admin');
+        alert(parsed.message || 'Failed to create user');
       }
     } catch (error) {
-      console.error('Error creating company admin:', error);
-      alert('Failed to create company admin');
+      console.error('Error creating user:', error);
+      alert('Failed to create user');
     } finally {
       setIsLoading(false);
     }
@@ -221,8 +406,10 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'active': return 'bg-green-100 text-green-800';
+      case 'invited': return 'bg-blue-100 text-blue-800';
       case 'pending': return 'bg-yellow-100 text-yellow-800';
       case 'suspended': return 'bg-red-100 text-red-800';
+      case 'inactive': return 'bg-gray-200 text-gray-700';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
@@ -372,13 +559,61 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
                       </select>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(user.status || 'active')}`}>
-                        {user.status || 'active'}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium w-fit ${getStatusColor(user.status || 'active')}`}>
+                          {user.status || 'active'}
+                        </span>
+                        {user.account_status && user.account_status !== 'active' && (
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium w-fit ${getStatusColor(user.account_status)}`}
+                            title={`Account lifecycle: ${user.account_status}`}
+                          >
+                            Account: {user.account_status}
+                          </span>
+                        )}
+                        {(() => {
+                          const invite = invitesByEmail[String(user.email || '').toLowerCase()];
+                          if (!invite) return null;
+                          const stateLabel: Record<string, { label: string; cls: string }> = {
+                            queued: { label: 'Queued', cls: 'bg-slate-100 text-slate-700' },
+                            sending: { label: 'Sending', cls: 'bg-indigo-100 text-indigo-700' },
+                            sent: { label: 'Delivered', cls: 'bg-green-100 text-green-700' },
+                            retrying: { label: `Retrying ${invite.retryCount ?? 0}/${invite.maxRetries ?? 5}`, cls: 'bg-amber-100 text-amber-800' },
+                            failed: { label: 'Failed', cls: 'bg-red-100 text-red-700' },
+                            dead: { label: 'Dead-lettered', cls: 'bg-red-200 text-red-900' },
+                            none: { label: 'No delivery', cls: 'bg-gray-100 text-gray-600' },
+                          };
+                          const tag = stateLabel[invite.deliveryState] ?? stateLabel.none;
+                          return (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium w-fit ${tag.cls}`}
+                              title={invite.lastError ?? undefined}
+                            >
+                              <Mail className="h-3 w-3" /> {tag.label}
+                            </span>
+                          );
+                        })()}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(user.created_at).toLocaleDateString()}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center gap-2">
+                        {(() => {
+                          const invite = invitesByEmail[String(user.email || '').toLowerCase()];
+                          if (!invite) return null;
+                          const canResend = ['queued', 'sending', 'failed', 'dead', 'retrying', 'none'].includes(invite.deliveryState);
+                          if (!canResend) return null;
+                          return (
+                            <button
+                              onClick={() => handleResendInvite(invite.invitationId, user.email)}
+                              className="text-blue-600 hover:text-blue-900 p-1 rounded hover:bg-blue-50"
+                              title="Resend invitation email"
+                              disabled={isLoading}
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                            </button>
+                          );
+                        })()}
                         <button
                           onClick={() => handleUserStatusChange(user.user_id, user.company_id, (user.status || 'active') === 'active' ? 'inactive' : 'active')}
                           disabled={!user.company_id}
@@ -386,6 +621,34 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
                           title={user.company_id ? ((user.status || 'active') === 'active' ? 'Make Inactive' : 'Make Active') : 'User must be assigned to a company'}
                         >
                           {(user.status || 'active') === 'active' ? <XCircle className="h-4 w-4" /> : <CheckCircle className="h-4 w-4" />}
+                        </button>
+                        {/* Phase 2.B — lifecycle actions */}
+                        {user.account_status === 'suspended' ? (
+                          <button
+                            onClick={() => handleLifecycleAction('resume', user.user_id, user.email)}
+                            className="text-green-700 hover:text-green-900 p-1 rounded hover:bg-green-50"
+                            title="Resume account"
+                            disabled={isLoading}
+                          >
+                            <Power className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleLifecycleAction('suspend', user.user_id, user.email)}
+                            className="text-orange-600 hover:text-orange-900 p-1 rounded hover:bg-orange-50"
+                            title="Suspend account (blocks all access, reversible)"
+                            disabled={isLoading || user.account_status === 'deleted'}
+                          >
+                            <Ban className="h-4 w-4" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleLifecycleAction('force-logout', user.user_id, user.email)}
+                          className="text-indigo-600 hover:text-indigo-900 p-1 rounded hover:bg-indigo-50"
+                          title="Force logout (revoke all active sessions, account stays active)"
+                          disabled={isLoading || user.account_status === 'deleted'}
+                        >
+                          <LogOut className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleDeleteUser(user.user_id, user.company_id)}
@@ -440,13 +703,38 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
 
       {showCreateCompanyAdminModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Add Company User</h3>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl mx-4 p-6 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-gray-900 mb-1">Create User</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Backend-creates the Supabase Auth account, the company role, and the invitation.
+              Step-up authentication (passkey + trusted device) is required.
+            </p>
+
+            {createUserResult && (
+              <div className={`mb-4 rounded-lg border px-4 py-3 text-sm ${createUserResult.queueError ? 'bg-yellow-50 border-yellow-200 text-yellow-800' : 'bg-green-50 border-green-200 text-green-800'}`}>
+                <div className="font-medium">User created: {createUserResult.email}</div>
+                <div className="text-xs mt-1">
+                  Invite mode: <strong>{createUserResult.mode}</strong> · Delivery: <strong>{createUserResult.deliveryStatus}</strong>
+                  {createUserResult.jobId && <span className="ml-2 text-slate-500">(job {createUserResult.jobId.slice(0, 8)})</span>}
+                  {createUserResult.queueError && <div className="mt-1">Queue error: {createUserResult.queueError}</div>}
+                  <div className="mt-1 text-slate-500">
+                    Email delivery runs asynchronously. Status appears in the user list within ~1 minute.
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
                 <input type="email" value={companyAdminForm.email} onChange={(e) => setCompanyAdminForm((p) => ({ ...p, email: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2" placeholder="admin@acme.com" />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Full name (optional)</label>
+                <input type="text" value={companyAdminForm.fullName} onChange={(e) => setCompanyAdminForm((p) => ({ ...p, fullName: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2" placeholder="Jane Doe" />
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Company</label>
                 <select value={companyAdminForm.companyId} onChange={(e) => setCompanyAdminForm((p) => ({ ...p, companyId: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2">
@@ -456,6 +744,7 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
                   ))}
                 </select>
               </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Role</label>
                 <select value={companyAdminForm.role} onChange={(e) => setCompanyAdminForm((p) => ({ ...p, role: e.target.value }))} className="w-full border border-gray-300 rounded-lg px-3 py-2">
@@ -463,12 +752,97 @@ export default function CompanyUsersTab({ authError }: CompanyUsersTabProps) {
                     <option key={option.id} value={option.id}>{option.name}</option>
                   ))}
                 </select>
+                <p className="text-xs text-slate-500 mt-1">SUPER_ADMIN cannot be assigned via this flow.</p>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={companyAdminForm.allowPersonalEmail}
+                    onChange={(e) => setCompanyAdminForm((p) => ({ ...p, allowPersonalEmail: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span className="text-sm">
+                    <span className="font-medium text-slate-800">Allow personal email</span>
+                    <span className="block text-xs text-slate-500 mt-0.5">
+                      Bypasses the work-email gate. Use only for verified scenarios (consultants, contractors, internal testing).
+                      This bypass is audited.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Invite mode</label>
+                <div className="space-y-2">
+                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-slate-200 px-3 py-2 hover:bg-slate-50">
+                    <input
+                      type="radio"
+                      name="inviteMode"
+                      value="magic_link"
+                      checked={companyAdminForm.inviteMode === 'magic_link'}
+                      onChange={() => setCompanyAdminForm((p) => ({ ...p, inviteMode: 'magic_link' }))}
+                      className="mt-1"
+                    />
+                    <span className="text-sm">
+                      <span className="font-medium text-slate-800">Magic link (recommended)</span>
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        User receives a token URL. They sign in passwordless and can set their own password after.
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-slate-200 px-3 py-2 hover:bg-slate-50">
+                    <input
+                      type="radio"
+                      name="inviteMode"
+                      value="temp_password"
+                      checked={companyAdminForm.inviteMode === 'temp_password'}
+                      onChange={() => setCompanyAdminForm((p) => ({ ...p, inviteMode: 'temp_password' }))}
+                      className="mt-1"
+                    />
+                    <span className="text-sm">
+                      <span className="font-medium text-slate-800">Temporary password</span>
+                      <span className="block text-xs text-slate-500 mt-0.5">
+                        Server generates a one-time password and emails it. User is forced to reset on first sign-in.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {companyAdminForm.inviteMode === 'temp_password' && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <div className="font-medium mb-1">Temporary-password warning</div>
+                  <div className="text-xs leading-relaxed">
+                    The password is generated server-side, transmitted only in the email body, and is single-use.
+                    Prefer magic link when possible — it has no plaintext password in transit.
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-lg border border-slate-200 px-4 py-3">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={companyAdminForm.sendInvite}
+                    onChange={(e) => setCompanyAdminForm((p) => ({ ...p, sendInvite: e.target.checked }))}
+                    className="mt-0.5"
+                  />
+                  <span className="text-sm">
+                    <span className="font-medium text-slate-800">Send invitation email now</span>
+                    <span className="block text-xs text-slate-500 mt-0.5">
+                      If unchecked, the user is provisioned but no email is sent. You can resend later.
+                    </span>
+                  </span>
+                </label>
               </div>
             </div>
+
             <div className="flex justify-end gap-3 mt-6">
-              <button onClick={() => setShowCreateCompanyAdminModal(false)} className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors">Cancel</button>
+              <button onClick={() => { setShowCreateCompanyAdminModal(false); setCreateUserResult(null); }} className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors">Close</button>
               <button onClick={handleCreateCompanyAdmin} disabled={isLoading} className="px-4 py-2 bg-gray-900 text-white rounded-lg disabled:opacity-50">
-                {isLoading ? 'Creating...' : 'Create Admin'}
+                {isLoading ? 'Creating...' : 'Create User'}
               </button>
             </div>
           </div>

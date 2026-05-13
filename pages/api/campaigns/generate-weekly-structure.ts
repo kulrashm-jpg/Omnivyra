@@ -50,6 +50,8 @@ import {
   pickContentType,
   buildTopicReference,
   buildCreatorCard,
+  buildCreativeGuidance,
+  requiresCreatorCreativeGuidance,
   buildDayTopics,
   computeTopicAssignedDays,
   validateDailyPlan,
@@ -472,7 +474,9 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           const baseTopic = topics[globalTopicIdx % topics.length]!;
           const topic = deriveSubTopic(baseTopic, contentType, k, synthTargetAudience);
           globalTopicIdx++;
-          const requiresMediaBrief = ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'shorts'].includes(contentType);
+          const requiresMediaBrief =
+            ['video', 'reel', 'reels', 'carousel', 'story', 'stories', 'short', 'shorts', 'podcast', 'image'].includes(contentType) ||
+            requiresCreatorCreativeGuidance(contentType);
           topic_slots.push({
             topic,
             global_progression_index: synthGlobalIdx,
@@ -890,7 +894,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // so the block processor generates format-appropriate content.
         const contentType = String(item.contentType || 'post');
         const normalizedContentType = contentType.toLowerCase().trim();
-        const requiresMediaIntent = ['video', 'reel', 'short', 'carousel', 'image', 'story', 'podcast'].includes(normalizedContentType);
+        const requiresMediaIntent = ['video', 'reel', 'short', 'carousel', 'image', 'story', 'podcast', 'banner', 'infographic', 'pdf', 'slider'].includes(normalizedContentType);
         const execCategory = getExecutionCategoryForContentType(contentType);
         const aiGenerated = executionCategoryToAiGenerated(execCategory);
 
@@ -910,10 +914,26 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         if (creatorCardForRow) {
           (enriched as any).creator_card = creatorCardForRow;
         }
-        const derivedAssetType = requiresMediaIntent ? deriveCreatorAssetTypeFromIntent({
-          contentType: normalizedContentType,
-          targetPlatforms: [normalizePlatformKey(platform)],
-        }) : null;
+        const creativeGuidance = buildCreativeGuidance({
+          week: weekBlueprint as any,
+          item,
+          enrichedItem: enriched,
+          creatorCard: creatorCardForRow as any,
+        });
+        if (creativeGuidance) {
+          (enriched as any).creative_guidance = creativeGuidance;
+        }
+        let derivedAssetType: string | null = null;
+        if (requiresMediaIntent) {
+          try {
+            derivedAssetType = deriveCreatorAssetTypeFromIntent({
+              contentType: normalizedContentType,
+              targetPlatforms: [normalizePlatformKey(platform)],
+            });
+          } catch {
+            derivedAssetType = null;
+          }
+        }
         const row = {
           campaign_id: campaignId,
           week_number: weekNumber,
@@ -956,6 +976,9 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           max_retries: 3,
           failure_reason: null,
           failure_type: null,
+          content_status: creativeGuidance && ['video', 'reel', 'short', 'podcast'].includes(normalizedContentType)
+            ? 'guidance_ready'
+            : null,
         };
         rowsWithContent.push({ row, contentObj: enriched });
       }
@@ -1080,6 +1103,9 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         (enriched as any).validation_status = (enriched as any).validation_status === 'invalid' ? 'invalid' : 'adjusted';
         if ((entry.contentObj as any)?.creator_card != null) {
           (enriched as any).creator_card = (entry.contentObj as any).creator_card;
+        }
+        if ((entry.contentObj as any)?.creative_guidance != null) {
+          (enriched as any).creative_guidance = (entry.contentObj as any).creative_guidance;
         }
 
         const nextRow = {

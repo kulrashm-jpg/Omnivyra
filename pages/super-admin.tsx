@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import { getAuthToken } from '../utils/getAuthToken';
 import { parseJsonResponse } from '../lib/utils/safeFetchJson';
-import CostAccountingDashboard from '../components/super-admin/CostAccountingDashboard';
-import ActivityCostBreakdown from '../components/super-admin/ActivityCostBreakdown';
 import {
   ArrowLeft,
   BarChart3,
@@ -30,15 +29,51 @@ import {
   OAUTH_PLATFORMS,
   KNOWN_APIS,
 } from './super-admin.types';
-import ApisPlatformsTab from '../components/super-admin/tabs/ApisPlatformsTab';
-import CompanyUsersTab from '../components/super-admin/tabs/CompanyUsersTab';
-import AnalyticsTab from '../components/super-admin/tabs/AnalyticsTab';
-import PlansTab from '../components/super-admin/tabs/PlansTab';
-import CommunityAiTab from '../components/super-admin/tabs/CommunityAiTab';
-import SecurityTab from '../components/super-admin/tabs/SecurityTab';
-import MonetizationOpsTab from '../components/super-admin/tabs/MonetizationOpsTab';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import { classifyAuthFailure, isRecoverableAuthFailure } from '../lib/security/superAdminAuthFailure';
+
+const SuperAdminTabLoader = () => (
+  <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-8 flex items-center justify-center">
+    <div className="animate-spin rounded-full h-7 w-7 border-b-2 border-indigo-600" />
+  </div>
+);
+
+const CostAccountingDashboard = dynamic(() => import('../components/super-admin/CostAccountingDashboard'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const ActivityCostBreakdown = dynamic(() => import('../components/super-admin/ActivityCostBreakdown'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const ApisPlatformsTab = dynamic(() => import('../components/super-admin/tabs/ApisPlatformsTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const CompanyUsersTab = dynamic(() => import('../components/super-admin/tabs/CompanyUsersTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const AnalyticsTab = dynamic(() => import('../components/super-admin/tabs/AnalyticsTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const PlansTab = dynamic(() => import('../components/super-admin/tabs/PlansTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const CommunityAiTab = dynamic(() => import('../components/super-admin/tabs/CommunityAiTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const SecurityTab = dynamic(() => import('../components/super-admin/tabs/SecurityTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
+const MonetizationOpsTab = dynamic(() => import('../components/super-admin/tabs/MonetizationOpsTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
 
 export default function SuperAdminPanel() {
   const router = useRouter();
@@ -102,7 +137,6 @@ export default function SuperAdminPanel() {
         if (r.ok) return;
         const failure = await classifyAuthFailure(r);
         if (failure.kind === 'not_authenticated') {
-          // eslint-disable-next-line no-console
           console.warn('[super-admin] initial probe → not_authenticated, redirecting', {
             correlationId: failure.correlationId,
           });
@@ -115,13 +149,11 @@ export default function SuperAdminPanel() {
       } catch (err) {
         // Network blip — DO NOT log the operator out. Surface a banner;
         // the user can hit refresh.
-        // eslint-disable-next-line no-console
         console.warn('[super-admin] initial probe network error (preserving session)', err);
         setAuthError('Network error contacting super-admin API. Check your connection and retry.');
       }
     })();
     loadSuperAdminData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadSuperAdminData = async () => {

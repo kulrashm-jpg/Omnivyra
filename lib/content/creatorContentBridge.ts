@@ -1,6 +1,7 @@
 import type { NextRouter } from 'next/router';
 import type { ContentBlock, HeadingBlock, ImageBlock, ParagraphBlock, SummaryBlock, KeyInsightsBlock, ListBlock } from '../blog/blockTypes';
 import { generateAnchor, newId } from '../blog/blockUtils';
+import type { CreatorFlowContext } from './creatorFlowContext';
 
 type CreatorAssetPayload = {
   media_bundle?: {
@@ -42,6 +43,7 @@ type CreatorBlogPrefillPayload = {
     seo_meta_description: string;
   };
   source: 'creator_content';
+  creator_context?: CreatorFlowContext;
 };
 
 function escapeHtml(value: string): string {
@@ -228,10 +230,12 @@ export function launchBlogFromCreator({
   router,
   title,
   output,
+  context,
 }: {
   router: NextRouter;
   title: string;
   output: CreatorOutput;
+  context?: CreatorFlowContext;
 }): void {
   const blocks = buildCreatorContentBlocks(title, output);
   const markdown = buildCreatorMarkdown(title, output);
@@ -247,6 +251,7 @@ export function launchBlogFromCreator({
       seo_meta_description: output.packaging.meta_description || output.packaging.caption || '',
     },
     source: 'creator_content',
+    creator_context: context,
   };
   const token = persistCreatorBlogPrefill(payload);
   void router.push({

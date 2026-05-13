@@ -14,6 +14,13 @@ import {
   renderCanonicalReportHtml,
   renderCanonicalReportPdf,
 } from '../../../backend/services/export/canonicalReportPipeline';
+import { renderPdfFromHtml } from '../../../backend/services/export/htmlToPdfRenderer';
+import {
+  performanceRendererMap,
+  renderPerformanceDocument,
+} from '../../../backend/services/performanceHtmlRenderer';
+import { performanceSections } from '../../../backend/services/performanceReportSections';
+import type { PerformanceReportMappedData } from '../../../backend/services/performanceReportMapper';
 import {
   mapSnapshot,
   mapPerformance,
@@ -182,6 +189,46 @@ function buildPdfDownloadFilename(
   return `${prefix} - ${brand}.pdf`;
 }
 
+function isPerformanceIntelligenceComposedReport(value: unknown): value is {
+  report_type: 'performance_intelligence';
+  html: string;
+  mapped_data?: unknown;
+  window_days?: unknown;
+  warnings?: unknown;
+  status?: unknown;
+} {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as { report_type?: unknown; html?: unknown };
+  return candidate.report_type === 'performance_intelligence' && typeof candidate.html === 'string' && candidate.html.trim().length > 0;
+}
+
+function renderCurrentPerformanceHtml(composed: {
+  html: string;
+  mapped_data?: unknown;
+  window_days?: unknown;
+  warnings?: unknown;
+  status?: unknown;
+}, companyName: string | null): string {
+  if (!composed.mapped_data || typeof composed.mapped_data !== 'object') {
+    return composed.html;
+  }
+  const warningList = Array.isArray(composed.warnings) ? composed.warnings : [];
+  return renderPerformanceDocument(
+    performanceSections
+      .map((sectionKey) => performanceRendererMap[sectionKey](composed.mapped_data as PerformanceReportMappedData))
+      .join(''),
+    {
+      companyName,
+      dateRangeLabel: typeof composed.window_days === 'number'
+        ? `Last ${composed.window_days} days`
+        : 'Most recent analytics window',
+      warning: composed.status === 'partial' || warningList.length > 0
+        ? 'Some sections are incomplete or still syncing. Treat low-confidence findings as directional.'
+        : null,
+    },
+  );
+}
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<ReportViewPayload | { error: string; code: string }>,
@@ -329,6 +376,31 @@ export default async function handler(
     if (nextCtx !== ctx) ctxHolder.companyContext = nextCtx;
     return payload;
   };
+
+  const rawComposedReport: unknown = composedReport;
+  if (type === 'performance' && isPerformanceIntelligenceComposedReport(rawComposedReport)) {
+    const performanceContext = rawComposedReport as unknown as {
+      input_context?: { resolved?: { companyName?: unknown } };
+    };
+    const companyName =
+      typeof performanceContext.input_context?.resolved?.companyName === 'string'
+        ? performanceContext.input_context.resolved.companyName
+        : null;
+    const performanceHtml = renderCurrentPerformanceHtml(rawComposedReport, companyName);
+    if (format === 'html') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'private, no-store');
+      return (res as NextApiResponse<any>).status(200).send(performanceHtml);
+    }
+    if (format === 'pdf') {
+      const pdfBuffer = await renderPdfFromHtml(performanceHtml);
+      const filename = buildPdfDownloadFilename(type, companyName, report.domain);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=\"${filename}\"`);
+      res.setHeader('Cache-Control', 'private, no-store');
+      return (res as NextApiResponse).status(200).send(pdfBuffer);
+    }
+  }
 
   const mapStoredReportToPayload = (
     reportRow: {

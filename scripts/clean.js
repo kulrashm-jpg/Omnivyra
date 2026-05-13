@@ -1,38 +1,42 @@
 #!/usr/bin/env node
 /**
- * Clean build artifacts: .next, dist, .vercel
- * No external dependencies — uses Node.js built-in fs.promises.rm.
+ * Clean build artifacts: .next, dist, .vercel.
  *
- * Modes:
- *   node scripts/clean.js           — delete all dirs in parallel, await completion (for build)
- *   node scripts/clean.js --bg      — fire-and-forget background deletion (for dev/start)
+ * Safety rule:
+ *   Cleanup is blocked whenever a live Next.js dev/build runtime is detected.
+ *   Use --force only for an intentional manual override.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { assertCleanupAllowed } = require('./dev-runtime-guard');
 
 const root = process.cwd();
 const dirs = ['.next', 'dist', '.vercel'];
-const isBg = process.argv.includes('--bg');
+const force = process.argv.includes('--force');
+const triggerArg = process.argv.find((arg) => arg.startsWith('--trigger='));
+const trigger = triggerArg ? triggerArg.slice('--trigger='.length) : process.env.npm_lifecycle_event || 'manual-clean';
 
 async function cleanAll() {
+  assertCleanupAllowed({ force, trigger });
   await Promise.all(
     dirs.map(async (dir) => {
       const target = path.join(root, dir);
       try {
         await fs.promises.rm(target, { recursive: true, force: true });
-        if (!isBg) console.log(`🧹 Cleared ${dir}/`);
-      } catch (e) {
-        if (!isBg) console.warn(`⚠️  Could not clear ${dir}/: ${e.message}`);
+        console.log(`Cleared ${dir}/`);
+      } catch (error) {
+        console.warn(`Could not clear ${dir}/: ${error.message}`);
       }
-    })
+    }),
   );
 }
 
-if (isBg) {
-  // Fire and forget — parent process doesn't wait
-  cleanAll().catch(() => {});
-} else {
-  // Await completion — used by build so old files are gone before next build writes
-  cleanAll().then(() => process.exit(0)).catch(() => process.exit(1));
-}
+cleanAll()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    if (error?.code !== 'UNSAFE_CLEANUP_BLOCKED') {
+      console.error(error?.message || error);
+    }
+    process.exit(1);
+  });

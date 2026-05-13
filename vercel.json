@@ -10,6 +10,14 @@
     {
       "path": "/api/cron/analytics-ingestion",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/market-pulse-automation",
+      "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/cron/email-jobs",
+      "schedule": "* * * * *"
     }
   ],
   "experimentalServices": {

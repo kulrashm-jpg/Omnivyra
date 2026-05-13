@@ -45,10 +45,9 @@
 
 import IORedis from 'ioredis';
 import { recordAnomalyEvent } from './anomalyDetector';
-import { detectAnomaly } from '../anomaly/detectionEngine';
 import { createInstrumentedClient } from '../redis/instrumentation';
-import { getRateLimitAdminConfig, getRateLimitOverride } from '../../backend/services/adminRuntimeConfig';
 import { logger } from '../../backend/services/logger';
+import { config as appConfig } from '@/config';
 
 // ── In-memory fallback limiter ────────────────────────────────────────────────
 // Used ONLY when Redis is unavailable (fail-open path).
@@ -78,7 +77,7 @@ let _rl: IORedis | null = null;
 
 function getRlRedis(): IORedis {
   if (_rl) return _rl;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = appConfig.REDIS_URL || 'redis://localhost:6379';
   const raw = new IORedis(url, {
     enableReadyCheck: false,
     maxRetriesPerRequest: 1,         // fail fast; rate limiting is non-critical
@@ -119,6 +118,33 @@ export interface RateLimitResult {
   bypassed: boolean; // true when Redis was unavailable (fail-open path)
 }
 
+async function resolveEffectiveRateLimitConfig(config: RateLimitConfig): Promise<RateLimitConfig> {
+  try {
+    const { getRateLimitAdminConfig, getRateLimitOverride } = await import('../../backend/services/adminRuntimeConfig');
+    await getRateLimitAdminConfig();
+    const override = getRateLimitOverride(config.keyPrefix);
+    return override
+      ? { ...config, limit: override.limit, windowSecs: override.windowSecs }
+      : config;
+  } catch (error) {
+    logger.warn('RATE_LIMIT_ADMIN_CONFIG_UNAVAILABLE', {
+      prefix: config.keyPrefix,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return config;
+  }
+}
+
+function emitRedisFallbackAnomaly(config: RateLimitConfig, reason: string): void {
+  void import('../anomaly/detectionEngine')
+    .then(({ detectAnomaly }) => detectAnomaly({
+      type:       'redis_fallback_mode',
+      entityType: 'system',
+      metadata:   { prefix: config.keyPrefix, reason },
+    }))
+    .catch(() => {});
+}
+
 // ── Sliding window implementation (Redis MULTI/EXEC) ─────────────────────────
 
 /**
@@ -136,12 +162,7 @@ export async function checkRateLimit(
   identifier: string,
   config: RateLimitConfig,
 ): Promise<RateLimitResult> {
-  // Warm the admin-config cache (no-op if already fresh); then apply override
-  await getRateLimitAdminConfig();
-  const override = getRateLimitOverride(config.keyPrefix);
-  const effectiveConfig = override
-    ? { ...config, limit: override.limit, windowSecs: override.windowSecs }
-    : config;
+  const effectiveConfig = await resolveEffectiveRateLimitConfig(config);
 
   const redis = getRlRedis();
   const key = `${effectiveConfig.keyPrefix}:${identifier}`;
@@ -189,11 +210,7 @@ export async function checkRateLimit(
     // Still enforces a generous per-process cap instead of allowing unlimited requests.
     logBypass(identifier, config.keyPrefix, err?.message ?? 'redis_error');
     // Emit a CRITICAL anomaly (persisted to system_anomalies, Slack alert sent)
-    void detectAnomaly({
-      type:       'redis_fallback_mode',
-      entityType: 'system',
-      metadata:   { prefix: config.keyPrefix, reason: err?.message ?? 'redis_error' },
-    });
+    emitRedisFallbackAnomaly(config, err?.message ?? 'redis_error');
     return fallbackRateLimit(key, config, resetAt);
   }
 }

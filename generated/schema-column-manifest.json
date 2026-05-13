@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-05-13T14:34:15.112Z",
+  "manifest_hash": "a870a80a849344183b2841a04125c601b343719630944f489eb87b438508e6bc",
+  "watched_tables": [
+    "companies",
+    "users"
+  ],
+  "columns": [
+    {
+      "table": "companies",
+      "column": "admin_email_domain",
+      "source_migration": "20260321_company_email_domain.sql",
+      "first_consumer": {
+        "file": "pages\\api\\auth\\post-login-route.ts",
+        "line": 111
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "companies",
+      "column": "created_at",
+      "source_migration": "20260325_activity_cost_test_data.sql",
+      "first_consumer": null,
+      "lifecycle_critical": false
+    },
+    {
+      "table": "companies",
+      "column": "deleted_at",
+      "source_migration": "20260640_lifecycle_governance.sql",
+      "first_consumer": {
+        "file": "pages\\api\\super-admin\\companies.ts",
+        "line": 174
+      },
+      "lifecycle_critical": true
+    },
+    {
+      "table": "companies",
+      "column": "free_credit_granted_at",
+      "source_migration": "20260514_enhance_one_time_credits.sql",
+      "first_consumer": null,
+      "lifecycle_critical": false
+    },
+    {
+      "table": "companies",
+      "column": "id",
+      "source_migration": "20260325_activity_cost_test_data.sql",
+      "first_consumer": {
+        "file": "backend\\scripts\\engagementCommandCenterDiagnostics.ts",
+        "line": 24
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "companies",
+      "column": "is_domain_verified",
+      "source_migration": "20260322_domain_credit_hardening.sql",
+      "first_consumer": null,
+      "lifecycle_critical": false
+    },
+    {
+      "table": "companies",
+      "column": "name",
+      "source_migration": "20260325_activity_cost_test_data.sql",
+      "first_consumer": {
+        "file": "backend\\scripts\\engagementCommandCenterDiagnostics.ts",
+        "line": 24
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "companies",
+      "column": "status",
+      "source_migration": "20260642_legacy_baseline_columns.sql",
+      "first_consumer": {
+        "file": "backend\\security\\TenantGuard.ts",
+        "line": 168
+      },
+      "lifecycle_critical": true
+    },
+    {
+      "table": "companies",
+      "column": "website_domain",
+      "source_migration": "20260321_company_website_domain.sql",
+      "first_consumer": {
+        "file": "backend\\services\\googleProviderReadinessService.ts",
+        "line": 91
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "activated_at",
+      "source_migration": "20260641_user_activated_at.sql",
+      "first_consumer": null,
+      "lifecycle_critical": true
+    },
+    {
+      "table": "users",
+      "column": "active_company_id",
+      "source_migration": "20260406_multi_tenant_auth_migration.sql",
+      "first_consumer": {
+        "file": "backend\\security\\IdentityResolver.ts",
+        "line": 92
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "created_at",
+      "source_migration": "20260325_activity_cost_test_data.sql",
+      "first_consumer": {
+        "file": "pages\\api\\super-admin\\recovery-state.ts",
+        "line": 77
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "email",
+      "source_migration": "20260325_activity_cost_test_data.sql",
+      "first_consumer": {
+        "file": "backend\\services\\creditDeductionService.ts",
+        "line": 243
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "firebase_uid",
+      "source_migration": "20260331_auth_columns.sql",
+      "first_consumer": null,
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "has_password",
+      "source_migration": "20260406_multi_tenant_auth_migration.sql",
+      "first_consumer": {
+        "file": "pages\\api\\auth\\login.ts",
+        "line": 44
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "id",
+      "source_migration": "20260325_activity_cost_test_data.sql",
+      "first_consumer": {
+        "file": "pages\\api\\admin\\external-users.ts",
+        "line": 132
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "is_deleted",
+      "source_migration": "20260323_user_soft_delete.sql",
+      "first_consumer": {
+        "file": "pages\\api\\auth\\check-user.ts",
+        "line": 37
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "name",
+      "source_migration": "20260323_apply_all_pending.sql",
+      "first_consumer": {
+        "file": "backend\\services\\invitationService.ts",
+        "line": 165
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "onboarding_state",
+      "source_migration": "20260406_multi_tenant_auth_migration.sql",
+      "first_consumer": {
+        "file": "pages\\api\\auth\\post-login-route.ts",
+        "line": 51
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "session_revoked_after",
+      "source_migration": "20260640_lifecycle_governance.sql",
+      "first_consumer": null,
+      "lifecycle_critical": true
+    },
+    {
+      "table": "users",
+      "column": "signup_source",
+      "source_migration": "20260406_multi_tenant_auth_migration.sql",
+      "first_consumer": null,
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "status",
+      "source_migration": "20260638_user_status_lifecycle.sql",
+      "first_consumer": {
+        "file": "pages\\api\\super-admin\\users\\create.ts",
+        "line": 197
+      },
+      "lifecycle_critical": true
+    },
+    {
+      "table": "users",
+      "column": "supabase_uid",
+      "source_migration": "20260406_multi_tenant_auth_migration.sql",
+      "first_consumer": {
+        "file": "backend\\services\\lifecycleGovernance.ts",
+        "line": 65
+      },
+      "lifecycle_critical": false
+    },
+    {
+      "table": "users",
+      "column": "unified_person_id",
+      "source_migration": "20260506000001_identity_spine_source_columns_and_fk_columns.sql",
+      "first_consumer": null,
+      "lifecycle_critical": false
+    }
+  ]
+}

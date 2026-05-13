@@ -14,6 +14,10 @@ export const COMMUNITY_AI_CAPABILITIES = {
   SCHEDULE_ACTIONS: [Role.CONTENT_REVIEWER, Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
   MANAGE_PLAYBOOKS: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
   MANAGE_CONNECTORS: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN, Role.CONTENT_PUBLISHER, Role.CONTENT_REVIEWER],
+  // Phase 0 — gates explicit enable/disable of social-listening capabilities
+  // on an integration. Narrower than MANAGE_CONNECTORS: connecting a platform
+  // for publishing should not implicitly authorise listening enablement.
+  MANAGE_LISTENING_CAPABILITIES: [Role.COMPANY_ADMIN, Role.SUPER_ADMIN],
   VIEW_DISCOVERED_USERS: [
     Role.CONTENT_CREATOR,
     Role.CONTENT_PUBLISHER,

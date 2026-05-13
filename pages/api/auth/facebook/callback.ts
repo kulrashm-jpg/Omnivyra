@@ -7,6 +7,8 @@ import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
+import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
+import { config } from '@/config';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -83,7 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+    const userId = user?.id || stateUserId || config.DEFAULT_USER_ID || '';
 
     if (!userId) {
       return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required — please log in and try again')}`);
@@ -146,6 +148,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     await setToken(accountId, tokenObj);
+
+    // Phase 0 — persist actually-granted scopes. Meta returns `scope` as a
+    // comma-separated string on token-exchange responses.
+    const grantedFacebookScopes = normaliseScopes(
+      longLivedData.scope ?? tokenData.scope,
+      'comma',
+    );
+    await persistGrantedScopes({
+      socialAccountId: accountId,
+      platform: 'facebook',
+      grantedScopes: grantedFacebookScopes,
+    });
 
     let derivedThreadsCount = 0;
     try {

@@ -17,6 +17,7 @@ import { launchCampaignFromContent } from '../../lib/content/launchCampaignFromC
 import { resolveGeneratedPrefillBlocks } from '../../lib/content/editorPrefill';
 import { launchSocialPostingFromContent } from '../../lib/content/socialPosting';
 import { useCompanyIdentity } from '../../hooks/useCompanyIdentity';
+import type { CreatorFlowContext } from '../../lib/content/creatorFlowContext';
 
 const DEFAULT_TEMPLATE = createDefaultBlogTemplate();
 
@@ -25,6 +26,7 @@ type PrefillPayload = {
   source?: string;
   target_word_count?: number;
   format_type?: BlogFormatType;
+  creator_context?: CreatorFlowContext;
 };
 
 export default function BlogNewPage() {
@@ -224,6 +226,11 @@ export default function BlogNewPage() {
           if (Array.isArray(outputAny.secondary_keywords)) setSecondaryKeywords(outputAny.secondary_keywords as string[]);
           if (parsed.source === 'company_blog_intelligence') {
             setPrefillNotice('Draft prefilled from your blog intelligence. Review and publish when ready.');
+          } else if (parsed.source === 'creator_content') {
+            const contextLine = parsed.creator_context?.creatorType
+              ? ` Source: ${parsed.creator_context.creatorType}.`
+              : '';
+            setPrefillNotice(`Draft prefilled from Creator Content.${contextLine} Review, edit, and save when ready.`);
           }
         }
         sessionStorage.removeItem(token);

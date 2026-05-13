@@ -1,11 +1,10 @@
 import { supabase } from '../db/supabaseClient';
+import { getCreatorGovernance, normalizeCreatorFormat } from '../../lib/shared/creatorGovernanceRegistry';
 
 export type CreatorAssetType =
   | 'image'
   | 'carousel'
-  | 'video'
-  | 'post_with_asset'
-  | 'thread_with_asset';
+  | 'video';
 
 export type CreatorTemplateRecord = {
   id: string;
@@ -75,73 +74,39 @@ const BUILTIN_TEMPLATES: Record<CreatorAssetType, CreatorTemplateRecord> = {
     },
     is_default: true,
   },
-  post_with_asset: {
-    id: 'builtin-post-with-asset',
-    type: 'post_with_asset',
-    name: 'Post With Asset',
-    structure_schema: {
-      text: 'single_post',
-      asset: 'image',
-      frame_count: 1,
-      frame_roles: ['supporting_asset'],
-      output_shape: 'caption_with_single_asset',
-    },
-    style_schema: {
-      visual_density: 'supporting',
-      preferred_layout: 'caption_led',
-    },
-    mapping_rules: {
-      caption_strategy: 'caption_primary',
-      hashtag_strategy: 'platform_native',
-    },
-    is_default: true,
-  },
-  thread_with_asset: {
-    id: 'builtin-thread-with-asset',
-    type: 'thread_with_asset',
-    name: 'Thread With Asset',
-    structure_schema: {
-      slides: 'thread_sequence',
-      asset: 'carousel',
-      frame_count: 1,
-      frame_roles: ['supporting_asset'],
-      output_shape: 'thread_with_attachment',
-    },
-    style_schema: {
-      visual_density: 'supporting',
-      preferred_layout: 'thread_led',
-    },
-    mapping_rules: {
-      caption_strategy: 'thread_opening_caption',
-      hashtag_strategy: 'minimal',
-    },
-    is_default: true,
-  },
 };
 
 export function resolveCreatorAssetType(contentType: string): CreatorAssetType {
-  const value = String(contentType || '').trim().toLowerCase();
-  if (['carousel', 'slides', 'slide', 'presentation', 'deck', 'pdf', 'slider'].includes(value)) return 'carousel';
-  if (['image', 'photo', 'graphic', 'visual', 'banner', 'infographic'].includes(value)) return 'image';
-  if (['thread'].includes(value)) return 'thread_with_asset';
-  if (['post'].includes(value)) return 'post_with_asset';
-  return 'video';
+  const value = normalizeCreatorFormat(contentType);
+  const governance = getCreatorGovernance(value);
+  if (!governance) {
+    console.warn('[creator-governance][unsupported-format]', {
+      content_type: contentType,
+      normalized_content_type: value,
+      source: 'resolveCreatorAssetType',
+    });
+    throw new Error(`Unsupported creator content type: ${String(contentType || '').trim() || 'unknown'}`);
+  }
+  if (!governance.ai_renderable || governance.guidance_only || governance.daily_plan_only) {
+    console.warn('[creator-governance][non-renderable-format]', {
+      content_type: contentType,
+      normalized_content_type: value,
+      canonical_asset_family: governance.canonical_asset_family,
+      source: 'resolveCreatorAssetType',
+    });
+    throw new Error(`Creator format "${value}" is guidance-only and cannot be rendered or scheduled autonomously`);
+  }
+  if (governance.canonical_asset_family === 'image') return 'image';
+  if (governance.canonical_asset_family === 'carousel') return 'carousel';
+  if (governance.canonical_asset_family === 'video') return 'video';
+  throw new Error(`Creator format "${value}" is not mapped to a renderable asset family`);
 }
 
 export function deriveCreatorAssetTypeFromIntent(input: {
   contentType: string;
   targetPlatforms?: string[];
 }): CreatorAssetType {
-  const normalizedType = String(input.contentType || '').trim().toLowerCase();
-  const platforms = Array.isArray(input.targetPlatforms)
-    ? input.targetPlatforms.map((platform) => String(platform).trim().toLowerCase())
-    : [];
-
-  if (normalizedType === 'post' && platforms.some((platform) => platform === 'x' || platform === 'twitter')) {
-    return 'thread_with_asset';
-  }
-
-  return resolveCreatorAssetType(normalizedType);
+  return resolveCreatorAssetType(String(input.contentType || '').trim().toLowerCase());
 }
 
 export function getBuiltinCreatorTemplate(assetType: CreatorAssetType): CreatorTemplateRecord {

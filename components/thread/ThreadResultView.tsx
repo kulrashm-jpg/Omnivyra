@@ -23,6 +23,16 @@ import {
   createThreadSessionToken,
 } from '../../lib/thread/threadStorage';
 import { getThreadContinuationLink, getThreadSchedulerLink } from '../../lib/thread/threadLinks';
+import {
+  THREAD_CREATOR_ASSET_TYPES,
+  buildWriterCreatorPrefill,
+  createWriterSourceId,
+  launchCreatorFromWriter,
+  loadWriterAttachedAssetsDurable,
+  readWriterAttachedAssets,
+  type CreatorAssetLaunchType,
+  type WriterAttachedAsset,
+} from '../../lib/content/writerCreatorAssetLaunch';
 
 type ApiResponse = {
   success?: boolean;
@@ -97,6 +107,8 @@ export default function ThreadResultView() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [activeSessionToken, setActiveSessionToken] = useState('');
+  const [assetMenuOpen, setAssetMenuOpen] = useState(false);
+  const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -237,6 +249,57 @@ export default function ThreadResultView() {
       topic: session?.topic,
     });
   }, [activeSessionToken, session?.executionMode, session?.topic]);
+  const writerSourceId = useMemo(
+    () => createWriterSourceId('thread', activeSessionToken || session?.topic),
+    [activeSessionToken, session?.topic],
+  );
+
+  useEffect(() => {
+    if (!writerSourceId) return;
+    const refresh = () => setAttachedAssets(readWriterAttachedAssets('thread', writerSourceId));
+    const refreshDurable = () => {
+      void loadWriterAttachedAssetsDurable({
+        companyId: selectedCompanyId,
+        sourceType: 'thread',
+        sourceId: writerSourceId,
+      }).then(setAttachedAssets);
+    };
+    refresh();
+    refreshDurable();
+    window.addEventListener('focus', refreshDurable);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refreshDurable);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [selectedCompanyId, writerSourceId]);
+
+  const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
+    if (!session) return;
+    setAssetMenuOpen(false);
+    launchCreatorFromWriter({
+      router,
+      assetType,
+      source: buildWriterCreatorPrefill({
+        sourceType: 'thread',
+        sourceId: writerSourceId,
+        title: session.topic,
+        body: fullThread,
+        cta: session.cta,
+        audience: session.audience,
+        tone: decisionTrace?.tone_used || session.tone,
+        platform: session.platform,
+        hashtags,
+        companyName: session.companyName,
+        brandContext: {
+          anchor: session.anchorLabel,
+          productsServices: session.productsServices,
+          brandVoice: session.brandVoice,
+        },
+        threadSegments: segments,
+      }),
+    });
+  };
 
   const copyThread = async () => {
     if (!fullThread.trim()) return;
@@ -395,7 +458,38 @@ export default function ThreadResultView() {
 
               <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Next Actions</p>
-                <div className="mt-4 flex flex-col gap-3">
+                  <div className="mt-4 flex flex-col gap-3">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setAssetMenuOpen((open) => !open)}
+                      disabled={!fullThread.trim()}
+                      className="inline-flex w-full items-center justify-center rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-700 transition hover:border-violet-300 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Add Asset
+                    </button>
+                    {assetMenuOpen ? (
+                      <div className="absolute left-0 right-0 z-10 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                        <div className="border-b border-slate-100 px-4 py-3">
+                          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset from thread</p>
+                          <p className="mt-1 text-xs text-slate-500">Choose a supported Creator asset and we will prefill it from this thread sequence.</p>
+                        </div>
+                        {THREAD_CREATOR_ASSET_TYPES.map((assetType) => (
+                          <button
+                            key={assetType}
+                            type="button"
+                            onClick={() => launchAssetCreator(assetType)}
+                            className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                          >
+                            <span>{assetType.charAt(0).toUpperCase() + assetType.slice(1)}</span>
+                            <span className="mt-1 block text-xs font-normal text-slate-500">
+                              Opens {assetType.charAt(0).toUpperCase() + assetType.slice(1)} Creator with this thread attached.
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
                   <Link href={socialLink} className="inline-flex items-center justify-center rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-700">
                     Review, schedule, and post
                   </Link>
@@ -409,6 +503,36 @@ export default function ThreadResultView() {
                     Build another thread
                   </Link>
                 </div>
+              </div>
+
+              <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
+                {attachedAssets.length === 0 ? (
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    No Creator assets attached yet. Use Add Asset to launch Image, Banner, Infographic, Carousel, PDF, or Slider with this thread prefilled.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {attachedAssets.map((asset) => (
+                      <a
+                        key={asset.id}
+                        href={asset.url || `/command-center/creator-content/${asset.creatorType}`}
+                        target={asset.url ? '_blank' : undefined}
+                        rel={asset.url ? 'noreferrer' : undefined}
+                        className="block rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm text-slate-700 transition hover:border-slate-300"
+                      >
+                        <span className="font-semibold">{asset.title}</span>
+                        <span className="mt-1 block text-xs text-slate-500">
+                          {asset.creatorType.charAt(0).toUpperCase() + asset.creatorType.slice(1)}
+                          {asset.creatorType === 'image' && asset.imageMode
+                            ? ` - ${asset.imageMode === 'text_embedded' ? 'Text Inside Image' : 'Post + Image'}`
+                            : ''}
+                          {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="rounded-[28px] border border-violet-100 bg-violet-50/80 p-5">

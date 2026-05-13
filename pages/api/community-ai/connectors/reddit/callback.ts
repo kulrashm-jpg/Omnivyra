@@ -3,6 +3,7 @@ import { saveToken } from '../../../../../backend/services/platformTokenService'
 import { dualWriteSocialAccount } from '../../../../../backend/auth/tokenStore';
 import { requireManageConnectors, getCommunityAiConnectorCallbackUrl } from '../utils';
 import { getOAuthCredentialsForPlatform } from '../../../../../backend/auth/oauthCredentialResolver';
+import { persistGrantedScopesByPlatformUser, normaliseScopes } from '../../../../../backend/auth/oauthScopePersistence';
 
 const decodeState = (state: string) => {
   const padded = state.replace(/-/g, '+').replace(/_/g, '/');
@@ -116,6 +117,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         expires_at: expiresAt || undefined,
       },
     });
+
+    // Phase 0 — persist actually-granted scopes. Reddit returns `scope` as a
+    // space-separated string on the token response.
+    const grantedRedditScopes = normaliseScopes(tokenData.scope, 'space');
+    if (grantedRedditScopes.length > 0) {
+      await persistGrantedScopesByPlatformUser({
+        userId: access!.userId,
+        companyId: organizationId,
+        platform: 'reddit',
+        platformUserId: null,
+        grantedScopes: grantedRedditScopes,
+      });
+    }
 
     // G5.5: Audit log
     console.info('[connector_audit]', JSON.stringify({ user_id: access!.userId, company_id: organizationId, platform: 'reddit', action: 'connect' }));

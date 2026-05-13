@@ -20,6 +20,8 @@ import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectS
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { extractDomain } from '../../../backend/services/companyMatchService';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
+import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
+import { sendAuthError } from '../../../backend/services/sendAuthError';
 
 const DEFAULT_STRATEGIC_ASPECTS = ['Growth', 'Awareness', 'Conversion'];
 
@@ -90,7 +92,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
         const { user, error } = await getSupabaseUserFromRequest(req);
         if (error || !user) {
-          return res.status(401).json({ error: 'UNAUTHORIZED' });
+          // Translate the resolver's failure mode into a typed code so the
+          // client can decide between "sign me out" and "show a visible
+          // error" without re-classifying status codes. The sendAuthError
+          // helper picks the HTTP status from the registry.
+          if (error === 'ACCOUNT_DELETED') {
+            sendAuthError(res, AUTH_ERROR_CODE.ACCOUNT_DELETED);
+            return;
+          }
+          if (error === 'ACCOUNT_SUSPENDED') {
+            sendAuthError(res, AUTH_ERROR_CODE.ACCOUNT_DISABLED);
+            return;
+          }
+          if (error === 'ACCOUNT_INVITED') {
+            sendAuthError(res, AUTH_ERROR_CODE.USER_INVITED);
+            return;
+          }
+          if (error === 'SESSION_REVOKED' || error === 'INVALID_AUTH' || error === 'MISSING_AUTH') {
+            sendAuthError(res, AUTH_ERROR_CODE.INVALID_SESSION);
+            return;
+          }
+          // Fallback: token validated but no user row yet (orphan auth).
+          sendAuthError(res, AUTH_ERROR_CODE.USER_NOT_FOUND);
+          return;
         }
         // Resolve the canonical display name from the users table so the
         // frontend doesn't have to fall back to Supabase auth metadata

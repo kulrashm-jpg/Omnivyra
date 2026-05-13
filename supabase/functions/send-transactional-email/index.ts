@@ -44,6 +44,15 @@ type Template =
       recipientEmail: string;
       finalDomain: string;
       dashboardUrl: string;
+    }
+  | {
+      type: "team_invite_credentials";
+      recipientEmail: string;
+      fullName: string | null;
+      companyName: string | null;
+      role: string;
+      loginUrl: string;
+      temporaryPassword: string;
     };
 
 type Envelope = { to: string; subject: string; html: string };
@@ -118,6 +127,32 @@ function render(t: Template): Envelope {
           body,
           "Open team settings",
           `${getAppUrl()}/settings/team`,
+        ),
+      };
+    }
+
+    case "team_invite_credentials": {
+      // One-shot credentials envelope. The temporary password is rendered
+      // inline (the whole point of this template). Never echoed to logs.
+      const greeting = t.fullName?.trim() ? `Hi ${t.fullName},` : "Hi,";
+      const orgLine = t.companyName
+        ? `You've been added to <strong>${t.companyName}</strong> on Omnivyra as <strong>${t.role}</strong>.`
+        : `You've been added to Omnivyra as <strong>${t.role}</strong>.`;
+      const body =
+        `${greeting}<br/><br/>` +
+        `${orgLine}<br/><br/>` +
+        `Your sign-in details:<br/>` +
+        `<strong>Email:</strong> ${t.recipientEmail}<br/>` +
+        `<strong>Temporary password:</strong> <code style="background:#f1f4f8;padding:4px 8px;border-radius:4px">${t.temporaryPassword}</code><br/><br/>` +
+        `For your security, you'll be asked to choose a new password the first time you sign in.`;
+      return {
+        to: t.recipientEmail,
+        subject: "Your Omnivyra account is ready",
+        html: actionLayout(
+          "Your Omnivyra account is ready",
+          body,
+          "Sign in",
+          t.loginUrl,
         ),
       };
     }
@@ -239,6 +274,7 @@ Deno.serve(async (req) => {
   // with a half-built envelope. Keep the allowlist in sync with Template.
   const KNOWN_TYPES = new Set([
     "team_invite",
+    "team_invite_credentials",
     "company_referral",
     "inbound_signup_notice",
     "domain_verification_reminder",

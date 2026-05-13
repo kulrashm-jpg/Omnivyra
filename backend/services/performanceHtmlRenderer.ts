@@ -29,6 +29,12 @@ function formatCount(value: number | null | undefined): string {
   return value.toLocaleString('en-US');
 }
 
+function formatSignedPercent(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '--';
+  const pct = value * 100;
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+}
+
 function renderEmptyState(message: string): string {
   return `<div class="perf-empty">${escapeHtml(message)}</div>`;
 }
@@ -94,6 +100,13 @@ function renderMetricNote(label: string, value: string, note: string): string {
 
 function renderPriorityBadge(priority: string): string {
   return `<span class="perf-badge perf-badge-priority-${escapeHtml(priority)}">${escapeHtml(priority.toUpperCase())}</span>`;
+}
+
+function confidenceCopy(value: string): string {
+  if (value === 'high') return 'Observed';
+  if (value === 'medium') return 'Likely';
+  if (value === 'low') return 'Directional';
+  return 'Insufficient';
 }
 
 export function renderLeadCommandCenter(data: PerformanceReportMappedData): string {
@@ -187,6 +200,75 @@ export function renderConversionsSection(data: PerformanceReportMappedData): str
   `;
 }
 
+export function renderBehaviorQuality(data: PerformanceReportMappedData): string {
+  const current = data.behavior_quality.current;
+  const deltas = data.behavior_quality.deltas;
+  const hasBehaviorSignal = Boolean(current) ||
+    data.behavior_quality.device_insights.length > 0 ||
+    data.behavior_quality.landing_page_insights.length > 0 ||
+    data.behavior_quality.source_insights.length > 0;
+  if (!hasBehaviorSignal && data.behavior_quality.engagement_confidence === 'none') return '';
+  const deviceRows = data.behavior_quality.device_insights.length
+    ? `<div class="perf-stack">${data.behavior_quality.device_insights.map((item) => `
+      <article class="perf-card">
+        <div class="perf-row">
+          <div class="perf-list-title">${escapeHtml(item.key)}</div>
+          <span class="perf-badge perf-badge-priority-${escapeHtml(item.severity)}">${escapeHtml(item.severity.toUpperCase())}</span>
+        </div>
+        <div class="perf-inline-metrics">
+          <span>${escapeHtml(formatCount(item.sessions))} sessions</span>
+          <span>${escapeHtml(formatPercent(item.engagement_rate))} engaged</span>
+          <span>${escapeHtml(item.avg_engagement_seconds.toFixed(1))}s avg engagement</span>
+          <span>${escapeHtml(confidenceCopy(item.confidence))}</span>
+        </div>
+        <p class="perf-card-note">${escapeHtml(item.diagnosis)}</p>
+      </article>
+    `).join('')}</div>`
+    : renderEmptyState('No device-specific engagement issues are available yet.');
+
+  const pageRows = data.behavior_quality.landing_page_insights.length
+    ? `<div class="perf-stack">${data.behavior_quality.landing_page_insights.slice(0, 5).map((item) => `
+      <article class="perf-card">
+        <div class="perf-list-title">${escapeHtml(item.page_url)}</div>
+        <div class="perf-inline-metrics">
+          <span>${escapeHtml(formatCount(item.visits))} visits</span>
+          <span>${escapeHtml(item.engagement_rate.toFixed(2))} events/visit</span>
+          <span>${escapeHtml(formatPercent(item.conversion_rate))} conversion</span>
+          <span>${escapeHtml(formatSignedPercent(item.conversion_delta_pct))} conversions</span>
+          <span>${escapeHtml(confidenceCopy(item.confidence))}</span>
+        </div>
+        <p class="perf-card-note">${escapeHtml(item.diagnosis)}</p>
+      </article>
+    `).join('')}</div>`
+    : renderEmptyState('No landing-page behavior weaknesses are available yet.');
+
+  return `
+    <section class="perf-section" id="behavior-quality">
+      ${renderSectionHeader(
+        'Behavior Quality',
+        'Behavior Quality Intelligence',
+        data.behavior_quality.decision_summary,
+        data.behavior_quality.why_this_matters,
+      )}
+      <div class="perf-metric-grid perf-metric-grid-3">
+        ${renderMetricNote('Engagement Confidence', confidenceCopy(data.behavior_quality.engagement_confidence), data.behavior_quality.engagement_summary)}
+        ${renderMetricNote('Traffic Quality Confidence', confidenceCopy(data.behavior_quality.traffic_quality_confidence), data.behavior_quality.traffic_summary)}
+        ${renderMetricNote('Conversion Confidence', confidenceCopy(data.behavior_quality.conversion_confidence), data.behavior_quality.conversion_summary)}
+      </div>
+      <div class="perf-metric-grid perf-metric-grid-4">
+        ${renderMetricNote('Engaged Sessions', formatCount(current?.engaged_sessions ?? 0), 'GA engaged sessions in the current report window.')}
+        ${renderMetricNote('Engagement Rate', formatPercent(current?.engagement_rate ?? 0), 'Share of sessions with meaningful engagement.')}
+        ${renderMetricNote('Avg Engagement Time', `${(current?.avg_engagement_seconds ?? 0).toFixed(1)}s`, 'Average engagement time per measured session.')}
+        ${renderMetricNote('Conversion Trend', formatSignedPercent(deltas?.conversion_rate_pct ?? 0), 'Current conversion-rate change against the prior period.')}
+      </div>
+      <div class="perf-two-col">
+        <article class="perf-card"><h3 class="perf-subtitle">Device Engagement</h3>${deviceRows}</article>
+        <article class="perf-card"><h3 class="perf-subtitle">Landing Page Efficiency</h3>${pageRows}</article>
+      </div>
+    </section>
+  `;
+}
+
 export function renderTopPagesSection(data: PerformanceReportMappedData): string {
   const topConverting = data.content.top_converting_pages.length
     ? `<div class="perf-stack">${data.content.top_converting_pages.map((item) => `
@@ -228,6 +310,114 @@ export function renderTopPagesSection(data: PerformanceReportMappedData): string
         <article class="perf-card"><h3 class="perf-subtitle">Highest Converting Pages</h3>${topConverting}</article>
         <article class="perf-card"><h3 class="perf-subtitle">High Session, Low Conversion Pages</h3>${weakPages}</article>
       </div>
+    </section>
+  `;
+}
+
+export function renderOrganicSearchIntelligence(data: PerformanceReportMappedData): string {
+  const hasSearchSignal =
+    data.organic_search.opportunities.length > 0 ||
+    data.organic_search.keyword_opportunities.length > 0 ||
+    data.organic_search.joined_pages.some((item) => item.impressions > 0 || item.clicks > 0) ||
+    data.organic_search.opportunity_themes.length > 0;
+  if (!hasSearchSignal && data.organic_search.data_confidence === 'none') return '';
+
+  const themes = data.organic_search.opportunity_themes.length
+    ? `<div class="perf-theme-grid">${data.organic_search.opportunity_themes.map((theme) => `
+      <article class="perf-theme-card perf-card-priority-${escapeHtml(theme.severity)}">
+        <div class="perf-card-header">
+          <div class="perf-list-title">${escapeHtml(theme.theme)}</div>
+          <div class="perf-badge-group">
+            <span class="perf-badge perf-badge-priority-${escapeHtml(theme.severity)}">${escapeHtml(theme.severity.toUpperCase())}</span>
+            <span class="perf-badge perf-badge-impact">${escapeHtml(confidenceCopy(theme.confidence))}</span>
+          </div>
+        </div>
+        <p class="perf-card-note">${escapeHtml(theme.summary)}</p>
+        <div class="perf-list-meta">${escapeHtml(theme.evidence_summary)}</div>
+        ${theme.pages.length ? `<div class="perf-inline-metrics">${theme.pages.map((page) => `<span>${escapeHtml(page)}</span>`).join('')}</div>` : ''}
+      </article>
+    `).join('')}</div>`
+    : '';
+
+  const opportunities = data.organic_search.opportunities.length
+    ? `<div class="perf-stack">${data.organic_search.opportunities.map((item) => `
+        <article class="perf-card perf-card-priority-${escapeHtml(item.severity)}">
+          <div class="perf-card-header">
+            <div class="perf-list-title">${escapeHtml(item.title)}</div>
+            <div class="perf-badge-group">
+              <span class="perf-badge perf-badge-priority-${escapeHtml(item.severity)}">${escapeHtml(item.severity.toUpperCase())}</span>
+              <span class="perf-badge perf-badge-impact">${escapeHtml(item.confidence_label.toUpperCase())}</span>
+              <span class="perf-badge perf-badge-impact">${escapeHtml(confidenceCopy(item.confidence))}</span>
+            </div>
+          </div>
+          <div class="perf-inline-metrics">
+            ${typeof item.evidence.impressions === 'number' ? `<span>${escapeHtml(formatCount(item.evidence.impressions))} impressions</span>` : ''}
+            ${typeof item.evidence.clicks === 'number' ? `<span>${escapeHtml(formatCount(item.evidence.clicks))} clicks</span>` : ''}
+            ${typeof item.evidence.ctr === 'number' ? `<span>${escapeHtml(formatPercent(item.evidence.ctr))} CTR</span>` : ''}
+            ${typeof item.evidence.avg_position === 'number' ? `<span>${escapeHtml(item.evidence.avg_position.toFixed(1))} avg position</span>` : ''}
+            ${typeof item.evidence.sessions === 'number' ? `<span>${escapeHtml(formatCount(item.evidence.sessions))} sessions</span>` : ''}
+            ${typeof item.evidence.conversion_rate === 'number' ? `<span>${escapeHtml(formatPercent(item.evidence.conversion_rate))} conversion</span>` : ''}
+          </div>
+          <p class="perf-card-note">${escapeHtml(item.recommendation)}</p>
+        </article>
+      `).join('')}</div>`
+    : renderEmptyState('No organic search opportunities are confident enough yet.');
+
+  const joinedPages = data.organic_search.joined_pages.length
+    ? `<div class="perf-stack">${data.organic_search.joined_pages.slice(0, 5).map((item) => `
+        <article class="perf-card">
+          <div class="perf-list-title">${escapeHtml(item.page_url)}</div>
+          <div class="perf-inline-metrics">
+            <span>${escapeHtml(formatCount(item.impressions))} impressions</span>
+            <span>${escapeHtml(formatCount(item.clicks))} clicks</span>
+            <span>${escapeHtml(formatPercent(item.ctr))} CTR</span>
+            <span>${escapeHtml(formatCount(item.sessions))} sessions</span>
+            <span>${escapeHtml(formatPercent(item.conversion_rate))} conversion</span>
+            <span>${escapeHtml(formatSignedPercent(item.click_delta_pct))} clicks</span>
+          </div>
+        </article>
+      `).join('')}</div>`
+    : renderEmptyState('No joined GA/Search Console landing-page rows are available yet.');
+
+  const keywordRows = data.organic_search.keyword_opportunities.length
+    ? `<div class="perf-stack">${data.organic_search.keyword_opportunities.slice(0, 5).map((item) => `
+        <article class="perf-card">
+          <div class="perf-row">
+            <div>
+              <div class="perf-list-title">${escapeHtml(item.keyword)}</div>
+              <div class="perf-list-meta">${escapeHtml(item.page_url || 'No landing page mapped')}</div>
+            </div>
+            <span class="perf-badge perf-badge-impact">${escapeHtml(item.opportunity_type.toUpperCase())}</span>
+          </div>
+          <div class="perf-inline-metrics">
+            <span>${escapeHtml(formatCount(item.impressions))} impressions</span>
+            <span>${escapeHtml(formatCount(item.clicks))} clicks</span>
+            <span>${escapeHtml(formatPercent(item.ctr))} CTR</span>
+            <span>${escapeHtml(item.avg_position.toFixed(1))} avg position</span>
+          </div>
+        </article>
+      `).join('')}</div>`
+    : renderEmptyState('No keyword-level opportunities are available yet.');
+
+  return `
+    <section class="perf-section page-break" id="organic-search">
+      ${renderSectionHeader(
+        'Organic Search',
+        'Organic Search Intelligence',
+        data.organic_search.decision_summary,
+        data.organic_search.why_this_matters,
+      )}
+      <div class="perf-metric-grid perf-metric-grid-3">
+        ${renderMetricNote('Data Confidence', confidenceCopy(data.organic_search.data_confidence), data.organic_search.organic_visibility_summary)}
+        ${renderMetricNote('Insight Confidence', confidenceCopy(data.organic_search.insight_confidence), data.organic_search.demand_quality_summary)}
+        ${renderMetricNote('Recommendation Confidence', confidenceCopy(data.organic_search.recommendation_confidence), data.organic_search.landing_page_weakness_summary)}
+      </div>
+      ${themes}
+      <div class="perf-two-col">
+        <article class="perf-card"><h3 class="perf-subtitle">Search Opportunities</h3>${opportunities}</article>
+        <article class="perf-card"><h3 class="perf-subtitle">Joined Landing Pages</h3>${joinedPages}</article>
+      </div>
+      <article class="perf-card"><h3 class="perf-subtitle">Keyword Opportunities</h3>${keywordRows}</article>
     </section>
   `;
 }
@@ -426,6 +616,11 @@ export function renderConversionDiagnosis(data: PerformanceReportMappedData): st
 }
 
 export function renderActionPlan(data: PerformanceReportMappedData): string {
+  const hasActions =
+    data.actions.quick_wins.length > 0 ||
+    data.actions.growth_levers.length > 0 ||
+    data.actions.strategic_bets.length > 0;
+  if (!hasActions) return '';
   return `
     <section class="perf-section page-break" id="action-plan">
       ${renderSectionHeader(
@@ -543,6 +738,7 @@ export function renderGrowthMaturity(data: PerformanceReportMappedData): string 
 
 export function renderNextBestMoves(data: PerformanceReportMappedData): string {
   const items = data.next_moves.slice(0, 5);
+  if (items.length === 0) return '';
   const content = items.length
     ? `<div class="perf-stack">${items.map((item) => `
       <article class="perf-card">
@@ -553,7 +749,13 @@ export function renderNextBestMoves(data: PerformanceReportMappedData): string {
             <span class="perf-badge perf-badge-effort-${escapeHtml(item.effort)}">${escapeHtml(item.effort.toUpperCase())} EFFORT</span>
           </div>
         </div>
-        <div class="perf-list-meta">Source: ${escapeHtml(item.source)} &middot; Expected outcome: ${escapeHtml(item.impact)}</div>
+        <p class="perf-card-note">${escapeHtml(item.why_it_matters)}</p>
+        <div class="perf-inline-metrics">
+          <span>${escapeHtml(confidenceCopy(item.confidence_tier === 'confirmed' ? 'high' : item.confidence_tier === 'directional' ? 'medium' : item.confidence_tier === 'hypothesis' ? 'low' : 'none'))}</span>
+          <span>${escapeHtml(item.source)}</span>
+          <span>${escapeHtml(item.impact)}</span>
+        </div>
+        <div class="perf-list-meta">${escapeHtml(item.trigger)}${item.page_url ? ` Page: ${escapeHtml(item.page_url)}` : ''}</div>
       </article>
     `).join('')}</div>`
     : renderEmptyState('No next moves available yet.');
@@ -623,10 +825,207 @@ export function renderCompetitivePressureAnalysis(data: PerformanceReportMappedD
   `;
 }
 
+// ─── Pre-drill calibration: "What matters most" + report quality renderers ──
+// These are the two new top-of-report sections registered by Phase 1. When
+// the mapper hasn't populated the optional fields (older runs), the renderers
+// degrade to empty strings so the rest of the report continues to render.
+
+const TIER_BADGE_CLASS: Record<string, string> = {
+  confirmed:   'perf-tier-confirmed',
+  directional: 'perf-tier-directional',
+  hypothesis:  'perf-tier-hypothesis',
+  weak_data:   'perf-tier-weak',
+};
+
+function renderTierBadge(tier: string | null | undefined, tierLabel?: string | null): string {
+  if (!tier) return '';
+  const cls = TIER_BADGE_CLASS[tier] ?? 'perf-tier-directional';
+  const label = (tierLabel ?? tier).toUpperCase();
+  return `<span class="perf-tier-badge ${cls}">${escapeHtml(label)}</span>`;
+}
+
+function renderWhatMattersMost(data: PerformanceReportMappedData): string {
+  const wm = data.what_matters_most;
+  if (!wm) return '';
+  const renderItems = (
+    items: NonNullable<PerformanceReportMappedData['what_matters_most']>['risks'],
+    accent: 'risk' | 'opportunity' | 'next_step',
+  ): string => {
+    if (items.length === 0) {
+      const label = accent === 'risk' ? 'No urgent risks identified.'
+        : accent === 'opportunity' ? 'No standout opportunities surfaced this run.'
+        : 'No converging next steps yet.';
+      return renderEmptyState(label);
+    }
+    return items.map((item) => `
+      <article class="perf-whatmatters-card perf-whatmatters-${accent}">
+        <div class="perf-whatmatters-card-head">
+          <div class="perf-whatmatters-title">${escapeHtml(item.title)}</div>
+          ${renderTierBadge(item.confidence_tier)}
+        </div>
+        <p class="perf-whatmatters-rationale">${escapeHtml(item.rationale)}</p>
+        <div class="perf-whatmatters-meta">
+          <span class="perf-whatmatters-source">${escapeHtml(item.source)}</span>
+          ${item.impact ? `<span class="perf-whatmatters-impact">${escapeHtml(item.impact)}</span>` : ''}
+          ${item.anchor ? `<span class="perf-whatmatters-anchor">${escapeHtml(item.anchor)}</span>` : ''}
+        </div>
+      </article>
+    `).join('');
+  };
+
+  return `
+    <section class="perf-section perf-whatmatters-section">
+      <div class="perf-section-header">
+        <div class="perf-kicker">What matters most</div>
+        <h2 class="perf-section-title">${escapeHtml(wm.headline)}</h2>
+        <div class="perf-why-box"><strong>How to read this:</strong> Risks first, then opportunities, then the most actionable next step. Cards are colour-coded by calibrated confidence — confirmed, directional, or hypothesis.</div>
+      </div>
+      <div class="perf-whatmatters-grid">
+        <div class="perf-whatmatters-column">
+          <h3 class="perf-whatmatters-column-title">Biggest risks</h3>
+          ${renderItems(wm.risks, 'risk')}
+        </div>
+        <div class="perf-whatmatters-column">
+          <h3 class="perf-whatmatters-column-title">Biggest opportunities</h3>
+          ${renderItems(wm.opportunities, 'opportunity')}
+        </div>
+        <div class="perf-whatmatters-column">
+          <h3 class="perf-whatmatters-column-title">Most actionable next step</h3>
+          ${renderItems(wm.next_steps, 'next_step')}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderReportQuality(data: PerformanceReportMappedData): string {
+  const breakdown = data.confidence_breakdown;
+  const consolidation = data.consolidation;
+  if (!breakdown && !consolidation) return '';
+  const dist = breakdown?.distribution ?? { confirmed: 0, directional: 0, hypothesis: 0, weak_data: 0 };
+  const total = dist.confirmed + dist.directional + dist.hypothesis + dist.weak_data;
+  const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
+  const dedupRatio = consolidation && consolidation.behavior_raw_count > 0
+    ? Math.round((consolidation.behavior_consolidated_count / consolidation.behavior_raw_count) * 100)
+    : null;
+
+  return `
+    <section class="perf-section perf-quality-section">
+      <div class="perf-section-header">
+        <div class="perf-kicker">Report calibration</div>
+        <h2 class="perf-section-title">How much to trust this report</h2>
+      </div>
+      <div class="perf-quality-row">
+        <div class="perf-quality-block">
+          <div class="perf-label">Confidence distribution</div>
+          <div class="perf-quality-stack">
+            <span class="perf-tier-badge perf-tier-confirmed">${dist.confirmed} CONFIRMED · ${pct(dist.confirmed)}%</span>
+            <span class="perf-tier-badge perf-tier-directional">${dist.directional} DIRECTIONAL · ${pct(dist.directional)}%</span>
+            <span class="perf-tier-badge perf-tier-hypothesis">${dist.hypothesis} HYPOTHESIS · ${pct(dist.hypothesis)}%</span>
+            <span class="perf-tier-badge perf-tier-weak">${dist.weak_data} WEAK · ${pct(dist.weak_data)}%</span>
+          </div>
+        </div>
+        ${consolidation ? `
+          <div class="perf-quality-block">
+            <div class="perf-label">Consolidation</div>
+            <div class="perf-meta-value">
+              ${consolidation.behavior_consolidated_count} of ${consolidation.behavior_raw_count} behavior recommendations after dedup
+              ${dedupRatio !== null ? ` <span class="perf-label">(${dedupRatio}% retained)</span>` : ''}
+            </div>
+            <div class="perf-meta-value">
+              ${consolidation.search_consolidated_count} of ${consolidation.search_raw_count} search opportunities after dedup
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    </section>
+  `;
+}
+
+function renderSnapshotFoundation(data: PerformanceReportMappedData): string {
+  const foundation = data.snapshot_foundation;
+  if (!foundation) {
+    return `
+      <section class="perf-section perf-foundation-section">
+        ${renderSectionHeader(
+          'Snapshot Foundation',
+          'Digital Snapshot Foundation',
+          'The Digital Snapshot baseline could not be attached to this run.',
+          'Performance Intelligence should be read as Snapshot-plus: authority context first, behavior and search performance second.',
+        )}
+        ${renderEmptyState('Re-run the Digital Authority Snapshot or retry this report after snapshot composition is available.')}
+      </section>
+    `;
+  }
+
+  const pillars = foundation.pillar_scores.length
+    ? foundation.pillar_scores.map((pillar) => `
+      <article class="perf-foundation-pillar">
+        <div class="perf-label">${escapeHtml(pillar.label)}</div>
+        <div class="perf-foundation-score">${pillar.value == null ? '--' : escapeHtml(String(Math.round(pillar.value)))}</div>
+        <div class="perf-list-meta">${escapeHtml(pillar.band)}${pillar.primary_signal ? ` · ${escapeHtml(pillar.primary_signal)}` : ''}</div>
+      </article>
+    `).join('')
+    : renderEmptyState('Canonical pillar scores are not available yet.');
+
+  const priorities = foundation.top_priorities.length
+    ? foundation.top_priorities.map((priority) => `
+      <article class="perf-foundation-priority">
+        <div class="perf-list-title">${escapeHtml(priority.title)}</div>
+        <p class="perf-card-note">${escapeHtml(priority.why_now)}</p>
+        <div class="perf-list-meta">${escapeHtml(priority.impact)} · confidence ${escapeHtml(String(Math.round(priority.confidence)))}</div>
+      </article>
+    `).join('')
+    : renderEmptyState('No Snapshot priorities are ready yet.');
+
+  return `
+    <section class="perf-section perf-foundation-section page-break">
+      <div class="perf-foundation-hero">
+        <div>
+          <div class="perf-kicker">Snapshot Foundation</div>
+          <h2 class="perf-foundation-title">Digital Authority Baseline</h2>
+          <p class="perf-foundation-headline">${escapeHtml(foundation.headline)}</p>
+        </div>
+        <div class="perf-foundation-index">
+          <div class="perf-label">Authority Index</div>
+          <div class="perf-foundation-index-value">${foundation.authority_score == null ? '--' : escapeHtml(String(Math.round(foundation.authority_score)))}</div>
+          <div class="perf-list-meta">${escapeHtml(foundation.authority_band)} · ${escapeHtml(foundation.maturity_label)}</div>
+        </div>
+      </div>
+      <div class="perf-foundation-constraint">
+        <div class="perf-label">Primary Constraint From Snapshot</div>
+        <p>${escapeHtml(foundation.primary_constraint)}</p>
+        ${foundation.positioning ? `<p class="perf-card-note"><strong>Positioning:</strong> ${escapeHtml(foundation.positioning)}</p>` : ''}
+        ${foundation.market_position ? `<p class="perf-card-note"><strong>Market position:</strong> ${escapeHtml(foundation.market_position)}</p>` : ''}
+      </div>
+      <div class="perf-foundation-pillars">${pillars}</div>
+      <div class="perf-two-col">
+        <article class="perf-card perf-card-dark">
+          <h3 class="perf-subtitle">Snapshot Priorities Carried Forward</h3>
+          ${priorities}
+        </article>
+        <article class="perf-card">
+          <h3 class="perf-subtitle">How Performance Intelligence Extends It</h3>
+          <ul class="perf-list">
+            <li class="perf-list-item">Connects authority constraints to GA engagement and conversion behavior.</li>
+            <li class="perf-list-item">Adds GSC demand, keyword, page, CTR, and position intelligence when Search Console is ready.</li>
+            <li class="perf-list-item">Ranks the next moves by confidence, severity, and measurable business impact.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
 export const performanceRendererMap: Record<PerformanceSectionKey, (data: PerformanceReportMappedData) => string> = {
+  what_matters_most: renderWhatMattersMost,
+  report_quality: renderReportQuality,
+  snapshot_foundation: renderSnapshotFoundation,
   key_decisions: renderLeadCommandCenter,
   funnel: renderLeadLeakage,
   conversions: renderConversionsSection,
+  behavior_quality: renderBehaviorQuality,
+  organic_search: renderOrganicSearchIntelligence,
   top_pages: renderTopPagesSection,
   drop_offs: renderDropOffsSection,
   traffic_sources: renderLeadSources,
@@ -641,9 +1040,9 @@ function renderHeader(meta?: PerformanceRenderMeta): string {
     <header class="perf-header">
       <div class="perf-header-top">
         <div>
-          <div class="perf-kicker">Lead &amp; Growth Intelligence Report</div>
-          <h1 class="perf-title">Lead &amp; Growth Intelligence Report</h1>
-          <p class="perf-tagline">Focused on qualified lead generation and growth decisions</p>
+          <div class="perf-kicker">Performance Intelligence</div>
+          <h1 class="perf-title">Performance Intelligence Report</h1>
+          <p class="perf-tagline">Digital Snapshot foundation plus GA/GSC behavior, search, conversion, and opportunity intelligence.</p>
         </div>
         <div class="perf-header-meta">
           <div class="perf-meta-block">
@@ -673,7 +1072,7 @@ export function renderPerformanceDocument(
   <html lang="en">
     <head>
       <meta charSet="utf-8" />
-      <title>Lead &amp; Growth Intelligence Report</title>
+      <title>Performance Intelligence Report</title>
       ${performanceReportStyles}
     </head>
     <body>
@@ -688,19 +1087,19 @@ export function renderPerformanceDocument(
 
 export const performanceReportStyles = `
   <style>
-    body { margin: 0; font-family: Arial, sans-serif; background: #f4f6f8; color: #1f2933; line-height: 1.6; }
-    .perf-report { width: 1024px; margin: 0 auto; background: #ffffff; padding: 40px; box-sizing: border-box; overflow-wrap: anywhere; }
-    .perf-header { margin-bottom: 36px; border-bottom: 2px solid #d9e2ec; padding-bottom: 22px; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #edf2f7; color: #172033; line-height: 1.6; }
+    .perf-report { width: 1024px; margin: 0 auto; background: #ffffff; padding: 34px; box-sizing: border-box; overflow-wrap: anywhere; }
+    .perf-header { margin-bottom: 34px; border-radius: 18px; padding: 34px; color: #ffffff; background: linear-gradient(135deg, #081426 0%, #123c69 48%, #0f766e 100%); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12); }
     .perf-header-top { display: table; width: 100%; table-layout: fixed; }
     .perf-header-top > div { display: table-cell; vertical-align: top; }
     .perf-header-meta { width: 280px; text-align: right; }
     .perf-meta-block { margin-bottom: 14px; }
-    .perf-meta-value { font-size: 15px; font-weight: 700; color: #102a43; }
-    .perf-kicker { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #486581; margin-bottom: 6px; }
-    .perf-title { margin: 0 0 10px; font-size: 34px; line-height: 1.15; color: #102a43; }
+    .perf-meta-value { font-size: 15px; font-weight: 700; color: inherit; }
+    .perf-kicker { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #2dd4bf; margin-bottom: 6px; }
+    .perf-title { margin: 0 0 10px; font-size: 38px; line-height: 1.12; color: inherit; }
     .perf-section-title { margin: 0 0 14px; font-size: 24px; line-height: 1.25; color: #102a43; }
     .perf-subtitle { margin: 0 0 12px; font-size: 16px; line-height: 1.35; color: #243b53; }
-    .perf-tagline { margin: 0; color: #52606d; font-size: 15px; max-width: 560px; }
+    .perf-tagline { margin: 0; color: #dbeafe; font-size: 15px; max-width: 620px; }
     .perf-muted { color: #6b7c93; font-size: 12px; }
     .perf-section { margin: 0 0 40px; padding-bottom: 6px; page-break-inside: avoid; }
     .perf-section-header { margin-bottom: 18px; }
@@ -708,6 +1107,9 @@ export const performanceReportStyles = `
     .perf-why-box { margin: 0 0 14px; padding: 12px 14px; background: #f8fbfd; border: 1px solid #d9e2ec; color: #52606d; font-size: 13px; font-style: italic; }
     .perf-card { border: 1px solid #d9e2ec; background: #ffffff; padding: 18px; margin-bottom: 14px; border-radius: 6px; }
     .perf-card-highlight { background: #f0f4f8; }
+    .perf-card-dark { background: #0f172a; color: #e5eefb; border-color: #1e3a5f; }
+    .perf-card-dark .perf-subtitle, .perf-card-dark .perf-list-title { color: #ffffff; }
+    .perf-card-dark .perf-card-note, .perf-card-dark .perf-list-meta { color: #cbd5e1; }
     .perf-label { font-size: 12px; text-transform: uppercase; color: #486581; margin-bottom: 6px; }
     .perf-value { font-size: 28px; font-weight: 700; line-height: 1.15; word-break: break-word; }
     .perf-value-sm { font-size: 18px; }
@@ -716,6 +1118,8 @@ export const performanceReportStyles = `
     .perf-metric-grid-4 { grid-template-columns: repeat(4, 1fr); }
     .perf-metric-grid-3, .perf-three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
     .perf-two-col { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+    .perf-theme-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 0 0 16px; }
+    .perf-theme-card { border: 1px solid #d9e2ec; background: #fbfdff; padding: 16px; border-radius: 6px; }
     .perf-funnel { display: grid; grid-template-columns: repeat(5, auto); gap: 12px; align-items: center; margin-bottom: 16px; }
     .perf-funnel-step { border: 1px solid #d9e2ec; padding: 14px; background: #f8fbfd; min-width: 140px; border-radius: 6px; }
     .perf-funnel-arrow { text-align: center; color: #829ab1; font-weight: 700; }
@@ -755,5 +1159,42 @@ export const performanceReportStyles = `
     .perf-cta-secondary { border: 1px solid #bcccdc; color: #334e68; background: #ffffff; }
     .page-break { page-break-before: always; }
     @page { margin: 18mm 14mm; }
+    /* Pre-drill calibration: "What matters most" + tier-badge styles */
+    .perf-whatmatters-section { background: #fcfdff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 22px 24px; margin-bottom: 32px; }
+    .perf-whatmatters-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+    .perf-whatmatters-column-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: #486581; margin: 0 0 10px; }
+    .perf-whatmatters-card { background: #ffffff; border: 1px solid #e0e8f0; border-radius: 6px; padding: 14px; margin-bottom: 10px; }
+    .perf-whatmatters-risk { border-left: 4px solid #c53030; }
+    .perf-whatmatters-opportunity { border-left: 4px solid #0b6e4f; }
+    .perf-whatmatters-next_step { border-left: 4px solid #0f609b; }
+    .perf-whatmatters-card-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; margin-bottom: 6px; }
+    .perf-whatmatters-title { font-weight: 700; font-size: 14px; color: #102a43; line-height: 1.35; }
+    .perf-whatmatters-rationale { margin: 6px 0 8px; color: #486581; font-size: 13px; line-height: 1.45; }
+    .perf-whatmatters-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: #627d98; }
+    .perf-whatmatters-source { background: #f8fbfd; border: 1px solid #d9e2ec; padding: 2px 8px; border-radius: 999px; }
+    .perf-whatmatters-impact { background: #fffaf0; border: 1px solid #fbd38d; padding: 2px 8px; border-radius: 999px; color: #b7791f; }
+    .perf-whatmatters-anchor { background: #f0f4f8; border: 1px solid #d9e2ec; padding: 2px 8px; border-radius: 999px; color: #486581; font-family: monospace; }
+    .perf-quality-section { background: #f8fbfd; border: 1px solid #d9e2ec; border-radius: 8px; padding: 18px 22px; margin-bottom: 28px; }
+    .perf-quality-row { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; align-items: start; }
+    .perf-quality-block { font-size: 13px; color: #334e68; }
+    .perf-quality-stack { display: flex; flex-wrap: wrap; gap: 6px; }
+    .perf-tier-badge { display: inline-block; border-radius: 999px; padding: 3px 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; }
+    .perf-tier-confirmed { background: #dcfce7; color: #065f46; border: 1px solid #a7f3d0; }
+    .perf-tier-directional { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+    .perf-tier-hypothesis { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+    .perf-tier-weak { background: #f3f4f6; color: #4b5563; border: 1px solid #d1d5db; }
+    .perf-foundation-section { background: #f8fafc; border: 1px solid #d7e2ee; border-radius: 14px; padding: 26px; }
+    .perf-foundation-hero { display: grid; grid-template-columns: 1fr 210px; gap: 22px; align-items: stretch; margin-bottom: 18px; }
+    .perf-foundation-title { margin: 0 0 10px; color: #0f172a; font-size: 28px; line-height: 1.15; }
+    .perf-foundation-headline { margin: 0; font-size: 16px; color: #334155; }
+    .perf-foundation-index { background: #0f172a; color: #ffffff; border-radius: 12px; padding: 18px; text-align: center; }
+    .perf-foundation-index .perf-label, .perf-foundation-index .perf-list-meta { color: #cbd5e1; }
+    .perf-foundation-index-value { font-size: 54px; font-weight: 800; line-height: 1; color: #5eead4; }
+    .perf-foundation-constraint { background: #ffffff; border-left: 5px solid #0f766e; padding: 16px 18px; margin-bottom: 16px; border-radius: 8px; }
+    .perf-foundation-constraint p { margin: 0 0 8px; }
+    .perf-foundation-pillars { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
+    .perf-foundation-pillar { background: #ffffff; border: 1px solid #d9e2ec; border-radius: 8px; padding: 12px; min-height: 108px; }
+    .perf-foundation-score { color: #0f766e; font-size: 30px; font-weight: 800; line-height: 1; }
+    .perf-foundation-priority { border-bottom: 1px solid rgba(255,255,255,0.16); padding: 0 0 10px; margin-bottom: 10px; }
   </style>
 `;

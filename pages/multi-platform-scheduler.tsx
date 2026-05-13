@@ -12,6 +12,18 @@ import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '@/lib/shared/s
 import { defaultScheduleValue, getContentTypeLabel, normalizePlatform, parseHashtags, resolveSocialPublishType, type ConnectedAccount, type DraftPayload, type PlatformConfigItem, type PlatformOption, type PlatformState } from '@/components/content/post-to-social/schedulerShared';
 import { clearThreadPublishLink, saveThreadPublishLink } from '@/lib/thread/threadStorage';
 import { getThreadContinuationLink } from '@/lib/thread/threadLinks';
+import {
+  POST_CREATOR_ASSET_TYPES,
+  THREAD_CREATOR_ASSET_TYPES,
+  buildWriterCreatorPrefill,
+  createWriterSourceId,
+  launchCreatorFromWriter,
+  loadWriterAttachedAssetsDurable,
+  readWriterAttachedAssets,
+  type CreatorAssetLaunchType,
+  type WriterAttachedAsset,
+  type WriterSourceType,
+} from '@/lib/content/writerCreatorAssetLaunch';
 export default function MultiPlatformSchedulerPage() {
   const router = useRouter();
   const { user, selectedCompanyId, selectedCompanyName, isLoading } = useCompanyContext();
@@ -23,6 +35,8 @@ export default function MultiPlatformSchedulerPage() {
   const [selectedPlatform, setSelectedPlatform] = useState('');
   const [platformState, setPlatformState] = useState<Record<string, PlatformState>>({});
   const [adaptingPlatform, setAdaptingPlatform] = useState<string | null>(null);
+  const [assetMenuOpen, setAssetMenuOpen] = useState(false);
+  const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
   const adaptedPlatformKeysRef = useRef<Record<string, string>>({});
   const requestedPlatform = typeof router.query.platform === 'string'
     ? normalizePlatform(router.query.platform)
@@ -140,12 +154,21 @@ export default function MultiPlatformSchedulerPage() {
   // visible as DISABLED chips with the registry-provided reason as tooltip;
   // disconnected platforms are filtered out upstream (connectedAccounts).
   const schedulerSourceContentType = String(draft?.sourceContentType || router.query.contentType || 'post').trim().toLowerCase();
+  // Phase 2.C asset-aware activation. attachedAssets is populated by the
+  // Writer-source effect below; when the Writer has produced image/banner/
+  // infographic/carousel/pdf assets, those types expand the platform
+  // capability set so Instagram + Pinterest light up automatically. When
+  // no asset is attached, the filter falls back to the text/writer
+  // capability of the content type (legacy behavior preserved).
   const platformFilter = useMemo(() => {
     return filterConnectedPlatformsForContent(
       allPlatformOptions.map((opt) => opt.key),
-      { contentType: schedulerSourceContentType },
+      {
+        contentType:        schedulerSourceContentType,
+        attachedAssetTypes: attachedAssets.map((asset) => asset.creatorType),
+      },
     );
-  }, [allPlatformOptions, schedulerSourceContentType]);
+  }, [allPlatformOptions, schedulerSourceContentType, attachedAssets]);
 
   const hiddenReasonByKey = useMemo(() => {
     const m = new Map<string, string>();
@@ -235,6 +258,15 @@ export default function MultiPlatformSchedulerPage() {
   const sourceContentLabel = getContentTypeLabel(sourceContentType);
   const publishContentLabel = getContentTypeLabel(publishContentType);
   const isManualThreadFlow = sourceContentType === 'thread' && executionMode !== 'auto';
+  const writerSourceType: WriterSourceType | null = sourceContentType === 'thread' ? 'thread' : sourceContentType === 'post' ? 'post' : null;
+  const writerSourceId = writerSourceType && draft
+    ? createWriterSourceId(writerSourceType, draft.sourceId || router.query.prefill?.toString() || draft.title)
+    : '';
+  const supportedCreatorAssetTypes = writerSourceType === 'thread'
+    ? THREAD_CREATOR_ASSET_TYPES
+    : writerSourceType === 'post'
+      ? POST_CREATOR_ASSET_TYPES
+      : [];
 
   const updatePlatformState = (platform: string, patch: Partial<PlatformState>) => {
     setPlatformState((current) => ({
@@ -245,6 +277,86 @@ export default function MultiPlatformSchedulerPage() {
       },
     }));
   };
+
+  useEffect(() => {
+    if (!writerSourceType || !writerSourceId) {
+      setAttachedAssets([]);
+      return;
+    }
+    const refresh = () => setAttachedAssets(readWriterAttachedAssets(writerSourceType, writerSourceId));
+    const refreshDurable = () => {
+      void loadWriterAttachedAssetsDurable({
+        companyId: selectedCompanyId,
+        sourceType: writerSourceType,
+        sourceId: writerSourceId,
+      }).then(setAttachedAssets);
+    };
+    refresh();
+    refreshDurable();
+    window.addEventListener('focus', refreshDurable);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refreshDurable);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [selectedCompanyId, writerSourceId, writerSourceType]);
+
+  const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
+    if (!draft || !writerSourceType || !writerSourceId) return;
+    const sourceContent = selectedState?.content || draft.content || '';
+    const hashtagText = selectedState?.hashtags || draft.hashtags.join(' ');
+    setAssetMenuOpen(false);
+    launchCreatorFromWriter({
+      router,
+      assetType,
+      source: buildWriterCreatorPrefill({
+        sourceType: writerSourceType,
+        sourceId: writerSourceId,
+        title: draft.title || draft.topic || `${sourceContentLabel} draft`,
+        body: sourceContent,
+        cta: 'Share, save, or schedule this content',
+        audience: 'Audience from the Writer draft',
+        tone: 'Platform-aware and brand-aligned',
+        platform: selectedOption?.key || draft.sourcePlatform || '',
+        hashtags: parseHashtags(hashtagText),
+        companyName: selectedCompanyName || '',
+        threadSegments: writerSourceType === 'thread'
+          ? sourceContent.split(/\n{2,}|\n(?=\d+[\).\s])/).map((segment) => segment.trim()).filter(Boolean)
+          : undefined,
+      }),
+    });
+  };
+
+  const assetSelector = supportedCreatorAssetTypes.length > 0 ? (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setAssetMenuOpen((open) => !open)}
+        disabled={!draft || !selectedState?.content?.trim()}
+        className="inline-flex items-center rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        Add Asset
+      </button>
+      {assetMenuOpen ? (
+        <div className="absolute left-0 z-20 mt-2 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+          <div className="border-b border-slate-100 px-4 py-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset</p>
+            <p className="mt-1 text-xs text-slate-500">Prefilled from this {sourceContentLabel.toLowerCase()}.</p>
+          </div>
+          {supportedCreatorAssetTypes.map((assetType) => (
+            <button
+              key={assetType}
+              type="button"
+              onClick={() => launchAssetCreator(assetType)}
+              className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              {assetType.charAt(0).toUpperCase() + assetType.slice(1)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  ) : null;
 
   const persistThreadPublishLink = (platform: string, scheduledPostId: string | null) => {
     if (typeof window === 'undefined' || !draft?.sourceId || sourceContentType !== 'thread') return;
@@ -659,7 +771,37 @@ export default function MultiPlatformSchedulerPage() {
                         onSchedule={() => void scheduleOrPublish('schedule')}
                         onPublish={() => void scheduleOrPublish('publish')}
                         onDelete={() => void deleteScheduledPost()}
+                        assetAction={assetSelector}
                       />
+
+                      {writerSourceType ? (
+                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
+                          {attachedAssets.length === 0 ? (
+                            <p className="mt-2 text-sm leading-6 text-slate-600">
+                              No Creator assets attached yet. Use Add Asset to create a supported Creator asset from this {sourceContentLabel.toLowerCase()}.
+                            </p>
+                          ) : (
+                            <div className="mt-3 grid gap-2">
+                              {attachedAssets.map((asset) => (
+                                <a
+                                  key={asset.id}
+                                  href={asset.url || `/command-center/creator-content/${asset.creatorType}`}
+                                  target={asset.url ? '_blank' : undefined}
+                                  rel={asset.url ? 'noreferrer' : undefined}
+                                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 transition hover:border-slate-300"
+                                >
+                                  <span className="font-semibold">{asset.title}</span>
+                                  <span className="mt-1 block text-xs text-slate-500">
+                                    {asset.creatorType.charAt(0).toUpperCase() + asset.creatorType.slice(1)}
+                                    {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
+                                  </span>
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
 
                       {isManualThreadFlow && draft?.sourceId ? (
                         <div className="mt-4 rounded-2xl border border-violet-200 bg-violet-50/70 p-4">

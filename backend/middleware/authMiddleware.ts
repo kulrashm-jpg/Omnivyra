@@ -31,6 +31,8 @@ export interface AuthUser {
   /** Supabase auth UUID (auth.users.id). Mirrors users.supabase_uid. */
   supabaseUid: string;
   email: string;
+  /** Phase 2.B — lifecycle status. 'active' for nearly all requests. */
+  status?: 'invited' | 'active';
 }
 
 // ── 1. requireAuth ─────────────────────────────────────────────────────────────
@@ -52,6 +54,20 @@ export async function requireAuth(
     res.status(403).json({ error: 'Account has been deactivated.', code: 'ACCOUNT_DELETED' });
     return null;
   }
+  if (result.error === 'ACCOUNT_SUSPENDED') {
+    res.status(403).json({
+      error: 'Account is suspended. Contact your administrator.',
+      code: 'ACCOUNT_SUSPENDED',
+    });
+    return null;
+  }
+  if (result.error === 'SESSION_REVOKED') {
+    res.status(401).json({
+      error: 'Session was revoked. Please sign in again.',
+      code: 'SESSION_REVOKED',
+    });
+    return null;
+  }
   if (result.error === 'USER_NOT_FOUND') {
     res.status(401).json({ error: 'User not found — please complete sign-in' });
     return null;
@@ -61,11 +77,25 @@ export async function requireAuth(
     return null;
   }
 
+  // Phase 2.B — invited users are returned with status='invited'. Routes
+  // that go through requireAuth are protected, application-tier routes;
+  // invited users have not completed onboarding and MUST NOT have access.
+  // The invite-safe routes (set-password, accept-invite, verify-email)
+  // do their own resolver call and inspect status themselves.
+  if (result.user.status === 'invited') {
+    res.status(403).json({
+      error: 'Account is pending invitation acceptance. Complete onboarding to continue.',
+      code: 'ACCOUNT_INVITED',
+    });
+    return null;
+  }
+
   return {
     user: {
       id: result.user.id,
       supabaseUid: result.user.supabaseUid,
       email: result.user.email,
+      status: 'active',
     },
   };
 }

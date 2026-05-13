@@ -31,6 +31,7 @@ type AnalyticsProviderFormState = {
   oauth_client_secret: string;
   enabled: boolean;
   redirect_uri: string;
+  gsc_redirect_uri: string;
 };
 type AnalyticsProviderConfigSummary = {
   provider: 'google_analytics';
@@ -40,6 +41,10 @@ type AnalyticsProviderConfigSummary = {
   has_client_secret: boolean;
   scopes: string[];
   redirect_uri: string | null;
+  capability_redirect_uris?: {
+    google_analytics?: string | null;
+    google_search_console?: string | null;
+  };
   status: string;
   updated_at: string | null;
 };
@@ -279,6 +284,7 @@ export default function SocialPlatformsSection() {
     oauth_client_secret: '',
     enabled: false,
     redirect_uri: '',
+    gsc_redirect_uri: '',
   });
   const [analyticsProviderExpanded, setAnalyticsProviderExpanded] = useState(false);
   const [analyticsProviderSaving, setAnalyticsProviderSaving] = useState(false);
@@ -328,6 +334,7 @@ export default function SocialPlatformsSection() {
       oauth_client_secret: '',
       enabled: false,
       redirect_uri: '',
+      gsc_redirect_uri: '',
     });
     setExpandedPlatform(null);
     setShowSecretFor(null);
@@ -355,7 +362,6 @@ export default function SocialPlatformsSection() {
       // BEFORE redirecting so any in-flight render between now and the
       // redirect cannot expose preview values or in-progress form input.
       clearCredentialState();
-      // eslint-disable-next-line no-console
       console.warn('[super-admin] auth failure → redirect to login', {
         kind: failure.kind,
         status: failure.status,
@@ -372,7 +378,6 @@ export default function SocialPlatformsSection() {
       // returns until a follow-up authorized fetch succeeds.
       clearCredentialState();
       setAuthFailure(failure);
-      // eslint-disable-next-line no-console
       console.warn('[super-admin] recoverable auth failure', {
         kind: failure.kind,
         status: failure.status,
@@ -569,6 +574,7 @@ export default function SocialPlatformsSection() {
         oauth_client_secret: '',
         enabled: config.enabled,
         redirect_uri: config.redirect_uri || '',
+        gsc_redirect_uri: config.capability_redirect_uris?.google_search_console || config.redirect_uri || '',
       });
       // Flip the analytics-provider load-gate ONLY after a successful
       // authorized fetch — same boundary as the platform OAuth section.
@@ -590,6 +596,10 @@ export default function SocialPlatformsSection() {
           oauth_client_id: analyticsProviderForm.oauth_client_id,
           oauth_client_secret: analyticsProviderForm.oauth_client_secret,
           redirect_uri: analyticsProviderForm.redirect_uri,
+          capability_redirect_uris: {
+            google_analytics: analyticsProviderForm.redirect_uri,
+            google_search_console: analyticsProviderForm.gsc_redirect_uri,
+          },
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -707,7 +717,7 @@ export default function SocialPlatformsSection() {
                   <BarChart3 className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-900">Google Analytics Provider</h3>
+                  <h3 className="text-lg font-semibold text-slate-900">Google Analytics + Search Console Provider</h3>
                   <p className="text-sm text-slate-600">
                     One global config powers the Company Admin click → connect → select → done flow.
                   </p>
@@ -754,7 +764,7 @@ export default function SocialPlatformsSection() {
             >
               {analyticsProviderExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
               {analyticsProviderLoaded
-                ? (analyticsProvider?.configured ? 'Update Google Analytics' : 'Configure Google Analytics')
+                ? (analyticsProvider?.configured ? 'Update Google Data Provider' : 'Configure Google Data Provider')
                 : 'Loading…'}
             </button>
           </div>
@@ -809,13 +819,27 @@ export default function SocialPlatformsSection() {
               </div>
 
               <div>
-                <label className="mb-1 block text-xs font-medium text-slate-700">Redirect URI</label>
+                <label className="mb-1 block text-xs font-medium text-slate-700">Google Analytics Redirect URI</label>
                 <input
                   type="text"
                   value={analyticsProviderForm.redirect_uri}
                   onChange={(event) => setAnalyticsProviderForm((current) => ({ ...current, redirect_uri: event.target.value }))}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
                 />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-700">Search Console Redirect URI</label>
+                <input
+                  type="text"
+                  value={analyticsProviderForm.gsc_redirect_uri}
+                  onChange={(event) => setAnalyticsProviderForm((current) => ({ ...current, gsc_redirect_uri: event.target.value }))}
+                  placeholder={analyticsProviderForm.redirect_uri || 'https://www.omnivyra.com/api/analytics/connect/google/callback'}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  This can match the Analytics redirect URI, but it is stored separately so GSC setup stays explicit.
+                </p>
               </div>
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
@@ -829,7 +853,7 @@ export default function SocialPlatformsSection() {
                   onChange={(event) => setAnalyticsProviderForm((current) => ({ ...current, enabled: event.target.checked }))}
                   className="rounded border-slate-300"
                 />
-                Enable Google Analytics for Company Admin self-serve connect
+                Enable Google Analytics and Search Console for Company Admin self-serve connect
               </label>
 
               {analyticsProviderMessage && (

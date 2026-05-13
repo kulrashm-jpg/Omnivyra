@@ -9,6 +9,15 @@ import {
   ORGANIZATION_DELETE,
 } from '../../../shared/contracts/security';
 import type { Capability } from '../../../shared/contracts/security';
+import {
+  cascadeDisableCompany,
+  softDeleteCompanyWithCascade,
+} from '../../../backend/services/lifecycleGovernance';
+import {
+  insertAuditLogStrict,
+  SYSTEM_USER_ID,
+} from '../../../backend/services/auditActorService';
+import { logger } from '../../../backend/services/logger';
 
 const normalizeWebsite = (value: string): string => {
   const trimmed = value.trim().toLowerCase();
@@ -40,10 +49,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (guard.ok !== true) return;
 
   if (req.method === 'GET') {
-    const { data, error } = await supabase
+    // Phase 2.B — by default exclude soft-deleted rows. Opt in with
+    // ?include_deleted=true for the operator-restore screen.
+    const includeDeleted =
+      typeof req.query.include_deleted === 'string'
+      && req.query.include_deleted.toLowerCase() === 'true';
+
+    let companiesQuery = supabase
       .from('companies')
       .select('*')
       .order('created_at', { ascending: false });
+
+    if (!includeDeleted) {
+      companiesQuery = companiesQuery.is('deleted_at', null);
+    }
+
+    const { data, error } = await companiesQuery;
 
     if (error) {
       return res.status(500).json({ error: 'FAILED_TO_LIST_COMPANIES' });
@@ -131,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PATCH') {
-    const { companyId, status } = req.body || {};
+    const { companyId, status, reason } = req.body || {};
     if (!companyId || !status) {
       return res.status(400).json({ error: 'companyId and status are required' });
     }
@@ -139,9 +160,90 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'INVALID_STATUS' });
     }
 
+    const actorUserId = guard.principal.userId || SYSTEM_USER_ID;
+    const reasonText =
+      typeof reason === 'string' && reason.trim().length > 0
+        ? reason.trim().slice(0, 500)
+        : `super-admin sets company status=${status}`;
+
+    // Phase 2.B — disable cascades. Enabling does NOT auto-unrevoke roles
+    // or sessions (revocations are intentionally one-way; affected users
+    // re-establish access via sign-in or by being re-invited).
+    if (String(status) === 'inactive') {
+      // Pre-check existence + previous state for the audit row.
+      const { data: previous } = await supabase
+        .from('companies')
+        .select('id, name, status, deleted_at')
+        .eq('id', companyId)
+        .maybeSingle();
+      if (!previous) {
+        return res.status(404).json({ error: 'COMPANY_NOT_FOUND' });
+      }
+      if ((previous as any).deleted_at) {
+        return res.status(409).json({
+          error: 'COMPANY_DELETED',
+          details: 'Company is already soft-deleted; cannot be disabled.',
+        });
+      }
+
+      let cascade;
+      try {
+        cascade = await cascadeDisableCompany(companyId, actorUserId, `disable:${reasonText}`);
+      } catch (err: any) {
+        logger.error('super_admin_company_disable_cascade_failed', {
+          companyId,
+          message: err?.message ?? String(err),
+        });
+        return res.status(500).json({
+          error: 'CASCADE_FAILED',
+          details: err?.message ?? String(err),
+        });
+      }
+
+      const { data: updated } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('id', companyId)
+        .maybeSingle();
+
+      await insertAuditLogStrict({
+        actorUserId,
+        action: 'SUPER_ADMIN_COMPANY_DISABLE',
+        targetUserId: null,
+        companyId,
+        metadata: {
+          capability: IDENTITY_ADMIN_ASSIGN,
+          reason: reasonText,
+          before: { status: (previous as any).status ?? 'active' },
+          after: { status: 'inactive' },
+          affected_users: cascade.affectedUsers,
+          revoked_roles: cascade.revokedRoles,
+          revoked_sessions: cascade.revokedSessions,
+        },
+      });
+
+      return res.status(200).json({
+        company: updated ?? { id: companyId, status: 'inactive' },
+        cascade,
+      });
+    }
+
+    // status === 'active' — simple toggle, no cascade.
+    const { data: previousActive } = await supabase
+      .from('companies')
+      .select('status, deleted_at')
+      .eq('id', companyId)
+      .maybeSingle();
+    if (previousActive && (previousActive as any).deleted_at) {
+      return res.status(409).json({
+        error: 'COMPANY_DELETED',
+        details: 'Soft-deleted companies cannot be re-activated through PATCH.',
+      });
+    }
+
     const { data, error } = await supabase
       .from('companies')
-      .update({ status: String(status) })
+      .update({ status: 'active' })
       .eq('id', companyId)
       .select('*')
       .single();
@@ -150,40 +252,127 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'FAILED_TO_UPDATE_COMPANY' });
     }
 
+    await insertAuditLogStrict({
+      actorUserId,
+      action: 'SUPER_ADMIN_COMPANY_ENABLE',
+      targetUserId: null,
+      companyId,
+      metadata: {
+        capability: IDENTITY_ADMIN_ASSIGN,
+        reason: reasonText,
+        before: { status: (previousActive as any)?.status ?? 'inactive' },
+        after: { status: 'active' },
+      },
+    });
+
     return res.status(200).json({ company: data });
   }
 
   if (req.method === 'DELETE') {
-    const { companyId } = req.body || {};
+    const { companyId, reason, hard } = req.body || {};
     if (!companyId) {
       return res.status(400).json({ error: 'companyId is required' });
     }
 
-    const { error: rolesError } = await supabase
-      .from('user_company_roles')
-      .delete()
-      .eq('company_id', companyId);
-    if (rolesError) {
-      return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY_USERS' });
+    const actorUserId = guard.principal.userId || SYSTEM_USER_ID;
+    const reasonText =
+      typeof reason === 'string' && reason.trim().length > 0
+        ? reason.trim().slice(0, 500)
+        : 'super-admin company delete';
+
+    // Phase 2.B default: SOFT delete via soft_delete_company RPC. The
+    // cascade deactivates memberships, revokes sessions, and bumps each
+    // affected user's session_revoked_after. Data is preserved.
+    //
+    // Hard delete is an opt-in escape hatch for cleanup of empty/test
+    // companies. It preserves the legacy behavior (DELETE FROM ...) and
+    // is gated by an explicit `hard=true` body flag in addition to the
+    // ORGANIZATION_DELETE capability.
+    if (hard === true) {
+      const { error: rolesError } = await supabase
+        .from('user_company_roles')
+        .delete()
+        .eq('company_id', companyId);
+      if (rolesError) {
+        return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY_USERS' });
+      }
+
+      const { error: profileError } = await supabase
+        .from('company_profiles')
+        .delete()
+        .eq('company_id', companyId);
+      if (profileError) {
+        return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY_PROFILE' });
+      }
+
+      const { error: companyError } = await supabase
+        .from('companies')
+        .delete()
+        .eq('id', companyId);
+      if (companyError) {
+        return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY' });
+      }
+
+      await insertAuditLogStrict({
+        actorUserId,
+        action: 'SUPER_ADMIN_COMPANY_HARD_DELETE',
+        targetUserId: null,
+        companyId,
+        metadata: {
+          capability: ORGANIZATION_DELETE,
+          reason: reasonText,
+          mode: 'hard',
+        },
+      });
+
+      return res.status(200).json({ success: true, mode: 'hard' });
     }
 
-    const { error: profileError } = await supabase
-      .from('company_profiles')
-      .delete()
-      .eq('company_id', companyId);
-    if (profileError) {
-      return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY_PROFILE' });
-    }
-
-    const { error: companyError } = await supabase
+    // Soft delete (default).
+    const { data: previous } = await supabase
       .from('companies')
-      .delete()
-      .eq('id', companyId);
-    if (companyError) {
-      return res.status(500).json({ error: 'FAILED_TO_DELETE_COMPANY' });
+      .select('id, name, status, deleted_at')
+      .eq('id', companyId)
+      .maybeSingle();
+    if (!previous) {
+      return res.status(404).json({ error: 'COMPANY_NOT_FOUND' });
+    }
+    if ((previous as any).deleted_at) {
+      return res.status(200).json({ success: true, mode: 'soft', already_deleted: true });
     }
 
-    return res.status(200).json({ success: true });
+    let cascade;
+    try {
+      cascade = await softDeleteCompanyWithCascade(companyId, actorUserId, `delete:${reasonText}`);
+    } catch (err: any) {
+      logger.error('super_admin_company_soft_delete_failed', {
+        companyId,
+        message: err?.message ?? String(err),
+      });
+      return res.status(500).json({
+        error: 'SOFT_DELETE_FAILED',
+        details: err?.message ?? String(err),
+      });
+    }
+
+    await insertAuditLogStrict({
+      actorUserId,
+      action: 'SUPER_ADMIN_COMPANY_SOFT_DELETE',
+      targetUserId: null,
+      companyId,
+      metadata: {
+        capability: ORGANIZATION_DELETE,
+        reason: reasonText,
+        mode: 'soft',
+        before: { status: (previous as any).status ?? 'active', deleted_at: null },
+        after: { status: 'inactive', deleted_at_set: true },
+        affected_users: cascade.affectedUsers,
+        revoked_roles: cascade.revokedRoles,
+        revoked_sessions: cascade.revokedSessions,
+      },
+    });
+
+    return res.status(200).json({ success: true, mode: 'soft', cascade });
   }
 
   return res.status(405).json({ error: 'Method not allowed' });

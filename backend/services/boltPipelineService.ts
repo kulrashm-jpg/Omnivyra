@@ -37,6 +37,18 @@ import {
   isLegacyMediaProfile,
   withBoltMetadata,
 } from '../../variants/bolt/boltCampaignMetadata';
+import {
+  getCreatorFormatsFromExecutionConfig,
+  getUnsupportedCreatorFormats,
+  getCreatorGovernance,
+  supportsAutonomousExecution,
+  validateCreatorScheduleRequest,
+} from '../../lib/shared/creatorGovernanceRegistry';
+import {
+  runCreatorAssetGenerationRuntime,
+  type CreatorAssetGenerationMode,
+  type CreatorAssetGenerationResult,
+} from './creatorAssetGenerationRuntime';
 
 const AI_PLAN_TIMEOUT_MS = 120_000;
 const GENERATE_WEEKLY_TIMEOUT_MS = 90_000;
@@ -61,6 +73,7 @@ export type BoltStage =
   | 'ai/plan'
   | 'commit-plan'
   | 'generate-weekly-structure'
+  | 'creator-asset-generation'
   | 'schedule-structured-plan';
 
 export interface BoltPayload {
@@ -777,6 +790,7 @@ const STAGES: BoltStage[] = [
   'ai/plan',
   'commit-plan',
   'generate-weekly-structure',
+  'creator-asset-generation',
   'schedule-structured-plan',
 ];
 
@@ -830,15 +844,56 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   const payload = run.payload as BoltPayload;
   const { companyId, outcomeView } = payload;
   const executionProfile = getExecutionProfile(payload.executionConfig);
+  if (executionProfile === 'creator') {
+    const formats = getCreatorFormatsFromExecutionConfig(payload.executionConfig);
+    const unsupportedFormats = getUnsupportedCreatorFormats(formats);
+    if (unsupportedFormats.length > 0) {
+      const msg = `Unsupported creator format: ${unsupportedFormats.join(', ')}`;
+      await updateRun(runId, { status: 'failed', error_message: msg });
+      throw new Error(msg);
+    }
+    const scheduleValidation = validateCreatorScheduleRequest({
+      campaignMode: 'creator',
+      outcomeView,
+      executionConfig: payload.executionConfig,
+    });
+    if (scheduleValidation.ok === false) {
+      await updateRun(runId, { status: 'failed', error_message: scheduleValidation.message });
+      throw new Error(scheduleValidation.message);
+    }
+  }
   const usesUnifiedMediaFlow = executionProfile === 'creator';
   const usesLegacyMediaFlow = isLegacyMediaProfile(executionProfile);
   const requiresMediaFlow = usesUnifiedMediaFlow || usesLegacyMediaFlow;
   // Combined mode: text + creator formats together. Scheduling applies to the text portion only.
   const isCombined = executionProfile === 'combined';
+  const creatorFormats = usesUnifiedMediaFlow
+    ? getCreatorFormatsFromExecutionConfig(payload.executionConfig)
+    : [];
+  const hasGuidanceOnlyCreatorFormats = creatorFormats.some((format) => {
+    const governance = getCreatorGovernance(format);
+    return Boolean(governance?.guidance_only || governance?.daily_plan_only);
+  });
+  const hasRenderableCreatorFormats = creatorFormats.some((format) => supportsAutonomousExecution(format));
+  const wantsSchedule = outcomeView === 'schedule' || outcomeView === 'campaign_schedule';
+  const creatorExecutionMode: CreatorAssetGenerationMode | null = usesUnifiedMediaFlow
+    ? wantsSchedule && !hasGuidanceOnlyCreatorFormats && hasRenderableCreatorFormats
+      ? 'SCHEDULE_AND_RENDER'
+      : hasRenderableCreatorFormats
+        ? 'RENDER_ONLY'
+        : 'GUIDANCE_ONLY'
+    : null;
+  const shouldRunCreatorAssetGeneration =
+    usesUnifiedMediaFlow &&
+    outcomeView !== 'week_plan' &&
+    creatorExecutionMode !== 'SCHEDULE_AND_RENDER';
 
-  // Legacy creator-dependent campaigns stop at daily_plan.
-  // Unified creator campaigns schedule through the creator execution engine.
-  const shouldSchedule = (usesUnifiedMediaFlow || !requiresMediaFlow) && (outcomeView === 'schedule' || outcomeView === 'campaign_schedule');
+  // Unified creator campaigns schedule only when every selected format is schedulable/renderable.
+  // Mixed-mode creator campaigns render autonomous formats in the separate render-only stage.
+  const shouldSchedule = wantsSchedule && (
+    (usesUnifiedMediaFlow && creatorExecutionMode === 'SCHEDULE_AND_RENDER') ||
+    (!requiresMediaFlow)
+  );
   const isWeekPlanOnly = outcomeView === 'week_plan';
 
   const missing = validateExecutionConfig(payload.executionConfig);
@@ -896,7 +951,9 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
     ? 3  // source-recommendation, ai/plan, commit-plan — stops at blueprint
     : shouldSchedule
       ? STAGES.length
-      : STAGES.length - 1;
+      : shouldRunCreatorAssetGeneration
+        ? STAGES.length - 1
+        : STAGES.length - 2;
   // Platforms required for scheduling; generate-weekly-structure falls back to linkedin if none configured
   const needsPlatformsForContent = shouldSchedule;
   if (needsPlatformsForContent && eligiblePlatforms.length === 0) {
@@ -911,12 +968,14 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   let weeksGenerated = 0;
   let dailySlotsCreated = 0;
   let scheduledPostsCreated = 0;
+  let creatorAssetGenerationResult: CreatorAssetGenerationResult | null = null;
 
   const getProgress = (stageIndex: number) => Math.round((stageIndex / totalStages) * 100);
 
   try {
     for (let i = 0; i < STAGES.length; i++) {
       const stage = STAGES[i];
+      if (stage === 'creator-asset-generation' && !shouldRunCreatorAssetGeneration) continue;
       if (stage === 'schedule-structured-plan' && !shouldSchedule) continue;
       // Note: generate-weekly-structure now runs even for week_plan so that
       // daily_content_plans rows (activity cards) are created and visible
@@ -1042,6 +1101,24 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
           );
           weeksGenerated = plan.weeks.length;
           dailySlotsCreated = summary.dailySlotsCreated;
+        } else if (stage === 'creator-asset-generation' && campaignId) {
+          creatorAssetGenerationResult = await runCreatorAssetGenerationRuntime({
+            campaignId,
+            companyId,
+            userId: payload.userId ?? null,
+            mode: creatorExecutionMode ?? 'RENDER_ONLY',
+            onProgress: (progressStage) => updateRun(runId, { current_stage: progressStage }),
+          });
+          await logEvent(runId, stage, 'completed', {
+            campaign_id: campaignId,
+            duration_ms: Date.now() - stageStart,
+            mode: creatorAssetGenerationResult.mode,
+            rendered_count: creatorAssetGenerationResult.rendered_count,
+            guidance_ready_count: creatorAssetGenerationResult.guidance_ready_count,
+            skipped_count: creatorAssetGenerationResult.skipped_count,
+            failed_count: creatorAssetGenerationResult.failed_count,
+            final_status: creatorAssetGenerationResult.final_status,
+          });
         } else if (stage === 'schedule-structured-plan' && campaignId && plan) {
           const scheduleResult = await runScheduleStructuredPlan(
             campaignId,
@@ -1121,7 +1198,9 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
         schedule: 'schedule',
         campaign_schedule: 'schedule',
       };
-      const finalStage = outcomeStageMap[String(payload.outcomeView ?? '')] ?? 'week_plan';
+      const finalStage = creatorAssetGenerationResult?.final_status
+        ?? outcomeStageMap[String(payload.outcomeView ?? '')]
+        ?? 'week_plan';
       await ownedDbTable('campaigns')
         .update({ status: 'active', current_stage: finalStage, updated_at: new Date().toISOString() })
         .eq('id', campaignId);
@@ -1136,7 +1215,9 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       scheduled_posts_created: scheduledPostsCreated,
       themes_generated: 1,
       weekly_plan_items: planWeeksCount,
-      content_variants_generated: dailySlotsCreated,
+      content_variants_generated: creatorAssetGenerationResult
+        ? creatorAssetGenerationResult.rendered_count + creatorAssetGenerationResult.guidance_ready_count
+        : dailySlotsCreated,
       expected_content_items: dailySlotsCreated,
       actual_posts_published: scheduledPostsCreated,
       ...aiMetrics,

@@ -4,14 +4,15 @@ export type CreatorPlatformType =
   | 'x'
   | 'twitter'
   | 'tiktok'
-  | 'pinterest';
+  | 'pinterest'
+  | 'facebook'
+  | 'threads'
+  | 'reddit';
 
 export type CreatorAssetKind =
   | 'image'
   | 'carousel'
-  | 'video'
-  | 'post_with_asset'
-  | 'thread_with_asset';
+  | 'video';
 
 export type CreatorPlatformCapability = {
   platform: CreatorPlatformType;
@@ -43,7 +44,7 @@ export type CreatorPlatformCapability = {
 export const CREATOR_CAPABILITY_MAP: Record<CreatorPlatformType, CreatorPlatformCapability> = {
   linkedin: {
     platform: 'linkedin',
-    supported_asset_types: ['image', 'carousel', 'video', 'post_with_asset'],
+    supported_asset_types: ['image', 'carousel', 'video'],
     max_media_items: 9,
     max_slide_count: 9,
     accepted_media_formats: ['image/jpeg', 'image/png', 'video/mp4'],
@@ -69,7 +70,7 @@ export const CREATOR_CAPABILITY_MAP: Record<CreatorPlatformType, CreatorPlatform
   },
   instagram: {
     platform: 'instagram',
-    supported_asset_types: ['image', 'carousel', 'video', 'post_with_asset'],
+    supported_asset_types: ['image', 'carousel', 'video'],
     max_media_items: 10,
     max_slide_count: 10,
     accepted_media_formats: ['image/jpeg', 'image/png', 'video/mp4'],
@@ -95,7 +96,7 @@ export const CREATOR_CAPABILITY_MAP: Record<CreatorPlatformType, CreatorPlatform
   },
   x: {
     platform: 'x',
-    supported_asset_types: ['image', 'video', 'thread_with_asset', 'post_with_asset'],
+    supported_asset_types: ['image', 'video'],
     max_media_items: 4,
     accepted_media_formats: ['image/jpeg', 'image/png', 'video/mp4'],
     accepted_url_extensions: ['.jpg', '.jpeg', '.png', '.mp4'],
@@ -120,7 +121,7 @@ export const CREATOR_CAPABILITY_MAP: Record<CreatorPlatformType, CreatorPlatform
   },
   twitter: {
     platform: 'twitter',
-    supported_asset_types: ['image', 'video', 'thread_with_asset', 'post_with_asset'],
+    supported_asset_types: ['image', 'video'],
     max_media_items: 4,
     accepted_media_formats: ['image/jpeg', 'image/png', 'video/mp4'],
     accepted_url_extensions: ['.jpg', '.jpeg', '.png', '.mp4'],
@@ -165,7 +166,7 @@ export const CREATOR_CAPABILITY_MAP: Record<CreatorPlatformType, CreatorPlatform
   },
   pinterest: {
     platform: 'pinterest',
-    supported_asset_types: ['image', 'carousel', 'post_with_asset'],
+    supported_asset_types: ['image', 'carousel'],
     max_media_items: 6,
     max_slide_count: 6,
     accepted_media_formats: ['image/jpeg', 'image/png'],
@@ -176,6 +177,50 @@ export const CREATOR_CAPABILITY_MAP: Record<CreatorPlatformType, CreatorPlatform
       max_file_size_bytes: 20971520,
       min_width: 1000,
       min_height: 1500,
+    },
+  },
+  facebook: {
+    platform: 'facebook',
+    supported_asset_types: ['image', 'carousel'],
+    max_media_items: 10,
+    max_slide_count: 10,
+    accepted_media_formats: ['image/jpeg', 'image/png'],
+    accepted_url_extensions: ['.jpg', '.jpeg', '.png'],
+    accepted_aspect_ratios: ['1:1', '4:5', '16:9'],
+    requires_remote_asset: true,
+    image_constraints: {
+      max_file_size_bytes: 10485760,
+      min_width: 1080,
+      min_height: 1080,
+    },
+  },
+  threads: {
+    platform: 'threads',
+    supported_asset_types: ['image'],
+    max_media_items: 10,
+    accepted_media_formats: ['image/jpeg', 'image/png'],
+    accepted_url_extensions: ['.jpg', '.jpeg', '.png'],
+    accepted_aspect_ratios: ['1:1', '4:5'],
+    requires_remote_asset: true,
+    image_constraints: {
+      max_file_size_bytes: 8388608,
+      min_width: 1080,
+      min_height: 1080,
+    },
+  },
+  reddit: {
+    platform: 'reddit',
+    supported_asset_types: ['image', 'carousel'],
+    max_media_items: 20,
+    max_slide_count: 20,
+    accepted_media_formats: ['image/jpeg', 'image/png'],
+    accepted_url_extensions: ['.jpg', '.jpeg', '.png'],
+    accepted_aspect_ratios: ['1:1', '16:9'],
+    requires_remote_asset: true,
+    image_constraints: {
+      max_file_size_bytes: 20971520,
+      min_width: 720,
+      min_height: 720,
     },
   },
 };

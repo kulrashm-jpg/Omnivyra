@@ -3,6 +3,8 @@ import { CompanyProfile } from './companyProfileService';
 import { detectContentOverlap } from './contentOverlapService';
 import { refineLanguageOutput } from './languageRefinementService';
 import { runCompletionWithOperation } from './aiGateway';
+import { refineGeneratedText } from './editorialTextRefinementService';
+import { config } from '@/config';
 
 const contentSchema = z.object({
   headline: z.string(),
@@ -84,7 +86,7 @@ ${tone}
   const result = await runCompletionWithOperation({
     companyId: input.companyProfile?.company_id ?? null,
     campaignId: null,
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    model: config.OPENAI_RESPONSES_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
     operation: 'generateContentForDay',
@@ -125,6 +127,16 @@ ${tone}
       parsed = { ...parsed, [k]: refined[i] || parsed[k] };
     });
   }
+  parsed = {
+    ...parsed,
+    headline: refineGeneratedText(parsed.headline, { kind: 'headline' }),
+    caption: refineGeneratedText(parsed.caption, { kind: 'body' }),
+    hook: refineGeneratedText(parsed.hook, { kind: 'body' }),
+    callToAction: refineGeneratedText(parsed.callToAction, { kind: 'body' }),
+    reasoning: refineGeneratedText(parsed.reasoning, { kind: 'body' }),
+    script: parsed.script ? refineGeneratedText(parsed.script, { kind: 'body' }) : parsed.script,
+    blogDraft: parsed.blogDraft ? refineGeneratedText(parsed.blogDraft, { kind: 'body' }) : parsed.blogDraft,
+  };
   return {
     ...parsed,
     tone: parsed.tone || tone,
@@ -155,7 +167,7 @@ ${JSON.stringify(input.existingContent, null, 2)}
   const result = await runCompletionWithOperation({
     companyId: input.companyId ?? null,
     campaignId: input.campaignId ?? null,
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    model: config.OPENAI_RESPONSES_MODEL || 'gpt-4o-mini',
     temperature: 0,
     response_format: { type: 'json_object' },
     operation: 'regenerateContent',
@@ -180,5 +192,15 @@ ${JSON.stringify(input.existingContent, null, 2)}
       parsed = { ...parsed, [k]: refined[i] || parsed[k] };
     });
   }
+  parsed = {
+    ...parsed,
+    headline: refineGeneratedText(parsed.headline, { kind: 'headline' }),
+    caption: refineGeneratedText(parsed.caption, { kind: 'body' }),
+    hook: refineGeneratedText(parsed.hook, { kind: 'body' }),
+    callToAction: refineGeneratedText(parsed.callToAction, { kind: 'body' }),
+    reasoning: refineGeneratedText(parsed.reasoning, { kind: 'body' }),
+    script: parsed.script ? refineGeneratedText(parsed.script, { kind: 'body' }) : parsed.script,
+    blogDraft: parsed.blogDraft ? refineGeneratedText(parsed.blogDraft, { kind: 'body' }) : parsed.blogDraft,
+  };
   return parsed;
 }

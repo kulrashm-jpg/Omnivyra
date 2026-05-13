@@ -2,6 +2,10 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { jobQueue } from '../../../../backend/queue/jobQueue';
+import {
+  leadQueueHardenedDefaults,
+  buildLeadJobIdempotencyKey,
+} from '../../../../backend/queue/leadQueueHardening';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -131,10 +135,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: 'Failed to create lead job' });
     }
 
-    await jobQueue.add('lead-job', {
-      type: 'LEAD',
-      jobId: job.id,
-    });
+    // Phase 0 — per-job hardening: retries, exponential backoff, retry-safe
+    // idempotency key. Applied at the enqueue site (not as queue defaults) so
+    // Market Pulse jobs on the same engine-jobs queue are unaffected.
+    await jobQueue.add(
+      'lead-job',
+      { type: 'LEAD', jobId: job.id },
+      {
+        ...leadQueueHardenedDefaults,
+        jobId: buildLeadJobIdempotencyKey({
+          organizationId: companyId,
+          leadJobId: job.id,
+          mode,
+        }),
+      },
+    );
 
     return res.status(201).json({
       jobId: job.id,

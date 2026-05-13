@@ -45,68 +45,12 @@ export async function validateCreatorContentQuality(
     return validateCarousel(blueprint, rules, issues, autoRepairs, qualityAssessment);
   } else if (contentType === 'story') {
     return validateStory(blueprint, rules, issues, autoRepairs, qualityAssessment);
-  } else if (contentType === 'post_blueprint') {
-    return validatePostBlueprint(blueprint, issues, qualityAssessment);
-  } else if (contentType === 'thread_blueprint') {
-    return validateThreadBlueprint(blueprint, rules, issues, qualityAssessment);
   }
 
   return {
     pass: false,
     severity: 'blocking',
     issues: [`Unknown content type: ${contentType}`],
-  };
-}
-
-function validatePostBlueprint(
-  blueprint: any,
-  issues: string[],
-  qualityAssessment: any
-): CreatorValidationResult {
-  if (!blueprint?.headline) issues.push('Missing headline');
-  if (!blueprint?.summary) issues.push('Missing summary');
-  if (!blueprint?.cta_scene?.text) issues.push('Missing CTA text');
-  qualityAssessment.narrative_flow = blueprint?.summary ? 'adequate' : 'disjointed';
-  qualityAssessment.visual_clarity = blueprint?.visual_description ? 'clear' : 'unclear';
-  qualityAssessment.platform_fit = {};
-  return {
-    pass: issues.length === 0,
-    severity: issues.length === 0 ? undefined : 'warning',
-    issues: issues.length > 0 ? issues : undefined,
-    quality_assessment: qualityAssessment,
-  };
-}
-
-function validateThreadBlueprint(
-  blueprint: any,
-  rules: any,
-  issues: string[],
-  qualityAssessment: any
-): CreatorValidationResult {
-  const sequence = Array.isArray(blueprint?.thread)
-    ? blueprint.thread
-    : Array.isArray(blueprint?.tweets)
-      ? blueprint.tweets
-      : Array.isArray(blueprint?.slides)
-        ? blueprint.slides
-        : [];
-  if (sequence.length < (rules?.min_frames ?? 1)) {
-    issues.push(`Too few thread items: ${sequence.length}, need at least ${rules?.min_frames ?? 1}`);
-  }
-  if (!blueprint?.headline && !sequence[0]?.text) {
-    issues.push('Missing thread hook');
-  }
-  if (!blueprint?.cta_scene?.text) {
-    issues.push('Missing CTA text');
-  }
-  qualityAssessment.narrative_flow = sequence.length > 1 ? 'adequate' : 'disjointed';
-  qualityAssessment.visual_clarity = blueprint?.visual_description ? 'clear' : 'unclear';
-  qualityAssessment.platform_fit = {};
-  return {
-    pass: issues.length === 0,
-    severity: issues.length === 0 ? undefined : 'warning',
-    issues: issues.length > 0 ? issues : undefined,
-    quality_assessment: qualityAssessment,
   };
 }
 

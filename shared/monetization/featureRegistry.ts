@@ -223,8 +223,6 @@ const BASE_FEATURES: MonetizationFeatureRegistryEntry[] = [
       'creator_execution_blueprint_image',
       'creator_execution_blueprint_carousel',
       'creator_execution_blueprint_video',
-      'creator_execution_blueprint_post_with_asset',
-      'creator_execution_blueprint_thread_with_asset',
       'blogGeneration',
       'blockEnrich',
     ],

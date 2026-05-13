@@ -13,12 +13,7 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isPlatformSuperAdmin, isSuperAdmin, getUserRole } from '../../../../backend/services/rbacService';
-import {
-  getOrgCreditSummary,
-  grantCredits,
-  adjustCredits,
-  updateOrgCreditRate,
-} from '../../../../backend/services/consumptionAnalyticsService';
+import { getOrgCreditSummary } from '../../../../backend/services/creditReadService';
 import { requireAdminRateLimit, requireAuthenticatedInternalUser } from '../../../../backend/services/requestAccessService';
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { logger } from '../../../../backend/services/logger';
@@ -80,6 +75,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (typeof credits !== 'number' || credits <= 0) {
           return res.status(400).json({ error: 'credits must be a positive number' });
         }
+        const { grantCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
         await recordAdminAudit({
@@ -96,6 +92,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       if (action === 'adjust') {
         if (typeof credits !== 'number') return res.status(400).json({ error: 'credits must be a number (positive or negative)' });
         if (!note) return res.status(400).json({ error: 'note required for adjustments' });
+        const { adjustCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
         await recordAdminAudit({
@@ -113,6 +110,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (typeof creditRateUsd !== 'number' || creditRateUsd < 0) {
           return res.status(400).json({ error: 'creditRateUsd must be a non-negative number' });
         }
+        const { updateOrgCreditRate } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await updateOrgCreditRate({ organizationId: companyId, creditRateUsd, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
         await recordAdminAudit({

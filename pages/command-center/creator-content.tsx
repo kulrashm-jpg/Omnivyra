@@ -8,7 +8,9 @@ type CreatorTypeId =
   | 'banner'
   | 'infographic'
   | 'pdf'
-  | 'slider';
+  | 'slider'
+  | 'post'
+  | 'thread';
 
 type CreatorCard = {
   id: CreatorTypeId;
@@ -127,6 +129,40 @@ const CREATOR_CARDS: CreatorCard[] = [
     borderColor: 'border-sky-200',
     ctaColor: 'bg-sky-600 hover:bg-sky-700',
   },
+  {
+    id: 'post',
+    title: 'Post',
+    category: 'Social Copy',
+    outcome: 'Platform-ready post creative with optional reusable asset context',
+    description: 'Create a focused social post with structured direction, CTA, platform packaging, and optional saved asset support.',
+    bullets: [
+      'Best for LinkedIn and Instagram post packaging',
+      'Can attach existing creator assets when useful',
+      'Ready for campaign, blog, or scheduler handoff',
+    ],
+    cta: 'Create Post',
+    accentFrom: 'from-lime-50',
+    accentTo: 'to-emerald-50',
+    borderColor: 'border-lime-200',
+    ctaColor: 'bg-lime-700 hover:bg-lime-800',
+  },
+  {
+    id: 'thread',
+    title: 'Thread',
+    category: 'Sequence Copy',
+    outcome: 'Connected post sequence with optional reusable asset context',
+    description: 'Build a thread narrative with hook, progression, CTA, platform packaging, and optional saved asset support.',
+    bullets: [
+      'Strong fit for authority and launch narratives',
+      'Can reuse saved assets as context or support',
+      'Easy handoff into long-form and social workflows',
+    ],
+    cta: 'Create Thread',
+    accentFrom: 'from-fuchsia-50',
+    accentTo: 'to-rose-50',
+    borderColor: 'border-fuchsia-200',
+    ctaColor: 'bg-fuchsia-700 hover:bg-fuchsia-800',
+  },
 ];
 
 export default function CreatorContentPage() {
@@ -210,7 +246,16 @@ export default function CreatorContentPage() {
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">Select A Creator Content Type</p>
             <p className="mt-1 text-sm text-gray-600">Each card below opens a dedicated workflow for that creator content type.</p>
           </div>
-          <p className="hidden text-sm text-gray-500 md:block">{CREATOR_CARDS.length} creator paths</p>
+          <div className="hidden items-center gap-3 md:flex">
+            <button
+              type="button"
+              onClick={() => router.push('/command-center/creator-content/visual-review')}
+              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+            >
+              Visual Review
+            </button>
+            <p className="text-sm text-gray-500">{CREATOR_CARDS.length} creator paths</p>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">

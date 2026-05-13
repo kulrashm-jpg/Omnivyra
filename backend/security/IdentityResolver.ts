@@ -23,6 +23,7 @@ import type { NextApiRequest } from 'next';
 import { resolveAuthenticatedUser } from '../services/authResolver';
 import { supabase as db } from '../db/supabaseClient';
 import { logger } from '../services/logger';
+import { tolerantUserSelect } from '../services/userColumnProjection';
 import {
   resolveSessionFromRequest,
   touchSession,
@@ -319,14 +320,43 @@ async function tryResolvePrincipalFromCanonicalSession(
   if (lookup.ok !== true) return null;
 
   const session = lookup.session;
-  const { data: userRow } = await db
-    .from('users')
-    .select('id, supabase_uid, email, is_deleted')
-    .eq('id', session.user_id)
-    .maybeSingle();
-  if (!userRow) return null;
-  const u = userRow as { id: string; supabase_uid: string | null; email: string | null; is_deleted: boolean };
+  const selected = await tolerantUserSelect({
+    resolver: 'identityResolver.canonical_session',
+    filterColumn: 'id',
+    filterValue: session.user_id,
+  });
+  if (!selected.row) return null;
+  const u = selected.row;
   if (u.is_deleted) return null;
+
+  // Phase 2.B — canonical session path enforces lifecycle state too.
+  // suspended / deleted → reject. session_revoked_after vs session.created_at
+  // → if the session was minted before the revocation, reject.
+  if (u.status === 'suspended' || u.status === 'deleted') {
+    logger.warn('identity_resolver_canonical_session_lifecycle_block', {
+      userId: u.id,
+      status: u.status,
+    });
+    return null;
+  }
+  if (u.session_revoked_after) {
+    const sessionCreatedAt = Date.parse(session.created_at);
+    const revokedAfter = Date.parse(u.session_revoked_after);
+    if (Number.isFinite(sessionCreatedAt) && Number.isFinite(revokedAfter) && sessionCreatedAt < revokedAfter) {
+      logger.warn('identity_resolver_canonical_session_revoked', {
+        userId: u.id,
+        sessionCreatedAt: session.created_at,
+        revokedAfter: u.session_revoked_after,
+      });
+      return null;
+    }
+  }
+  // Invited users CANNOT proceed via canonical session — canonical sessions
+  // are minted only for fully-active accounts.
+  if (u.status === 'invited') {
+    logger.warn('identity_resolver_canonical_session_invited_block', { userId: u.id });
+    return null;
+  }
 
   return buildPrincipalFromAuth(req, {
     id: u.id,

@@ -1,4 +1,5 @@
 import { ownedDbTable } from '../db/writeOwner';
+import { config } from '@/config';
 /**
  * Usage Ledger Service — append-only financial telemetry.
  * Logs LLM usage, external API usage, automation execution.
@@ -29,7 +30,7 @@ import {
 // Guardrail: any single request whose api_cost exceeds this threshold logs a
 // cost_anomalies row. Threshold is conservative — a well-behaved LLM call is
 // sub-cent; $1.00+ signals runaway context or bad retries.
-const REQUEST_COST_ANOMALY_THRESHOLD_USD = Number(process.env.COST_REQUEST_THRESHOLD_USD ?? '1.00');
+const REQUEST_COST_ANOMALY_THRESHOLD_USD = config.COST_REQUEST_THRESHOLD_USD;
 
 /**
  * Calculate estimated AI cost in USD from token counts and model.
@@ -502,8 +503,6 @@ const LEGACY_PROCESS_TYPE_TO_ACTION_KEY: Record<string, string> = {
   creator_execution_blueprint_image: 'content_basic',
   creator_execution_blueprint_carousel: 'content_basic',
   creator_execution_blueprint_video: 'content_basic',
-  creator_execution_blueprint_post_with_asset: 'content_basic',
-  creator_execution_blueprint_thread_with_asset: 'content_basic',
   creator_marketing_packaging:     'content_rewrite',
   chatModeration:                  'ai_reply',
   extractPlannerCommands:          'ai_reply',

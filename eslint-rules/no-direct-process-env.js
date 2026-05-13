@@ -39,74 +39,60 @@ module.exports = {
 
   create(context) {
     const filename = context.getFilename();
+    const normalizedFilename = filename.replace(/\\/g, '/');
     
     // Whitelist: allow direct access only in config module directory
-    const isInConfigDir = filename.includes('/config/') || filename.includes('/lib/config/');
+    const isInConfigDir = normalizedFilename.includes('/config/') || normalizedFilename.includes('/lib/config/');
     if (isInConfigDir) {
       return {}; // No checks in config directory
     }
 
+    const allowedEnvNames = new Set([
+      'NODE_ENV',
+      'NEXT_RUNTIME',
+      'JEST_WORKER_ID',
+    ]);
+
+    function getEnvName(node) {
+      const parent = node.parent;
+      if (!parent || parent.type !== 'MemberExpression' || parent.object !== node) {
+        return null;
+      }
+
+      if (!parent.computed && parent.property.type === 'Identifier') {
+        return parent.property.name;
+      }
+
+      if (parent.computed && parent.property.type === 'Literal') {
+        return String(parent.property.value);
+      }
+
+      return null;
+    }
+
+    function isAllowedEnvName(name) {
+      return Boolean(name && (allowedEnvNames.has(name) || name.startsWith('NEXT_PUBLIC_')));
+    }
+
+    function reportIfDisallowed(node) {
+      const name = getEnvName(node);
+      if (isAllowedEnvName(name)) {
+        return;
+      }
+
+      context.report({
+        node,
+        messageId: 'noDirect',
+      });
+    }
+
+    // One visitor on the inner `process.env` MemberExpression handles every
+    // form: process.env.X, process.env['X'], destructuring, and direct passing
+    // of process.env. Reporting once per `process.env` node avoids the
+    // duplicate diagnostics the previous multi-visitor implementation produced.
     return {
-      // Check: process.env.VARIABLE_NAME
-      MemberExpression(node) {
-        // Match: process.env.X
-        if (
-          node.object.name === 'process' &&
-          node.property.name === 'env' &&
-          node.parent.property &&
-          node.parent.property.name
-        ) {
-          context.report({
-            node,
-            messageId: 'noDirect',
-          });
-        }
-        
-        // Match: process.env (accessing the object itself)
-        if (
-          node.object.name === 'process' &&
-          node.property.name === 'env'
-        ) {
-          // Check parent to see if it's being accessed for a specific property
-          const parent = node.parent;
-          if (parent.type === 'MemberExpression' || parent.type === 'CallExpression') {
-            context.report({
-              node,
-              messageId: 'noDirect',
-            });
-          }
-        }
-      },
-
-      // Check: process.env['VARIABLE_NAME'] or process.env[dynamicKey]
-      CallExpression(node) {
-        if (
-          node.callee.type === 'MemberExpression' &&
-          node.callee.object.type === 'MemberExpression' &&
-          node.callee.object.object.name === 'process' &&
-          node.callee.object.property.name === 'env'
-        ) {
-          context.report({
-            node,
-            messageId: 'noDirect',
-          });
-        }
-      },
-
-      // Check: const x = process.env.VAR
-      VariableDeclarator(node) {
-        if (
-          node.init &&
-          node.init.type === 'MemberExpression' &&
-          node.init.object.type === 'MemberExpression' &&
-          node.init.object.object.name === 'process' &&
-          node.init.object.property.name === 'env'
-        ) {
-          context.report({
-            node,
-            messageId: 'noDirect',
-          });
-        }
+      'MemberExpression[object.name="process"][property.name="env"]'(node) {
+        reportIfDisallowed(node);
       },
     };
   },

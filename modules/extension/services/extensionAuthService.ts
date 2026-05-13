@@ -18,6 +18,9 @@ import {
   SyncMode,
   IExtensionAuthService,
 } from '../types/extension.types';
+import { supabase } from '../../../backend/db/supabaseClient';
+import { logger } from '../../../backend/services/logger';
+import { tolerantUserSelect } from '../../../backend/services/userColumnProjection';
 
 // ============================================================================
 // IN-MEMORY STORE (MVP ONLY - use Redis in production)
@@ -48,6 +51,55 @@ export class ExtensionAuthService implements IExtensionAuthService {
       // Check expiration
       if (new Date() > session.expires_at) {
         sessionStore.delete(sessionToken);
+        return null;
+      }
+
+      // Phase 2.B — lifecycle enforcement. The session token is process-local,
+      // but the user it represents may have been suspended / deleted / force-
+      // logged-out since the session was minted. Check the canonical DB
+      // state at every validation and drop the in-memory entry on a block.
+      try {
+        const selected = await tolerantUserSelect({
+          resolver: 'extensionAuthService.session_validate',
+          filterColumn: 'id',
+          filterValue: session.user_id,
+        });
+
+        if (!selected.row) {
+          sessionStore.delete(sessionToken);
+          return null;
+        }
+        const u = selected.row;
+        if (u.is_deleted || u.status === 'deleted' || u.status === 'suspended') {
+          logger.warn('extension_auth_session_lifecycle_block', {
+            userId: session.user_id,
+            status: u.status,
+            isDeleted: u.is_deleted,
+          });
+          sessionStore.delete(sessionToken);
+          return null;
+        }
+        // Force-logout: invalidate sessions minted before the revocation epoch.
+        if (u.session_revoked_after) {
+          const revokedMs = Date.parse(u.session_revoked_after);
+          const createdMs = session.created_at?.getTime?.() ?? 0;
+          if (Number.isFinite(revokedMs) && createdMs < revokedMs) {
+            logger.warn('extension_auth_session_revoked', {
+              userId: session.user_id,
+              sessionCreatedAt: session.created_at,
+              revokedAfter: u.session_revoked_after,
+            });
+            sessionStore.delete(sessionToken);
+            return null;
+          }
+        }
+      } catch (err) {
+        // DB unreachable — fail closed. An extension cannot continue
+        // operating against an unknown lifecycle state.
+        logger.warn('extension_auth_lifecycle_check_failed', {
+          userId: session.user_id,
+          message: err instanceof Error ? err.message : String(err),
+        });
         return null;
       }
 

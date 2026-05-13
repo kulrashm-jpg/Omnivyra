@@ -1,0 +1,100 @@
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { enforceCompanyAccess } from '@/backend/services/userContextService';
+import {
+  attachCreatorAsset,
+  listCreatorAssetAttachments,
+} from '@/backend/services/creatorAssetPersistenceService';
+
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asSourceType(value: unknown): 'post' | 'thread' | null {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'post' || normalized === 'thread' ? normalized : null;
+}
+
+function mapAttachment(row: Record<string, unknown>) {
+  return {
+    id: String(row.creator_asset_id || row.id || ''),
+    creatorType: String(row.creator_type || ''),
+    title: String(row.title || 'Creator asset'),
+    url: typeof row.url === 'string' ? row.url : undefined,
+    files: Array.isArray(row.files) ? row.files : undefined,
+    previewKind: typeof row.preview_kind === 'string' ? row.preview_kind : undefined,
+    imageMode: typeof row.image_mode === 'string' ? row.image_mode : null,
+    platformContext: typeof row.platform_context === 'string' ? row.platform_context : undefined,
+    renderIdentityHash: typeof row.render_identity_hash === 'string' ? row.render_identity_hash : undefined,
+    metadata: asObject(row.metadata),
+    createdAt: typeof row.created_at === 'string' ? row.created_at : new Date().toISOString(),
+  };
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const companyId = String(req.query.company_id || req.body?.company_id || '').trim();
+  const access = await enforceCompanyAccess({ req, res, companyId });
+  if (!access) return;
+
+  if (req.method === 'GET') {
+    const sourceType = asSourceType(req.query.source_type);
+    const sourceId = String(req.query.source_id || '').trim();
+    if (!sourceType || !sourceId) {
+      return res.status(400).json({ error: 'source_type and source_id are required' });
+    }
+    try {
+      const rows = await listCreatorAssetAttachments({
+        companyId,
+        userId: access.userId,
+        sourceType,
+        sourceId,
+      });
+      return res.status(200).json({ attachments: rows.map(mapAttachment) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load creator attachments';
+      return res.status(message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE') ? 503 : 500).json({
+        error: message,
+        persistence_available: !message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE'),
+      });
+    }
+  }
+
+  if (req.method === 'POST') {
+    const sourceType = asSourceType(req.body?.source_type);
+    const sourceId = String(req.body?.source_id || '').trim();
+    const asset = asObject(req.body?.asset);
+    const creatorType = String(asset.creatorType || asset.creator_type || '').trim();
+    if (!sourceType || !sourceId || !creatorType) {
+      return res.status(400).json({ error: 'source_type, source_id, and asset.creatorType are required' });
+    }
+    try {
+      const row = await attachCreatorAsset({
+        tenantId: companyId,
+        companyId,
+        userId: access.userId,
+        sourceType,
+        sourceId,
+        creatorAssetId: typeof asset.id === 'string' ? asset.id : undefined,
+        creatorType,
+        title: String(asset.title || 'Creator asset'),
+        url: typeof asset.url === 'string' ? asset.url : undefined,
+        files: Array.isArray(asset.files) ? asset.files.map(String) : undefined,
+        previewKind: typeof asset.previewKind === 'string' ? asset.previewKind : typeof asset.preview_kind === 'string' ? asset.preview_kind : undefined,
+        imageMode: typeof asset.imageMode === 'string' ? asset.imageMode : typeof asset.image_mode === 'string' ? asset.image_mode : undefined,
+        platformContext: typeof asset.platformContext === 'string' ? asset.platformContext : typeof asset.platform_context === 'string' ? asset.platform_context : undefined,
+        attachmentOrder: Number.isFinite(Number(asset.attachmentOrder)) ? Number(asset.attachmentOrder) : 0,
+        metadata: asObject(asset.metadata),
+        sourceContent: asObject(req.body?.source_content),
+        renderIdentityHash: typeof asset.renderIdentityHash === 'string' ? asset.renderIdentityHash : typeof asset.render_identity_hash === 'string' ? asset.render_identity_hash : undefined,
+      });
+      return res.status(200).json({ attachment: mapAttachment(row) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to persist creator attachment';
+      return res.status(message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE') ? 503 : 500).json({
+        error: message,
+        persistence_available: !message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE'),
+      });
+    }
+  }
+
+  return res.status(405).json({ error: 'Method not allowed' });
+}

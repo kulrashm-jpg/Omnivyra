@@ -29,6 +29,54 @@ export interface GscIngestionResult {
   keywordsProcessed: number;
   keywordsInserted: number;
   metricsInserted: number;
+  window: {
+    startDate: string;
+    endDate: string;
+    mode: 'explicit' | 'rolling_28_day_delayed' | 'historical_90_day_delayed';
+  };
+}
+
+const GSC_REPORTING_DELAY_DAYS = 3;
+const GSC_ROLLING_WINDOW_DAYS = 28;
+const GSC_HISTORICAL_BACKFILL_DAYS = 90;
+
+function isoDateFromNow(daysDelta: number): string {
+  const date = new Date(Date.now() + daysDelta * 24 * 60 * 60 * 1000);
+  return date.toISOString().slice(0, 10);
+}
+
+function startDateForWindow(endDate: string, days: number): string {
+  const end = new Date(`${endDate}T00:00:00.000Z`);
+  end.setUTCDate(end.getUTCDate() - Math.max(1, days) + 1);
+  return end.toISOString().slice(0, 10);
+}
+
+export function resolveGscIngestionWindow(input: Pick<GscIngestionInput, 'startDate' | 'endDate'> & { historicalBackfill?: boolean } = {}): {
+  startDate: string;
+  endDate: string;
+  mode: 'explicit' | 'rolling_28_day_delayed' | 'historical_90_day_delayed';
+} {
+  if (input.startDate || input.endDate) {
+    const endDate = input.endDate ?? isoDateFromNow(-GSC_REPORTING_DELAY_DAYS);
+    return {
+      startDate: input.startDate ?? startDateForWindow(endDate, GSC_ROLLING_WINDOW_DAYS),
+      endDate,
+      mode: 'explicit',
+    };
+  }
+
+  const endDate = isoDateFromNow(-GSC_REPORTING_DELAY_DAYS);
+  const days = input.historicalBackfill ? GSC_HISTORICAL_BACKFILL_DAYS : GSC_ROLLING_WINDOW_DAYS;
+  return {
+    startDate: startDateForWindow(endDate, days),
+    endDate,
+    mode: input.historicalBackfill ? 'historical_90_day_delayed' : 'rolling_28_day_delayed',
+  };
+}
+
+export function buildGscHistoricalBackfillOverride(): { startDate: string; endDate: string } {
+  const window = resolveGscIngestionWindow({ historicalBackfill: true });
+  return { startDate: window.startDate, endDate: window.endDate };
 }
 
 async function fetchGscRows(input: GscIngestionInput): Promise<GscKeywordRow[]> {
@@ -43,8 +91,8 @@ async function fetchGscRows(input: GscIngestionInput): Promise<GscKeywordRow[]> 
   const response = await axios.post(
     `https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(input.siteUrl)}/searchAnalytics/query`,
     {
-      startDate: input.startDate ?? todayIsoDate(),
-      endDate: input.endDate ?? todayIsoDate(),
+      startDate: resolveGscIngestionWindow(input).startDate,
+      endDate: resolveGscIngestionWindow(input).endDate,
       dimensions: ['query', 'page', 'country', 'device', 'date'],
       rowLimit: 25000,
     },
@@ -94,6 +142,7 @@ async function ensureKeyword(companyId: string, keyword: string, pageUrl: string
 }
 
 export async function ingestGscData(input: GscIngestionInput): Promise<GscIngestionResult> {
+  const window = resolveGscIngestionWindow(input);
   const rows = await fetchGscRows(input);
   const website = input.siteUrl || (await resolveCompanyWebsite(input.companyId));
   if (website) {
@@ -140,9 +189,18 @@ export async function ingestGscData(input: GscIngestionInput): Promise<GscIngest
     keywordsProcessed: rows.length,
     keywordsInserted,
     metricsInserted,
+    window,
   };
 }
 
 export function buildGscRunKey(input: GscIngestionInput): string {
-  return hashKey('gsc', input.companyId, input.siteUrl, input.startDate ?? '', input.endDate ?? '', Array.isArray(input.rows) ? input.rows.length : 'api');
+  const window = Array.isArray(input.rows) ? null : resolveGscIngestionWindow(input);
+  return hashKey(
+    'gsc',
+    input.companyId,
+    input.siteUrl,
+    window?.startDate ?? input.startDate ?? '',
+    window?.endDate ?? input.endDate ?? '',
+    Array.isArray(input.rows) ? input.rows.length : 'api',
+  );
 }

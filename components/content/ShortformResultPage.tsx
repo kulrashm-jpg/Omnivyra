@@ -10,6 +10,18 @@ import PlatformIcon from '../ui/PlatformIcon';
 import { filterConnectedPlatformsForContent } from '../../lib/shared/social/platformContentFilter';
 import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
+import {
+  POST_CREATOR_ASSET_TYPES,
+  buildWriterCreatorPrefill,
+  createWriterSourceId,
+  launchCreatorFromWriter,
+  loadWriterAttachedAssetsDurable,
+  readWriterAttachedAssets,
+  type CreatorAssetLaunchType,
+  type WriterAttachedAsset,
+} from '../../lib/content/writerCreatorAssetLaunch';
+
+const WRITER_CREATOR_SOCIAL_PLATFORMS = ['linkedin', 'x', 'instagram', 'facebook', 'threads', 'reddit'];
 
 type ShortformPayload = {
   output?: {
@@ -69,11 +81,14 @@ export default function ShortformResultPage({
   createPath,
 }: Props) {
   const router = useRouter();
-  const { user, isLoading, selectedCompanyId } = useCompanyContext();
+  const { user, isLoading, selectedCompanyId, selectedCompanyName } = useCompanyContext();
   const [payload, setPayload] = useState<ShortformPayload | null>(null);
   const [copied, setCopied] = useState(false);
   const [hashtagsCopied, setHashtagsCopied] = useState(false);
   const [connectedPlatforms, setConnectedPlatforms] = useState<Array<{ key: string; label: string }>>([]);
+  const [assetMenuOpen, setAssetMenuOpen] = useState(false);
+  const [selectedCreatorPlatform, setSelectedCreatorPlatform] = useState('linkedin');
+  const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
 
   const token = typeof router.query.prefill === 'string' ? router.query.prefill : '';
 
@@ -127,19 +142,25 @@ export default function ShortformResultPage({
   const masterTrace = payload?.output?.master_content?.decision_trace;
   const adaptationTrace = payload?.output?.platform_variant?.adaptation_trace;
   const topic = payload?.topic || `Generated ${contentType}`;
+  const writerSourceId = useMemo(() => createWriterSourceId('post', token || topic), [token, topic]);
 
-  // Capability-aware platform filter (Phase 7). Routes connected platforms
-  // through the shared registry so Instagram/Pinterest/etc never appear for
-  // text-only or writer content.
+  // Capability-aware platform filter (Phase 2.C). Routes connected platforms
+  // through the shared registry. Now ASSET-AWARE — when the Writer has
+  // attached Creator assets (image/banner/infographic/carousel/pdf), those
+  // asset types unlock additional platforms (e.g. Instagram + Pinterest for
+  // image-class assets) via the capability-set resolver. Video-only
+  // destinations (YouTube/TikTok) are filtered out of the displayable list
+  // by the helper itself.
   const platformFilter = useMemo(() => {
     return filterConnectedPlatformsForContent(
       connectedPlatforms.map((p) => p.key),
       {
-        formatFamily: adaptationTrace?.format_family,
-        contentType: payload?.output?.content_type ?? contentType,
+        formatFamily:       adaptationTrace?.format_family,
+        contentType:        payload?.output?.content_type ?? contentType,
+        attachedAssetTypes: attachedAssets.map((asset) => asset.creatorType),
       },
     );
-  }, [connectedPlatforms, adaptationTrace?.format_family, payload?.output?.content_type, contentType]);
+  }, [connectedPlatforms, adaptationTrace?.format_family, payload?.output?.content_type, contentType, attachedAssets]);
 
   useEffect(() => {
     if (connectedPlatforms.length === 0) return;
@@ -179,6 +200,51 @@ export default function ShortformResultPage({
       campaign: `/campaign-planner?mode=direct&source=${contentType}-result&contentType=${normalizedType}${topicQuery}`,
     };
   }, [contentType, token, topic]);
+
+  useEffect(() => {
+    if (!writerSourceId) return;
+    const refresh = () => setAttachedAssets(readWriterAttachedAssets('post', writerSourceId));
+    const refreshDurable = () => {
+      void loadWriterAttachedAssetsDurable({
+        companyId: selectedCompanyId,
+        sourceType: 'post',
+        sourceId: writerSourceId,
+      }).then(setAttachedAssets);
+    };
+    refresh();
+    refreshDurable();
+    window.addEventListener('focus', refreshDurable);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('focus', refreshDurable);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [selectedCompanyId, writerSourceId]);
+
+  const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
+    setAssetMenuOpen(false);
+    launchCreatorFromWriter({
+      router,
+      assetType,
+      source: buildWriterCreatorPrefill({
+        sourceType: 'post',
+        sourceId: writerSourceId,
+        title: topic,
+        body: generatedContent,
+        cta: masterTrace?.outcome_promise || '',
+        audience: '',
+        tone: masterTrace?.tone_used || adaptationTrace?.style_strategy || '',
+        platform: selectedCreatorPlatform,
+        hashtags,
+        companyName: selectedCompanyName || '',
+        brandContext: {
+          objective: masterTrace?.objective || '',
+          writingAngle: masterTrace?.writing_angle || '',
+          outcomePromise: masterTrace?.outcome_promise || '',
+        },
+      }),
+    });
+  };
 
   const copyText = async (text: string, type: 'content' | 'hashtags') => {
     if (!text.trim()) return;
@@ -356,6 +422,11 @@ export default function ShortformResultPage({
                             {labelFor(key)}
                           </Link>
                         ))}
+                        {/* Video-only platforms (YouTube/TikTok) are pre-filtered
+                            out of `hidden` by the helper itself — no per-call
+                            carve-out needed. Remaining hidden chips are
+                            registered-but-incompatible (e.g. Instagram for a
+                            text-only post with no attached asset). */}
                         {platformFilter.hidden.map(({ platform, reason }) => (
                           <span
                             key={platform}
@@ -372,6 +443,56 @@ export default function ShortformResultPage({
                     )}
                   </div>
                   <div className="mt-4 space-y-3">
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setAssetMenuOpen((open) => !open)}
+                        className="inline-flex w-full items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100"
+                      >
+                        Add Asset
+                      </button>
+                      {assetMenuOpen ? (
+                        <div className="absolute left-0 right-0 z-10 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                          <div className="border-b border-slate-100 px-4 py-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset from post</p>
+                            <p className="mt-1 text-xs text-slate-500">Choose a supported Creator asset and we will prefill it from this post.</p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {WRITER_CREATOR_SOCIAL_PLATFORMS.map((platform) => (
+                                <button
+                                  key={platform}
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedCreatorPlatform(platform);
+                                  }}
+                                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-semibold transition ${
+                                    selectedCreatorPlatform === platform
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
+                                  }`}
+                                >
+                                  <PlatformIcon platform={platform} size={14} />
+                                  {labelFor(platform)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          {POST_CREATOR_ASSET_TYPES.map((assetType) => (
+                            <button
+                              key={assetType}
+                              type="button"
+                              onClick={() => launchAssetCreator(assetType)}
+                              className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                              <span>{assetType.charAt(0).toUpperCase() + assetType.slice(1)}</span>
+                              <span className="mt-1 block text-xs font-normal text-slate-500">
+                                Opens {assetType.charAt(0).toUpperCase() + assetType.slice(1)} Creator with this post attached.
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                     <Link href={socialWorkflowLinks.social} className={`inline-flex w-full items-center justify-center rounded-xl px-4 py-3 text-sm font-semibold text-white ${accentButtonClassName}`}>
                       Post to social
                     </Link>
@@ -384,6 +505,36 @@ export default function ShortformResultPage({
                   </div>
                 </div>
               )}
+
+              <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
+                {attachedAssets.length === 0 ? (
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    No Creator assets attached yet. Use Add Asset to launch Image, Banner, Infographic, Carousel, or PDF with this post prefilled.
+                  </p>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {attachedAssets.map((asset) => (
+                      <a
+                        key={asset.id}
+                        href={asset.url || `/command-center/creator-content/${asset.creatorType}`}
+                        target={asset.url ? '_blank' : undefined}
+                        rel={asset.url ? 'noreferrer' : undefined}
+                        className="block rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 text-sm text-slate-700 transition hover:border-slate-300"
+                      >
+                        <span className="font-semibold">{asset.title}</span>
+                        <span className="mt-1 block text-xs text-slate-500">
+                          {asset.creatorType.charAt(0).toUpperCase() + asset.creatorType.slice(1)}
+                          {asset.creatorType === 'image' && asset.imageMode
+                            ? ` - ${asset.imageMode === 'text_embedded' ? 'Text Inside Image' : 'Post + Image'}`
+                            : ''}
+                          {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div className="rounded-[28px] border border-white/80 bg-white/95 p-5 shadow-[0_24px_70px_rgba(15,23,42,0.08)]">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Adaptation Details</p>

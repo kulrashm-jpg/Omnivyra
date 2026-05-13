@@ -126,7 +126,7 @@ function getVideoThumbnail(url: string): string | null {
 const PLATFORM_LABELS: Record<string, string> = {
   linkedin: 'LinkedIn', facebook: 'Facebook', instagram: 'Instagram',
   x: 'X (Twitter)', youtube: 'YouTube', tiktok: 'TikTok',
-  reddit: 'Reddit', pinterest: 'Pinterest',
+  reddit: 'Reddit', pinterest: 'Pinterest', threads: 'Threads',
 };
 
 const PLATFORM_UPLOAD_HINTS: Record<string, string> = {
@@ -159,6 +159,7 @@ const IMAGE_HINTS: Record<string, string> = {
   youtube: 'Custom thumbnail: JPG/PNG, 1280×720 px.',
   tiktok: 'Cover image: JPG/PNG, 9:16 ratio.',
   reddit: 'JPG/PNG up to 20 MB.',
+  threads: 'Square or portrait JPG/PNG for lightweight social creatives.',
   pinterest: 'JPG/PNG 2:3 ratio (1000×1500 px recommended).',
 };
 
@@ -414,7 +415,7 @@ function PlatformCard({
 
 /* ────────────────────── main component ────────────────────── */
 
-const DEFAULT_PLATFORMS = ['linkedin', 'facebook', 'instagram', 'x', 'youtube', 'tiktok'];
+const DEFAULT_PLATFORMS = ['linkedin', 'x', 'instagram', 'facebook', 'threads', 'reddit'];
 
 export default function CreatorContentPanel({
   theme,

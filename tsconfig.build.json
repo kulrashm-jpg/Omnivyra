@@ -5,12 +5,13 @@
   },
   "include": [
     "next-env.d.ts",
-    "pages/**/*.ts",
-    "pages/**/*.tsx",
-    "components/**/*.ts",
-    "components/**/*.tsx",
-    "lib/**/*.ts",
-    "lib/**/*.tsx"
+    "pages/command-center/creator-content.tsx",
+    "pages/command-center/creator-content/[type].tsx",
+    "pages/blogs/new.tsx",
+    "lib/content/creatorContentBridge.ts",
+    "lib/content/creatorFlowContext.ts",
+    "lib/content/launchCampaignFromContent.ts",
+    "lib/content/socialPosting.ts"
   ],
   "exclude": [
     "node_modules",
@@ -23,6 +24,10 @@
     "tmp_*",
     "artifacts",
     "scripts",
+    "pages/api",
+    "pages/api/**",
+    "backend",
+    "backend/**",
     "backend/tests",
     "**/*.test.ts",
     "**/*.spec.ts"

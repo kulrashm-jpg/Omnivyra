@@ -4,6 +4,7 @@ import { resolveCompanyAccess } from '../../../backend/services/contentArchitect
 import { supabase } from '../../../backend/db/supabaseClient';
 import { jobQueue } from '../../../backend/queue/jobQueue';
 import {
+  buildMarketPulseExecutorContext,
   createMarketPulseRun,
   resolveMarketPulseRunInput,
   syncLegacyJobIntoRun,
@@ -43,12 +44,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Credit acknowledgement is required for automated monitoring' });
     }
 
-    const { resolvedInput } = await resolveMarketPulseRunInput(companyId, input);
+    const { context, resolvedInput } = await resolveMarketPulseRunInput(companyId, input);
 
     const regionsNormalized =
       resolvedInput.custom_regions && resolvedInput.custom_regions.length > 0
         ? [...resolvedInput.custom_regions]
         : ['GLOBAL'];
+
+    // Phase 1A: derive the company-aware executor_context block and embed it
+    // in the BullMQ context_payload so generateMarketPulseForRegion can shape
+    // the LLM prompt around competitors, growth priorities, regulatory
+    // sensitivity, etc. — instead of dropping all of that on the floor.
+    const executorContext = buildMarketPulseExecutorContext(context, resolvedInput);
+
     const contextPayload = {
       context_mode: 'FULL',
       additional_direction: resolvedInput.custom_direction ?? undefined,
@@ -56,6 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       selected_categories: resolvedInput.categories,
       objective: resolvedInput.objective,
       competitor_scope: resolvedInput.competitor_scope,
+      executor_context: executorContext,
     };
 
     const { data: legacyJob, error: insertError } = await supabase

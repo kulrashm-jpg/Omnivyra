@@ -7,6 +7,8 @@ import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCred
 import { syncInstagramAndThreadsFromMeta } from '../../../../backend/services/metaDerivedAccountsService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { encryptTokenColumns, setToken } from '../../../../backend/auth/tokenStore';
+import { persistGrantedScopesByPlatformUser, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
+import { config } from '@/config';
 
 type MetaPageSummary = {
   id: string;
@@ -230,7 +232,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const longLivedData = longLivedResponse.ok ? await longLivedResponse.json() : tokenData;
     const accessToken = longLivedData.access_token ?? tokenData.access_token;
 
-    if (process.env.META_DEBUG === 'true') {
+    if (config.META_DEBUG) {
       const accountsDebug = await readMetaJson(
         `https://graph.facebook.com/v22.0/me/accounts?access_token=${encodeURIComponent(accessToken)}`
       );
@@ -247,7 +249,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const { user } = await getSupabaseUserFromRequest(req);
-    const userId = user?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+    const userId = user?.id || stateUserId || config.DEFAULT_USER_ID || '';
     if (!userId) {
       return res.redirect(`${errDest}?error=${encodeURIComponent('Login session required - please log in and try again')}`);
     }
@@ -279,6 +281,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (syncResult.instagramAccounts.length === 0) {
       throw new Error('No Instagram Business account found. Connect a Facebook Page with an Instagram Business account to enable Instagram and Threads.');
+    }
+
+    // Phase 0 — persist actually-granted scopes on every social_accounts row
+    // produced from this Meta connection (Threads via Page + IG Business +
+    // Threads-from-IG, if present). Meta scope is comma-separated.
+    const grantedMetaScopes = normaliseScopes(
+      String(tokenData.scope || longLivedData.scope || ''),
+      'comma',
+    );
+    if (grantedMetaScopes.length > 0) {
+      await persistGrantedScopesByPlatformUser({
+        userId,
+        companyId: companyId || null,
+        platform: 'threads',
+        platformUserId: selectedPage.instagramId,
+        grantedScopes: grantedMetaScopes,
+      });
+      for (const ig of syncResult.instagramAccounts) {
+        const igId = (ig as { id?: string }).id;
+        if (typeof igId === 'string' && igId.trim()) {
+          await persistGrantedScopesByPlatformUser({
+            userId,
+            companyId: companyId || null,
+            platform: 'instagram',
+            platformUserId: igId,
+            grantedScopes: grantedMetaScopes,
+          });
+        }
+      }
+      for (const th of syncResult.threadsAccounts) {
+        const thId = (th as { id?: string }).id;
+        if (typeof thId === 'string' && thId.trim()) {
+          await persistGrantedScopesByPlatformUser({
+            userId,
+            companyId: companyId || null,
+            platform: 'threads',
+            platformUserId: thId,
+            grantedScopes: grantedMetaScopes,
+          });
+        }
+      }
     }
 
     if (companyId && userId) {

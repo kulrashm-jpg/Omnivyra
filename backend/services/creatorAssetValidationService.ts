@@ -119,9 +119,7 @@ export async function validateAssetReadiness(input: {
       ? ['slides']
       : input.output.asset_type === 'image'
         ? ['visual_descriptor']
-        : input.output.asset_type === 'video'
-          ? ['scenes']
-          : ['caption_blueprint'];
+        : ['scenes'];
   for (const field of requiredPayloadFields) {
     if (!(field in payload)) {
       return {
@@ -164,7 +162,7 @@ export async function validateAssetReadiness(input: {
     };
   }
 
-  if (input.output.asset_type === 'video' || input.output.asset_type === 'post_with_asset' || input.output.asset_type === 'thread_with_asset') {
+  if (input.output.asset_type === 'video') {
     const constraints = capabilityResult.capability.video_constraints;
     if (constraints) {
       if (durationSeconds != null && constraints.min_duration_seconds != null && durationSeconds < constraints.min_duration_seconds) {
@@ -283,7 +281,7 @@ export async function validateAssetReadiness(input: {
       };
     }
     const fileSizeLimit =
-      input.output.asset_type === 'video' || input.output.asset_type === 'post_with_asset' || input.output.asset_type === 'thread_with_asset'
+      input.output.asset_type === 'video'
         ? capabilityResult.capability.video_constraints?.max_file_size_bytes
         : capabilityResult.capability.image_constraints?.max_file_size_bytes;
     if (fileSizeLimit != null && check.contentLength != null && check.contentLength > fileSizeLimit) {

@@ -9,6 +9,8 @@ import { useCompanyContext } from '../components/CompanyContext';
 import LandingNavbar from '../components/landing/LandingNavbar';
 import { TourProvider } from '../components/tour/TourContext';
 import AppLayout from '../components/layout/AppLayout';
+import { AuthErrorBanner } from '../components/auth/AuthErrorBanner';
+import { AuthDevPanel } from '../components/auth/AuthDevPanel';
 import { WEBSITE_GA_MEASUREMENT_ID } from '../lib/websiteAnalytics';
 
 // NOTE: clearSupabaseSession() was removed here.  It wiped sb-* localStorage
@@ -176,9 +178,16 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Authenticated routes get AppLayout (header + footer)
   const showAppLayout = isAuthenticated && !isPublic && !isOnboardingRoute && !isLoginRoute && !isCaptureRoute;
 
+  // AuthErrorBanner renders any non-session-fatal auth error from
+  // CompanyContext (USER_INVITED, USER_NOT_FOUND, SCHEMA_MISMATCH,
+  // PROFILE_LOAD_FAILED). Only shown on protected routes to avoid
+  // showing it on /login (where a fresh sign-in clears the state anyway).
+  const showAuthErrorBanner = !isPublic;
+
   return (
     <>
       {showLandingNavbar && <LandingNavbar />}
+      {showAuthErrorBanner && <AuthErrorBanner />}
       {showAppLayout ? (
         <AppLayout>{children}</AppLayout>
       ) : (
@@ -201,6 +210,7 @@ function MyApp({ Component, pageProps }: AppProps) {
         <AuthGate>
           <Component {...pageProps} />
         </AuthGate>
+        <AuthDevPanel />
       </TourProvider>
     </CompanyProvider>
   );

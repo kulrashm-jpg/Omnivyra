@@ -7,6 +7,8 @@ import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
+import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
+import { config } from '@/config';
 
 function getRequestBaseUrl(req: NextApiRequest): string {
   const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
@@ -82,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { companyId, userId: stateUserId, returnTo, flow: stateFlow, tenantId: stateTenantId } = decodeOAuthState(state as string);
 
     const { user: sessionUser } = await getSupabaseUserFromRequest(req);
-    const userId = sessionUser?.id || stateUserId || process.env.DEFAULT_USER_ID || '';
+    const userId = sessionUser?.id || stateUserId || config.DEFAULT_USER_ID || '';
 
     if (!userId) {
       console.error('No user_id available - cannot save account');
@@ -175,6 +177,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     await setToken(accountId, tokenObj);
+
+    // Phase 0 — persist actually-granted scopes (X OAuth 2.0 returns the
+    // granted scope set as a space-separated `scope` field on the token
+    // response). Fall back to the originally-requested scopes if absent.
+    const requestedXScopes = 'tweet.read tweet.write users.read like.write follows.write offline.access';
+    const grantedXScopes = normaliseScopes(tokenData.scope ?? requestedXScopes, 'space');
+    await persistGrantedScopes({
+      socialAccountId: accountId,
+      platform: 'x',
+      grantedScopes: grantedXScopes,
+    });
 
     if (companyId && userId) {
       checkAndGrantSetupCredits(companyId, userId)

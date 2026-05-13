@@ -5,6 +5,15 @@ import { useRouter } from 'next/router';
 import ReportFormModal from '@/components/ReportFormModal';
 import { useCompanyContext } from '@/components/CompanyContext';
 
+function integrationKeyForName(name: string): string {
+  if (name === 'Google Analytics') return 'google_analytics';
+  if (name === 'Google Search Console') return 'google_search_console';
+  if (name === 'Google Ads') return 'google_ads';
+  if (name === 'LinkedIn Ads') return 'linkedin_ads';
+  if (name === 'Facebook / Meta Ads') return 'meta_ads';
+  return 'website_crawl';
+}
+
 export default function MarketGrowthIntelligencePage() {
   const router = useRouter();
   const { selectedCompanyId } = useCompanyContext();
@@ -49,6 +58,27 @@ export default function MarketGrowthIntelligencePage() {
   const readinessLabel = integrationsConnected
     ? 'Ready to generate'
     : (readiness?.reports?.growth?.missing_requirements?.[0] as string | undefined) || 'Connect integrations below to proceed';
+  const getCapabilityStatus = (key: string) => {
+    const provider = readiness?.provider_readiness?.[key];
+    if (provider) {
+      return {
+        connected: Boolean(provider.connected),
+        label: provider.connected ? 'Connected' : String(provider.action_label || 'Setup required'),
+      };
+    }
+
+    const connected = Boolean(readiness?.integration_state?.[key]?.connected);
+    return {
+      connected,
+      label: connected
+        ? 'Connected'
+        : key === 'google_search_console'
+          ? 'Search Console setup required'
+          : key === 'google_analytics'
+            ? 'Connect Google Analytics'
+            : 'Manage',
+    };
+  };
 
   return (
     <>
@@ -300,7 +330,9 @@ export default function MarketGrowthIntelligencePage() {
                   { icon: '💼', name: 'LinkedIn Ads', desc: 'B2B audience data and market segment insights', required: false },
                   { icon: '🟦', name: 'Facebook / Meta Ads', desc: 'Market reach and audience size benchmarks', required: false },
                   { icon: '🌐', name: 'Website Crawl', desc: 'Competitor site analysis via your domain — no integration needed', required: false },
-                ].map((item) => (
+                ].map((item) => {
+                  const status = getCapabilityStatus(integrationKeyForName(item.name));
+                  return (
                   <div key={item.name} className="flex items-center gap-4 rounded-xl bg-gray-50 p-4 border border-gray-200">
                     <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white border border-gray-200 text-2xl flex-shrink-0">
                       {item.icon}
@@ -316,39 +348,16 @@ export default function MarketGrowthIntelligencePage() {
                     <button
                       onClick={() => router.push('/integrations?focus=data')}
                       className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                        readiness?.integration_state?.[
-                          item.name === 'Google Analytics'
-                            ? 'google_analytics'
-                            : item.name === 'Google Search Console'
-                              ? 'google_search_console'
-                              : item.name === 'Google Ads'
-                                ? 'google_ads'
-                                : item.name === 'LinkedIn Ads'
-                                  ? 'linkedin_ads'
-                                  : item.name === 'Facebook / Meta Ads'
-                                    ? 'meta_ads'
-                                    : 'website_crawl'
-                        ]?.connected
+                        status.connected
                           ? 'bg-green-100 text-green-700 cursor-default'
                           : 'bg-emerald-600 hover:bg-emerald-700 text-white'
                       }`}
                     >
-                      {readiness?.integration_state?.[
-                        item.name === 'Google Analytics'
-                          ? 'google_analytics'
-                          : item.name === 'Google Search Console'
-                            ? 'google_search_console'
-                            : item.name === 'Google Ads'
-                              ? 'google_ads'
-                              : item.name === 'LinkedIn Ads'
-                                ? 'linkedin_ads'
-                                : item.name === 'Facebook / Meta Ads'
-                                  ? 'meta_ads'
-                                  : 'website_crawl'
-                      ]?.connected ? '✓ Connected' : 'Manage'}
+                      {status.connected ? 'Connected' : status.label}
                     </button>
                   </div>
-                ))}
+                  );
+                })}
                 <p className="text-xs text-center text-gray-400 mt-4">
                   🔒 All integrations are read-only. We never modify or store your account data.
                 </p>

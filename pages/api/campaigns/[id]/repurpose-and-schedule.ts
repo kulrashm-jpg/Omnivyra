@@ -15,6 +15,10 @@ import { requireCampaignAccess } from '../../../../backend/services/campaignAcce
 import { evaluateScheduleEligibility } from '../../../../backend/services/campaignScheduleEligibilityService';
 import { scheduleStructuredPlan, ScheduleEligibilityError } from '../../../../backend/services/structuredPlanScheduler';
 import { acquireSchedulerLock, releaseSchedulerLock, SchedulerLockError } from '../../../../backend/services/SchedulerLockService';
+import {
+  CreatorScheduleGovernanceError,
+  assertNoUnschedulableCreatorDailyPlans,
+} from '../../../../lib/shared/creatorGovernanceRegistry';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -30,19 +34,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let lockId: string | null = null;
 
   try {
-    // Acquire scheduler lock to prevent concurrent runs
-    try {
-      lockId = await acquireSchedulerLock(campaignId);
-    } catch (lockErr) {
-      if (lockErr instanceof SchedulerLockError) {
-        return res.status(409).json({
-          success: false,
-          error: 'Scheduling already in progress.',
-        });
-      }
-      throw lockErr;
-    }
-
     // FIX 3: Ensure campaign has start_date
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
@@ -80,7 +71,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         error: 'No daily plans found for this campaign. Generate daily plans first.',
       });
     }
-
     const { data: versionRow } = await supabase
       .from('campaign_versions')
       .select('campaign_snapshot')
@@ -89,6 +79,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .limit(1)
       .maybeSingle();
     const executionProfile = String(((versionRow as any)?.campaign_snapshot?.execution_config?.[['campaign', 'mode'].join('_')]) || 'text');
+
+    if (executionProfile === 'creator') {
+      try {
+        assertNoUnschedulableCreatorDailyPlans(plans as Array<{ content_type?: unknown }>);
+      } catch (error) {
+        if (error instanceof CreatorScheduleGovernanceError) {
+          return res.status(error.statusCode).json(error.payload);
+        }
+        throw error;
+      }
+    }
+
+    // Acquire scheduler lock only after creator schedule governance has passed.
+    try {
+      lockId = await acquireSchedulerLock(campaignId);
+    } catch (lockErr) {
+      if (lockErr instanceof SchedulerLockError) {
+        return res.status(409).json({
+          success: false,
+          error: 'Scheduling already in progress.',
+        });
+      }
+      throw lockErr;
+    }
 
     const eligibility = evaluateScheduleEligibility(plans as Array<{
       id?: string | null;

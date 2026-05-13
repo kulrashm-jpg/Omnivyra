@@ -281,7 +281,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const companyIds = Array.from(new Set(rows.map((row) => row.company_id).filter(Boolean)));
 
     const [usersResult, companiesResult, profilesResult] = await Promise.all([
-      supabase.from('users').select('id, email, created_at').eq('is_deleted', false),
+      // Phase 2.B — surface users.status so the super-admin UI can show
+      // suspended/invited/deleted lifecycle state distinct from the
+      // user_company_roles.status the existing UI already displays.
+      supabase.from('users').select('id, email, status, created_at').eq('is_deleted', false),
       companyIds.length > 0
         ? supabase.from('companies').select('id, name').in('id', companyIds)
         : Promise.resolve({ data: [], error: null }),
@@ -307,6 +310,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       },
       {}
     );
+    // Phase 2.B — lifecycle status by users.id, keyed for fast row lookup.
+    const accountStatusByUserId = (usersResult.data || []).reduce<Record<string, string | null>>(
+      (acc, user) => {
+        acc[(user as any).id] = ((user as any).status as string | null) ?? null;
+        return acc;
+      },
+      {},
+    );
     const nameByCompanyId = (companiesResult.data || []).reduce<Record<string, string>>((acc, company) => {
       acc[company.id] = company.name || '';
       return acc;
@@ -324,6 +335,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       email: emailByUserId[row.user_id] || '',
       role: row.role,
       status: row.status || null,
+      account_status: accountStatusByUserId[row.user_id] ?? null,
       company_id: row.company_id,
       company_name: nameByCompanyId[row.company_id] || '',
       created_at: row.created_at,
@@ -337,6 +349,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         email: user.email || '',
         role: 'UNASSIGNED',
         status: null,
+        account_status: accountStatusByUserId[user.id] ?? null,
         company_id: null,
         company_name: '',
         created_at: user.created_at || null,

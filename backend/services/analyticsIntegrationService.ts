@@ -1,10 +1,9 @@
 import { decodeOAuthState, encodeOAuthState } from '../auth/oauthState';
 import { decryptCredential, encryptCredential } from '../auth/credentialEncryption';
-import { supabase } from '../db/supabaseClient';
 import { getAnalyticsProviderConfig } from './analyticsProviderConfigService';
 import { ownedDbTable } from '../db/writeOwner';
 
-export type AnalyticsProvider = 'GA4';
+export type AnalyticsProvider = 'GA4' | 'GSC';
 export type AnalyticsIntegrationStatus = 'connected' | 'disconnected' | 'error';
 
 export type AnalyticsIntegrationRecord = {
@@ -45,6 +44,12 @@ export type GoogleAnalyticsPropertySummary = {
   accountName: string | null;
 };
 
+export type GoogleSearchConsoleSiteSummary = {
+  siteUrl: string;
+  permissionLevel: string | null;
+  verified: boolean;
+};
+
 type GoogleAdminApiAccountSummary = {
   account?: string | null;
   displayName?: string | null;
@@ -72,6 +77,7 @@ export type GoogleAnalyticsConnectionStatus = {
   tokenValid: boolean;
   tokenExpiresAt: string | null;
   propertiesCount: number;
+  tokenScope: string | null;
 };
 
 type ConnectGoogleAnalyticsOptions = {
@@ -94,18 +100,36 @@ type TokenExchangeResult = {
 };
 
 const GA4_PROVIDER: AnalyticsProvider = 'GA4';
+const GSC_PROVIDER: AnalyticsProvider = 'GSC';
 const GA4_SCOPES = [
   'openid',
   'email',
   'profile',
   'https://www.googleapis.com/auth/analytics.readonly',
+  'https://www.googleapis.com/auth/webmasters.readonly',
 ].join(' ');
+const REQUIRED_GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
+
+function isMissingGscProviderEnum(error: unknown): boolean {
+  const message = error && typeof error === 'object' && 'message' in error
+    ? String((error as { message?: unknown }).message || '')
+    : String(error || '');
+  return /invalid input value for enum analytics_provider:\s*"?GSC"?|analytics_provider.*GSC/i.test(message);
+}
+
+function gscProviderMigrationError(): Error {
+  return new Error('Search Console database support is not installed. Apply migration 20260632_google_search_console_analytics_provider.sql, then retry.');
+}
 
 async function getGoogleAnalyticsOauthConfig(): Promise<{
   client_id: string;
   client_secret: string;
   scopes: string[];
   redirect_uri: string | null;
+  capability_redirect_uris: {
+    google_analytics: string | null;
+    google_search_console: string | null;
+  };
 }> {
   const config = await getAnalyticsProviderConfig('google_analytics');
   if (!config?.enabled) {
@@ -120,6 +144,7 @@ async function getGoogleAnalyticsOauthConfig(): Promise<{
     client_secret: config.oauth_client_secret,
     scopes: config.scopes,
     redirect_uri: config.redirect_uri,
+    capability_redirect_uris: config.capability_redirect_uris,
   };
 }
 
@@ -156,13 +181,27 @@ function parseGoogleResourceId(resourceName: string | null | undefined): string 
 }
 
 async function getAnalyticsIntegration(companyId: string): Promise<AnalyticsIntegrationRecord | null> {
+  return getAnalyticsIntegrationForProvider(companyId, GA4_PROVIDER);
+}
+
+async function getAnalyticsIntegrationForProvider(
+  companyId: string,
+  provider: AnalyticsProvider,
+): Promise<AnalyticsIntegrationRecord | null> {
   const { data, error } = await ownedDbTable('analytics_integrations')
     .select('*')
     .eq('company_id', companyId)
-    .eq('provider', GA4_PROVIDER)
+    .eq('provider', provider)
     .maybeSingle();
 
   if (error) {
+    if (provider === GSC_PROVIDER && isMissingGscProviderEnum(error)) {
+      console.warn('[GSC-OAUTH][provider-enum-missing]', {
+        company_id: companyId,
+        message: error.message,
+      });
+      return null;
+    }
     throw new Error(`Failed to load analytics integration: ${error.message}`);
   }
 
@@ -172,8 +211,9 @@ async function getAnalyticsIntegration(companyId: string): Promise<AnalyticsInte
 async function ensureAnalyticsIntegration(
   companyId: string,
   status: AnalyticsIntegrationStatus,
+  provider: AnalyticsProvider = GA4_PROVIDER,
 ): Promise<AnalyticsIntegrationRecord> {
-  const existing = await getAnalyticsIntegration(companyId);
+  const existing = await getAnalyticsIntegrationForProvider(companyId, provider);
   const timestamp = new Date().toISOString();
 
   if (existing) {
@@ -196,7 +236,7 @@ async function ensureAnalyticsIntegration(
   const { data, error } = await ownedDbTable('analytics_integrations')
     .insert({
       company_id: companyId,
-      provider: GA4_PROVIDER,
+      provider,
       status,
       created_at: timestamp,
       updated_at: timestamp,
@@ -205,6 +245,9 @@ async function ensureAnalyticsIntegration(
     .single();
 
   if (error) {
+    if (provider === GSC_PROVIDER && isMissingGscProviderEnum(error)) {
+      throw gscProviderMigrationError();
+    }
     throw new Error(`Failed to create analytics integration: ${error.message}`);
   }
 
@@ -307,12 +350,26 @@ async function syncAnalyticsProperties(
   return (data ?? []) as AnalyticsPropertyRecord[];
 }
 
+function withRequiredScopes(scopes: string[], required: string[]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const scope of [...scopes, ...required]) {
+    const normalized = String(scope || '').trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    merged.push(normalized);
+  }
+  return merged;
+}
+
 async function exchangeAuthorizationCode(
   code: string,
   requestBaseUrl?: string,
+  capability: 'google_analytics' | 'google_search_console' = 'google_analytics',
 ): Promise<TokenExchangeResult> {
   const credentials = await getGoogleAnalyticsOauthConfig();
   const redirectUri =
+    credentials.capability_redirect_uris[capability] ||
     credentials.redirect_uri ||
     `${(requestBaseUrl || '').replace(/\/$/, '')}/api/analytics/connect/google/callback`;
 
@@ -498,6 +555,48 @@ export async function fetchGAAccountsAndProperties(
   return Array.from(dedupedProperties.values()).sort((a, b) => a.propertyName.localeCompare(b.propertyName));
 }
 
+export async function fetchSearchConsoleSites(accessToken: string): Promise<GoogleSearchConsoleSiteSummary[]> {
+  const response = await fetch('https://searchconsole.googleapis.com/webmasters/v3/sites', {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    console.error('[GSC-OAUTH][sites-api] request failed', {
+      status: response.status,
+      body,
+    });
+    throw new Error(`Google Search Console sites request failed (${response.status}): ${body || 'unknown error'}`);
+  }
+
+  const payload = await response.json();
+  const entries = Array.isArray(payload?.siteEntry) ? payload.siteEntry : [];
+  return entries
+    .map((entry: any): GoogleSearchConsoleSiteSummary | null => {
+      const siteUrl = typeof entry?.siteUrl === 'string' ? entry.siteUrl.trim() : '';
+      if (!siteUrl) return null;
+      const permissionLevel = typeof entry?.permissionLevel === 'string' ? entry.permissionLevel : null;
+      return {
+        siteUrl,
+        permissionLevel,
+        verified: permissionLevel !== 'siteUnverifiedUser',
+      };
+    })
+    .filter((entry: GoogleSearchConsoleSiteSummary | null): entry is GoogleSearchConsoleSiteSummary => Boolean(entry))
+    .sort((a, b) => a.siteUrl.localeCompare(b.siteUrl));
+}
+
+function mapGscSitesToProperties(sites: GoogleSearchConsoleSiteSummary[]): GoogleAnalyticsPropertySummary[] {
+  return sites.map((site) => ({
+    propertyId: site.siteUrl,
+    propertyName: site.siteUrl,
+    accountId: site.permissionLevel,
+    accountName: site.verified ? 'verified' : 'unverified',
+  }));
+}
+
 export async function connectGoogleAnalytics(
   companyId: string,
   options: ConnectGoogleAnalyticsOptions = {},
@@ -520,18 +619,72 @@ export async function connectGoogleAnalytics(
 
   const params = new URLSearchParams({
     client_id: credentials.client_id,
-    redirect_uri: credentials.redirect_uri || `${baseUrl}/api/analytics/connect/google/callback`,
+    redirect_uri: credentials.capability_redirect_uris.google_analytics || credentials.redirect_uri || `${baseUrl}/api/analytics/connect/google/callback`,
     response_type: 'code',
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
-    scope: credentials.scopes.length > 0 ? credentials.scopes.join(' ') : GA4_SCOPES,
+    scope: withRequiredScopes(credentials.scopes.length > 0 ? credentials.scopes : GA4_SCOPES.split(' '), []).join(' '),
     state,
   });
 
   return {
     authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
   };
+}
+
+export async function connectGoogleSearchConsole(
+  companyId: string,
+  options: ConnectGoogleAnalyticsOptions = {},
+): Promise<{ authorizationUrl: string }> {
+  const credentials = await getGoogleAnalyticsOauthConfig();
+
+  const baseUrl = (options.requestBaseUrl || '').replace(/\/$/, '');
+  if (!baseUrl && !credentials.redirect_uri) {
+    throw new Error('Request base URL is required to start Search Console OAuth');
+  }
+
+  await ensureAnalyticsIntegration(companyId, 'disconnected', GSC_PROVIDER);
+
+  const state = encodeOAuthState({
+    companyId,
+    userId: options.userId,
+    returnTo: options.returnTo,
+    flow: 'gsc',
+  });
+
+  const params = new URLSearchParams({
+    client_id: credentials.client_id,
+    redirect_uri: credentials.capability_redirect_uris.google_search_console || credentials.redirect_uri || `${baseUrl}/api/analytics/connect/google/callback`,
+    response_type: 'code',
+    access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: 'true',
+    scope: withRequiredScopes(credentials.scopes.length > 0 ? credentials.scopes : GA4_SCOPES.split(' '), [REQUIRED_GSC_SCOPE]).join(' '),
+    state,
+  });
+
+  return {
+    authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+  };
+}
+
+export async function handleGoogleOAuthCallback(
+  input: OAuthCallbackInput,
+): Promise<{
+  companyId: string;
+  integration: AnalyticsIntegrationRecord;
+  properties: AnalyticsPropertyRecord[];
+  returnTo: string | null;
+  flow: 'ga4' | 'gsc';
+}> {
+  const state = decodeOAuthState(input.state);
+  if (state.flow === 'gsc') {
+    const result = await handleSearchConsoleOAuthCallback(input);
+    return { ...result, flow: 'gsc' };
+  }
+  const result = await handleOAuthCallback(input);
+  return { ...result, flow: 'ga4' };
 }
 
 export async function handleOAuthCallback(
@@ -558,7 +711,7 @@ export async function handleOAuthCallback(
     throw new Error('Request base URL is required for GA4 OAuth callback');
   }
 
-  const token = await exchangeAuthorizationCode(input.code, input.requestBaseUrl);
+  const token = await exchangeAuthorizationCode(input.code, input.requestBaseUrl, 'google_analytics');
   if (!token.access_token) {
     throw new Error('OAuth callback did not return an access token');
   }
@@ -587,6 +740,53 @@ export async function handleOAuthCallback(
   // been chosen yet — saveSelectedProperty() will fire ingestion instead.
   if (syncedProperties.some((p) => p.is_active)) {
     triggerImmediateGa4Ingestion(state.companyId);
+  }
+
+  return {
+    companyId: state.companyId,
+    integration,
+    properties: syncedProperties,
+    returnTo: state.returnTo ?? null,
+  };
+}
+
+export async function handleSearchConsoleOAuthCallback(
+  input: OAuthCallbackInput,
+): Promise<{
+  companyId: string;
+  integration: AnalyticsIntegrationRecord;
+  properties: AnalyticsPropertyRecord[];
+  returnTo: string | null;
+}> {
+  const state = decodeOAuthState(input.state);
+  console.log('[GSC-OAUTH][handleOAuthCallback] start', {
+    state_valid: state.valid,
+    state_company_id: state.companyId ?? null,
+    has_request_base_url: Boolean(input.requestBaseUrl),
+  });
+  if (state.valid !== true) {
+    throw new Error('Invalid OAuth state');
+  }
+  if (!state.companyId) {
+    throw new Error('OAuth state is missing company context');
+  }
+  if (!input.requestBaseUrl) {
+    throw new Error('Request base URL is required for Search Console OAuth callback');
+  }
+
+  const token = await exchangeAuthorizationCode(input.code, input.requestBaseUrl, 'google_search_console');
+  if (!token.access_token) {
+    throw new Error('OAuth callback did not return an access token');
+  }
+
+  const integration = await ensureAnalyticsIntegration(state.companyId, 'connected', GSC_PROVIDER);
+  await saveAnalyticsTokens(integration.id, token);
+
+  const sites = await fetchSearchConsoleSites(token.access_token);
+  const syncedProperties = await syncAnalyticsProperties(integration.id, mapGscSitesToProperties(sites));
+
+  if (syncedProperties.some((p) => p.is_active)) {
+    triggerImmediateGscIngestion(state.companyId);
   }
 
   return {
@@ -628,6 +828,42 @@ export function triggerImmediateGa4Ingestion(companyId: string): void {
       const message = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? err.stack : undefined;
       console.error('[GA-OAUTH][INITIAL_GA_INGESTION_FAILED]', {
+        company_id: companyId,
+        message,
+        stack,
+      });
+    }
+  })();
+}
+
+export function triggerImmediateGscIngestion(companyId: string): void {
+  void (async () => {
+    try {
+      const { runIngestionForCompany } = await import('./ingestionScheduler');
+      const { buildGscHistoricalBackfillOverride } = await import('./gscIngestionService');
+      const summary = await runIngestionForCompany({
+        companyId,
+        sources: ['gsc'],
+        overrides: {
+          gsc: buildGscHistoricalBackfillOverride(),
+        },
+        force: true,
+        reason: 'initial_gsc_90_day_backfill',
+      });
+      console.log('[GSC-OAUTH][initial-ingestion] completed', {
+        company_id: companyId,
+        sources: summary.sources.map((s) => ({
+          source: s.source,
+          success: s.success,
+          skipped: s.skipped ?? false,
+          error: s.error ?? null,
+        })),
+        ready: summary.ready,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      console.error('[GSC-OAUTH][INITIAL_GSC_INGESTION_FAILED]', {
         company_id: companyId,
         message,
         stack,
@@ -684,6 +920,90 @@ export async function saveSelectedProperty(
   return data as AnalyticsPropertyRecord;
 }
 
+export async function saveSelectedSearchConsoleProperty(
+  companyId: string,
+  propertyId: string,
+): Promise<AnalyticsPropertyRecord> {
+  const integration = await getAnalyticsIntegrationForProvider(companyId, GSC_PROVIDER);
+  if (!integration) {
+    throw new Error('Search Console integration not found for company');
+  }
+
+  const { data: property, error: propertyError } = await ownedDbTable('analytics_properties')
+    .select('*')
+    .eq('integration_id', integration.id)
+    .eq('property_id', propertyId)
+    .maybeSingle();
+
+  if (propertyError) {
+    throw new Error(`Failed to load Search Console property: ${propertyError.message}`);
+  }
+  if (!property) {
+    throw new Error('Selected Search Console property does not belong to this company integration');
+  }
+
+  const timestamp = new Date().toISOString();
+
+  const { error: resetError } = await ownedDbTable('analytics_properties')
+    .update({ is_active: false, updated_at: timestamp })
+    .eq('integration_id', integration.id)
+    .eq('is_active', true);
+
+  if (resetError) {
+    throw new Error(`Failed to deactivate current Search Console property: ${resetError.message}`);
+  }
+
+  const { data, error } = await ownedDbTable('analytics_properties')
+    .update({ is_active: true, updated_at: timestamp })
+    .eq('id', (property as AnalyticsPropertyRecord).id)
+    .select('*')
+    .single();
+
+  if (error) {
+    throw new Error(`Failed to activate Search Console property: ${error.message}`);
+  }
+
+  triggerImmediateGscIngestion(companyId);
+
+  return data as AnalyticsPropertyRecord;
+}
+
+export async function disconnectSearchConsole(companyId: string): Promise<{ disconnected: boolean }> {
+  const integration = await getAnalyticsIntegrationForProvider(companyId, GSC_PROVIDER);
+  if (!integration) {
+    return { disconnected: false };
+  }
+
+  const timestamp = new Date().toISOString();
+
+  const { error: propertyError } = await ownedDbTable('analytics_properties')
+    .update({ is_active: false, updated_at: timestamp })
+    .eq('integration_id', integration.id)
+    .eq('is_active', true);
+
+  if (propertyError) {
+    throw new Error(`Failed to deactivate Search Console properties: ${propertyError.message}`);
+  }
+
+  const { error: tokenError } = await ownedDbTable('analytics_tokens')
+    .delete()
+    .eq('integration_id', integration.id);
+
+  if (tokenError) {
+    throw new Error(`Failed to remove Search Console token: ${tokenError.message}`);
+  }
+
+  const { error: integrationError } = await ownedDbTable('analytics_integrations')
+    .update({ status: 'disconnected', updated_at: timestamp })
+    .eq('id', integration.id);
+
+  if (integrationError) {
+    throw new Error(`Failed to disconnect Search Console integration: ${integrationError.message}`);
+  }
+
+  return { disconnected: true };
+}
+
 export async function getActiveProperty(companyId: string): Promise<AnalyticsPropertyRecord | null> {
   const integration = await getAnalyticsIntegration(companyId);
   if (!integration) return null;
@@ -696,6 +1016,23 @@ export async function getActiveProperty(companyId: string): Promise<AnalyticsPro
 
   if (error) {
     throw new Error(`Failed to load active GA4 property: ${error.message}`);
+  }
+
+  return (data as AnalyticsPropertyRecord | null) ?? null;
+}
+
+export async function getActiveSearchConsoleProperty(companyId: string): Promise<AnalyticsPropertyRecord | null> {
+  const integration = await getAnalyticsIntegrationForProvider(companyId, GSC_PROVIDER);
+  if (!integration) return null;
+
+  const { data, error } = await ownedDbTable('analytics_properties')
+    .select('*')
+    .eq('integration_id', integration.id)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to load active Search Console property: ${error.message}`);
   }
 
   return (data as AnalyticsPropertyRecord | null) ?? null;
@@ -770,6 +1107,12 @@ export async function getValidAccessTokenForCompany(companyId: string): Promise<
   return getValidAccessTokenForIntegration(integration.id);
 }
 
+export async function getValidSearchConsoleAccessTokenForCompany(companyId: string): Promise<string | null> {
+  const integration = await getAnalyticsIntegrationForProvider(companyId, GSC_PROVIDER);
+  if (!integration || integration.status !== 'connected') return null;
+  return getValidAccessTokenForIntegration(integration.id);
+}
+
 export async function listGoogleAnalyticsProperties(
   companyId: string,
   options: { syncRemote?: boolean } = {},
@@ -797,6 +1140,33 @@ export async function listGoogleAnalyticsProperties(
   return (data ?? []) as AnalyticsPropertyRecord[];
 }
 
+export async function listSearchConsoleProperties(
+  companyId: string,
+  options: { syncRemote?: boolean } = {},
+): Promise<AnalyticsPropertyRecord[]> {
+  const integration = await getAnalyticsIntegrationForProvider(companyId, GSC_PROVIDER);
+  if (!integration) return [];
+
+  if (options.syncRemote !== false) {
+    const accessToken = await getValidAccessTokenForIntegration(integration.id);
+    if (accessToken) {
+      const remoteSites = await fetchSearchConsoleSites(accessToken);
+      await syncAnalyticsProperties(integration.id, mapGscSitesToProperties(remoteSites));
+    }
+  }
+
+  const { data, error } = await ownedDbTable('analytics_properties')
+    .select('*')
+    .eq('integration_id', integration.id)
+    .order('property_name', { ascending: true });
+
+  if (error) {
+    throw new Error(`Failed to list Search Console properties: ${error.message}`);
+  }
+
+  return (data ?? []) as AnalyticsPropertyRecord[];
+}
+
 export async function getGoogleAnalyticsStatus(companyId: string): Promise<GoogleAnalyticsConnectionStatus> {
   const integration = await getAnalyticsIntegration(companyId);
   if (!integration) {
@@ -807,6 +1177,7 @@ export async function getGoogleAnalyticsStatus(companyId: string): Promise<Googl
       tokenValid: false,
       tokenExpiresAt: null,
       propertiesCount: 0,
+      tokenScope: null,
     };
   }
 
@@ -837,6 +1208,52 @@ export async function getGoogleAnalyticsStatus(companyId: string): Promise<Googl
     tokenValid,
     tokenExpiresAt,
     propertiesCount: properties.length,
+    tokenScope: token?.scope ?? null,
+  };
+}
+
+export async function getGoogleSearchConsoleStatus(companyId: string): Promise<GoogleAnalyticsConnectionStatus> {
+  const integration = await getAnalyticsIntegrationForProvider(companyId, GSC_PROVIDER);
+  if (!integration) {
+    return {
+      integration: null,
+      activeProperty: null,
+      ready: false,
+      tokenValid: false,
+      tokenExpiresAt: null,
+      propertiesCount: 0,
+      tokenScope: null,
+    };
+  }
+
+  const [activeProperty, properties, token] = await Promise.all([
+    getActiveSearchConsoleProperty(companyId),
+    listSearchConsoleProperties(companyId, { syncRemote: false }),
+    getAnalyticsTokenRecord(integration.id),
+  ]);
+
+  let tokenValid = false;
+  let tokenExpiresAt = token?.expiry_date ?? null;
+
+  if (token?.access_token) {
+    try {
+      const validToken = await getValidAccessTokenForIntegration(integration.id);
+      tokenValid = Boolean(validToken);
+      const latestToken = await getAnalyticsTokenRecord(integration.id);
+      tokenExpiresAt = latestToken?.expiry_date ?? tokenExpiresAt;
+    } catch {
+      tokenValid = false;
+    }
+  }
+
+  return {
+    integration,
+    activeProperty,
+    ready: integration.status === 'connected' && Boolean(activeProperty) && tokenValid,
+    tokenValid,
+    tokenExpiresAt,
+    propertiesCount: properties.length,
+    tokenScope: token?.scope ?? null,
   };
 }
 
@@ -856,6 +1273,31 @@ export async function resolveGa4IngestionContext(companyId: string): Promise<{
   const accessToken = await getValidAccessTokenForIntegration(status.integration.id);
   if (!accessToken) {
     throw new Error(`No valid GA4 token available for company ${companyId}`);
+  }
+
+  return {
+    integration: status.integration,
+    property: status.activeProperty,
+    accessToken,
+  };
+}
+
+export async function resolveGscIngestionContext(companyId: string): Promise<{
+  integration: AnalyticsIntegrationRecord;
+  property: AnalyticsPropertyRecord;
+  accessToken: string;
+}> {
+  const status = await getGoogleSearchConsoleStatus(companyId);
+  if (!status.integration || status.integration.status !== 'connected') {
+    throw new Error(`No connected Search Console integration for company ${companyId}`);
+  }
+  if (!status.activeProperty) {
+    throw new Error(`No active Search Console property selected for company ${companyId}`);
+  }
+
+  const accessToken = await getValidAccessTokenForIntegration(status.integration.id);
+  if (!accessToken) {
+    throw new Error(`No valid Search Console token available for company ${companyId}`);
   }
 
   return {

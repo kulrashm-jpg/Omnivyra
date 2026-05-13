@@ -17,6 +17,13 @@ import type { BoltContentJobData } from '../queue/jobProcessors/boltContentJobPr
 import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
 import { ownedDbTable } from '../db/writeOwner';
+import {
+  assertCreatorFormatsSchedulable,
+  assertNoUnschedulableCreatorDailyPlans,
+  getCreatorFormatsFromStructuredPlanWeeks,
+  getCreatorGovernance,
+  normalizeCreatorFormat,
+} from '../../lib/shared/creatorGovernanceRegistry';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -318,6 +325,10 @@ function classifyCreatorFailure(error: unknown): 'transient' | 'permanent' {
     return 'transient';
   }
   return 'permanent';
+}
+
+function assertNoUnschedulableCreatorPlanWeeks(weeks: StructuredWeekBlueprint[]): void {
+  assertCreatorFormatsSchedulable(getCreatorFormatsFromStructuredPlanWeeks(weeks));
 }
 
 function startCreatorLeaseHeartbeat(input: {
@@ -1007,6 +1018,20 @@ async function processCreatorStructuredSchedule(input: {
   let skippedCount = 0;
 
   for (const row of dailyPlans) {
+    const rowContentType = normalizeCreatorFormat(row.content_type || '');
+    const rowGovernance = getCreatorGovernance(rowContentType);
+    if (rowGovernance && !rowGovernance.schedulable) {
+      await ownedDbTable('daily_content_plans')
+        .update({
+          content_status: 'guidance_ready',
+          failure_reason: null,
+          failure_type: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', row.id);
+      skippedCount++;
+      continue;
+    }
     if (row.failure_type === 'permanent' && toNumericValue(row.plan_version, 1) === currentPlanVersion) {
       if (!skippedPlatforms.includes(String(row.platform || '').toLowerCase())) {
         skippedPlatforms.push(String(row.platform || '').toLowerCase());
@@ -1686,6 +1711,7 @@ async function scheduleStructuredPlanRuntime(
   const hasDailyPlans = !dailyPlansError && Array.isArray(dailyPlans) && dailyPlans.length > 0;
 
   if (hasDailyPlans && Array.isArray(dailyPlans)) {
+    assertNoUnschedulableCreatorDailyPlans(dailyPlans as DailyPlanRow[]);
     // execution_mode and creator_asset are optional columns not always selected —
     // pass them as undefined so eligibility check treats all rows as text-schedulable.
     if (!usesUnifiedMediaFlow) {
@@ -1818,6 +1844,7 @@ async function scheduleStructuredPlanRuntime(
   const schedulableJobs = extractSchedulableJobsFromWeeks(plan.weeks as any[]);
   const hasExecutionJobs = schedulableJobs.length > 0;
   const useLegacy = isLegacyPlan(plan.weeks);
+  assertNoUnschedulableCreatorPlanWeeks(plan.weeks as StructuredWeekBlueprint[]);
 
   // Use effectiveUserId so legacy paths don't fail on null user_id
   const campaignWithUser = { ...campaign, user_id: effectiveUserId };

@@ -31,6 +31,8 @@ export interface AppUserData {
   company_name: string;
   role: string;
   status?: string | null;
+  /** Phase 2.B — users.status (lifecycle): invited | active | suspended | deleted. */
+  account_status?: string | null;
   created_at: string;
 }
 

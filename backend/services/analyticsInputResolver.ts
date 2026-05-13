@@ -1,4 +1,4 @@
-import { getGoogleAnalyticsStatus } from './analyticsIntegrationService';
+import { getGoogleAnalyticsCapabilityReadiness, getGoogleSearchConsoleReadiness } from './googleProviderReadinessService';
 import {
   resolveReportInput,
   persistResolvedReportInputs,
@@ -25,10 +25,28 @@ export async function resolveAnalyticsReportInput(params: {
     requestPayload: params.requestPayload,
   });
 
-  const googleAnalyticsStatus = await getGoogleAnalyticsStatus(params.companyId);
-  if (googleAnalyticsStatus?.ready) {
+  const googleAnalyticsReadiness = await getGoogleAnalyticsCapabilityReadiness(params.companyId);
+  const googleAnalyticsAvailable =
+    googleAnalyticsReadiness.connected ||
+    (
+      googleAnalyticsReadiness.provider_authenticated &&
+      googleAnalyticsReadiness.status !== 'property_required' &&
+      googleAnalyticsReadiness.status !== 'provider_not_connected' &&
+      googleAnalyticsReadiness.status !== 'missing_scope'
+    );
+  if (googleAnalyticsAvailable) {
     resolved.integrations.google_analytics = {
       ...resolved.integrations.google_analytics,
+      connected: true,
+      source: 'system',
+    };
+  }
+
+  const googleSearchConsoleReadiness = await getGoogleSearchConsoleReadiness(params.companyId);
+  const googleSearchConsoleAvailable = googleSearchConsoleReadiness.capability_ready;
+  if (googleSearchConsoleAvailable) {
+    resolved.integrations.google_search_console = {
+      ...resolved.integrations.google_search_console,
       connected: true,
       source: 'system',
     };

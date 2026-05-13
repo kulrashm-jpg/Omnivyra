@@ -14,6 +14,7 @@ import {
   Plug,
   RefreshCw,
   Rss,
+  Search,
   Trash2,
   X,
   XCircle,
@@ -59,6 +60,9 @@ type GoogleAnalyticsCardStatus =
   | 'waiting_for_data'
   | 'ready'
   | 'low_data'
+  | 'limited_coverage'
+  | 'property_unverified'
+  | 'domain_mapping_required'
   | 'error';
 
 type GoogleAnalyticsStatusResponse = {
@@ -72,6 +76,33 @@ type GoogleAnalyticsStatusResponse = {
   message: string;
   last_sync: string | null;
   events_last_30_days?: number;
+  properties?: Array<{
+    id: string;
+    name: string;
+    account_id: string | null;
+    active: boolean;
+  }>;
+  reconnect_required?: boolean;
+  provider_readiness?: Record<string, {
+    status: string;
+    message: string;
+    action_label: string;
+    connected: boolean;
+    capability_ready: boolean;
+  }>;
+  search_console?: GoogleSearchConsoleStatusResponse;
+};
+
+type GoogleSearchConsoleStatusResponse = {
+  connected: boolean;
+  property: {
+    id: string;
+    name: string;
+    account_id: string | null;
+  } | null;
+  status: GoogleAnalyticsCardStatus | 'setup_required';
+  message: string;
+  last_sync: string | null;
   properties?: Array<{
     id: string;
     name: string;
@@ -545,6 +576,155 @@ function GoogleAnalyticsGridCard({
   );
 }
 
+function GoogleSearchConsoleGridCard({
+  isAdmin,
+  gscStatus,
+  loading,
+  error,
+  notice,
+  connecting,
+  syncing,
+  onConnect,
+  onForceSync,
+  onDisconnect,
+}: {
+  isAdmin: boolean;
+  gscStatus: GoogleSearchConsoleStatusResponse | null;
+  loading: boolean;
+  error: string | null;
+  notice: string | null;
+  connecting: boolean;
+  syncing: boolean;
+  onConnect: () => Promise<void>;
+  onForceSync: () => Promise<void>;
+  onDisconnect: () => Promise<void>;
+}) {
+  const status = gscStatus?.status ?? 'setup_required';
+  const isReady = status === 'ready';
+  const canSync = ['connected', 'waiting_for_data', 'ready', 'low_data', 'limited_coverage'].includes(status);
+  const needsConnect = ['setup_required', 'not_connected', 'error'].includes(status);
+  const badgeClass =
+    isReady
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : status === 'property_selection'
+        ? 'border-amber-200 bg-amber-50 text-amber-700'
+        : status === 'waiting_for_data'
+          ? 'border-blue-200 bg-blue-50 text-blue-700'
+          : status === 'limited_coverage'
+            ? 'border-amber-200 bg-amber-50 text-amber-700'
+          : status === 'error'
+            ? 'border-red-200 bg-red-50 text-red-700'
+            : status === 'property_unverified' || status === 'domain_mapping_required'
+              ? 'border-orange-200 bg-orange-50 text-orange-700'
+            : 'border-gray-200 bg-gray-50 text-gray-600';
+  const badgeLabel = loading && !gscStatus
+    ? 'Loading...'
+    : isReady
+      ? 'Ready for Reports'
+      : status === 'property_selection'
+        ? 'Select Search Console Property'
+        : status === 'waiting_for_data'
+          ? 'Syncing Search Data'
+          : status === 'limited_coverage'
+            ? 'Limited Coverage'
+            : status === 'property_unverified'
+              ? 'Property Not Verified'
+              : status === 'domain_mapping_required'
+                ? 'Domain Mapping Required'
+          : status === 'error'
+            ? 'Reconnect Required'
+            : 'Search Console Setup Required';
+
+  return (
+    <div
+      id="google-search-console-section"
+      className="flex h-full flex-col rounded-2xl border border-sky-200 bg-white p-5 shadow-sm ring-1 ring-sky-100"
+    >
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-sky-200 bg-sky-50 text-sky-700">
+          <Search className="h-5 w-5" />
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${badgeClass}`}>
+          {badgeLabel}
+        </span>
+      </div>
+
+      <div className="mb-4">
+        <h3 className="text-base font-semibold text-gray-900">Google Search Console</h3>
+        <p className="mt-1 text-sm leading-6 text-gray-600">
+          Connect verified search properties for organic queries, landing pages, clicks, and impressions.
+        </p>
+      </div>
+
+      <div className="mb-5 space-y-2">
+        {['Search queries and landing pages', 'Clicks, impressions, CTR, and position', 'Verified site ownership'].map((item) => (
+          <div key={item} className="flex items-start gap-2 text-sm text-gray-600">
+            <span className="mt-2 h-1.5 w-1.5 rounded-full bg-gray-400" />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mb-4 space-y-2 text-xs">
+        {gscStatus?.property?.name && (
+          <div className="text-gray-500">
+            Property: <span className="font-medium text-gray-700">{gscStatus.property.name}</span>
+          </div>
+        )}
+        {gscStatus?.last_sync && (
+          <div className="text-gray-500">Last sync: {formatDateTime(gscStatus.last_sync)}</div>
+        )}
+        {(error || (status === 'error' && gscStatus?.message)) && (
+          <div className="max-h-16 overflow-y-auto rounded-lg border border-red-200 bg-red-50 px-3 py-2 leading-5 text-red-700">
+            {error || gscStatus?.message}
+          </div>
+        )}
+        {!error && notice && (
+          <div className="max-h-16 overflow-y-auto rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 leading-5 text-blue-700">
+            {notice}
+          </div>
+        )}
+      </div>
+
+      {isAdmin && (
+        <div className="mt-auto flex flex-wrap gap-2">
+          {needsConnect ? (
+            <button
+              type="button"
+              onClick={() => void onConnect()}
+              disabled={connecting || loading}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${connecting ? 'animate-spin' : ''}`} />
+              {gscStatus?.reconnect_required ? 'Reconnect Search Console' : 'Connect Search Console'}
+            </button>
+          ) : canSync ? (
+            <button
+              type="button"
+              onClick={() => void onForceSync()}
+              disabled={syncing}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Syncing...' : 'Sync now'}
+            </button>
+          ) : null}
+          {gscStatus?.property && (
+            <button
+              type="button"
+              onClick={() => void onDisconnect()}
+              disabled={syncing || connecting || loading}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+            >
+              Disconnect
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GoogleAnalyticsHelperPanel({
   gaStatus,
   gaSelectingProperty,
@@ -719,6 +899,61 @@ function GoogleAnalyticsHelperPanel({
   );
 }
 
+function GoogleSearchConsoleHelperPanel({
+  gscStatus,
+  selecting,
+  selectedPropertyId,
+  onSelectedPropertyChange,
+  onSelectProperty,
+}: {
+  gscStatus: GoogleSearchConsoleStatusResponse | null;
+  selecting: boolean;
+  selectedPropertyId: string;
+  onSelectedPropertyChange: (value: string) => void;
+  onSelectProperty: () => Promise<void>;
+}) {
+  const properties = gscStatus?.properties || [];
+  const showPropertySelection = gscStatus?.status === 'property_selection';
+  if (!showPropertySelection) return null;
+
+  return (
+    <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+      <div className="mb-3">
+        <h3 className="text-sm font-semibold text-gray-900">Choose the Search Console property to sync</h3>
+        <p className="text-sm text-gray-600">Select the verified website property Omnivyra should use for organic search signals.</p>
+      </div>
+      {properties.length === 0 ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          No Search Console properties found
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <select
+            value={selectedPropertyId}
+            onChange={(event) => onSelectedPropertyChange(event.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300"
+          >
+            <option value="">Select a property</option>
+            {properties.map((property) => (
+              <option key={property.id} value={property.id}>
+                {property.name}{property.account_id ? ` - ${property.account_id}` : ''}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void onSelectProperty()}
+            disabled={!selectedPropertyId || selecting}
+            className="inline-flex items-center justify-center rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+          >
+            {selecting ? 'Saving...' : 'Use this property'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function IntegrationsPage() {
   const { selectedCompanyId, userRole } = useCompanyContext();
   const router = useRouter();
@@ -741,6 +976,13 @@ export default function IntegrationsPage() {
   const [gaSelectingProperty, setGaSelectingProperty] = useState(false);
   const [gaSyncing, setGaSyncing] = useState(false);
   const [selectedPropertyId, setSelectedPropertyId] = useState('');
+  const [gscStatus, setGscStatus] = useState<GoogleSearchConsoleStatusResponse | null>(null);
+  const [gscError, setGscError] = useState<string | null>(null);
+  const [gscNotice, setGscNotice] = useState<string | null>(null);
+  const [gscConnecting, setGscConnecting] = useState(false);
+  const [gscSelectingProperty, setGscSelectingProperty] = useState(false);
+  const [gscSyncing, setGscSyncing] = useState(false);
+  const [selectedGscPropertyId, setSelectedGscPropertyId] = useState('');
   const [scriptAssistOpen, setScriptAssistOpen] = useState(false);
   const [scriptAssistLoading, setScriptAssistLoading] = useState(false);
   const [scriptAssistError, setScriptAssistError] = useState<string | null>(null);
@@ -777,6 +1019,7 @@ export default function IntegrationsPage() {
 
     setGaLoading(true);
     setGaError(null);
+    setGscError(null);
     try {
       const response = await fetchWithAuth(`/api/analytics/status?companyId=${encodeURIComponent(companyId)}`);
       const data = await response.json();
@@ -789,8 +1032,15 @@ export default function IntegrationsPage() {
       } else {
         setSelectedPropertyId('');
       }
+      setGscStatus(data?.search_console ?? null);
+      if (data?.search_console?.property?.id) {
+        setSelectedGscPropertyId(data.search_console.property.id);
+      } else {
+        setSelectedGscPropertyId('');
+      }
     } catch (err: any) {
       setGaError(err?.message || 'Failed to load Google Analytics status');
+      setGscError(err?.message || 'Failed to load Search Console status');
     } finally {
       setGaLoading(false);
     }
@@ -809,40 +1059,116 @@ export default function IntegrationsPage() {
     }
     const error = typeof router.query.error === 'string' ? router.query.error : '';
     const gaConnected = typeof router.query.ga4 === 'string' ? router.query.ga4 : '';
+    const gscConnected = typeof router.query.gsc === 'string' ? router.query.gsc : '';
 
     if (error === 'oauth_failed') {
       setGaNotice('Failed to connect Google Analytics');
     } else if (error === 'no_properties_found') {
       setGaNotice('No GA properties found');
+    } else if (error === 'gsc_oauth_failed') {
+      setGscNotice('Failed to connect Search Console');
+    } else if (error === 'no_search_console_properties_found') {
+      setGscNotice('No Search Console properties found');
     } else if (gaConnected === 'connected') {
       setGaNotice('Google Analytics connected. Select a property to finish setup.');
       void loadGoogleAnalyticsStatus();
+    } else if (gscConnected === 'connected') {
+      setGscNotice('Search Console connected. Select a property to finish setup.');
+      void loadGoogleAnalyticsStatus();
     } else {
       setGaNotice(null);
+      setGscNotice(null);
     }
-  }, [router.isReady, router.query.error, router.query.ga4, loadGoogleAnalyticsStatus]);
+  }, [router.isReady, router.query.error, router.query.ga4, router.query.gsc, loadGoogleAnalyticsStatus]);
 
   const handleConnectGoogleAnalytics = async () => {
     if (!companyId) return;
+    const endpoint = '/api/analytics/connect/google';
+    const payload = {
+      companyId,
+      returnTo: '/integrations?focus=data',
+    };
     setGaConnecting(true);
     setGaError(null);
     try {
-      const response = await fetchWithAuth('/api/analytics/connect/google', {
+      if (process.env.NODE_ENV !== 'production') {
+        console.group('[integrations][google_analytics][connect]');
+        console.info('endpoint', endpoint);
+        console.info('payload', payload);
+      }
+      const response = await fetchWithAuth(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          companyId,
-          returnTo: '/integrations?focus=data',
-        }),
+        body: JSON.stringify(payload),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('responseStatus', response.status);
+        console.info('responseBody', data);
+      }
       if (!response.ok || !data?.authorizationUrl) {
         throw new Error(data?.message || 'Failed to connect Google Analytics');
       }
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('authorizationUrl', data.authorizationUrl);
+      }
       window.location.href = data.authorizationUrl;
     } catch (err: any) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('error', err);
+      }
       setGaError(err?.message || 'Failed to connect Google Analytics');
       setGaConnecting(false);
+    } finally {
+      if (process.env.NODE_ENV !== 'production') {
+        console.groupEnd();
+      }
+    }
+  };
+
+  const handleConnectSearchConsole = async () => {
+    if (!companyId) return;
+    const endpoint = '/api/analytics/connect/google';
+    const payload = {
+      companyId,
+      capability: 'google_search_console',
+      returnTo: '/integrations?focus=data',
+    };
+    setGscConnecting(true);
+    setGscError(null);
+    try {
+      if (process.env.NODE_ENV !== 'production') {
+        console.group('[integrations][google_search_console][connect]');
+        console.info('endpoint', endpoint);
+        console.info('payload', payload);
+      }
+      const response = await fetchWithAuth(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('responseStatus', response.status);
+        console.info('responseBody', data);
+      }
+      if (!response.ok || !data?.authorizationUrl) {
+        throw new Error(data?.message || 'Failed to connect Search Console');
+      }
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('authorizationUrl', data.authorizationUrl);
+      }
+      window.location.href = data.authorizationUrl;
+    } catch (err: any) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('error', err);
+      }
+      setGscError(err?.message || 'Failed to connect Search Console');
+      setGscConnecting(false);
+    } finally {
+      if (process.env.NODE_ENV !== 'production') {
+        console.groupEnd();
+      }
     }
   };
 
@@ -928,6 +1254,110 @@ export default function IntegrationsPage() {
     }
   };
 
+  const handleForceSyncSearchConsole = async () => {
+    if (!companyId || gscSyncing) return;
+    setGscSyncing(true);
+    setGscError(null);
+    setGscNotice('Syncing Search Console...');
+    const requestStart = Date.now();
+
+    try {
+      const response = await fetchWithAuth('/api/analytics/force-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId, capability: 'google_search_console' }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (response.status === 400 && data?.error === 'no_active_search_console_property') {
+        setGscError('Select a Search Console property before syncing.');
+        return;
+      }
+      if (!response.ok && response.status !== 202) {
+        throw new Error(data?.error || data?.message || 'Failed to sync Search Console');
+      }
+
+      if (data?.status === 'synced') {
+        setGscNotice('Sync complete.');
+        await loadGoogleAnalyticsStatus();
+        return;
+      }
+
+      const POLL_TIMEOUT_MS = 90_000;
+      const POLL_INTERVAL_MS = 2_500;
+      const pollDeadline = Date.now() + POLL_TIMEOUT_MS;
+      let lastError: string | null = null;
+
+      while (Date.now() < pollDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        try {
+          const pollResponse = await fetchWithAuth(
+            `/api/analytics/status?companyId=${encodeURIComponent(companyId)}`,
+          );
+          if (!pollResponse.ok) continue;
+          const pollData = await pollResponse.json();
+          const nextGscStatus = pollData?.search_console ?? null;
+          setGscStatus(nextGscStatus);
+
+          if (nextGscStatus?.status === 'error') {
+            lastError = nextGscStatus?.message || 'Search Console sync failed';
+            break;
+          }
+
+          const lastSyncMs = nextGscStatus?.last_sync ? new Date(nextGscStatus.last_sync).getTime() : 0;
+          if (
+            lastSyncMs > requestStart &&
+            nextGscStatus?.status &&
+            ['ready', 'limited_coverage', 'waiting_for_data'].includes(nextGscStatus.status)
+          ) {
+            setGscNotice(nextGscStatus.status === 'ready' ? 'Sync complete.' : nextGscStatus.message || 'Search Console data is still building coverage.');
+            return;
+          }
+        } catch {
+          // transient - keep polling
+        }
+      }
+
+      if (lastError) {
+        setGscError(lastError);
+      } else {
+        setGscNotice('Sync still running in the background. Refresh in a few minutes to see results.');
+      }
+    } catch (err: any) {
+      setGscError(err?.message || 'Failed to sync Search Console');
+    } finally {
+      setGscSyncing(false);
+    }
+  };
+
+  const handleDisconnectSearchConsole = async () => {
+    if (!companyId) return;
+    const confirmed = window.confirm('Disconnect Search Console for this company? Existing report data stays stored, but new search syncs will stop until it is reconnected.');
+    if (!confirmed) return;
+
+    setGscSyncing(true);
+    setGscError(null);
+    try {
+      const response = await fetchWithAuth('/api/analytics/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId, capability: 'google_search_console' }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.message || 'Failed to disconnect Search Console');
+      }
+      setGscNotice('Search Console disconnected.');
+      setSelectedGscPropertyId('');
+      await loadGoogleAnalyticsStatus();
+    } catch (err: any) {
+      setGscError(err?.message || 'Failed to disconnect Search Console');
+    } finally {
+      setGscSyncing(false);
+    }
+  };
+
   const handleSelectGoogleAnalyticsProperty = async () => {
     if (!companyId || !selectedPropertyId) return;
     setGaSelectingProperty(true);
@@ -951,6 +1381,33 @@ export default function IntegrationsPage() {
       setGaError(err?.message || 'Failed to connect Google Analytics');
     } finally {
       setGaSelectingProperty(false);
+    }
+  };
+
+  const handleSelectSearchConsoleProperty = async () => {
+    if (!companyId || !selectedGscPropertyId) return;
+    setGscSelectingProperty(true);
+    setGscError(null);
+    try {
+      const response = await fetchWithAuth('/api/analytics/select-property', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId,
+          propertyId: selectedGscPropertyId,
+          capability: 'google_search_console',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.message || 'Failed to connect Search Console');
+      }
+      setGscNotice('Search Console property selected.');
+      await loadGoogleAnalyticsStatus();
+    } catch (err: any) {
+      setGscError(err?.message || 'Failed to connect Search Console');
+    } finally {
+      setGscSelectingProperty(false);
     }
   };
 
@@ -1040,7 +1497,7 @@ export default function IntegrationsPage() {
 
   const highlightedIds = useMemo(() => {
     if (focus === 'website') return new Set(['website-publishing', 'lead-capture-forms']);
-    if (focus === 'data') return new Set(['crm-pipeline', 'google-analytics', 'files-imports']);
+    if (focus === 'data') return new Set(['crm-pipeline', 'google-analytics', 'google-search-console', 'files-imports']);
     return new Set<string>();
   }, [focus]);
 
@@ -1093,6 +1550,17 @@ export default function IntegrationsPage() {
       icon: <BarChart3 className="h-5 w-5" />,
       badgeClassName: 'border-amber-200 bg-amber-50 text-amber-700',
       items: ['Sessions and traffic sources', 'Page views and engagement', 'Conversion events'],
+      actions: [],
+    },
+    {
+      id: 'google-search-console',
+      focus: 'data',
+      title: 'Google Search Console',
+      description: 'Connect verified search properties for organic query and landing-page performance.',
+      badge: 'Live now',
+      icon: <Search className="h-5 w-5" />,
+      badgeClassName: 'border-sky-200 bg-sky-50 text-sky-700',
+      items: ['Search queries and pages', 'Clicks, impressions, CTR, position', 'Verified property matching'],
       actions: [],
     },
     {
@@ -1161,6 +1629,23 @@ export default function IntegrationsPage() {
                     gaSyncing={gaSyncing}
                     onConnect={handleConnectGoogleAnalytics}
                     onForceSync={handleForceSyncGoogleAnalytics}
+                  />
+                );
+              }
+              if (card.id === 'google-search-console') {
+                return (
+                  <GoogleSearchConsoleGridCard
+                    key={card.id}
+                    isAdmin={isAdmin}
+                    gscStatus={gscStatus}
+                    loading={gaLoading}
+                    error={gscError}
+                    notice={gscNotice}
+                    connecting={gscConnecting}
+                    syncing={gscSyncing}
+                    onConnect={handleConnectSearchConsole}
+                    onForceSync={handleForceSyncSearchConsole}
+                    onDisconnect={handleDisconnectSearchConsole}
                   />
                 );
               }
@@ -1355,21 +1840,30 @@ export default function IntegrationsPage() {
             )}
 
             {showDataFlow && (
-              <GoogleAnalyticsHelperPanel
-                gaStatus={gaStatus}
-                gaSelectingProperty={gaSelectingProperty}
-                selectedPropertyId={selectedPropertyId}
-                scriptAssistOpen={scriptAssistOpen}
-                scriptAssistLoading={scriptAssistLoading}
-                scriptAssistError={scriptAssistError}
-                scriptAssistForm={scriptAssistForm}
-                scriptAssistResult={scriptAssistResult}
-                onSelectedPropertyChange={setSelectedPropertyId}
-                onSelectProperty={handleSelectGoogleAnalyticsProperty}
-                onToggleScriptAssist={() => setScriptAssistOpen((current) => !current)}
-                onScriptAssistInput={(key, value) => setScriptAssistForm((current) => ({ ...current, [key]: value }))}
-                onGenerateScriptAssist={handleGenerateTrackingAssist}
-              />
+              <div className="space-y-3">
+                <GoogleAnalyticsHelperPanel
+                  gaStatus={gaStatus}
+                  gaSelectingProperty={gaSelectingProperty}
+                  selectedPropertyId={selectedPropertyId}
+                  scriptAssistOpen={scriptAssistOpen}
+                  scriptAssistLoading={scriptAssistLoading}
+                  scriptAssistError={scriptAssistError}
+                  scriptAssistForm={scriptAssistForm}
+                  scriptAssistResult={scriptAssistResult}
+                  onSelectedPropertyChange={setSelectedPropertyId}
+                  onSelectProperty={handleSelectGoogleAnalyticsProperty}
+                  onToggleScriptAssist={() => setScriptAssistOpen((current) => !current)}
+                  onScriptAssistInput={(key, value) => setScriptAssistForm((current) => ({ ...current, [key]: value }))}
+                  onGenerateScriptAssist={handleGenerateTrackingAssist}
+                />
+                <GoogleSearchConsoleHelperPanel
+                  gscStatus={gscStatus}
+                  selecting={gscSelectingProperty}
+                  selectedPropertyId={selectedGscPropertyId}
+                  onSelectedPropertyChange={setSelectedGscPropertyId}
+                  onSelectProperty={handleSelectSearchConsoleProperty}
+                />
+              </div>
             )}
           </div>
         )}

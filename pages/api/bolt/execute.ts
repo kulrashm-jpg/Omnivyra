@@ -12,6 +12,12 @@ import { enforceCompanyAccess } from '../../../backend/services/userContextServi
 import { getBoltQueue } from '../../../backend/queue/boltQueue';
 import { getUserFriendlyMessage } from '../../../backend/utils/userFriendlyErrors';
 import { executeBoltPipeline } from '../../../backend/services/boltPipelineService';
+import { config } from '@/config';
+import {
+  getCreatorFormatsFromExecutionConfig,
+  getUnsupportedCreatorFormats,
+  validateCreatorScheduleRequest,
+} from '../../../lib/shared/creatorGovernanceRegistry';
 
 function normalizeOptionalUuid(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -82,6 +88,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'executionConfig is required and must be an object' });
     }
 
+    const executionConfig = payload.executionConfig as Record<string, unknown>;
+    if (String(executionConfig.campaign_mode || '').toLowerCase() === 'creator') {
+      const formats = getCreatorFormatsFromExecutionConfig(executionConfig);
+      const unsupportedFormats = getUnsupportedCreatorFormats(formats);
+      if (unsupportedFormats.length > 0) {
+        return res.status(400).json({
+          error: `Unsupported creator format: ${unsupportedFormats.join(', ')}`,
+          code: 'UNSUPPORTED_CREATOR_FORMAT',
+          unsupported_formats: unsupportedFormats,
+        });
+      }
+      const scheduleValidation = validateCreatorScheduleRequest({
+        campaignMode: executionConfig.campaign_mode,
+        outcomeView: payload.outcomeView,
+        executionConfig,
+      });
+      if (scheduleValidation.ok === false) {
+        return res.status(409).json({
+          error: scheduleValidation.message,
+          code: 'CREATOR_SCHEDULE_BLOCKED_BY_GOVERNANCE',
+          blocked_formats: scheduleValidation.blockedFormats,
+          unsupported_formats: scheduleValidation.unsupportedFormats,
+        });
+      }
+    }
+
     const generatedCampaignId = payload.generatedCampaignId;
     if (generatedCampaignId && typeof generatedCampaignId === 'string' && generatedCampaignId.trim()) {
       const { data: existingRun } = await supabase
@@ -121,8 +153,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const runId = (run as { id: string }).id;
 
-    const workersEnabled =
-      process.env.ENABLE_AUTO_WORKERS === '1' || process.env.ENABLE_AUTO_WORKERS === 'true';
+    const workersEnabled = config.ENABLE_AUTO_WORKERS;
 
     let queuedViaBullMQ = false;
     if (workersEnabled) {

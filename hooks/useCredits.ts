@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/utils/supabaseClient';
 import type { CategoryUsage } from '@/components/ui/CreditMeter';
 import { getFeatureDisplayGroup } from '@/shared/monetization/featureRegistry';
+import { runSharedPoll } from '@/utils/pollingGuards';
 
 export interface CreditsState {
   totalCredits: number;
@@ -62,27 +63,29 @@ export function useCredits(companyId: string | null | undefined): CreditsState &
 
   const fetch = useCallback(async () => {
     if (!companyId) return;
-    setState(s => ({ ...s, loading: true, error: null }));
-    try {
-      const res = await window.fetch(`/api/admin/credits?companyId=${encodeURIComponent(companyId)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      const credits = json?.credits;
-      if (!credits) {
-        // No credit account yet — show zeros
-        setState({ totalCredits: 0, remainingCredits: 0, categories: [], loading: false, error: null });
-        return;
+    await runSharedPoll(`credits:${companyId}`, async () => {
+      setState(s => ({ ...s, loading: true, error: null }));
+      try {
+        const res = await window.fetch(`/api/admin/credits?companyId=${encodeURIComponent(companyId)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        const credits = json?.credits;
+        if (!credits) {
+          // No credit account yet — show zeros
+          setState({ totalCredits: 0, remainingCredits: 0, categories: [], loading: false, error: null });
+          return;
+        }
+        setState({
+          totalCredits: credits.lifetime_purchased ?? 0,
+          remainingCredits: credits.balance_credits ?? 0,
+          categories: buildCategories(credits.recent_transactions ?? [], credits.lifetime_consumed ?? 0),
+          loading: false,
+          error: null,
+        });
+      } catch (err: any) {
+        setState(s => ({ ...s, loading: false, error: err?.message ?? 'Failed to load credits' }));
       }
-      setState({
-        totalCredits: credits.lifetime_purchased ?? 0,
-        remainingCredits: credits.balance_credits ?? 0,
-        categories: buildCategories(credits.recent_transactions ?? [], credits.lifetime_consumed ?? 0),
-        loading: false,
-        error: null,
-      });
-    } catch (err: any) {
-      setState(s => ({ ...s, loading: false, error: err?.message ?? 'Failed to load credits' }));
-    }
+    }, { startupDelayMs: 3000, minIntervalMs: 1000 });
   }, [companyId]);
 
   useEffect(() => {

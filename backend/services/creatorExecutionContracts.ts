@@ -22,10 +22,6 @@ function expectedAssetKind(assetType: CanonicalCreatorOutput['asset_type']): str
       return 'carousel';
     case 'video':
       return 'video';
-    case 'post_with_asset':
-      return 'image';
-    case 'thread_with_asset':
-      return 'carousel';
     default:
       return '';
   }
@@ -77,24 +73,6 @@ function validateAssetPayloadByType(output: CanonicalCreatorOutput): string[] {
       break;
     case 'video':
       if (!Array.isArray(payload.scenes) || payload.scenes.length === 0) issues.push('video asset_payload.scenes[] required');
-      break;
-    case 'post_with_asset':
-      if (!isObject(payload.media_bundle)) issues.push('post_with_asset requires media_bundle');
-      if (!isObject(payload.caption_blueprint)) {
-        issues.push('post_with_asset requires caption_blueprint');
-      } else {
-        const captionBlueprint = payload.caption_blueprint;
-        if (!requiredString(captionBlueprint.hook)) issues.push('post_with_asset caption_blueprint.hook required');
-        if (!requiredString(captionBlueprint.body)) issues.push('post_with_asset caption_blueprint.body required');
-        if (!requiredString(captionBlueprint.cta)) issues.push('post_with_asset caption_blueprint.cta required');
-      }
-      break;
-    case 'thread_with_asset':
-      if (!isObject(payload.media_bundle)) issues.push('thread_with_asset requires media_bundle');
-      if (!isObject(payload.caption_blueprint)) issues.push('thread_with_asset requires caption_blueprint');
-      if (!Array.isArray(payload.thread_sequence) || payload.thread_sequence.length === 0) {
-        issues.push('thread_with_asset requires thread_sequence');
-      }
       break;
     default:
       issues.push(`unknown asset_type: ${String((output as any).asset_type)}`);

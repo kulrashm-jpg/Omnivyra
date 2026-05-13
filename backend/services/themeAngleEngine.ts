@@ -5,6 +5,7 @@
  */
 
 import type { CampaignTone } from './languageRefinementService';
+import { refineCampaignTopicForHeadlines, refineStrategicCardTitle } from './editorialTextRefinementService';
 
 export type Tone = CampaignTone;
 
@@ -131,7 +132,7 @@ export function generateThemeFromTopic(
   const normalized = normalizeTopic(topic);
   if (!normalized) return 'Strategic Theme';
 
-  const titleCased = titleCasePreservingAcronyms(normalized);
+  const titleCased = refineCampaignTopicForHeadlines(titleCasePreservingAcronyms(normalized));
   const base = hash(normalized.toLowerCase());
   const seed = diversity_seed ?? 0;
 
@@ -158,7 +159,7 @@ export function generateThemeFromTopic(
 
   let result = template.replace(/\{topic\}/g, titleCased);
   result = removeDuplicateWords(result);
-  return result;
+  return refineStrategicCardTitle(result, normalized);
 }
 
 /**
@@ -222,11 +223,11 @@ export function generateThemeAngleForProgression(
     return normalized;
   }
 
-  const titleCased = titleCasePreservingAcronyms(normalized);
+  const titleCased = refineCampaignTopicForHeadlines(titleCasePreservingAcronyms(normalized));
   const seed = hash(`${normalized.toLowerCase()}-${stage}-${weekIndex}`);
   const template = templates[seed % templates.length];
   const result = template.replace(/\{topic\}/g, titleCased);
-  return result?.trim() || normalized;
+  return refineStrategicCardTitle(result, normalized, weekIndex)?.trim() || normalized;
 }
 
 /** Map angle name to index in THEME_ANGLES */

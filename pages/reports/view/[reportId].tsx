@@ -16,6 +16,8 @@ export default function ReportViewPage() {
   const [snapshotHtmlMarkup, setSnapshotHtmlMarkup] = useState<string | null>(null);
   const [snapshotHtmlStyles, setSnapshotHtmlStyles] = useState<string>('');
   const [snapshotHtmlLoading, setSnapshotHtmlLoading] = useState(false);
+  const [performanceHtmlDocument, setPerformanceHtmlDocument] = useState<string | null>(null);
+  const [performanceHtmlLoading, setPerformanceHtmlLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
@@ -75,6 +77,8 @@ export default function ReportViewPage() {
           setSnapshotHtmlLoading(true);
           setSnapshotHtmlMarkup(null);
           setSnapshotHtmlStyles('');
+          setPerformanceHtmlDocument(null);
+          setPerformanceHtmlLoading(false);
           try {
             const htmlRes = await fetch(
               `/api/reports/${reportId}?type=${data.reportType}&format=html`,
@@ -100,10 +104,38 @@ export default function ReportViewPage() {
               setSnapshotHtmlLoading(false);
             }
           }
+        } else if (data.reportType === 'performance') {
+          setPerformanceHtmlLoading(true);
+          setPerformanceHtmlDocument(null);
+          setSnapshotHtmlMarkup(null);
+          setSnapshotHtmlStyles('');
+          setSnapshotHtmlLoading(false);
+          try {
+            const htmlRes = await fetch(
+              `/api/reports/${reportId}?type=performance&format=html`,
+              {
+                credentials: 'include',
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+              },
+            );
+            if (!cancelled && htmlRes.ok) {
+              setPerformanceHtmlDocument(await htmlRes.text());
+            }
+          } catch {
+            if (!cancelled) {
+              setPerformanceHtmlDocument(null);
+            }
+          } finally {
+            if (!cancelled) {
+              setPerformanceHtmlLoading(false);
+            }
+          }
         } else {
           setSnapshotHtmlMarkup(null);
           setSnapshotHtmlStyles('');
           setSnapshotHtmlLoading(false);
+          setPerformanceHtmlDocument(null);
+          setPerformanceHtmlLoading(false);
         }
 
         setIsGenerating(false);
@@ -349,6 +381,85 @@ export default function ReportViewPage() {
                   The new snapshot report could not be rendered right now, so the page is not
                   falling back to the old template. Please regenerate the report or refresh after a
                   moment.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (reportData.reportType === 'performance') {
+    return (
+      <>
+        <Head>
+          <title>
+            {(reportData.companyContext?.companyName || reportData.domain)} - {reportData.title || 'Performance Intelligence Report'}
+          </title>
+          <meta name="robots" content="noindex" />
+        </Head>
+
+        <div className="min-h-screen bg-slate-950">
+          <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+            <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-800 bg-slate-900/95 px-4 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-300">
+                  Performance Intelligence
+                </p>
+                <h1 className="mt-1 text-xl font-semibold text-white">
+                  {reportData.title || 'Performance Intelligence Report'}
+                </h1>
+                <p className="mt-1 text-sm text-slate-300">
+                  Review the interactive HTML report first. PDF export is available separately.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={isDownloading}
+                  className="inline-flex items-center rounded-xl border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:border-sky-400 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isDownloading ? 'Preparing PDF...' : 'Export PDF'}
+                </button>
+                <button
+                  onClick={handleRegenerate}
+                  disabled={isRegenerating}
+                  className="inline-flex items-center rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isRegenerating ? 'Regenerating...' : 'Regenerate'}
+                </button>
+              </div>
+            </div>
+
+            {fetchError ? (
+              <div className="mb-4 rounded-lg border border-red-900/70 bg-red-950 px-4 py-3 text-sm text-red-100">
+                {fetchError}
+              </div>
+            ) : null}
+
+            {performanceHtmlLoading ? (
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-sm">
+                <div className="mb-4 h-6 w-56 animate-pulse rounded bg-slate-800" />
+                <div className="space-y-3">
+                  <div className="h-28 animate-pulse rounded-xl bg-slate-800" />
+                  <div className="h-28 animate-pulse rounded-xl bg-slate-800" />
+                  <div className="h-28 animate-pulse rounded-xl bg-slate-800" />
+                </div>
+              </div>
+            ) : performanceHtmlDocument ? (
+              <iframe
+                title="Performance Intelligence Report"
+                srcDoc={performanceHtmlDocument}
+                className="h-[calc(100vh-140px)] min-h-[720px] w-full rounded-3xl border border-slate-800 bg-white shadow-2xl"
+              />
+            ) : (
+              <div className="rounded-2xl border border-amber-700 bg-amber-950 px-5 py-4 text-sm text-amber-100 shadow-sm">
+                <div className="font-semibold text-amber-50">Performance HTML unavailable</div>
+                <p className="mt-1">
+                  The report completed, but the interactive HTML view could not be loaded. PDF export
+                  remains separate, so refresh this page or regenerate the report if the HTML does not
+                  appear after a moment.
                 </p>
               </div>
             )}

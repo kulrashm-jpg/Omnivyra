@@ -17,8 +17,6 @@
  *   - aiTemplateLayer.ts  → recordTemplateHit
  */
 
-import { getInstrumentedClient } from '../queue/bullmqClient';
-
 // ── Counters ──────────────────────────────────────────────────────────────────
 
 let _exactHits    = 0;
@@ -90,17 +88,14 @@ export async function getMetricsSnapshot(): Promise<MetricsSnapshot> {
     ? _latencySamples.reduce((a, b) => a + b, 0) / _latencySamples.length
     : 0;
 
-  // Redis info — use shared singleton, never create a new connection here
+  // Redis info is optional and lazy so metric recording does not import queue infrastructure.
   let redisMemoryMb: number | null = null;
   let redisConnected = false;
   try {
-    const client = getInstrumentedClient('metrics');
-    const info = await client.info('memory');
-    redisConnected = true;
-    const match = info.match(/used_memory:(\d+)/);
-    if (match) {
-      redisMemoryMb = Math.round(parseInt(match[1]) / 1024 / 1024 * 10) / 10;
-    }
+    const { getQueueMetricsSnapshot } = await import('./queueMetricsAdapter');
+    const queueMetrics = await getQueueMetricsSnapshot();
+    redisMemoryMb = queueMetrics.redisMemoryMb;
+    redisConnected = queueMetrics.redisConnected;
   } catch {
     redisConnected = false;
   }

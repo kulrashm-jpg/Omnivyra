@@ -39,10 +39,33 @@ export async function requireAuthenticatedInternalUser(
   const { user, error } = await getSupabaseUserFromRequest(req);
   if (error || !user) {
     logger.warn('auth_required_failed', { error: error ?? 'UNKNOWN_AUTH_ERROR' });
-    res.status(error === 'ACCOUNT_DELETED' ? 403 : 401).json({
-      error: error === 'ACCOUNT_DELETED' ? 'Account has been deactivated.' : 'Invalid session',
-      code: error ?? undefined,
-    });
+    // Phase 2.B — distinct error codes for lifecycle states.
+    if (error === 'ACCOUNT_DELETED') {
+      res.status(403).json({ error: 'Account has been deactivated.', code: 'ACCOUNT_DELETED' });
+      return null;
+    }
+    if (error === 'ACCOUNT_SUSPENDED') {
+      res.status(403).json({
+        error: 'Account is suspended. Contact your administrator.',
+        code: 'ACCOUNT_SUSPENDED',
+      });
+      return null;
+    }
+    if (error === 'SESSION_REVOKED') {
+      res.status(401).json({
+        error: 'Session was revoked. Please sign in again.',
+        code: 'SESSION_REVOKED',
+      });
+      return null;
+    }
+    if (error === 'ACCOUNT_INVITED') {
+      res.status(403).json({
+        error: 'Account is pending invitation acceptance. Complete onboarding to continue.',
+        code: 'ACCOUNT_INVITED',
+      });
+      return null;
+    }
+    res.status(401).json({ error: 'Invalid session', code: error ?? undefined });
     return null;
   }
   seedRequestContextFromRequest(req, { userId: user.id });

@@ -1,4 +1,4 @@
-import { getLatestProfile } from '../services/companyProfileService';
+import { ownedDbTable } from '../db/writeOwner';
 import { config } from '@/config';
 
 /** INTERNAL = company's own user (default). EXTERNAL = agency/external. Infrastructure only; no enforcement yet. */
@@ -47,6 +47,18 @@ const parseCompanyIds = (value?: string | string[] | null): string[] => {
     .filter(Boolean);
 };
 
+async function getLatestCompanyId(): Promise<string | null> {
+  const { data, error } = await ownedDbTable('company_profiles')
+    .select('company_id')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to fetch latest company id: ${error.message}`);
+  const companyId = (data as { company_id?: string | null } | null)?.company_id;
+  return companyId || null;
+}
+
 export const resolveUserContext = async (): Promise<UserContext> => {
   // Return cached value if still fresh
   if (_contextCache && Date.now() < _contextCache.expiresAt) {
@@ -58,9 +70,9 @@ export const resolveUserContext = async (): Promise<UserContext> => {
 
   if (companyIds.length === 0) {
     try {
-      const latest = await getLatestProfile();
-      if (latest?.company_id) {
-        companyIds = [latest.company_id];
+      const latestCompanyId = await getLatestCompanyId();
+      if (latestCompanyId) {
+        companyIds = [latestCompanyId];
       } else {
         companyIds = ['default'];
       }

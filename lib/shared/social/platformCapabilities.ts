@@ -15,9 +15,16 @@
  *   - Extensible: adding `reels` / `shorts` / `stories` / `podcasts` /
  *     `threads` is a registry-only change.
  *
- * Phase scope: initial validation covers `text` and `writer` only — Instagram
- * must be hidden for both. The full media matrix is encoded for forward-
- * compatibility but only the text/writer paths are wired end-to-end.
+ * Activation contract (Phase 2.C — asset-aware):
+ *   The filter helper (`filterConnectedPlatformsForContent`) resolves a
+ *   capability *set* from the input (base content capability + any
+ *   capabilities unlocked by attached Creator assets). A platform is
+ *   considered supported when it can publish ANY capability in the set.
+ *   So a Post with an attached image asset matches BOTH `'text'` (LinkedIn,
+ *   X, …) AND `'image'` (Instagram, Pinterest). The earlier "text/writer
+ *   only" assumption — where Instagram was hidden for every Writer flow —
+ *   is no longer valid; see `ASSET_TYPE_CAPABILITY_MAP` in
+ *   `contentCapability.ts` for the asset→capability mapping.
  */
 
 export type ContentCapability =
@@ -106,7 +113,7 @@ export const PLATFORM_CAPABILITY_REGISTRY: Record<string, PlatformCapabilityConf
   },
   facebook: {
     platform: 'facebook',
-    supportedContent: ['text', 'image', 'video', 'carousel'],
+    supportedContent: ['text', 'writer', 'image', 'video', 'carousel'],
     requiresMediaForPublish: false,
   },
   instagram: {

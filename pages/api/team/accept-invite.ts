@@ -28,6 +28,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
+import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -90,7 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // is deprecated and no longer read.
   const { data: userRow } = await supabase
     .from('users')
-    .select('id, active_company_id')
+    .select('id, active_company_id, status')
     .or(`supabase_uid.eq.${callerUid},email.eq.${callerEmail.toLowerCase()}`)
     .maybeSingle();
 
@@ -100,24 +101,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const userId: string = userRow.id;
   const companyId: string = invitation.company_id;
+  const previousUserStatus: string | null = (userRow as any).status ?? null;
 
-  // ── 5. Check for existing membership ────────────────────────────────────
+  // ── 5. Resolve existing membership ────────────────────────────────────
+  // Phase 2.A invariant: a Super-Admin "Create User" flow pre-creates a
+  // user_company_roles row with status='invited'. We MUST upgrade that
+  // row to 'active' on acceptance rather than rejecting the invitation
+  // as a duplicate. Pre-existing 'active' rows still short-circuit as
+  // already-a-member (legacy behavior preserved).
   const { data: existingRole } = await supabase
     .from('user_company_roles')
-    .select('id')
+    .select('id, status, role')
     .eq('user_id', userId)
     .eq('company_id', companyId)
     .maybeSingle();
 
-  if (existingRole) {
+  const existingStatus = (existingRole as any)?.status ?? null;
+  const existingRoleValue = (existingRole as any)?.role ?? null;
+
+  if (existingRole && existingStatus === 'active') {
     return res.status(409).json({ error: 'You are already a member of this company.' });
   }
 
   // ── 6. Mark invitation as accepted (atomic — prevents double-accept) ──────
   // If a concurrent request already accepted it, updated_count will be 0.
+  const acceptedAt = new Date().toISOString();
   const { data: updated, error: updateErr } = await supabase
     .from('invitations')
-    .update({ accepted_at: new Date().toISOString(), accepted_by: userId })
+    .update({ accepted_at: acceptedAt, accepted_by: userId })
     .eq('id', invitation.id)
     .is('accepted_at', null)   // guard against race condition
     .is('revoked_at', null)
@@ -132,27 +143,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(404).json({ error: 'This invitation has already been used.' });
   }
 
-  // ── 7. Add user to the company ───────────────────────────────────────────
+  // ── 7. Activate membership ───────────────────────────────────────────────
+  // - If an 'invited' role row exists (Phase 2.A pre-create), upgrade it.
+  // - Otherwise INSERT (legacy single-endpoint acceptance flow).
   const now = new Date().toISOString();
 
-  await supabase.from('user_company_roles').insert({
-    user_id:    userId,
-    company_id: companyId,
-    role:       invitation.role,
-    status:     'active',
-    created_at: now,
-    updated_at: now,
-  });
-
-  // Link user's active company if not already set. Canonical role lives in
-  // user_company_roles (just inserted above); users.role is deprecated and
-  // no longer written here.
-  if (!userRow.active_company_id) {
-    await supabase
-      .from('users')
-      .update({ active_company_id: companyId })
-      .eq('id', userId);
+  if (existingRole) {
+    const { error: roleErr } = await supabase
+      .from('user_company_roles')
+      .update({
+        role: invitation.role,
+        status: 'active',
+        accepted_at: now,
+        deactivated_at: null,
+        updated_at: now,
+      })
+      .eq('id', (existingRole as any).id);
+    if (roleErr) {
+      console.error('[/api/team/accept-invite] role upgrade error:', roleErr.message);
+      return res.status(500).json({ error: 'Failed to activate membership' });
+    }
+  } else {
+    const { error: insErr } = await supabase.from('user_company_roles').insert({
+      user_id:    userId,
+      company_id: companyId,
+      role:       invitation.role,
+      status:     'active',
+      accepted_at: now,
+      created_at: now,
+      updated_at: now,
+    });
+    if (insErr) {
+      console.error('[/api/team/accept-invite] role insert error:', insErr.message);
+      return res.status(500).json({ error: 'Failed to activate membership' });
+    }
   }
+
+  // ── 8. Sync canonical user lifecycle state ────────────────────────────────
+  // - Flip users.status invited → active (Phase 2.A lifecycle).
+  // - Populate active_company_id if not already set. Existing pointers are
+  //   preserved (the user may already belong to a different primary org).
+  const userPatch: Record<string, unknown> = { updated_at: now };
+  if (previousUserStatus === 'invited') userPatch.status = 'active';
+  if (!(userRow as any).active_company_id) userPatch.active_company_id = companyId;
+  if (Object.keys(userPatch).length > 1) {
+    await supabase.from('users').update(userPatch).eq('id', userId);
+  }
+
+  // ── 9. Canonical audit row ────────────────────────────────────────────────
+  // Non-null actor: the user accepting the invitation IS the actor. The
+  // invitation.invited_by (admin/super-admin) lands in metadata for trace.
+  await insertAuditLogStrict({
+    actorUserId: userId || SYSTEM_USER_ID,
+    action: 'INVITATION_ACCEPTED',
+    targetUserId: userId,
+    companyId,
+    metadata: {
+      invitation_id: invitation.id,
+      role: invitation.role,
+      previous_user_status: previousUserStatus,
+      previous_role_status: existingStatus,
+      previous_role_value: existingRoleValue,
+      role_existed: Boolean(existingRole),
+      active_company_id_set: !(userRow as any).active_company_id,
+    },
+  });
 
   return res.status(200).json({
     companyId,

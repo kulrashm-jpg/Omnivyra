@@ -1,6 +1,6 @@
 import { runInBackgroundJobContext } from './intelligenceExecutionContext';
 import { buildAdsRunKey, ingestAdsData, type AdsCampaignRow } from './adsIngestionService';
-import { getGoogleAnalyticsStatus } from './analyticsIntegrationService';
+import { getGoogleAnalyticsStatus, getGoogleSearchConsoleStatus, resolveGscIngestionContext } from './analyticsIntegrationService';
 import { buildCrawlerRunKey, crawlCompanyWebsite } from './crawlerService';
 import { buildCrmRunKey, ingestCrmData, type CrmLeadRecord } from './crmIngestionService';
 import { buildGa4RunKey, ingestGa4Data, type Ga4SessionRow } from './ga4IngestionService';
@@ -120,6 +120,16 @@ async function runGscSource(
   overrides: SchedulerOverrides['gsc']
 ): Promise<SourcePayload> {
   const config = { ...toObject(integration?.config), ...toObject(overrides) };
+  if (!Array.isArray(overrides?.rows) && !overrides?.accessToken && !config.accessToken) {
+    const context = await resolveGscIngestionContext(companyId);
+    return (await ingestGscData({
+      companyId,
+      siteUrl: context.property.property_id,
+      accessToken: context.accessToken,
+      startDate: typeof config.startDate === 'string' ? config.startDate : undefined,
+      endDate: typeof config.endDate === 'string' ? config.endDate : undefined,
+    })) as unknown as SourcePayload;
+  }
   return (await ingestGscData({
     companyId,
     siteUrl: typeof config.siteUrl === 'string' ? config.siteUrl : undefined,
@@ -216,6 +226,7 @@ export async function runIngestionForCompany(params: {
     const overrides = params.overrides ?? {};
     const integrations = await loadCompanyIntegrations(companyId);
     const ga4Status = sources.includes('ga4') ? await getGoogleAnalyticsStatus(companyId) : null;
+    const gscStatus = sources.includes('gsc') ? await getGoogleSearchConsoleStatus(companyId) : null;
     const results: IngestionSourceResult[] = [];
 
     for (const source of sources) {
@@ -252,20 +263,31 @@ export async function runIngestionForCompany(params: {
         source === 'ga4' &&
         !overrides.ga4 &&
         (!ga4Status?.integration || ga4Status.integration.status !== 'connected' || !ga4Status.activeProperty || !ga4Status.tokenValid);
+      const missingGscIntegration =
+        source === 'gsc' &&
+        !overrides.gsc &&
+        !integration &&
+        (!gscStatus?.integration || gscStatus.integration.status !== 'connected' || !gscStatus.activeProperty || !gscStatus.tokenValid);
 
-      if ((!integration && source !== 'crawler' && source !== 'ga4' && !overrides[source]) || missingGa4Integration) {
+      if ((!integration && source !== 'crawler' && source !== 'ga4' && source !== 'gsc' && !overrides[source]) || missingGa4Integration || missingGscIntegration) {
+        const readinessError =
+          source === 'ga4'
+            ? 'GA4 integration is not ready'
+            : source === 'gsc'
+              ? 'Search Console integration is not ready'
+              : 'Integration config missing';
         await setDataSourceStatus({
           companyId,
           source: statusSourceForTable(source),
           status: 'missing',
-          errorMessage: source === 'ga4' ? 'GA4 integration is not ready' : 'Integration config missing',
+          errorMessage: readinessError,
         });
         results.push({
           source,
           success: false,
           missingIntegration: true,
           details: {},
-          error: source === 'ga4' ? 'GA4 integration is not ready' : 'Integration config missing',
+          error: readinessError,
         });
         continue;
       }

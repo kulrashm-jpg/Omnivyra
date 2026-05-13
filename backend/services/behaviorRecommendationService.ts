@@ -79,11 +79,14 @@ function effortLevelForType(type: BehaviorRecommendationType): BehaviorRecommend
 
 function buildDropOffRecommendation(insight: BehaviorInsight): BehaviorRecommendation {
   const pageUrl = String(insight.context?.page_url ?? 'this page');
+  const dropRate = Number(insight.context?.drop_off_rate ?? insight.metric ?? 0);
   return {
     type: 'ux_fix',
     priority: mapSeverityToPriority(insight.severity),
-    message: `Improve content clarity or CTA on ${pageUrl}`,
-    reasoning: 'High drop-off indicates users are leaving without taking action.',
+    message: `Tighten the first-screen promise and CTA path on ${pageUrl}`,
+    reasoning: dropRate > 0
+      ? `${Math.round(dropRate * 100)}% drop-off indicates users are leaving before the page earns a next action.`
+      : 'High drop-off indicates users are leaving before the page earns a next action.',
     linked_insight: 'drop_off',
     impact_estimate: impactEstimateForType('ux_fix'),
     effort_level: effortLevelForType('ux_fix'),
@@ -102,7 +105,7 @@ function buildFunnelRecommendation(insight: BehaviorInsight): BehaviorRecommenda
     return {
       type: 'messaging_fix',
       priority: mapSeverityToPriority(insight.severity),
-      message: 'Improve landing page messaging and relevance',
+      message: 'Rewrite landing-page messaging around the visitor intent that arrived',
       reasoning: 'A large drop before engagement suggests visitors do not see an immediate match between traffic intent and page value.',
       linked_insight: 'funnel',
       impact_estimate: impactEstimateForType('messaging_fix'),
@@ -117,7 +120,7 @@ function buildFunnelRecommendation(insight: BehaviorInsight): BehaviorRecommenda
   return {
     type: 'conversion_optimization',
     priority: mapSeverityToPriority(insight.severity),
-    message: 'Optimize conversion flow (CTA, form, or friction points)',
+    message: 'Reduce late-stage conversion friction after users engage',
     reasoning: 'Users are engaging but not converting, which points to friction or weak conversion prompts later in the journey.',
     linked_insight: 'funnel',
     impact_estimate: impactEstimateForType('conversion_optimization'),
@@ -137,7 +140,7 @@ function buildTrafficRecommendation(insight: BehaviorInsight): BehaviorRecommend
   return {
     type: 'traffic_alignment',
     priority: mapSeverityToPriority(insight.severity),
-    message: `Re-evaluate targeting or landing page alignment for ${sourceLabel}`,
+    message: `Re-align ${sourceLabel} traffic with a landing promise that matches its intent`,
     reasoning: 'This source is delivering sessions without proportional conversions, which suggests targeting mismatch or landing page misalignment.',
     linked_insight: 'traffic_quality',
     impact_estimate: impactEstimateForType('traffic_alignment'),
@@ -157,7 +160,7 @@ function buildPagePerformanceRecommendation(insight: BehaviorInsight): BehaviorR
     return {
       type: 'cta_optimization',
       priority: mapSeverityToPriority(insight.severity),
-      message: `Add stronger or clearer call-to-action on ${pageUrl}`,
+      message: `Add a clearer primary CTA and proof cue on ${pageUrl}`,
       reasoning: 'Users are engaging with the page, but there is no conversion response, which points to weak or unclear next-step prompts.',
       linked_insight: 'page_performance',
       impact_estimate: impactEstimateForType('cta_optimization'),
@@ -172,7 +175,7 @@ function buildPagePerformanceRecommendation(insight: BehaviorInsight): BehaviorR
   return {
     type: 'content_optimization',
     priority: mapSeverityToPriority(insight.severity),
-    message: `Improve content structure, readability, or above-the-fold messaging on ${pageUrl}`,
+    message: `Rework ${pageUrl} around the strongest reader problem, proof, and next step`,
     reasoning: 'The page is getting visits but not enough interaction, which suggests the content or first impression is not pulling users deeper.',
     linked_insight: 'page_performance',
     impact_estimate: impactEstimateForType('content_optimization'),

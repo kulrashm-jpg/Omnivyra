@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { getBaseUrl } from '../../../../../backend/auth/getBaseUrl';
 import { decodeOAuthState } from '../../../../../backend/auth/oauthState';
-import { handleOAuthCallback } from '../../../../../backend/services/analyticsIntegrationService';
+import { handleGoogleOAuthCallback } from '../../../../../backend/services/analyticsIntegrationService';
 import { getSupabaseUserFromRequest } from '../../../../../backend/services/supabaseAuthService';
 
 function buildRedirectUrl(returnTo: string | null, params: Record<string, string>): string {
@@ -18,7 +18,14 @@ function resolveCallbackError(error: string): string {
   return 'oauth_failed';
 }
 
-function buildSuccessParams(returnTo: string | null): Record<string, string> {
+function buildSuccessParams(returnTo: string | null, flow: 'ga4' | 'gsc'): Record<string, string> {
+  if (flow === 'gsc') {
+    return {
+      gsc: 'connected',
+      success: 'true',
+    };
+  }
+
   if (returnTo?.startsWith('/super-admin')) {
     return {
       ga4: 'connected',
@@ -93,8 +100,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    console.log('[GA-OAUTH][callback] invoking handleOAuthCallback');
-    const result = await handleOAuthCallback({
+    console.log('[GOOGLE-OAUTH][callback] invoking handleGoogleOAuthCallback');
+    const result = await handleGoogleOAuthCallback({
       code,
       state,
       requestBaseUrl: getBaseUrl(req),
@@ -106,18 +113,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       integration_status: result.integration.status,
       properties_count: result.properties.length,
       return_to: result.returnTo,
+      flow: result.flow,
     });
 
     if (result.properties.length === 0) {
       console.warn('[GA-OAUTH][callback] failure_point=no_properties_found');
-      return res.redirect(buildRedirectUrl(result.returnTo, { error: 'no_properties_found' }));
+      return res.redirect(buildRedirectUrl(result.returnTo, {
+        error: result.flow === 'gsc' ? 'no_search_console_properties_found' : 'no_properties_found',
+      }));
     }
 
-    return res.redirect(buildRedirectUrl(result.returnTo, buildSuccessParams(result.returnTo)));
+    return res.redirect(buildRedirectUrl(result.returnTo, buildSuccessParams(result.returnTo, result.flow)));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'ga4_callback_failed';
     const stack = error instanceof Error ? error.stack : undefined;
-    const redirectError = /property/i.test(message) ? 'no_properties_found' : 'oauth_failed';
+    const redirectError = /search console/i.test(message) || decodedState.flow === 'gsc'
+      ? (/property|site/i.test(message) ? 'no_search_console_properties_found' : 'gsc_oauth_failed')
+      : (/property/i.test(message) ? 'no_properties_found' : 'oauth_failed');
     console.error('[GA-OAUTH][callback] failure_point=exception', {
       message,
       redirectError,

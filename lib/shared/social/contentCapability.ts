@@ -31,7 +31,36 @@ export interface NormalizeContentCapabilityInput {
   outputMode?: string | null;
   /** Campaign planner intent (e.g. 'thought-leadership', 'creator'). */
   campaignType?: string | null;
+  /**
+   * Creator-asset types currently attached to this Writer source
+   * (image / banner / infographic / carousel / pdf / slider). When
+   * present, the resolved capability *set* expands beyond the
+   * text/writer baseline so platforms that publish those asset types
+   * (Instagram, Pinterest, etc.) light up. The single-capability
+   * resolver (`normalizeContentCapability`) is unchanged for backward
+   * compat — only `resolveContentCapabilitySet` reads this field.
+   */
+  attachedAssetTypes?: ReadonlyArray<string> | null;
 }
+
+/**
+ * Asset-type → capability mapping. Determines which `ContentCapability`
+ * each attached Creator asset *unlocks* for platform activation.
+ *
+ *   image / banner / infographic — visual creatives: 'image'.
+ *   carousel / slider            — multi-frame visual: 'carousel'.
+ *   pdf                          — longform document: 'writer'.
+ *
+ * Anything not listed here contributes no extra capability.
+ */
+export const ASSET_TYPE_CAPABILITY_MAP: Readonly<Record<string, ContentCapability>> = {
+  image:        'image',
+  banner:       'image',
+  infographic:  'image',
+  carousel:     'carousel',
+  slider:       'carousel',
+  pdf:          'writer',
+};
 
 const FORMAT_FAMILY_MAP: Record<string, ContentCapability> = {
   short_text: 'text',
@@ -136,4 +165,41 @@ export function normalizeContentCapability(
   if (cp && CAMPAIGN_TYPE_MAP[cp]) return CAMPAIGN_TYPE_MAP[cp];
 
   return null;
+}
+
+/**
+ * Asset-aware capability set resolver.
+ *
+ * Returns the *set* of capabilities a piece of content can satisfy,
+ * derived from:
+ *   1. the base content capability (whatever {@link normalizeContentCapability}
+ *      resolves — typically `'text'` for a Post, `'writer'` for a Thread),
+ *   2. plus one entry per attached Creator-asset type, mapped via
+ *      {@link ASSET_TYPE_CAPABILITY_MAP}.
+ *
+ * The resulting set is what the platform filter checks against: a platform
+ * is "supported" if it can publish ANY capability in the set. So a Post
+ * with an attached image asset matches both `'text'` (LinkedIn, X, …) AND
+ * `'image'` (Instagram, Pinterest), giving the audit-defined expanded
+ * activation behavior automatically.
+ *
+ * Returns an empty array when no capability could be derived (fail-closed
+ * contract — callers MUST treat as "block render", same as the single
+ * resolver returning `null`).
+ */
+export function resolveContentCapabilitySet(
+  input: NormalizeContentCapabilityInput,
+): ContentCapability[] {
+  const set = new Set<ContentCapability>();
+  const base = normalizeContentCapability(input);
+  if (base) set.add(base);
+
+  const attached = Array.isArray(input.attachedAssetTypes) ? input.attachedAssetTypes : [];
+  for (const raw of attached) {
+    const key = clean(raw);
+    const capability = ASSET_TYPE_CAPABILITY_MAP[key];
+    if (capability) set.add(capability);
+  }
+
+  return [...set];
 }
