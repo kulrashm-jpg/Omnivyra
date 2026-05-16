@@ -35,7 +35,6 @@ import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
 import { getCompanyContextIntelligence } from '../companyContextIntelligenceService';
 import { polishRecommendations } from '../recommendationPolishService';
-import { enrichRecommendationIntelligence } from '../recommendationIntelligenceService';
 import { buildCompanyStrategyDNA } from '../companyStrategyDNAService';
 import { analyzeStrategySignals } from '../recommendationStrategyFeedbackService';
 import { sequenceRecommendations } from '../recommendationSequencingService';
@@ -828,10 +827,9 @@ export const generateRecommendations = async (
   if (polished.length > 0) {
     trendsUsed = polished as unknown as TrendSignalNormalized[];
   }
-  const enriched = enrichRecommendationIntelligence(trendsUsed, profile);
-  if (enriched.length > 0) {
-    trendsUsed = enriched as unknown as TrendSignalNormalized[];
-  }
+  // Intelligence enrichment was removed upstream; this step is now a no-op
+  // pass-through (equivalent to the prior empty-result branch). trendsUsed
+  // is carried forward unchanged.
 
   const { getExcludedThemeTopicsForCompany } = await import('../companyThemeStateService');
   const { generateThemeKey } = await import('../themeKeyService');
@@ -888,8 +886,9 @@ export const generateRecommendations = async (
     const biased = applyPersonaPlatformBias(fallbackSignals, personaSummary, profile);
     const polished = polishRecommendations(biased, profile, input.strategicPayload);
     const polishedFallback = polished.length > 0 ? (polished as unknown as TrendSignalNormalized[]) : biased;
-    const enrichedFallback = enrichRecommendationIntelligence(polishedFallback, profile);
-    const processedFallback = enrichedFallback.length > 0 ? (enrichedFallback as unknown as TrendSignalNormalized[]) : polishedFallback;
+    // Intelligence enrichment removed upstream; no-op pass-through
+    // (equivalent to the prior empty-result branch).
+    const processedFallback = polishedFallback;
     trendsUsed = [...trendsUsed, ...processedFallback].slice(0, MIN_THEME_COUNT);
   }
 
