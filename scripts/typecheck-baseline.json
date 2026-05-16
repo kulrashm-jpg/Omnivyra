@@ -1,0 +1,4 @@
+{
+  "baseline": 86,
+  "note": "Known pre-existing fenced TypeScript errors across all 3 projects (json/backend/scripts) as of main 7f5309f6. CI fails if the count INCREASES. Lower this number (never raise it) as debt is genuinely fixed. Do NOT use suppressions/blanket any to game it."
+}
