@@ -1,4 +1,36 @@
+/**
+ * creditReadService — THE single canonical, reconciliation-aware reader for
+ * org credit state. `getOrgCreditSummary` here is the ONLY sanctioned
+ * org-credit-summary implementation.
+ *
+ * Do NOT:
+ *   • add a second `getOrgCreditSummary` anywhere (the prior duplicate in
+ *     consumptionAnalyticsService silently returned zeroed/`null` balances
+ *     and bypassed the Phase-D self-heal — it now re-exports from here).
+ *   • read `organization_credits` directly for a USER-FACING balance/summary
+ *     without going through this module (direct reads skip the gated
+ *     projection self-heal; see "Remaining direct readers" in the Phase-F
+ *     report for the classified exceptions that are intentionally raw).
+ */
 import { ownedDbTable } from '../db/writeOwner';
+import { logger } from './logger';
+import {
+  reconcileOrgCreditProjection,
+  projectionIsBroken,
+} from './creditProjectionReconciler';
+
+const CREDIT_COLUMNS =
+  'free_balance, paid_balance, incentive_balance, lifetime_purchased, lifetime_consumed, credit_rate_usd';
+
+async function readCreditRow(
+  organizationId: string,
+): Promise<Record<string, unknown> | null> {
+  const { data } = await ownedDbTable('organization_credits')
+    .select(CREDIT_COLUMNS)
+    .eq('organization_id', organizationId)
+    .maybeSingle();
+  return (data as Record<string, unknown> | null) ?? null;
+}
 
 export interface CreditTransaction {
   id: string;
@@ -22,10 +54,32 @@ export interface OrgCreditSummary {
 }
 
 export async function getOrgCreditSummary(organizationId: string): Promise<OrgCreditSummary | null> {
-  const { data: credit } = await ownedDbTable('organization_credits')
-    .select('free_balance, paid_balance, incentive_balance, lifetime_purchased, lifetime_consumed, credit_rate_usd')
-    .eq('organization_id', organizationId)
-    .maybeSingle();
+  let credit = await readCreditRow(organizationId);
+
+  // Gated self-heal: only when the projection is structurally broken (row
+  // absent OR impossible negative balances). A healthy row — including a
+  // legitimate all-zero one — is left untouched, so normal RPC operation
+  // and genuine zero balances are never disturbed.
+  if (projectionIsBroken(credit)) {
+    const result = await reconcileOrgCreditProjection(organizationId);
+    if (result.outcome === 'created_zero') {
+      // No ledger activity and no row → genuinely no credit account yet.
+      // Surface explicitly (caller maps null → "unavailable"); never faked.
+      return null;
+    }
+    if (result.outcome === 'rebuilt') {
+      credit = await readCreditRow(organizationId); // retry read exactly ONCE
+    }
+    // Still inconsistent after one reconcile + reread → fail explicitly.
+    // No infinite retry, no synthesized balances.
+    if (projectionIsBroken(credit)) {
+      logger.warn('credit_projection_reconcile_failed', {
+        organizationId,
+        outcome: result.outcome,
+      });
+      return null;
+    }
+  }
 
   if (!credit) return null;
 
@@ -35,7 +89,7 @@ export async function getOrgCreditSummary(organizationId: string): Promise<OrgCr
     .order('created_at', { ascending: false })
     .limit(20);
 
-  const c = credit as {
+  const c = credit as unknown as {
     free_balance: number;
     paid_balance: number;
     incentive_balance: number;
