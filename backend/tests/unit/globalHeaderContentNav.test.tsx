@@ -71,7 +71,7 @@ describe('GlobalHeader Content expandable navigation', () => {
 
     expect(push).not.toHaveBeenCalled();
     expect(within(menu).getByText('9 text-first content types')).toBeInTheDocument();
-    ['Post', 'Thread', 'Blog', 'Newsletter', 'Ad Copy', 'Product Copy', 'Landing Page', 'SEO Content', 'Script']
+    ['Post', 'Blog', 'Story', 'Article', 'Whitepaper', 'Case Study', 'Thread', 'Guide', 'Newsletter']
       .forEach((label) => expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument());
   });
 
@@ -81,7 +81,7 @@ describe('GlobalHeader Content expandable navigation', () => {
     fireEvent.click(within(menu).getByRole('menuitem', { name: /Creator Content/i }));
 
     expect(within(menu).getByText('6 AI-supported creator content types')).toBeInTheDocument();
-    ['Supporting Image', 'Banner', 'Infographic', 'Carousel', 'Brand Card', 'PDF/Slider']
+    ['Image', 'Carousel', 'Banner', 'Infographic', 'PDF', 'Slider']
       .forEach((label) => expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument());
   });
 
@@ -109,7 +109,7 @@ describe('GlobalHeader Content expandable navigation', () => {
     expect(writerAccordion).toBeDefined();
     fireEvent.click(writerAccordion as HTMLElement);
     expect((writerAccordion as HTMLElement).getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByRole('link', { name: 'SEO Content' })).toHaveAttribute('href', '/command-center/writer-content?type=seo-content');
+    expect(screen.getByRole('link', { name: 'Guide' })).toHaveAttribute('href', '/guides/create');
   });
 
   test('counts, routes, and active item state are preserved', () => {

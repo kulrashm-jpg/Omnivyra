@@ -135,40 +135,6 @@ const CREATOR_CARDS: CreatorCard[] = [
     ctaColor: 'bg-sky-600 hover:bg-sky-700',
   },
   {
-    id: 'post',
-    title: 'Post',
-    category: 'Social Copy',
-    outcome: 'Platform-ready post creative with optional reusable asset context',
-    description: 'Create a focused social post with structured direction, CTA, platform packaging, and optional saved asset support.',
-    bullets: [
-      'Best for LinkedIn and Instagram post packaging',
-      'Can attach existing creator assets when useful',
-      'Ready for campaign, blog, or scheduler handoff',
-    ],
-    cta: 'Create Post',
-    accentFrom: 'from-lime-50',
-    accentTo: 'to-emerald-50',
-    borderColor: 'border-lime-200',
-    ctaColor: 'bg-lime-700 hover:bg-lime-800',
-  },
-  {
-    id: 'thread',
-    title: 'Thread',
-    category: 'Sequence Copy',
-    outcome: 'Connected post sequence with optional reusable asset context',
-    description: 'Build a thread narrative with hook, progression, CTA, platform packaging, and optional saved asset support.',
-    bullets: [
-      'Strong fit for authority and launch narratives',
-      'Can reuse saved assets as context or support',
-      'Easy handoff into long-form and social workflows',
-    ],
-    cta: 'Create Thread',
-    accentFrom: 'from-fuchsia-50',
-    accentTo: 'to-rose-50',
-    borderColor: 'border-fuchsia-200',
-    ctaColor: 'bg-fuchsia-700 hover:bg-fuchsia-800',
-  },
-  {
     id: 'video',
     title: 'Video',
     category: 'Theme Treatment',
@@ -255,6 +221,17 @@ const CREATOR_CARDS: CreatorCard[] = [
   },
 ];
 
+const CREATOR_CONTENT_PAGE_TYPES: CreatorTypeId[] = [
+  'image',
+  'carousel',
+  'banner',
+  'infographic',
+  'pdf',
+  'slider',
+];
+
+const DISPLAY_CREATOR_CARDS = CREATOR_CARDS.filter((card) => CREATOR_CONTENT_PAGE_TYPES.includes(card.id));
+
 export default function CreatorContentPage() {
   const router = useRouter();
   const { user, authChecked, isLoading } = useCompanyContext();
@@ -306,7 +283,7 @@ export default function CreatorContentPage() {
             <div className="grid grid-cols-2 gap-3 lg:w-[240px]">
               <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Types</p>
-                <p className="mt-1 text-base font-semibold text-gray-900">{CREATOR_CARDS.length}</p>
+                <p className="mt-1 text-base font-semibold text-gray-900">{DISPLAY_CREATOR_CARDS.length}</p>
               </div>
               <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3.5 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Workflow</p>
@@ -344,12 +321,12 @@ export default function CreatorContentPage() {
             >
               Visual Review
             </button>
-            <p className="text-sm text-gray-500">{CREATOR_CARDS.length} creator paths</p>
+            <p className="text-sm text-gray-500">{DISPLAY_CREATOR_CARDS.length} creator paths</p>
           </div>
         </div>
 
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {CREATOR_CARDS.map((card) => (
+          {DISPLAY_CREATOR_CARDS.map((card) => (
             <div
               key={card.id}
               onClick={() => router.push(`/command-center/creator-content/${card.id}`)}

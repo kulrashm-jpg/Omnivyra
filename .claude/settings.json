@@ -15,7 +15,8 @@
       "Bash(echo \"exit:$?\")",
       "Bash(cp c:/tmp/billing-db-introspect.ts ./scripts/audit/_tmp_introspect.ts)",
       "Bash(sed -i \"s#../virality/backend#../../backend#\" ./scripts/audit/_tmp_introspect.ts)",
-      "Bash(cd c:/virality && git status --porcelain | grep -E 'scripts/audit/\\(reconcile-migration-ledger|_tmp\\)' ; rm -f scripts/audit/_tmp_*.ts 2>/dev/null; echo \"kept: reconcile-migration-ledger.ts \\(reusable read-only tool\\)\")"
+      "Bash(cd c:/virality && git status --porcelain | grep -E 'scripts/audit/\\(reconcile-migration-ledger|_tmp\\)' ; rm -f scripts/audit/_tmp_*.ts 2>/dev/null; echo \"kept: reconcile-migration-ledger.ts \\(reusable read-only tool\\)\")",
+      "Bash(git merge *)"
     ],
     "additionalDirectories": [
       "C:\\virality\\pages\\api\\activity-workspace\\[id]",

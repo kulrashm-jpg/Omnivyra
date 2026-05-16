@@ -223,22 +223,23 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
               const data = line.slice(6);
               if (data.trim() === '' || data === '[DONE]') continue;
 
+              let parsed: any;
               try {
-                const parsed = JSON.parse(data);
-                if (parsed.error) {
-                  throw new Error(parsed.error);
+                parsed = JSON.parse(data);
+              } catch {
+                continue;
+              }
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+              if (parsed.content) {
+                fullResponse += parsed.content;
+                if (onChunk) {
+                  onChunk(parsed.content);
                 }
-                if (parsed.content) {
-                  fullResponse += parsed.content;
-                  if (onChunk) {
-                    onChunk(parsed.content);
-                  }
-                }
-                if (parsed.done) {
-                  return fullResponse;
-                }
-              } catch (e) {
-                // Skip invalid JSON
+              }
+              if (parsed.done) {
+                return fullResponse;
               }
             }
           }
@@ -298,22 +299,23 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
               const data = line.slice(6);
               if (data.trim() === '' || data === '[DONE]') continue;
 
+              let parsed: any;
               try {
-                const parsed = JSON.parse(data);
-                if (parsed.error) {
-                  throw new Error(parsed.error);
+                parsed = JSON.parse(data);
+              } catch {
+                continue;
+              }
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+              if (parsed.content) {
+                fullResponse += parsed.content;
+                if (onChunk) {
+                  onChunk(parsed.content);
                 }
-                if (parsed.content) {
-                  fullResponse += parsed.content;
-                  if (onChunk) {
-                    onChunk(parsed.content);
-                  }
-                }
-                if (parsed.done) {
-                  return fullResponse;
-                }
-              } catch (e) {
-                // Skip invalid JSON
+              }
+              if (parsed.done) {
+                return fullResponse;
               }
             }
           }

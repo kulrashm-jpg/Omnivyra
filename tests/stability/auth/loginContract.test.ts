@@ -25,9 +25,32 @@ describe('stability/auth login contract', () => {
       "type ErrorResponse   = { error: string; code?: string }",
       "code: 'INVALID_CREDENTIALS'",
       "code: 'NO_PASSWORD'",
+      'supabase_uid',
+      "supabase.rpc('auth_user_has_password'",
       "return res.status(200).json({ proceed: true })",
     ]);
     expect(api).not.toContain('supabase.auth.admin');
+  });
+
+  test('login password capability uses Supabase Auth as the source of truth', () => {
+    const api = readRepoFile('pages/api/auth/login.ts');
+    const migration = readRepoFile('supabase/migrations/20260422_auth_user_has_password_fn.sql');
+
+    expectContainsAll(api, [
+      'supabase_uid',
+      'authHasPassword',
+      'publicHasPassword',
+      "supabase.rpc('auth_user_has_password'",
+      "p_user_id: supabaseUid",
+    ]);
+    expect(api).toMatch(/authHasPassword === false \|\| \(!publicHasPassword && authHasPassword !== true\)/);
+
+    expectContainsAll(migration, [
+      'CREATE OR REPLACE FUNCTION public.auth_user_has_password',
+      'FROM auth.users',
+      'encrypted_password IS NOT NULL',
+      'GRANT EXECUTE ON FUNCTION public.auth_user_has_password(uuid) TO service_role',
+    ]);
   });
 
   test('Supabase password session fixture exposes required fields consumed by login', () => {
