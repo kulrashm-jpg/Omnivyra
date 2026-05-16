@@ -5,11 +5,15 @@ import { renderAsset } from './creatorAssetRenderer';
 import { validateAssetReadiness } from './creatorAssetValidationService';
 import { validateCreatorExecutionOutput } from './creatorExecutionContracts';
 import type { CanonicalCreatorOutput } from './executionEngines/types';
+import { generateCreatorThemeTreatment } from './creatorThemeTreatmentService';
 import {
   getCreatorGovernance,
+  isAttachmentRequiredFormat,
+  isAutonomousRenderableFormat,
   normalizeCreatorFormat,
-  supportsAutonomousExecution,
+  CREATOR_LIFECYCLE_STATES,
 } from '../../lib/shared/creatorGovernanceRegistry';
+import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
 
 type DailyPlanRow = {
   id: string;
@@ -33,15 +37,45 @@ type DailyPlanRow = {
   failure_type?: string | null;
 };
 
-export type CreatorAssetGenerationMode = 'SCHEDULE_AND_RENDER' | 'RENDER_ONLY' | 'GUIDANCE_ONLY';
+/**
+ * Generation mode hint. With per-row eligibility this no longer gates
+ * runtime behavior — the runtime decides per row. The mode is kept as a
+ * telemetry / log signal so dashboards still report what the campaign
+ * looked like at runtime invocation.
+ *
+ *   SCHEDULE_AND_RENDER  — all rows autonomous, schedule outcome requested
+ *   RENDER_ONLY          — all rows autonomous, no schedule requested
+ *   MIXED                — mix of autonomous + attachment-required
+ *   ATTACHMENT_ONLY      — all rows attachment-required (no rendering)
+ *   GUIDANCE_ONLY        — legacy alias, retained for back-compat
+ */
+export type CreatorAssetGenerationMode =
+  | 'SCHEDULE_AND_RENDER'
+  | 'RENDER_ONLY'
+  | 'MIXED'
+  | 'ATTACHMENT_ONLY'
+  | 'GUIDANCE_ONLY';
 
 export type CreatorAssetGenerationResult = {
   mode: CreatorAssetGenerationMode;
   rendered_count: number;
+  /**
+   * Count of rows in `awaiting_media_upload`. Kept under the legacy
+   * `guidance_ready_count` name for back-compat with downstream telemetry
+   * consumers.
+   */
   guidance_ready_count: number;
+  /** Alias of `guidance_ready_count` under the new vocabulary. */
+  awaiting_media_upload_count: number;
   skipped_count: number;
   failed_count: number;
-  final_status: 'render_ready' | 'guidance_ready' | 'partially_rendered' | 'render_failed';
+  final_status:
+    | 'render_ready'
+    | 'guidance_ready'         // legacy alias when all rows are attachment-required
+    | 'awaiting_media_upload'  // new aggregate when all rows are attachment-required
+    | 'partially_rendered'     // autonomous rendered + attachment-required awaiting upload
+    | 'partially_schedulable'  // synonym surfaced when at least one row is renderable
+    | 'render_failed';
 };
 
 function safeObject(value: unknown): Record<string, unknown> {
@@ -147,19 +181,97 @@ async function persistCreatorAsset(input: {
   return assetId;
 }
 
-async function markGuidanceReady(row: DailyPlanRow): Promise<void> {
+/**
+ * Mark an attachment-required row (video / reel / short / podcast) as
+ * `awaiting_media_upload` AND persist the full theme treatment, creator
+ * guidance, and marketing package so the workspace surfaces a complete
+ * production brief while the user uploads media.
+ *
+ * Transition is funneled through {@link applyTransition} so the FSM
+ * captures the change in `content.creator_lifecycle_history` and mirrors
+ * `creator_lifecycle_state` + `content_status` consistently.
+ *
+ * `content_status` is a free-text column on daily_content_plans (no CHECK
+ * constraint — see database/daily_content_plans_creator_asset.sql:11-12),
+ * so writing `awaiting_media_upload` directly is safe.
+ *
+ * If theme-treatment generation fails (LLM timeout, missing API key, etc.)
+ * the row still lands in `awaiting_media_upload`; the failure reason is
+ * captured on the row so the workspace can offer a retry without blocking
+ * the upload affordance.
+ */
+async function markAwaitingMediaUpload(input: {
+  row: DailyPlanRow;
+  campaignId: string;
+  companyId: string;
+  userId: string;
+}): Promise<void> {
+  const { row, campaignId, companyId, userId } = input;
   const parsed = safeObject(row.content);
+  const creatorCard = safeObject(parsed.creator_card);
+  const platform = String(row.platform || parsed.platform || 'instagram').toLowerCase();
+  const contentType = normalizeCreatorFormat(row.content_type || '');
+
+  let treatment: Awaited<ReturnType<typeof generateCreatorThemeTreatment>> | null = null;
+  let treatmentError: string | null = null;
+  try {
+    treatment = await generateCreatorThemeTreatment({
+      companyId,
+      userId,
+      topic: String(row.topic || row.title || parsed.topic || 'Creator brief'),
+      contentType,
+      targetPlatforms: [platform],
+      audience: String(parsed.whoAreWeWritingFor ?? parsed.target_audience ?? creatorCard.target_audience ?? ''),
+      objective: String(parsed.dailyObjective ?? parsed.objective ?? creatorCard.objective ?? ''),
+      summary: String(parsed.summary ?? parsed.whatProblemAreWeAddressing ?? creatorCard.summary ?? ''),
+      creatorCard,
+    });
+  } catch (error) {
+    treatmentError = error instanceof Error ? error.message : String(error);
+    console.warn('[creator-runtime][theme-treatment-failed]', {
+      daily_plan_id: row.id,
+      content_type: contentType,
+      message: treatmentError,
+    });
+  }
+
+  // Persistence shape: keep the legacy structure intact, then OVERWRITE the
+  // lifecycle + guidance fields. applyTransition validates the transition
+  // from the row's current state (typically null on first emission) into
+  // `awaiting_media_upload` and writes the audit history entry.
+  const contentPatch: Record<string, unknown> = {
+    render_policy: {
+      mode: 'attachment_required',
+      skipped_reason: 'attachment_required_format_awaiting_media_upload',
+    },
+    // Empty upload slot — populated by the upload API.
+    uploaded_media_url: null,
+    upload_source: null,
+    upload_validated_at: null,
+    upload_validation: null,
+    uploaded_mime_type: null,
+    uploaded_size_bytes: null,
+    upload_error: null,
+  };
+  if (treatment) {
+    contentPatch.theme_treatment = treatment.asset_payload;
+    contentPatch.creator_guidance = treatment.asset_payload.creator_guidance;
+    contentPatch.marketing_package = treatment.asset_payload.marketing_package;
+    contentPatch.platform_notes = treatment.asset_payload.platform_notes;
+    contentPatch.theme_treatment_metadata = treatment.metadata;
+  } else {
+    contentPatch.theme_treatment_error = treatmentError;
+  }
+
+  const transition = applyTransition(parsed, CREATOR_LIFECYCLE_STATES.AWAITING_MEDIA_UPLOAD, {
+    contentPatch,
+    reason: treatment ? 'guidance_persisted' : `guidance_failed:${treatmentError ?? 'unknown'}`,
+  });
+
   await ownedDbTable('daily_content_plans')
     .update({
-      content: JSON.stringify({
-        ...parsed,
-        render_policy: {
-          mode: 'guidance_only',
-          skipped_reason: 'skipped_due_to_guidance_only_policy',
-        },
-        content_status: 'guidance_ready',
-      }),
-      content_status: 'guidance_ready',
+      content: JSON.stringify(transition.content),
+      content_status: transition.contentStatus,
       failure_reason: null,
       failure_type: null,
       updated_at: new Date().toISOString(),
@@ -207,27 +319,39 @@ export async function runCreatorAssetGenerationRuntime(input: {
   const rows = Array.isArray(data) ? data as DailyPlanRow[] : [];
   const engine = getExecutionEngine('creator');
   let renderedCount = 0;
-  let guidanceReadyCount = 0;
+  let awaitingUploadCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
 
   for (const row of rows) {
     const contentType = normalizeCreatorFormat(row.content_type || '');
     const governance = getCreatorGovernance(contentType);
-    if (!governance || governance.guidance_only || governance.daily_plan_only || !governance.ai_renderable) {
-      if (governance?.guidance_only || governance?.daily_plan_only) {
-        await markGuidanceReady(row);
-        guidanceReadyCount++;
-      } else {
-        skippedCount++;
-      }
-      continue;
-    }
-    if (!supportsAutonomousExecution(contentType)) {
+
+    // ── Unsupported format: skip ─────────────────────────────────────────
+    if (!governance) {
       skippedCount++;
       continue;
     }
 
+    // ── Group B: attachment-required (video/reel/short/podcast) ──────────
+    // Emit awaiting_media_upload + persist full theme treatment / creator
+    // guidance / marketing package, skip rendering. No retry loop, no
+    // renderer call. The row holds in place until a user uploads a media
+    // URL via /api/activity-workspace/[id]/upload-media.
+    if (isAttachmentRequiredFormat(contentType)) {
+      await markAwaitingMediaUpload({ row, campaignId: input.campaignId, companyId, userId });
+      awaitingUploadCount++;
+      input.onProgress?.(`awaiting-upload-${contentType}`);
+      continue;
+    }
+
+    // ── Non-renderable, non-attachment formats (e.g. post/thread): skip ──
+    if (!isAutonomousRenderableFormat(contentType)) {
+      skippedCount++;
+      continue;
+    }
+
+    // ── Group A: autonomous renderable ───────────────────────────────────
     const parsed = safeObject(row.content);
     const creatorCard = safeObject(parsed.creator_card);
     const maxRetries = Math.max(1, Number(row.max_retries ?? 3) || 3);
@@ -277,11 +401,16 @@ export async function runCreatorAssetGenerationRuntime(input: {
           output: renderedOutput,
         });
 
+        const finalLifecycleState = readiness.ready
+          ? CREATOR_LIFECYCLE_STATES.RENDER_READY
+          : CREATOR_LIFECYCLE_STATES.RENDER_FAILED;
+
         await ownedDbTable('daily_content_plans')
           .update({
             content: JSON.stringify({
               ...parsed,
               ...renderedOutput,
+              creator_lifecycle_state: finalLifecycleState,
               render_policy: { mode: 'render_only' },
               creator_asset_id: creatorAssetId,
               rendered_asset: {
@@ -336,21 +465,26 @@ export async function runCreatorAssetGenerationRuntime(input: {
     }
   }
 
-  const finalStatus =
-    renderedCount > 0 && guidanceReadyCount > 0 && failedCount === 0
+  // ── Final-status aggregate ──────────────────────────────────────────────
+  // Maps the per-row counts to a campaign-level summary. With the per-row
+  // model this is purely a telemetry signal — it never gates downstream
+  // scheduling, which now operates row by row.
+  const finalStatus: CreatorAssetGenerationResult['final_status'] =
+    renderedCount > 0 && awaitingUploadCount > 0 && failedCount === 0
       ? 'partially_rendered'
       : renderedCount > 0 && failedCount === 0
-      ? 'render_ready'
-      : renderedCount > 0 && failedCount > 0
-        ? 'partially_rendered'
-        : renderedCount === 0 && guidanceReadyCount > 0 && failedCount === 0
-          ? 'guidance_ready'
-          : 'render_failed';
+        ? 'render_ready'
+        : renderedCount > 0 && failedCount > 0
+          ? 'partially_rendered'
+          : renderedCount === 0 && awaitingUploadCount > 0 && failedCount === 0
+            ? 'awaiting_media_upload'
+            : 'render_failed';
 
   return {
     mode: input.mode,
     rendered_count: renderedCount,
-    guidance_ready_count: guidanceReadyCount,
+    guidance_ready_count: awaitingUploadCount, // legacy alias preserved
+    awaiting_media_upload_count: awaitingUploadCount,
     skipped_count: skippedCount,
     failed_count: failedCount,
     final_status: finalStatus,

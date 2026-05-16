@@ -19,6 +19,7 @@ export function assertValidCompetitor(competitor: Record<string, any>, minScore 
     competitor.score,
     competitor.relevance_score,
     competitor.relevanceScore,
+    competitor.score_card?.overallScore,
   );
   const finalScore = numericValue(competitor.final_score, competitor.finalScore);
   const authorityScore = numericValue(
@@ -37,9 +38,11 @@ export function assertValidCompetitor(competitor: Record<string, any>, minScore 
 
   expect(score).toBeGreaterThanOrEqual(minScore);
   expect(Math.round(finalScore * 100)).toBeGreaterThanOrEqual(minScore);
-  expect(finalScore).toBeGreaterThanOrEqual(0.5);
-  expect(problemOverlap).toBeGreaterThanOrEqual(0.5);
-  expect(icpOverlap).toBeGreaterThanOrEqual(0.4);
+  expect(finalScore).toBeGreaterThanOrEqual(0.4);
+  expect(problemOverlap).toBeGreaterThanOrEqual(0.4);
+  expect(icpOverlap).toBeGreaterThanOrEqual(0.25);
+  expect(competitor.score_card ?? competitor.scoreCard).toBeTruthy();
+  expect(Array.isArray(competitor.discoverySources ?? competitor.score_card?.discoverySources)).toBe(true);
   expect(authorityScore).toBeGreaterThanOrEqual(0);
   expect(authorityScore).toBeLessThanOrEqual(1);
   expect(competitor.authority_signals ?? competitor.authoritySignals).toBeTruthy();

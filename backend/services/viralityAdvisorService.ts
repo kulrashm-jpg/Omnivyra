@@ -200,17 +200,23 @@ function normalizeDiagnosticOutput(
 
 async function runDiagnostic(
   diagnostic: DiagnosticOutput['diagnostic'],
-  snapshot: ViralitySnapshot
+  snapshot: ViralitySnapshot,
+  ctx: { organizationId: string | null; campaignId: string }
 ): Promise<DiagnosticOutput> {
   const snapshotJson = canonicalJsonStringify(snapshot);
   const userPrompt = `${DIAGNOSTIC_PROMPTS[diagnostic]}\nSnapshot JSON:\n${snapshotJson}`;
 
-  const response = await runDiagnosticPrompt<LlmDiagnosticResponse>(SYSTEM_PROMPT, userPrompt);
+  const response = await runDiagnosticPrompt<LlmDiagnosticResponse>(SYSTEM_PROMPT, userPrompt, {
+    organizationId: ctx.organizationId,
+    campaignId: ctx.campaignId,
+    processType: `viralityDiagnostic:${diagnostic}`,
+  });
   return normalizeDiagnosticOutput(diagnostic, response.data);
 }
 
 async function runComparisons(
-  snapshot: ViralitySnapshot
+  snapshot: ViralitySnapshot,
+  ctx: { organizationId: string | null; campaignId: string }
 ): Promise<DiagnosticComparisons[]> {
   const snapshotJson = canonicalJsonStringify(snapshot);
   const userPrompt =
@@ -222,7 +228,11 @@ async function runComparisons(
     '- If insufficient evidence, return comparisons with observation "insufficient evidence".\n' +
     `Snapshot JSON:\n${snapshotJson}`;
 
-  const response = await runDiagnosticPrompt<LlmComparisonsResponse>(SYSTEM_PROMPT, userPrompt);
+  const response = await runDiagnosticPrompt<LlmComparisonsResponse>(SYSTEM_PROMPT, userPrompt, {
+    organizationId: ctx.organizationId,
+    campaignId: ctx.campaignId,
+    processType: 'viralityComparisons',
+  });
   return (response.data.comparisons || []).map((item) => ({
     ...item,
     ...normalizeEvidence(item),
@@ -232,7 +242,8 @@ async function runComparisons(
 async function runOverallSummary(
   snapshot: ViralitySnapshot,
   diagnostics: DiagnosticsByType,
-  comparisons: DiagnosticComparisons[]
+  comparisons: DiagnosticComparisons[],
+  ctx: { organizationId: string | null; campaignId: string }
 ): Promise<string> {
   const summaryPrompt =
     'Executive Summary:\n' +
@@ -243,7 +254,11 @@ async function runOverallSummary(
     'Return JSON with field: overall_summary.\n';
 
   const userPrompt = `${summaryPrompt}\nSnapshot JSON:\n${canonicalJsonStringify(snapshot)}\nDiagnostics JSON:\n${canonicalJsonStringify(diagnostics)}\nComparisons JSON:\n${canonicalJsonStringify(comparisons)}`;
-  const response = await runDiagnosticPrompt<LlmSummaryResponse>(SYSTEM_PROMPT, userPrompt);
+  const response = await runDiagnosticPrompt<LlmSummaryResponse>(SYSTEM_PROMPT, userPrompt, {
+    organizationId: ctx.organizationId,
+    campaignId: ctx.campaignId,
+    processType: 'viralityOverallSummary',
+  });
   return response.data.overall_summary || 'insufficient evidence';
 }
 
@@ -301,13 +316,28 @@ async function storeAssessment(
 export type AssessViralityOptions = {
   snapshot: ViralitySnapshot;
   snapshot_hash: string;
+  organizationId?: string | null;
 };
+
+async function resolveCampaignOrganizationId(campaignId: string): Promise<string | null> {
+  const { data } = await ownedDbTable('campaign_versions')
+    .select('company_id')
+    .eq('campaign_id', campaignId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const companyId = (data as any)?.company_id;
+  return typeof companyId === 'string' && companyId.trim() ? companyId.trim() : null;
+}
 
 export async function assessVirality(
   campaignId: string,
   prebuilt?: AssessViralityOptions
 ): Promise<ViralityAssessment> {
   const { snapshot, snapshot_hash } = prebuilt ?? await buildCampaignSnapshotWithHash(campaignId);
+  const organizationId =
+    prebuilt?.organizationId?.trim() || (await resolveCampaignOrganizationId(campaignId));
+  const ctx = { organizationId, campaignId };
 
   const cached = await getCachedAssessment(campaignId, snapshot_hash);
   if (cached) {
@@ -315,9 +345,9 @@ export async function assessVirality(
   }
 
   const [assetCoverage, platformOpportunity, engagementReadiness] = await Promise.all([
-    runDiagnostic('asset_coverage', snapshot),
-    runDiagnostic('platform_opportunity', snapshot),
-    runDiagnostic('engagement_readiness', snapshot),
+    runDiagnostic('asset_coverage', snapshot, ctx),
+    runDiagnostic('platform_opportunity', snapshot, ctx),
+    runDiagnostic('engagement_readiness', snapshot, ctx),
   ]);
   const diagnostics: DiagnosticsByType = {
     asset_coverage: assetCoverage,
@@ -325,8 +355,8 @@ export async function assessVirality(
     engagement_readiness: engagementReadiness,
   };
 
-  const comparisons = await runComparisons(snapshot);
-  const overallSummary = await runOverallSummary(snapshot, diagnostics, comparisons);
+  const comparisons = await runComparisons(snapshot, ctx);
+  const overallSummary = await runOverallSummary(snapshot, diagnostics, comparisons, ctx);
 
   let omnivyreDecision: DecisionResult | undefined;
   try {

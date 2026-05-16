@@ -154,6 +154,63 @@ jest.mock('../../services/creatorAssetRenderer', () => ({
   }),
 }));
 
+// Mock the theme treatment service so the runtime's markAwaitingMediaUpload
+// path can persist guidance synchronously in tests without making any LLM
+// calls. The shape mirrors what the real service emits.
+jest.mock('../../services/creatorThemeTreatmentService', () => ({
+  generateCreatorThemeTreatment: jest.fn(async (input: any) => ({
+    intent_type: 'creator',
+    asset_type: 'video',
+    asset_instruction: {
+      blueprint: { hook_scene: { text: `${input.contentType} hook` } },
+      structure: { output_shape: 'theme_treatment' },
+      visual_style: 'mock',
+      template_id: `theme-treatment-${input.contentType}`,
+    },
+    asset_payload: {
+      asset_kind: 'theme_treatment',
+      content_type: input.contentType,
+      hook_scene: { text: `${input.contentType} hook` },
+      scenes: [{ scene_number: 1, dialogue: 'open' }, { scene_number: 2, dialogue: 'reveal' }],
+      cta_scene: { text: 'Watch now' },
+      platform_notes: { optimal_aspect_ratio: '9:16' },
+      duration_seconds: 60,
+      aspect_ratio: '9:16',
+      creator_guidance: {
+        production_notes: `Produce ${input.contentType}`,
+        production_checklist: ['set up scene', 'record'],
+        talking_points: ['open', 'reveal'],
+        b_roll_ideas: ['transition shot'],
+      },
+      marketing_package: {
+        caption: `${input.contentType} caption`,
+        hashtags: ['#mock'],
+        cta: 'Watch now',
+        meta_description: `${input.contentType} treatment for ${input.topic}`,
+        keywords: [input.topic, input.contentType],
+        platform_variants: {},
+      },
+      media_bundle: {
+        metadata: { preview_kind: 'theme_treatment', content_type: input.contentType },
+      },
+    },
+    packaging: {
+      caption: `${input.contentType} caption`,
+      hashtags: ['#mock'],
+      cta: 'Watch now',
+      meta_description: `${input.contentType} treatment for ${input.topic}`,
+      keywords: [input.topic, input.contentType],
+      platform_variants: {},
+    },
+    generation_prompt: `mock:${input.contentType}`,
+    metadata: {
+      content_type: input.contentType,
+      preview_kind: 'theme_treatment',
+      attachment_required: true,
+    },
+  })),
+}));
+
 jest.mock('../../services/executionEngines', () => ({
   getExecutionEngine: jest.fn(() => ({
     generateFromIntent: jest.fn(async (intent: any) => {
@@ -228,46 +285,49 @@ describe('creator mixed-mode runtime validation', () => {
     expect(store.dailyPlans.some((row) => row.content_status === 'guidance_ready')).toBe(false);
   });
 
-  test('pure guidance-only campaign marks guidance_ready without render, assets, or retries', async () => {
+  test('pure attachment-required campaign emits awaiting_media_upload without render, assets, or retries', async () => {
     resetStore(['reel', 'short', 'podcast']);
 
     const result = await runCreatorAssetGenerationRuntime({
       campaignId: 'campaign-1',
       companyId: 'company-1',
       userId: 'user-1',
-      mode: 'GUIDANCE_ONLY',
+      mode: 'ATTACHMENT_ONLY',
     });
 
     expect(result).toMatchObject({
-      mode: 'GUIDANCE_ONLY',
+      mode: 'ATTACHMENT_ONLY',
       rendered_count: 0,
-      guidance_ready_count: 3,
+      awaiting_media_upload_count: 3,
+      guidance_ready_count: 3, // legacy alias preserved
       failed_count: 0,
-      final_status: 'guidance_ready',
+      final_status: 'awaiting_media_upload',
     });
     expect(store.calls.engine).toBe(0);
     expect(store.calls.render).toBe(0);
     expect(store.creatorAssets).toHaveLength(0);
     expect(store.scheduledPosts).toHaveLength(0);
-    expect(store.dailyPlans.every((row) => row.content_status === 'guidance_ready')).toBe(true);
+    expect(store.dailyPlans.every((row) => row.content_status === 'awaiting_media_upload')).toBe(true);
     expect(store.dailyPlans.every((row) => row.retry_count === 0)).toBe(true);
-    expect(store.dailyPlans.every((row) => JSON.parse(row.content).render_policy.skipped_reason === 'skipped_due_to_guidance_only_policy')).toBe(true);
+    expect(store.dailyPlans.every((row) => JSON.parse(row.content).creator_lifecycle_state === 'awaiting_media_upload')).toBe(true);
+    expect(store.dailyPlans.every((row) => JSON.parse(row.content).render_policy.skipped_reason === 'attachment_required_format_awaiting_media_upload')).toBe(true);
   });
 
-  test('mixed-mode campaign renders autonomous rows and preserves guidance-only row', async () => {
+  test('mixed-mode campaign renders autonomous rows and holds attachment-required row in awaiting_media_upload', async () => {
     resetStore(['infographic', 'carousel', 'reel']);
 
     const result = await runCreatorAssetGenerationRuntime({
       campaignId: 'campaign-1',
       companyId: 'company-1',
       userId: 'user-1',
-      mode: 'RENDER_ONLY',
+      mode: 'MIXED',
     });
 
     expect(result).toMatchObject({
-      mode: 'RENDER_ONLY',
+      mode: 'MIXED',
       rendered_count: 2,
-      guidance_ready_count: 1,
+      awaiting_media_upload_count: 1,
+      guidance_ready_count: 1, // legacy alias preserved
       failed_count: 0,
       final_status: 'partially_rendered',
     });
@@ -275,31 +335,41 @@ describe('creator mixed-mode runtime validation', () => {
     expect(store.calls.render).toBe(2);
     expect(store.creatorAssets).toHaveLength(2);
     expect(store.scheduledPosts).toHaveLength(0);
+    // Autonomous rows reach render_ready.
     expect(store.dailyPlans.filter((row) => row.content_status === 'render_ready')).toHaveLength(2);
-    expect(store.dailyPlans.filter((row) => row.content_status === 'guidance_ready')).toHaveLength(1);
+    // Attachment-required row holds in awaiting_media_upload — autonomous rows
+    // are NOT downgraded to render_only-globally, NOT blocked, NOT marked
+    // guidance_ready as a terminal state.
+    expect(store.dailyPlans.filter((row) => row.content_status === 'awaiting_media_upload')).toHaveLength(1);
+    expect(store.dailyPlans.some((row) => row.content_status === 'guidance_ready')).toBe(false);
     const reel = store.dailyPlans.find((row) => row.content_type === 'reel')!;
-    expect(JSON.parse(reel.content).render_policy.skipped_reason).toBe('skipped_due_to_guidance_only_policy');
+    expect(JSON.parse(reel.content).creator_lifecycle_state).toBe('awaiting_media_upload');
+    expect(JSON.parse(reel.content).render_policy.skipped_reason).toBe('attachment_required_format_awaiting_media_upload');
   });
 
-  test('legacy governance bypasses fail before render or schedule paths', () => {
+  test('mixed-mode and attachment-required formats no longer trigger campaign-wide scheduling vetoes', () => {
+    // Per-row eligibility: attachment-required formats are valid for every
+    // outcome (week_plan, daily_plan, schedule, campaign_schedule). The
+    // governance validator only blocks on truly UNSUPPORTED formats.
     expect(validateCreatorScheduleRequest({
       campaignMode: 'creator',
       outcomeView: 'campaign_schedule',
       executionConfig: { campaign_mode: 'creator', content_formats: ['reel'] },
-    })).toMatchObject({
-      ok: false,
-      blockedFormats: ['reel'],
-    });
+    })).toMatchObject({ ok: true });
 
     expect(validateCreatorScheduleRequest({
       campaignMode: 'creator',
       outcomeView: 'schedule',
       executionConfig: { campaign_mode: 'creator', content_formats: ['video'] },
-    })).toMatchObject({
-      ok: false,
-      blockedFormats: ['video'],
-    });
+    })).toMatchObject({ ok: true });
 
+    expect(validateCreatorScheduleRequest({
+      campaignMode: 'creator',
+      outcomeView: 'schedule',
+      executionConfig: { campaign_mode: 'creator', content_formats: ['infographic', 'carousel', 'reel'] },
+    })).toMatchObject({ ok: true });
+
+    // Unsupported formats are still rejected.
     expect(validateCreatorScheduleRequest({
       campaignMode: 'creator',
       outcomeView: 'daily_plan',
@@ -309,7 +379,99 @@ describe('creator mixed-mode runtime validation', () => {
       unsupportedFormats: ['unknown_format'],
     });
 
-    expect(() => deriveCreatorAssetTypeFromIntent({ contentType: 'reel' })).toThrow(/guidance-only/);
+    // resolveCreatorAssetType still rejects attachment-required formats —
+    // it's the AUTONOMOUS-render asset-type resolver, and attachment-required
+    // formats are explicitly not autonomous-renderable.
+    expect(() => deriveCreatorAssetTypeFromIntent({ contentType: 'reel' })).toThrow();
     expect(() => deriveCreatorAssetTypeFromIntent({ contentType: 'unknown-format' })).toThrow(/Unsupported creator content type/);
+  });
+
+  test('attachment-required runtime emission persists theme treatment + creator guidance + marketing package', async () => {
+    resetStore(['reel']);
+
+    await runCreatorAssetGenerationRuntime({
+      campaignId: 'campaign-1',
+      companyId: 'company-1',
+      userId: 'user-1',
+      mode: 'ATTACHMENT_ONLY',
+    });
+
+    const reel = store.dailyPlans[0];
+    expect(reel.content_status).toBe('awaiting_media_upload');
+    const parsed = JSON.parse(reel.content);
+    expect(parsed.creator_lifecycle_state).toBe('awaiting_media_upload');
+    expect(parsed.theme_treatment?.asset_kind).toBe('theme_treatment');
+    expect(parsed.theme_treatment?.scenes?.length).toBeGreaterThan(0);
+    expect(parsed.creator_guidance?.production_notes).toMatch(/reel/i);
+    expect(Array.isArray(parsed.creator_guidance?.production_checklist)).toBe(true);
+    expect(parsed.marketing_package?.caption).toBeTruthy();
+    expect(Array.isArray(parsed.marketing_package?.hashtags)).toBe(true);
+    expect(parsed.uploaded_media_url).toBeNull();
+    // History entry from the FSM
+    expect(Array.isArray(parsed.creator_lifecycle_history)).toBe(true);
+    expect(parsed.creator_lifecycle_history[0].to).toBe('awaiting_media_upload');
+  });
+
+  test('per-row scheduling eligibility transitions awaiting → media_uploaded → ready_for_schedule', async () => {
+    const { getRowSchedulingEligibility } = await import('../../../lib/shared/creatorGovernanceRegistry');
+    const { applyTransition } = await import('../../../lib/shared/creatorLifecycleStateMachine');
+
+    // Step 1: awaiting_media_upload — cannot schedule yet
+    let content: Record<string, unknown> = applyTransition({}, 'awaiting_media_upload').content;
+    let elig = getRowSchedulingEligibility({
+      content_type: 'reel',
+      content_status: 'awaiting_media_upload',
+      creator_lifecycle_state: content.creator_lifecycle_state,
+      uploaded_media_url: content.uploaded_media_url,
+      upload_validation: content.upload_validation,
+    });
+    expect(elig.lifecycle).toBe('attachment_required');
+    expect(elig.can_schedule_now).toBe(false);
+    expect(elig.requires_upload).toBe(true);
+    expect(elig.reason).toBe('awaiting_media_upload');
+
+    // Step 2: media_uploaded with valid validation — still need ready_for_schedule
+    content = applyTransition(content, 'media_uploaded', {
+      contentPatch: {
+        uploaded_media_url: 'https://cdn.example.test/reel-1.mp4',
+        upload_validation: { valid: true, validated_at: 'now', details: {} },
+      },
+    }).content;
+    elig = getRowSchedulingEligibility({
+      content_type: 'reel',
+      content_status: 'media_uploaded',
+      creator_lifecycle_state: content.creator_lifecycle_state,
+      uploaded_media_url: content.uploaded_media_url,
+      upload_validation: content.upload_validation,
+    });
+    expect(elig.can_schedule_now).toBe(true);
+    expect(elig.requires_upload).toBe(false);
+
+    // Step 3: ready_for_schedule remains schedulable
+    content = applyTransition(content, 'ready_for_schedule').content;
+    elig = getRowSchedulingEligibility({
+      content_type: 'reel',
+      content_status: 'ready_for_schedule',
+      creator_lifecycle_state: content.creator_lifecycle_state,
+      uploaded_media_url: content.uploaded_media_url,
+      upload_validation: content.upload_validation,
+    });
+    expect(elig.can_schedule_now).toBe(true);
+    expect(elig.reason).toBe('attachment_uploaded_ready_for_schedule');
+
+    // Step 4: invalid validation → can NOT schedule
+    const failedContent: Record<string, unknown> = {
+      creator_lifecycle_state: 'upload_failed',
+      uploaded_media_url: 'https://cdn.example.test/bad.mp4',
+      upload_validation: { valid: false, validated_at: 'now', errors: ['bad mime'], details: {} },
+    };
+    elig = getRowSchedulingEligibility({
+      content_type: 'reel',
+      creator_lifecycle_state: failedContent.creator_lifecycle_state,
+      uploaded_media_url: failedContent.uploaded_media_url,
+      upload_validation: failedContent.upload_validation,
+    });
+    expect(elig.can_schedule_now).toBe(false);
+    expect(elig.reason).toBe('media_upload_validation_pending_or_failed');
   });
 });

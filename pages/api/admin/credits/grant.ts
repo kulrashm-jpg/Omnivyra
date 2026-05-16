@@ -35,7 +35,13 @@ import {
   type AdminGrantReasonType,
 } from '../../../../backend/services/creditAdminGrantContract';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
+import { billingOk, billingFail } from '../../../../backend/services/billing/billingApiResponse';
 import { logger } from '../../../../backend/services/logger';
+import {
+  proposeApproval,
+  markApprovalExecuted,
+  recordAdminFinancialOperation,
+} from '../../../../backend/services/billing';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -88,6 +94,48 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(400).json({ error: 'expiryDays must be a non-negative number' });
   }
 
+  // ── Approval-chain gate (C-4) ────────────────────────────────────────────
+  // For low-amount grants (<5K credits by default), threshold lookup returns
+  // 1 required approval and the proposal auto-approves; behavior is identical
+  // to pre-C-4. Above threshold, an approval row is created and we return
+  // 202 to indicate "pending sign-off" — the client must call the signing
+  // endpoint with a second super-admin.
+  let proposalId: string | null = null;
+  try {
+    const proposal = await proposeApproval({
+      actionType: 'admin_grant',
+      proposedBy: user.id,
+      clientRequestId: clientKey,
+      payload: {
+        organizationId,
+        amountCredits: credits as number,
+        category:      'free',
+        reason:        reason.trim(),
+        reasonType,
+        expiryDays,
+        metadata,
+      },
+    });
+    if (!proposal.ok) {
+      return res.status(400).json({ error: proposal.message, code: proposal.code });
+    }
+    proposalId = proposal.approvalId;
+    if (!proposal.autoApproved) {
+      return billingOk(res, 202, {
+        status: 'pending_approval',
+        message: `Grant requires ${proposal.requiredApprovals} approval signatures. Have another super-admin sign via /api/admin/credits/approvals/sign.`,
+        legacy: {
+          status: 'pending_approval',
+          approvalId: proposal.approvalId,
+          requiredApprovals: proposal.requiredApprovals,
+        },
+      });
+    }
+  } catch (err: any) {
+    logger.error('admin_grant_approval_failed', { actor: user.id, message: err?.message });
+    return billingFail(res, 500, { rawMessage: err?.message, legacyCode: 'APPROVAL_WORKFLOW_FAILED' });
+  }
+
   let result: AdminGrantResult;
   try {
     const { grantAdminCreditExtension } = await import('../../../../backend/services/creditAdminGrantService');
@@ -104,7 +152,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     });
   } catch (err: any) {
     logger.error('admin_credit_grant_failed', { actor: user.id, message: err?.message });
-    return res.status(500).json({ error: 'Internal server error' });
+    return billingFail(res, 500, { rawMessage: err?.message, legacyCode: 'INTERNAL' });
   }
 
   if (!result.ok) {
@@ -113,7 +161,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       failure.code === 'LEDGER_FAILED'         ? 500 :
       failure.code === 'GRANT_LIMIT_EXCEEDED'  ? 429 :
                                                  400;
-    return res.status(statusCode).json({ error: failure.error, code: failure.code });
+    return billingFail(res, statusCode, { rawMessage: failure.error, legacyCode: failure.code });
   }
 
   try {
@@ -127,6 +175,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         reason,
         reasonType,
         expiresAt: result.expiresAt,
+        approvalId: proposalId,
         ...(metadata ?? {}),
       },
       idempotencyKey: result.idempotencyKey,
@@ -134,11 +183,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   } catch (err: any) {
     logger.error('admin_credit_grant_audit_failed', { actor: user.id, message: err?.message });
   }
-  return res.status(200).json({
-    ok:             true,
-    credits:        result.credits,
-    expiresAt:      result.expiresAt,
-    idempotencyKey: result.idempotencyKey,
+
+  // Close the approval row + emit structured financial audit (C-4 + governance §5)
+  if (proposalId) {
+    try {
+      await markApprovalExecuted({
+        approvalId:             proposalId,
+        executedIdempotencyKey: result.idempotencyKey,
+        actorUserId:            user.id,
+      });
+    } catch (err: any) {
+      logger.error('admin_grant_approval_close_failed', { actor: user.id, message: err?.message });
+    }
+  }
+  await recordAdminFinancialOperation({
+    module:               'http:admin_credits_grant',
+    actorUserId:          user.id,
+    organizationId,
+    action:               'admin_grant',
+    amountCredits:        credits as number,
+    reasonType,
+    reason:               reason.trim(),
+    approvalId:           proposalId ?? undefined,
+    ledgerIdempotencyKey: result.idempotencyKey,
+    metadata:             metadata ?? {},
+  });
+
+  return billingOk(res, 200, {
+    status: 'succeeded',
+    message: `Credits granted successfully (${result.credits} credits).`,
+    legacy: {
+      credits:        result.credits,
+      expiresAt:      result.expiresAt,
+      idempotencyKey: result.idempotencyKey,
+      approvalId:     proposalId,
+    },
   });
 }
 

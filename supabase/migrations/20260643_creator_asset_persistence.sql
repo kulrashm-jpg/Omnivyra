@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS public.creator_asset_attachments (
   url text,
   files jsonb NOT NULL DEFAULT '[]'::jsonb,
   preview_kind text,
-  image_mode text,
   platform_context text,
   attachment_order integer NOT NULL DEFAULT 0,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,

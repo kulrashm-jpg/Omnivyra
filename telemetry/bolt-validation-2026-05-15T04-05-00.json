@@ -1,0 +1,299 @@
+[
+  {
+    "phase": "phase-1",
+    "name": "PHASE 1 — Week Plan baseline",
+    "run_id": "918997f3-98f6-4024-a4e7-dea0eb8c1152",
+    "started_at": "2026-05-15T04:05:00.330Z",
+    "ended_at": "2026-05-15T04:05:50.365Z",
+    "runtime_ms": 49452,
+    "runtime_human": "49.5s",
+    "runtime_error_caught": null,
+    "memory": {
+      "before": {
+        "rss_mb": 197.4,
+        "heapUsed_mb": 105.9
+      },
+      "after": {
+        "rss_mb": 161.9,
+        "heapUsed_mb": 82.3
+      },
+      "rss_delta_mb": -35.5
+    },
+    "run_row": {
+      "id": "918997f3-98f6-4024-a4e7-dea0eb8c1152",
+      "status": "completed",
+      "current_stage": "generate-weekly-structure-week-1",
+      "progress_percentage": 100,
+      "result_campaign_id": "75c15232-d2f5-4abd-8bb0-10c6e8d74836",
+      "error_message": null,
+      "raw_error_message": null,
+      "failed_stage": null,
+      "failed_after_ms": null,
+      "pipeline_mode": null,
+      "campaign_type": null,
+      "weeks_generated": 1,
+      "daily_slots_created": 3,
+      "scheduled_posts_created": 0,
+      "content_jobs_total": 0,
+      "content_jobs_done": 0,
+      "ai_calls_total": 0,
+      "ai_tokens_input": 0,
+      "ai_tokens_output": 0,
+      "ai_cost_usd": "0"
+    },
+    "db_writes": {
+      "daily_content_plans": 3,
+      "scheduled_posts": 0
+    },
+    "stage_breakdown": [
+      {
+        "stage": "source-recommendation",
+        "started_at": "2026-05-15T04:05:02.689Z",
+        "ended_at": "2026-05-15T04:05:03.414Z",
+        "status": "completed",
+        "duration_ms": 874,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "ai/plan",
+        "started_at": "2026-05-15T04:05:03.900Z",
+        "ended_at": "2026-05-15T04:05:41.741Z",
+        "status": "completed",
+        "duration_ms": 37847,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "commit-plan",
+        "started_at": "2026-05-15T04:05:42.252Z",
+        "ended_at": "2026-05-15T04:05:43.415Z",
+        "status": "completed",
+        "duration_ms": 1284,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "generate-weekly-structure-week-1",
+        "started_at": "2026-05-15T04:05:44.003Z",
+        "ended_at": "2026-05-15T04:05:49.979Z",
+        "status": "completed",
+        "duration_ms": 5976,
+        "error_message": null,
+        "raw_error_message": null
+      }
+    ],
+    "success_evaluation": {
+      "completed": true,
+      "within_max_runtime": true,
+      "max_runtime_ms": 240000,
+      "failed_event_count": 0,
+      "failed_event_stages": [],
+      "final_status": "completed",
+      "failed_stage": null,
+      "raw_error_message": null,
+      "failed_after_ms": null
+    }
+  },
+  {
+    "phase": "phase-2",
+    "name": "PHASE 2 — Daily Plan baseline",
+    "run_id": "a5365c35-d5c5-402d-976c-b48f8d665417",
+    "started_at": "2026-05-15T04:05:50.453Z",
+    "ended_at": "2026-05-15T04:06:29.566Z",
+    "runtime_ms": 38563,
+    "runtime_human": "38.6s",
+    "runtime_error_caught": null,
+    "memory": {
+      "before": {
+        "rss_mb": 162,
+        "heapUsed_mb": 82.6
+      },
+      "after": {
+        "rss_mb": 167.9,
+        "heapUsed_mb": 91.4
+      },
+      "rss_delta_mb": 5.9
+    },
+    "run_row": {
+      "id": "a5365c35-d5c5-402d-976c-b48f8d665417",
+      "status": "completed",
+      "current_stage": "generate-weekly-structure-week-1",
+      "progress_percentage": 100,
+      "result_campaign_id": "552a6e37-5690-4d01-a085-11698696565d",
+      "error_message": null,
+      "raw_error_message": null,
+      "failed_stage": null,
+      "failed_after_ms": null,
+      "pipeline_mode": null,
+      "campaign_type": null,
+      "weeks_generated": 1,
+      "daily_slots_created": 3,
+      "scheduled_posts_created": 0,
+      "content_jobs_total": 0,
+      "content_jobs_done": 0,
+      "ai_calls_total": 0,
+      "ai_tokens_input": 0,
+      "ai_tokens_output": 0,
+      "ai_cost_usd": "0"
+    },
+    "db_writes": {
+      "daily_content_plans": 3,
+      "scheduled_posts": 0
+    },
+    "stage_breakdown": [
+      {
+        "stage": "source-recommendation",
+        "started_at": "2026-05-15T04:05:51.861Z",
+        "ended_at": "2026-05-15T04:05:52.460Z",
+        "status": "completed",
+        "duration_ms": 703,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "ai/plan",
+        "started_at": "2026-05-15T04:05:52.933Z",
+        "ended_at": "2026-05-15T04:06:21.994Z",
+        "status": "completed",
+        "duration_ms": 29140,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "commit-plan",
+        "started_at": "2026-05-15T04:06:22.449Z",
+        "ended_at": "2026-05-15T04:06:23.581Z",
+        "status": "completed",
+        "duration_ms": 1250,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "generate-weekly-structure-week-1",
+        "started_at": "2026-05-15T04:06:24.153Z",
+        "ended_at": "2026-05-15T04:06:29.205Z",
+        "status": "completed",
+        "duration_ms": 5052,
+        "error_message": null,
+        "raw_error_message": null
+      }
+    ],
+    "success_evaluation": {
+      "completed": true,
+      "within_max_runtime": true,
+      "max_runtime_ms": 240000,
+      "failed_event_count": 0,
+      "failed_event_stages": [],
+      "final_status": "completed",
+      "failed_stage": null,
+      "raw_error_message": null,
+      "failed_after_ms": null
+    }
+  },
+  {
+    "phase": "phase-3",
+    "name": "PHASE 3 — Schedule baseline",
+    "run_id": "7fc7218d-dd14-453e-9e0d-19087eb788c2",
+    "started_at": "2026-05-15T04:06:29.651Z",
+    "ended_at": "2026-05-15T04:07:46.342Z",
+    "runtime_ms": 76050,
+    "runtime_human": "76.0s",
+    "runtime_error_caught": null,
+    "memory": {
+      "before": {
+        "rss_mb": 167.9,
+        "heapUsed_mb": 91.7
+      },
+      "after": {
+        "rss_mb": 149.2,
+        "heapUsed_mb": 80.7
+      },
+      "rss_delta_mb": -18.7
+    },
+    "run_row": {
+      "id": "7fc7218d-dd14-453e-9e0d-19087eb788c2",
+      "status": "completed",
+      "current_stage": "schedule-writing-posts",
+      "progress_percentage": 100,
+      "result_campaign_id": "e0fc1664-9fee-4c6a-89d8-60114c18de72",
+      "error_message": null,
+      "raw_error_message": null,
+      "failed_stage": null,
+      "failed_after_ms": null,
+      "pipeline_mode": null,
+      "campaign_type": null,
+      "weeks_generated": 1,
+      "daily_slots_created": 3,
+      "scheduled_posts_created": 3,
+      "content_jobs_total": 0,
+      "content_jobs_done": 0,
+      "ai_calls_total": 0,
+      "ai_tokens_input": 0,
+      "ai_tokens_output": 0,
+      "ai_cost_usd": "0"
+    },
+    "db_writes": {
+      "daily_content_plans": 3,
+      "scheduled_posts": 3
+    },
+    "stage_breakdown": [
+      {
+        "stage": "source-recommendation",
+        "started_at": "2026-05-15T04:06:31.180Z",
+        "ended_at": "2026-05-15T04:06:31.799Z",
+        "status": "completed",
+        "duration_ms": 840,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "ai/plan",
+        "started_at": "2026-05-15T04:06:32.288Z",
+        "ended_at": "2026-05-15T04:07:03.219Z",
+        "status": "completed",
+        "duration_ms": 30994,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "commit-plan",
+        "started_at": "2026-05-15T04:07:03.697Z",
+        "ended_at": "2026-05-15T04:07:04.848Z",
+        "status": "completed",
+        "duration_ms": 1273,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "generate-weekly-structure-week-1",
+        "started_at": "2026-05-15T04:07:05.432Z",
+        "ended_at": "2026-05-15T04:07:10.497Z",
+        "status": "completed",
+        "duration_ms": 5065,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "schedule-structured-plan",
+        "started_at": "2026-05-15T04:07:10.980Z",
+        "ended_at": "2026-05-15T04:07:45.885Z",
+        "status": "completed",
+        "duration_ms": 35017,
+        "error_message": null,
+        "raw_error_message": null
+      }
+    ],
+    "success_evaluation": {
+      "completed": true,
+      "within_max_runtime": true,
+      "max_runtime_ms": 480000,
+      "failed_event_count": 0,
+      "failed_event_stages": [],
+      "final_status": "completed",
+      "failed_stage": null,
+      "raw_error_message": null,
+      "failed_after_ms": null
+    }
+  }
+]

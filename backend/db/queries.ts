@@ -50,6 +50,7 @@ export interface ScheduledPost {
   updated_at: string;
   repurpose_index?: number;
   repurpose_total?: number;
+  creator_attachment_metadata?: unknown;
 }
 
 export interface SocialAccount {

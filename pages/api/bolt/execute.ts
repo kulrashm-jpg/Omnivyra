@@ -8,11 +8,61 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { ownedDbTable } from '../../../backend/db/writeOwner';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getBoltQueue } from '../../../backend/queue/boltQueue';
 import { getUserFriendlyMessage } from '../../../backend/utils/userFriendlyErrors';
 import { executeBoltPipeline } from '../../../backend/services/boltPipelineService';
 import { config } from '@/config';
+
+/**
+ * Inline sweep of abandoned-but-still-locked runs for the company
+ * that's launching a new one. Runs BEFORE dispatch so HMR-orphaned /
+ * dead-worker runs that left their lock held don't accumulate and
+ * don't confuse the user with "stuck on Preparing week plan" cards
+ * from previous attempts.
+ *
+ * "Abandoned" = status='started' OR status='running', heartbeat older
+ * than 90 seconds, AND lock has expired. Anything actively progressing
+ * gets a heartbeat write multiple times per stage (see boltPipelineService
+ * → updateRun → heartbeat_at + lock_expires_at refresh) so a live run
+ * never matches this filter.
+ *
+ * Best-effort; failures are logged but never block the new run.
+ */
+async function recoverAbandonedCompanyRuns(companyId: string): Promise<void> {
+  try {
+    const nowIso = new Date().toISOString();
+    const cutoffIso = new Date(Date.now() - 90 * 1000).toISOString();
+    const { data, error } = await ownedDbTable('bolt_execution_runs')
+      .update({
+        status: 'failed',
+        error_message: 'Your campaign plan was disrupted due to a technical glitch. Please try again. If the problem persists, try again later or reach out for support.',
+        raw_error_message: 'Run abandoned: pipeline died before reaching a stage boundary (worker crash / HMR / lifecycle).',
+        failed_stage: 'abandoned',
+        lock_owner: null,
+        lock_expires_at: null,
+        updated_at: nowIso,
+      })
+      .eq('company_id', companyId)
+      .in('status', ['started', 'running'])
+      .lt('heartbeat_at', cutoffIso)
+      .or(`lock_expires_at.is.null,lock_expires_at.lt.${nowIso}`)
+      .select('id');
+    if (error) {
+      console.warn('[bolt/execute] inline sweep failed (non-fatal):', error.message);
+      return;
+    }
+    if (Array.isArray(data) && data.length > 0) {
+      console.log('[bolt/execute] inline sweep recovered abandoned runs', {
+        companyId,
+        recovered_ids: data.map((r) => (r as { id: string }).id),
+      });
+    }
+  } catch (err) {
+    console.warn('[bolt/execute] inline sweep crashed (non-fatal):', (err as Error)?.message);
+  }
+}
 import {
   getCreatorFormatsFromExecutionConfig,
   getUnsupportedCreatorFormats,
@@ -43,6 +93,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       companyId,
     });
     if (!access) return;
+
+    // Inline sweep BEFORE dispatch. Recovers HMR-orphaned / crashed-worker
+    // runs that left status='started'+lock-held so the user doesn't see
+    // "stuck on Preparing week plan" cards from the previous attempt.
+    // ~5–10 ms; harmless when there's nothing to recover.
+    await recoverAbandonedCompanyRuns(companyId);
 
     const resolvedBoltBlogType =
       body.source_blog_type === 'company' ? 'company'
@@ -166,14 +222,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // Direct in-process execution is the FALLBACK only — used when
+    // BullMQ enqueue failed (Redis down, workers disabled).
+    //
+    // We do NOT fire direct execution when the queue accepted the job.
+    // Previously this code ran direct unconditionally on the theory that
+    // "the lock guarantees only one will win" — but the direct call
+    // executes in the Next.js HTTP-handler process, wins the lock race
+    // almost every time, then gets KILLED when Next.js cleans up after
+    // the response is sent. Result: lock held by a dead promise, BullMQ
+    // worker locked out for the full TTL, run stuck on stage 1.
+    //
+    // When workers ARE running, trust them. When workers aren't running
+    // (BullMQ enqueue throws), fall back to direct execution. The
+    // sweeper handles the "BullMQ accepted but no worker is alive" edge
+    // case by reclaiming the run after the heartbeat threshold.
     if (!queuedViaBullMQ) {
-      // No workers running (ENABLE_AUTO_WORKERS not set or Redis unavailable) — run the pipeline
-      // directly in the background. The 'running' guard in executeBoltPipeline prevents double
-      // execution if a BullMQ worker picks it up later.
-      console.log(`[bolt/execute] Running pipeline directly for run ${runId}`);
+      // Synchronous state transition so the UI doesn't see the default
+      // `status='started'` if the void promise gets dropped by the
+      // dev-server runtime before the pipeline's first write.
+      try {
+        const nowIso = new Date().toISOString();
+        await supabase
+          .from('bolt_execution_runs')
+          .update({ status: 'running', heartbeat_at: nowIso, updated_at: nowIso })
+          .eq('id', runId);
+      } catch (preErr) {
+        console.warn('[bolt/execute] pre-dispatch status write failed (non-fatal):', (preErr as Error)?.message);
+      }
+
+      console.log(`[bolt/execute] Running pipeline directly for run ${runId} (workers unavailable)`);
       void executeBoltPipeline(runId).catch(async (err) => {
         console.error('[bolt/execute] Direct pipeline failed:', err?.message);
       });
+    } else {
+      console.log(`[bolt/execute] Queued via BullMQ for run ${runId}`);
     }
 
     return res.status(202).json({

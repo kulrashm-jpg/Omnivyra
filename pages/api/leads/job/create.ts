@@ -6,6 +6,7 @@ import {
   leadQueueHardenedDefaults,
   buildLeadJobIdempotencyKey,
 } from '../../../../backend/queue/leadQueueHardening';
+import { recordLeadQueueEnqueue } from '../../../../backend/queue/leadQueueObservability';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -138,6 +139,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Phase 0 — per-job hardening: retries, exponential backoff, retry-safe
     // idempotency key. Applied at the enqueue site (not as queue defaults) so
     // Market Pulse jobs on the same engine-jobs queue are unaffected.
+    const enqueueStartedAt = Date.now();
     await jobQueue.add(
       'lead-job',
       { type: 'LEAD', jobId: job.id },
@@ -150,6 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }),
       },
     );
+    recordLeadQueueEnqueue(Date.now() - enqueueStartedAt);
 
     return res.status(201).json({
       jobId: job.id,

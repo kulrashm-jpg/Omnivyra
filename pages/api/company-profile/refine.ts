@@ -60,7 +60,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       req.body?.onboardingMode === true;
     const mergeLockedFields = (existingFields: unknown, field: string) =>
       Array.from(new Set([...(Array.isArray(existingFields) ? existingFields : []), field]));
-    profile = await getProfile(effectiveCompanyId, { autoRefine: false });
+    profile = await getProfile(effectiveCompanyId, {
+      autoRefine: false,
+      includeStoredCompetitors: true,
+    });
     const { data: companyRow } = onboardingMode
       ? await supabase.from('companies').select('website').eq('id', effectiveCompanyId).maybeSingle()
       : { data: null };

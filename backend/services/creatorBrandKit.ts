@@ -64,6 +64,17 @@ type ResolveBrandKitInput = {
 const RENDERER_IDENTITY_VERSION = 'creator-brandkit-v1';
 const DEFAULT_PALETTE = ['#111827', '#2563eb', '#14b8a6'];
 const SAFE_ACCENT = '#38bdf8';
+const BRANDKIT_CACHE_TTL_MS = 5 * 60 * 1000;
+const BRANDKIT_CACHE_MAX = 250;
+
+type BrandKitCacheEntry = {
+  value: CreatorBrandKit;
+  expiresAt: number;
+};
+
+const brandKitCache = new Map<string, BrandKitCacheEntry>();
+let brandKitCacheHits = 0;
+let brandKitCacheMisses = 0;
 
 function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -171,6 +182,60 @@ function hashShort(value: unknown): string {
   return createHash('sha1').update(JSON.stringify(value)).digest('hex').slice(0, 12);
 }
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function makeBrandKitCacheKey(input: {
+  tenantId: string | null;
+  companyId: string | null;
+  companyName: string;
+  logoUrl: string;
+  faviconUrl: string;
+  palette: string[];
+  platform?: string | null;
+  assetType?: string | null;
+  tone: string;
+  audience: string;
+  industry: string;
+  domain: string;
+  socialHandles: Record<string, string>;
+}): string {
+  return createHash('sha1')
+    .update(stableStringify({
+      version: RENDERER_IDENTITY_VERSION,
+      tenantId: input.tenantId,
+      companyId: input.companyId,
+      companyName: input.companyName,
+      logoUrl: input.logoUrl,
+      faviconUrl: input.faviconUrl,
+      palette: input.palette,
+      platform: input.platform || null,
+      assetType: input.assetType || null,
+      tone: input.tone,
+      audience: input.audience,
+      industry: input.industry,
+      domain: input.domain,
+      socialHandles: input.socialHandles,
+    }))
+    .digest('hex');
+}
+
+function setBrandKitCache(key: string, value: CreatorBrandKit): void {
+  if (brandKitCache.size >= BRANDKIT_CACHE_MAX) {
+    const oldestKey = brandKitCache.keys().next().value;
+    if (oldestKey) brandKitCache.delete(oldestKey);
+  }
+  brandKitCache.set(key, { value, expiresAt: Date.now() + BRANDKIT_CACHE_TTL_MS });
+}
+
 function resolveBrandFields(input: ResolveBrandKitInput) {
   const metadata = safeObject(input.metadata);
   const selected = safeObject(metadata.selected_brand_assets);
@@ -210,6 +275,30 @@ export function resolveCreatorBrandKit(input: ResolveBrandKitInput = {}): Creato
   const fields = resolveBrandFields(input);
   const palette = normalizePalette(getPaletteCandidates(input));
   const normalizedPalette = palette.slice(0, 3);
+  const tenantId = clean(input.tenantId || fields.metadata.tenant_id || fields.metadata.tenantId || input.companyId || fields.metadata.company_id) || null;
+  const companyId = clean(input.companyId || fields.metadata.company_id || fields.metadata.companyId) || null;
+  const cacheKey = makeBrandKitCacheKey({
+    tenantId,
+    companyId,
+    companyName: fields.companyName,
+    logoUrl: fields.logoUrl,
+    faviconUrl: fields.faviconUrl,
+    palette: normalizedPalette,
+    platform: input.platform,
+    assetType: input.assetType,
+    tone: fields.tone,
+    audience: fields.audience,
+    industry: fields.industry,
+    domain: fields.domain,
+    socialHandles: fields.socialHandles,
+  });
+  const cached = brandKitCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    brandKitCacheHits += 1;
+    return cached.value;
+  }
+  brandKitCacheMisses += 1;
+  if (cached) brandKitCache.delete(cacheKey);
   const { accentColor, corrections } = chooseAccent(normalizedPalette);
   const accentContrastOnDark = contrastRatio(accentColor, '#020617');
   const accentContrastOnLight = contrastRatio(accentColor, '#ffffff');
@@ -218,8 +307,6 @@ export function resolveCreatorBrandKit(input: ResolveBrandKitInput = {}): Creato
   const panelOpacity = lowAccentContrast ? 0.58 : 0.46;
   const brandMark = fields.logoUrl || fields.faviconUrl || fallbackInitials(fields.companyName);
   const brandMarkType: CreatorBrandMarkType = fields.logoUrl ? 'logo' : fields.faviconUrl ? 'favicon' : 'initials';
-  const tenantId = clean(input.tenantId || fields.metadata.tenant_id || fields.metadata.tenantId || input.companyId || fields.metadata.company_id) || null;
-  const companyId = clean(input.companyId || fields.metadata.company_id || fields.metadata.companyId) || null;
   const layoutVariantId = `brand-${hashShort({
     tenantId,
     companyId,
@@ -242,7 +329,7 @@ export function resolveCreatorBrandKit(input: ResolveBrandKitInput = {}): Creato
     version: RENDERER_IDENTITY_VERSION,
   });
 
-  return {
+  const brandKit: CreatorBrandKit = {
     tenantId,
     companyId,
     companyName: fields.companyName,
@@ -291,6 +378,8 @@ export function resolveCreatorBrandKit(input: ResolveBrandKitInput = {}): Creato
     layoutVariantId,
     renderIdentityHash,
   };
+  setBrandKitCache(cacheKey, brandKit);
+  return brandKit;
 }
 
 export function normalizeBrandMark(brandKit: CreatorBrandKit): {
@@ -323,4 +412,24 @@ export function buildCreatorBrandKitMetadata(brandKit: CreatorBrandKit, input: {
     exportCapabilities: input.exportCapabilities || ['preview', 'download'],
     renderIdentityHash: brandKit.renderIdentityHash,
   };
+}
+
+export function getCreatorBrandKitCacheStats(): {
+  size: number;
+  hits: number;
+  misses: number;
+  ttl_ms: number;
+  max_entries: number;
+} {
+  return {
+    size: brandKitCache.size,
+    hits: brandKitCacheHits,
+    misses: brandKitCacheMisses,
+    ttl_ms: BRANDKIT_CACHE_TTL_MS,
+    max_entries: BRANDKIT_CACHE_MAX,
+  };
+}
+
+export function clearCreatorBrandKitCache(): void {
+  brandKitCache.clear();
 }

@@ -4,7 +4,16 @@ import ChatVoiceButton from '../components/ChatVoiceButton';
 import AIGenerationProgress from '../components/AIGenerationProgress';
 import CompanyStrategyProfileCard from '../components/company/CompanyStrategyProfileCard';
 import type { useCompanyProfileState } from '../hooks/useCompanyProfileState';
-import type { CompanyProfile } from './company-profile.types';
+import type {
+  CompanyContextIntelligence,
+  CompanyDependency,
+  CompanyGeographicExposure,
+  CompanyProfile,
+  CompanyRegulatoryExposure,
+  CompanyRevenueSegment,
+  CompanyTechnologyDependency,
+  CompanyWorkforceProfile,
+} from './company-profile.types';
 import { dedupeSocialProfiles, joinList, normalizeProfileSocialUrl, splitToList } from './company-profile.types';
 import { isValidCanonicalWebsite } from '../utils/companyProfileValidation';
 
@@ -475,6 +484,504 @@ function SectionCard({
   );
 }
 
+function GuidedChatPanel({
+  title,
+  description,
+  open,
+  messages,
+  input,
+  loading,
+  onInputChange,
+  onSend,
+  onClose,
+}: {
+  title: string;
+  description: string;
+  open: boolean;
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  input: string;
+  loading: boolean;
+  onInputChange: (value: string) => void;
+  onSend: () => void;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-4 sm:items-center">
+      <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+        <div className="border-b border-slate-200 px-5 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
+              <p className="mt-1 text-sm text-slate-600">{description}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+        <div className="max-h-[52vh] space-y-3 overflow-y-auto bg-slate-50 px-5 py-4">
+          {messages.length === 0 && loading ? (
+            <div className="rounded-xl border border-indigo-100 bg-white px-4 py-3 text-sm text-slate-600">
+              Preparing the first question...
+            </div>
+          ) : null}
+          {messages.map((message, index) => (
+            <div
+              key={`${message.role}-${index}`}
+              className={`rounded-xl px-4 py-3 text-sm ${
+                message.role === 'assistant'
+                  ? 'border border-slate-200 bg-white text-slate-700'
+                  : 'ml-auto max-w-[85%] bg-indigo-600 text-white'
+              }`}
+            >
+              {message.content}
+            </div>
+          ))}
+          {loading && messages.length > 0 ? (
+            <div className="text-xs font-medium text-slate-500">Thinking...</div>
+          ) : null}
+        </div>
+        <div className="border-t border-slate-200 p-4">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <textarea
+              value={input}
+              onChange={(event) => onInputChange(event.target.value)}
+              rows={2}
+              placeholder="Answer the question here"
+              className="min-h-[44px] flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  onSend();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={loading || !input.trim()}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const emptyIntelligenceContext = (): CompanyContextIntelligence => ({
+  revenue_segments: [],
+  geographic_exposures: [],
+  dependencies: [],
+  regulatory_exposures: [],
+  workforce_profile: null,
+  technology_dependencies: [],
+});
+
+const metadataDefaults = () => ({
+  source: 'user',
+  review_status: 'needs_review',
+  user_confirmed: false,
+  confidence: null,
+});
+
+function MetadataBadge({ row }: { row?: { source?: string | null; review_status?: string | null; confidence?: number | null; user_confirmed?: boolean | null } | null }) {
+  const status = row?.user_confirmed ? 'user_confirmed' : row?.review_status || row?.source || 'unknown';
+  const shouldShow =
+    row?.user_confirmed ||
+    typeof row?.confidence === 'number' ||
+    ['inferred', 'stale', 'conflicting', 'deprecated', 'system_generated'].includes(String(status));
+  if (!shouldShow) return null;
+  const confidence = typeof row?.confidence === 'number' ? `${Math.round(row.confidence * 100)}%` : 'unknown';
+  return (
+    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
+      {status.replace(/_/g, ' ')} · confidence {confidence}
+    </span>
+  );
+}
+
+function MiniInput({
+  label,
+  value,
+  onChange,
+  type = 'text',
+}: {
+  label: string;
+  value: string | number | null | undefined;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-slate-600">{label}</span>
+      <input
+        type={type}
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+      />
+    </label>
+  );
+}
+
+function MiniSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string | null | undefined;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs font-medium text-slate-600">{label}</span>
+      <select
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+      >
+        <option value="">Unknown</option>
+        {options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function IntelligenceContextSections({
+  context,
+  readiness,
+  loading,
+  saving,
+  isEditing,
+  quality,
+  suggestions,
+  enrichmentLoading,
+  enrichmentReviewingId,
+  onChange,
+  onSave,
+  onRunEnrichment,
+  onOpenGuidedCapture,
+  onReviewSuggestion,
+}: {
+  context: CompanyContextIntelligence | null;
+  readiness: ProfileState['intelligenceReadiness'];
+  loading: boolean;
+  saving: boolean;
+  isEditing: boolean;
+  quality: ProfileState['contextQuality'];
+  suggestions: ProfileState['enrichmentSuggestions'];
+  enrichmentLoading: boolean;
+  enrichmentReviewingId: string | null;
+  onChange: (patch: Partial<CompanyContextIntelligence>) => void;
+  onSave: () => void;
+  onRunEnrichment: () => void;
+  onOpenGuidedCapture: () => void;
+  onReviewSuggestion: (suggestionId: string, action: 'accepted' | 'rejected' | 'snoozed') => void;
+}) {
+  const ctx = context ?? emptyIntelligenceContext();
+  const updateRows = <K extends keyof CompanyContextIntelligence>(key: K, rows: CompanyContextIntelligence[K]) => {
+    onChange({ [key]: rows } as Partial<CompanyContextIntelligence>);
+  };
+  const updateRow = <T,>(rows: T[], index: number, patch: Partial<T>) =>
+    rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row);
+  const removeRow = <T,>(rows: T[], index: number) => rows.filter((_, rowIndex) => rowIndex !== index);
+  const readinessScores = readiness?.section_scores;
+  const readinessScore = readiness?.score ?? 0;
+  const recommendations = [
+    ctx.revenue_segments.length === 0 ? 'Add your primary customer markets' : null,
+    ctx.geographic_exposures.length === 0 ? 'Add the geographies that influence revenue or operations' : null,
+    !ctx.workforce_profile ? 'Add workforce dependency' : null,
+    ctx.dependencies.length === 0 ? 'Add operational vendor, labor, platform, or logistics dependencies' : null,
+    ctx.technology_dependencies.length === 0 ? 'Add cloud/platform dependencies' : null,
+    ctx.regulatory_exposures.length === 0 ? 'Add regulatory jurisdictions if they affect operations or customers' : null,
+  ].filter((item): item is string => Boolean(item)).slice(0, 4);
+  const validationWarnings = ctx.validation_warnings ?? [];
+
+  return (
+    <SectionCard
+      title="Context Intelligence"
+      description="Optional enrichment used by future exposure-aware recommendations, AI reasoning, and dependency intelligence. Empty sections are treated as missing, not as not relevant."
+      accent="indigo"
+    >
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-6">
+        {[
+          ['Market', readinessScores?.market_exposure],
+          ['Dependency', readinessScores?.dependency],
+          ['Workforce', readinessScores?.workforce],
+          ['Regulatory', readinessScores?.regulatory],
+          ['Geography', readinessScores?.geographic],
+          ['Strategy', readinessScores?.strategic_state],
+        ].map(([label, value]) => (
+          <div key={String(label)} className="rounded-lg border border-indigo-100 bg-white px-3 py-2">
+            <div className="text-[11px] font-semibold uppercase text-slate-500">{label}</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">{typeof value === 'number' ? `${value}%` : '0%'}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mb-4 h-2 overflow-hidden rounded-full bg-indigo-100">
+        <div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${Math.max(0, Math.min(100, readinessScore))}%` }} />
+      </div>
+
+      {quality ? (
+        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+          {[
+            ['Density', quality.intelligence_density_score],
+            ['Reliability', quality.context_reliability_score],
+            ['Inference', quality.inference_coverage_score],
+            ['Stale', quality.stale_context_score],
+          ].map(([label, value]) => (
+            <div key={String(label)} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <div className="text-[11px] font-semibold uppercase text-slate-500">{label}</div>
+              <div className="mt-1 text-base font-semibold text-slate-900">{value}%</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {recommendations.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-indigo-100 bg-white p-4">
+          <div className="text-sm font-semibold text-slate-900">Recommended next context</div>
+          <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+            {recommendations.map((item) => (
+              <div key={item} className="rounded-lg bg-indigo-50 px-3 py-2">{item}</div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Guided context capture</div>
+            <p className="mt-1 text-sm text-slate-500">Use chat for missing market, dependency, workforce, regulatory, and technology context, then review inferred suggestions before saving.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenGuidedCapture}
+              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white"
+            >
+              Capture with chat
+            </button>
+            <button
+              type="button"
+              onClick={onRunEnrichment}
+              disabled={enrichmentLoading}
+              className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50"
+            >
+              {enrichmentLoading ? 'Checking...' : 'Find suggestions'}
+            </button>
+          </div>
+        </div>
+        {suggestions.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {suggestions.slice(0, 3).map((item) => (
+              <div key={item.id} className="rounded-lg border border-slate-200 p-3">
+                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{item.inference_reason}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {item.inference_strength} inference · confidence {Math.round((item.confidence || 0) * 100)}% · readiness impact +{Math.round(item.readiness_impact_estimate || 0)}%
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <button type="button" disabled={enrichmentReviewingId === item.id} onClick={() => onReviewSuggestion(item.id, 'accepted')} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">Accept</button>
+                    <button type="button" disabled={enrichmentReviewingId === item.id} onClick={() => onReviewSuggestion(item.id, 'snoozed')} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 disabled:opacity-50">Snooze</button>
+                    <button type="button" disabled={enrichmentReviewingId === item.id} onClick={() => onReviewSuggestion(item.id, 'rejected')} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700 disabled:opacity-50">Reject</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 text-sm text-slate-500">No pending inference suggestions.</div>
+        )}
+      </div>
+
+      {validationWarnings.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="text-sm font-semibold text-amber-900">Review suggested</div>
+          <div className="mt-2 space-y-1 text-sm text-amber-800">
+            {validationWarnings.map((warning) => (
+              <div key={warning.code}>{warning.message}</div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {loading ? <div className="text-sm text-slate-500">Loading intelligence context...</div> : null}
+
+      <div className="space-y-3">
+        <details className="rounded-xl border border-slate-200 bg-white p-4" open>
+          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Customer & Revenue Exposure</summary>
+          <p className="mt-2 text-sm text-slate-500">Used to separate revenue dependency from generic audience descriptions.</p>
+          <div className="mt-4 space-y-3">
+            {ctx.revenue_segments.map((row, index) => (
+              <div key={row.id || index} className="rounded-lg border border-slate-200 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <MetadataBadge row={row} />
+                  <button type="button" disabled={!isEditing} onClick={() => updateRows('revenue_segments', removeRow(ctx.revenue_segments, index))} className="text-xs font-medium text-rose-700 disabled:opacity-50">Remove</button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <MiniInput label="Customer industry" value={row.customer_industry} onChange={(value) => updateRows('revenue_segments', updateRow(ctx.revenue_segments, index, { customer_industry: value }))} />
+                  <MiniInput label="Customer segment" value={row.customer_segment} onChange={(value) => updateRows('revenue_segments', updateRow(ctx.revenue_segments, index, { customer_segment: value }))} />
+                  <MiniInput label="Geography" value={row.geography} onChange={(value) => updateRows('revenue_segments', updateRow(ctx.revenue_segments, index, { geography: value }))} />
+                  <MiniInput label="Revenue %" value={row.revenue_percentage} type="number" onChange={(value) => updateRows('revenue_segments', updateRow(ctx.revenue_segments, index, { revenue_percentage: value }))} />
+                  <MiniSelect label="Strategic priority" value={row.strategic_priority} options={['low', 'medium', 'high', 'critical']} onChange={(value) => updateRows('revenue_segments', updateRow(ctx.revenue_segments, index, { strategic_priority: value }))} />
+                  <MiniInput label="Notes" value={row.notes} onChange={(value) => updateRows('revenue_segments', updateRow(ctx.revenue_segments, index, { notes: value }))} />
+                </div>
+              </div>
+            ))}
+            <button type="button" disabled={!isEditing} onClick={() => updateRows('revenue_segments', [...ctx.revenue_segments, { ...metadataDefaults() } as CompanyRevenueSegment])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add revenue segment</button>
+          </div>
+        </details>
+
+        <details className="rounded-xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Market Exposure</summary>
+          <p className="mt-2 text-sm text-slate-500">Used to distinguish customer, workforce, vendor, and operational exposure by geography.</p>
+          <div className="mt-4 space-y-3">
+            {ctx.geographic_exposures.map((row, index) => (
+              <div key={row.id || index} className="rounded-lg border border-slate-200 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <MetadataBadge row={row} />
+                  <button type="button" disabled={!isEditing} onClick={() => updateRows('geographic_exposures', removeRow(ctx.geographic_exposures, index))} className="text-xs font-medium text-rose-700 disabled:opacity-50">Remove</button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                  <MiniInput label="Geography" value={row.geography} onChange={(value) => updateRows('geographic_exposures', updateRow(ctx.geographic_exposures, index, { geography: value }))} />
+                  <MiniSelect label="Exposure type" value={row.exposure_type} options={['revenue', 'operations', 'workforce', 'customers', 'vendors']} onChange={(value) => updateRows('geographic_exposures', updateRow(ctx.geographic_exposures, index, { exposure_type: value as CompanyGeographicExposure['exposure_type'] }))} />
+                  <MiniInput label="Exposure %" value={row.exposure_percentage} type="number" onChange={(value) => updateRows('geographic_exposures', updateRow(ctx.geographic_exposures, index, { exposure_percentage: value }))} />
+                  <MiniSelect label="Criticality" value={row.criticality} options={['low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => updateRows('geographic_exposures', updateRow(ctx.geographic_exposures, index, { criticality: value }))} />
+                </div>
+              </div>
+            ))}
+            <button type="button" disabled={!isEditing} onClick={() => updateRows('geographic_exposures', [...ctx.geographic_exposures, { exposure_type: 'revenue', ...metadataDefaults() } as CompanyGeographicExposure])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add geography exposure</button>
+          </div>
+        </details>
+
+        <details className="rounded-xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Operational Dependencies</summary>
+          <p className="mt-2 text-sm text-slate-500">Used to capture non-technology dependencies that can disrupt delivery, channels, or costs.</p>
+          <div className="mt-4 space-y-3">
+            {ctx.dependencies.map((row, index) => (
+              <div key={row.id || index} className="rounded-lg border border-slate-200 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <MetadataBadge row={row} />
+                  <button type="button" disabled={!isEditing} onClick={() => updateRows('dependencies', removeRow(ctx.dependencies, index))} className="text-xs font-medium text-rose-700 disabled:opacity-50">Remove</button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <MiniSelect label="Dependency type" value={row.dependency_type} options={['cloud', 'vendor', 'supplier', 'logistics', 'labor', 'platform', 'channel', 'regulatory', 'technology', 'other']} onChange={(value) => updateRows('dependencies', updateRow(ctx.dependencies, index, { dependency_type: value as CompanyDependency['dependency_type'] }))} />
+                  <MiniInput label="Name" value={row.dependency_name} onChange={(value) => updateRows('dependencies', updateRow(ctx.dependencies, index, { dependency_name: value }))} />
+                  <MiniInput label="Region" value={row.dependency_region} onChange={(value) => updateRows('dependencies', updateRow(ctx.dependencies, index, { dependency_region: value }))} />
+                  <MiniSelect label="Criticality" value={row.criticality} options={['low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => updateRows('dependencies', updateRow(ctx.dependencies, index, { criticality: value }))} />
+                  <MiniInput label="Operational sensitivity" value={row.operational_sensitivity} onChange={(value) => updateRows('dependencies', updateRow(ctx.dependencies, index, { operational_sensitivity: value }))} />
+                  <MiniInput label="Notes" value={row.notes} onChange={(value) => updateRows('dependencies', updateRow(ctx.dependencies, index, { notes: value }))} />
+                </div>
+              </div>
+            ))}
+            <button type="button" disabled={!isEditing} onClick={() => updateRows('dependencies', [...ctx.dependencies, { dependency_type: 'vendor', ...metadataDefaults() } as CompanyDependency])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add dependency</button>
+          </div>
+        </details>
+
+        <details className="rounded-xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Workforce & Hiring</summary>
+          <p className="mt-2 text-sm text-slate-500">Used to model labor, immigration, contractor, remote-work, and skill-market sensitivity.</p>
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+            {(() => {
+              const row = ctx.workforce_profile ?? { ...metadataDefaults() } as CompanyWorkforceProfile;
+              const setWorkforce = (patch: Partial<CompanyWorkforceProfile>) => updateRows('workforce_profile', { ...row, ...patch });
+              return (
+                <>
+                  <MiniInput label="Workforce model" value={row.workforce_model} onChange={(value) => setWorkforce({ workforce_model: value })} />
+                  <MiniInput label="Hiring markets" value={Array.isArray(row.hiring_markets) ? row.hiring_markets.join(', ') : row.hiring_markets} onChange={(value) => setWorkforce({ hiring_markets: value })} />
+                  <MiniInput label="Key skill dependencies" value={Array.isArray(row.key_skill_dependencies) ? row.key_skill_dependencies.join(', ') : row.key_skill_dependencies} onChange={(value) => setWorkforce({ key_skill_dependencies: value })} />
+                  <MiniSelect label="Contractor dependency" value={row.contractor_dependency_level} options={['none', 'low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => setWorkforce({ contractor_dependency_level: value })} />
+                  <MiniSelect label="Immigration dependency" value={row.immigration_dependency_level} options={['none', 'low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => setWorkforce({ immigration_dependency_level: value })} />
+                  <MiniSelect label="Labor sensitivity" value={row.labor_sensitivity_level} options={['low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => setWorkforce({ labor_sensitivity_level: value })} />
+                  <MiniSelect label="Remote dependency" value={row.remote_dependency_level} options={['none', 'low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => setWorkforce({ remote_dependency_level: value })} />
+                  <div className="flex items-end"><MetadataBadge row={row} /></div>
+                </>
+              );
+            })()}
+          </div>
+        </details>
+
+        <details className="rounded-xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Regulatory Exposure</summary>
+          <p className="mt-2 text-sm text-slate-500">Used to capture jurisdictions and rule families that need future relevance filtering.</p>
+          <div className="mt-4 space-y-3">
+            {ctx.regulatory_exposures.map((row, index) => (
+              <div key={row.id || index} className="rounded-lg border border-slate-200 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <MetadataBadge row={row} />
+                  <button type="button" disabled={!isEditing} onClick={() => updateRows('regulatory_exposures', removeRow(ctx.regulatory_exposures, index))} className="text-xs font-medium text-rose-700 disabled:opacity-50">Remove</button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <MiniInput label="Jurisdiction" value={row.jurisdiction} onChange={(value) => updateRows('regulatory_exposures', updateRow(ctx.regulatory_exposures, index, { jurisdiction: value }))} />
+                  <MiniInput label="Regulation type" value={row.regulation_type} onChange={(value) => updateRows('regulatory_exposures', updateRow(ctx.regulatory_exposures, index, { regulation_type: value }))} />
+                  <MiniInput label="Applicability" value={row.applicability} onChange={(value) => updateRows('regulatory_exposures', updateRow(ctx.regulatory_exposures, index, { applicability: value }))} />
+                  <MiniSelect label="Severity" value={row.severity} options={['low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => updateRows('regulatory_exposures', updateRow(ctx.regulatory_exposures, index, { severity: value }))} />
+                  <MiniInput label="Notes" value={row.notes} onChange={(value) => updateRows('regulatory_exposures', updateRow(ctx.regulatory_exposures, index, { notes: value }))} />
+                </div>
+              </div>
+            ))}
+            <button type="button" disabled={!isEditing} onClick={() => updateRows('regulatory_exposures', [...ctx.regulatory_exposures, { ...metadataDefaults() } as CompanyRegulatoryExposure])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add regulatory exposure</button>
+          </div>
+        </details>
+
+        <details className="rounded-xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-900">Technology Dependencies</summary>
+          <p className="mt-2 text-sm text-slate-500">Used to identify platform, cloud, AI, payments, analytics, and security dependency sensitivity.</p>
+          <div className="mt-4 space-y-3">
+            {ctx.technology_dependencies.map((row, index) => (
+              <div key={row.id || index} className="rounded-lg border border-slate-200 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <MetadataBadge row={row} />
+                  <button type="button" disabled={!isEditing} onClick={() => updateRows('technology_dependencies', removeRow(ctx.technology_dependencies, index))} className="text-xs font-medium text-rose-700 disabled:opacity-50">Remove</button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <MiniInput label="Provider" value={row.provider_name} onChange={(value) => updateRows('technology_dependencies', updateRow(ctx.technology_dependencies, index, { provider_name: value }))} />
+                  <MiniInput label="Category" value={row.provider_category} onChange={(value) => updateRows('technology_dependencies', updateRow(ctx.technology_dependencies, index, { provider_category: value }))} />
+                  <MiniSelect label="Criticality" value={row.criticality} options={['low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => updateRows('technology_dependencies', updateRow(ctx.technology_dependencies, index, { criticality: value }))} />
+                  <MiniSelect label="Spend sensitivity" value={row.spend_sensitivity} options={['low', 'medium', 'high', 'critical', 'unknown']} onChange={(value) => updateRows('technology_dependencies', updateRow(ctx.technology_dependencies, index, { spend_sensitivity: value }))} />
+                  <MiniInput label="Operational dependency" value={row.operational_dependency} onChange={(value) => updateRows('technology_dependencies', updateRow(ctx.technology_dependencies, index, { operational_dependency: value }))} />
+                  <MiniInput label="Notes" value={row.notes} onChange={(value) => updateRows('technology_dependencies', updateRow(ctx.technology_dependencies, index, { notes: value }))} />
+                </div>
+              </div>
+            ))}
+            <button type="button" disabled={!isEditing} onClick={() => updateRows('technology_dependencies', [...ctx.technology_dependencies, { ...metadataDefaults() } as CompanyTechnologyDependency])} className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-800 disabled:opacity-50">Add technology dependency</button>
+          </div>
+        </details>
+      </div>
+
+      <div className="mt-5 flex items-center justify-between gap-3">
+        <div className="text-xs text-slate-500">
+          Overall intelligence readiness: <span className="font-semibold text-slate-800">{readinessScore}%</span>
+        </div>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={!isEditing || saving}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save intelligence context'}
+        </button>
+      </div>
+    </SectionCard>
+  );
+}
+
 export default function CompanyProfileForm({ d }: { d: ProfileState }) {
   const {
     REFINE_STEPS,
@@ -500,7 +1007,15 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     createCompanyError,
     createCompanyForm,
     createCompanyLoading,
+    contextIntelligenceChatLoading,
+    contextIntelligenceInput,
+    contextIntelligenceMessages,
+    contextIntelligencePanelOpen,
+    contextQuality,
     draftProfile,
+    enrichmentLoading,
+    enrichmentReviewingId,
+    enrichmentSuggestions,
     errorMessage,
     fetchWithAuth,
     filteredCompanies,
@@ -513,6 +1028,10 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     handleMarketPulseSettingChange,
     handleCreateCompany,
     handleMissingAnswer,
+    intelligenceContext,
+    intelligenceContextLoading,
+    intelligenceContextSaving,
+    intelligenceReadiness,
     isAdmin,
     isAuthenticated,
     isCompanyAdmin,
@@ -542,6 +1061,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     openCampaignPurposePanel,
     openInferProblemTransformationPanel,
     openMarketingIntelligencePanel,
+    openContextIntelligencePanel,
     openProblemTransformationPanel,
     openRefineProblemTransformationPanel,
     openTargetCustomerPanel,
@@ -565,14 +1085,18 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     refreshCompanies,
     removeOtherSocial,
     renderProblemTransformationAssistantMessage,
+    reviewIntelligenceEnrichment,
+    runIntelligenceEnrichment,
     router,
     saveProblemTransformation,
+    saveIntelligenceContext,
     saveProfile,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
     sendCampaignPurposeMessage,
     sendMarketingIntelligenceMessage,
+    sendContextIntelligenceMessage,
     sendProblemTransformationRefineMessage,
     sendTargetCustomerMessage,
     setCampaignPurposeInput,
@@ -599,6 +1123,10 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     setMarketingIntelligenceLoading,
     setMarketingIntelligenceMessages,
     setMarketingIntelligencePanelOpen,
+    setContextIntelligenceChatLoading,
+    setContextIntelligenceInput,
+    setContextIntelligenceMessages,
+    setContextIntelligencePanelOpen,
     setMissingFieldAnswers,
     setNotFound,
     setOverallProfileCompletion,
@@ -636,6 +1164,7 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     uiOverallProfileCompletion,
     uiProblemTransformationCompletion,
     updateActiveProfile,
+    updateIntelligenceContext,
     updateOtherSocial,
     user,
     userRole,
@@ -648,6 +1177,9 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
     .filter(Boolean);
   const competitorDetails = (marketPulseSettings.competitor_details ?? []).slice(0, 3);
   const competitorQuality = marketPulseSettings.competitor_quality ?? null;
+  const unifiedCompetitorIntelligence = marketPulseSettings.unified_competitor_intelligence ?? null;
+  const unifiedCompetitors = (unifiedCompetitorIntelligence?.competitors ?? []).slice(0, 5);
+  const unifiedCompetitorOpportunities = (unifiedCompetitorIntelligence?.opportunities ?? []).slice(0, 3);
   const competitorScoreThreshold = Number(competitorQuality?.threshold ?? 85);
   const topCompetitorScore = competitorQuality?.highest_score ?? (
     competitorDetails.length
@@ -1094,6 +1626,21 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               value={isEditing ? 'Editing' : 'Viewing saved profile'}
             />
           </div>
+
+          <div className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-4">
+            {[
+              ['1', 'Source intake', 'Website, social accounts, public proof'],
+              ['2', 'AI profile', 'Industry, audience, competitors, themes'],
+              ['3', 'Guided chat', 'Customer, context, marketing, transformation'],
+              ['4', 'Operating targets', 'Market Pulse and intelligence goals'],
+            ].map(([step, title, detail]) => (
+              <div key={step} className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-indigo-600">Step {step}</div>
+                <div className="mt-1 font-semibold text-slate-950">{title}</div>
+                <div className="mt-1 text-xs leading-5 text-slate-500">{detail}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {errorMessage && (
@@ -1180,95 +1727,6 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           <div className="text-sm text-gray-500">Loading profile...</div>
         ) : (
           <div className="space-y-6">
-            <SectionCard
-              title="Brand Assets"
-              description="Upload official logo and favicon assets before editing profile basics so downstream content has the right brand marks."
-            >
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                {(['logo_url', 'favicon_url'] as BrandAssetField[]).map((field) => {
-                  const spec = BRAND_ASSET_SPECS[field];
-                  const assetUrl = activeProfile[field] || '';
-                  const isUploading = brandAssetUploading[field];
-                  const uploadError = brandAssetErrors[field];
-                  const inputId = `brand-asset-${field}`;
-
-                  return (
-                    <div key={field} className="rounded-lg border border-slate-200 bg-white p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-medium text-slate-900">{spec.label}</div>
-                          <div className="mt-1 text-xs text-slate-500">{spec.helper}</div>
-                          <div className="mt-1 text-xs font-medium text-slate-700">{spec.recommendedSize}</div>
-                        </div>
-                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                          {assetUrl ? (
-                            <img
-                              src={assetUrl}
-                              alt={spec.label}
-                              className="h-full w-full object-contain"
-                            />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-[10px] font-medium uppercase tracking-wide text-slate-400">
-                              {field === 'logo_url' ? 'Logo' : 'Icon'}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <input
-                        id={inputId}
-                        type="file"
-                        accept={BRAND_ASSET_ACCEPT}
-                        className="hidden"
-                        onChange={(event) => {
-                          void uploadBrandAsset(field, event.target.files?.[0] ?? null);
-                          event.currentTarget.value = '';
-                        }}
-                      />
-
-                      <div className="mt-4 flex flex-wrap items-center gap-2">
-                        <label
-                          htmlFor={inputId}
-                          className={`inline-flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm font-medium ${
-                            !isUploading
-                              ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-                              : 'bg-slate-200 text-slate-500'
-                          }`}
-                        >
-                          {isUploading ? 'Uploading...' : assetUrl ? `Replace ${spec.label}` : `Upload ${spec.label}`}
-                        </label>
-                        {assetUrl && isEditing && (
-                          <button
-                            type="button"
-                            onClick={() => clearBrandAsset(field)}
-                            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            Remove
-                          </button>
-                        )}
-                        {assetUrl && (
-                          <a
-                            href={assetUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs font-medium text-indigo-600 hover:underline"
-                          >
-                            Open asset
-                          </a>
-                        )}
-                      </div>
-
-                      {uploadError && (
-                        <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                          {uploadError}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </SectionCard>
-
             <SectionCard
               title="Please Provide This Information"
               description="Provide the company website and public URLs AI should use. The generated company profile sections appear below after refinement."
@@ -1397,7 +1855,123 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
               </div>
             </SectionCard>
 
+            <SectionCard
+              title="Brand Assets"
+              description="Upload official logo and favicon assets after source intake so downstream content has the right brand marks."
+            >
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                {(['logo_url', 'favicon_url'] as BrandAssetField[]).map((field) => {
+                  const spec = BRAND_ASSET_SPECS[field];
+                  const assetUrl = activeProfile[field] || '';
+                  const isUploading = brandAssetUploading[field];
+                  const uploadError = brandAssetErrors[field];
+                  const inputId = `brand-asset-${field}`;
+
+                  return (
+                    <div key={field} className="rounded-lg border border-slate-200 bg-white p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-900">{spec.label}</div>
+                          <div className="mt-1 text-xs text-slate-500">{spec.helper}</div>
+                          <div className="mt-1 text-xs font-medium text-slate-700">{spec.recommendedSize}</div>
+                        </div>
+                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                          {assetUrl ? (
+                            <img
+                              src={assetUrl}
+                              alt={spec.label}
+                              className="h-full w-full object-contain"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] font-medium uppercase tracking-wide text-slate-400">
+                              {field === 'logo_url' ? 'Logo' : 'Icon'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <input
+                        id={inputId}
+                        type="file"
+                        accept={BRAND_ASSET_ACCEPT}
+                        className="hidden"
+                        onChange={(event) => {
+                          void uploadBrandAsset(field, event.target.files?.[0] ?? null);
+                          event.currentTarget.value = '';
+                        }}
+                      />
+
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <label
+                          htmlFor={inputId}
+                          className={`inline-flex cursor-pointer items-center rounded-lg px-3 py-2 text-sm font-medium ${
+                            !isUploading
+                              ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                              : 'bg-slate-200 text-slate-500'
+                          }`}
+                        >
+                          {isUploading ? 'Uploading...' : assetUrl ? `Replace ${spec.label}` : `Upload ${spec.label}`}
+                        </label>
+                        {assetUrl && isEditing && (
+                          <button
+                            type="button"
+                            onClick={() => clearBrandAsset(field)}
+                            className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Remove
+                          </button>
+                        )}
+                        {assetUrl && (
+                          <a
+                            href={assetUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs font-medium text-indigo-600 hover:underline"
+                          >
+                            Open asset
+                          </a>
+                        )}
+                      </div>
+
+                      {uploadError && (
+                        <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                          {uploadError}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </SectionCard>
+
             {renderOnboardingRefineAction()}
+
+            {showOnboardingContinuation && (
+              <SectionCard
+                title="Guided Capture"
+                description="Use chat when a section needs business judgment instead of website extraction. Each flow writes back to its own section for review before saving."
+                accent="indigo"
+              >
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                  {([
+                    ['Customer', 'ICP and sales model', openTargetCustomerPanel],
+                    ['Context', 'Markets and dependencies', openContextIntelligencePanel],
+                    ['Marketing', 'Positioning and campaigns', openMarketingIntelligencePanel],
+                    ['Transformation', 'Problem and authority', openRefineProblemTransformationPanel],
+                  ] as Array<[string, string, () => void]>).map(([label, detail, action]) => (
+                    <button
+                      key={String(label)}
+                      type="button"
+                      onClick={action}
+                      className="rounded-xl border border-indigo-100 bg-white px-4 py-3 text-left shadow-sm hover:border-indigo-300"
+                    >
+                      <div className="text-sm font-semibold text-slate-950">{label}</div>
+                      <div className="mt-1 text-xs text-slate-500">{detail}</div>
+                    </button>
+                  ))}
+                </div>
+              </SectionCard>
+            )}
 
             <SectionCard
               title="AI-Populated Company Profile"
@@ -1739,6 +2313,71 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                     ) : null}
                   </div>
                 ) : null}
+                {unifiedCompetitorIntelligence ? (
+                  <div className="mt-3 rounded-lg border border-sky-100 bg-sky-50/70 p-3 text-xs text-slate-800">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-semibold text-sky-950">Live competitor intelligence</div>
+                        <div className="mt-0.5 text-sky-800">{unifiedCompetitorIntelligence.summary}</div>
+                      </div>
+                      <span className={`rounded-full px-2 py-1 font-semibold ${
+                        unifiedCompetitorIntelligence.status === 'ready'
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : unifiedCompetitorIntelligence.status === 'limited'
+                            ? 'bg-amber-100 text-amber-700'
+                            : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {unifiedCompetitorIntelligence.status}
+                      </span>
+                    </div>
+                    {unifiedCompetitors.length > 0 ? (
+                      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                        {unifiedCompetitors.map((competitor) => (
+                          <div key={`${competitor.domain || competitor.name}-unified`} className="rounded-lg border border-sky-100 bg-white p-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="font-semibold text-slate-900">{competitor.name}</div>
+                                <div className="text-slate-500">{competitor.domain || 'Profile competitor'}</div>
+                              </div>
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">
+                                {competitor.confidence}
+                              </span>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-1 text-slate-700">
+                              <div>Visibility: {competitor.scores.visibility_share}</div>
+                              <div>Threat: {competitor.scores.discoverability_threat}</div>
+                              <div>Authority gap: {competitor.scores.authority_gap}</div>
+                              <div>Lead intent: {competitor.scores.commercial_overlap}</div>
+                            </div>
+                            <div className="mt-1 text-slate-500">
+                              {competitor.sources.join(', ')} · {competitor.freshness}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-2 rounded-lg border border-sky-100 bg-white px-2 py-2 text-slate-600">
+                        No verified live competitor overlap yet.
+                      </div>
+                    )}
+                    {unifiedCompetitorOpportunities.length > 0 ? (
+                      <div className="mt-3">
+                        <div className="font-semibold text-sky-950">Competitor opportunities</div>
+                        <div className="mt-2 space-y-2">
+                          {unifiedCompetitorOpportunities.map((opportunity) => (
+                            <div key={opportunity.id} className="rounded-lg border border-sky-100 bg-white px-2 py-2">
+                              <div className="font-semibold text-slate-900">{opportunity.title}</div>
+                              <div className="mt-1 text-slate-700">{opportunity.recommendation}</div>
+                              <div className="mt-1 text-slate-500">
+                                Priority {opportunity.priority_score} · {opportunity.confidence} confidence
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="mt-3 rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -1978,6 +2617,25 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
                 </p>
               )}
             </div>
+
+            {(canViewStrategicSections || isCompanyAdmin) && (
+              <IntelligenceContextSections
+                context={intelligenceContext}
+                readiness={intelligenceReadiness}
+                loading={intelligenceContextLoading}
+                saving={intelligenceContextSaving}
+                isEditing={isEditing}
+                quality={contextQuality}
+                suggestions={enrichmentSuggestions}
+                enrichmentLoading={enrichmentLoading}
+                enrichmentReviewingId={enrichmentReviewingId}
+                onChange={updateIntelligenceContext}
+                onSave={() => { void saveIntelligenceContext(); }}
+                onRunEnrichment={() => { void runIntelligenceEnrichment(); }}
+                onOpenGuidedCapture={openContextIntelligencePanel}
+                onReviewSuggestion={(suggestionId, action) => { void reviewIntelligenceEnrichment(suggestionId, action); }}
+              />
+            )}
 
             {canViewStrategicSections && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
@@ -2566,6 +3224,76 @@ export default function CompanyProfileForm({ d }: { d: ProfileState }) {
           </div>
         )}
       </div>
+      <GuidedChatPanel
+        title="Define target customer"
+        description="Capture customer segment, ICP, pricing, sales motion, and commercial details through guided questions."
+        open={targetCustomerPanelOpen}
+        messages={targetCustomerMessages}
+        input={targetCustomerInput}
+        loading={targetCustomerLoading}
+        onInputChange={setTargetCustomerInput}
+        onSend={() => { void sendTargetCustomerMessage(); }}
+        onClose={() => {
+          setTargetCustomerPanelOpen(false);
+          setTargetCustomerLoading(false);
+        }}
+      />
+      <GuidedChatPanel
+        title="Campaign purpose"
+        description="Capture campaign objective, monetization intent, problem domains, and positioning angle."
+        open={campaignPurposePanelOpen}
+        messages={campaignPurposeMessages}
+        input={campaignPurposeInput}
+        loading={campaignPurposeLoading}
+        onInputChange={setCampaignPurposeInput}
+        onSend={() => { void sendCampaignPurposeMessage(); }}
+        onClose={() => {
+          setCampaignPurposePanelOpen(false);
+          setCampaignPurposeLoading(false);
+        }}
+      />
+      <GuidedChatPanel
+        title="Marketing intelligence"
+        description="Refine channels, content strategy, campaign focus, positioning, messages, advantages, and growth priorities."
+        open={marketingIntelligencePanelOpen}
+        messages={marketingIntelligenceMessages}
+        input={marketingIntelligenceInput}
+        loading={marketingIntelligenceChatLoading}
+        onInputChange={setMarketingIntelligenceInput}
+        onSend={() => { void sendMarketingIntelligenceMessage(); }}
+        onClose={() => {
+          setMarketingIntelligencePanelOpen(false);
+          setMarketingIntelligenceChatLoading(false);
+        }}
+      />
+      <GuidedChatPanel
+        title="Context intelligence"
+        description="Capture markets, dependencies, workforce, regulatory exposure, and technology context for better relevance filtering."
+        open={contextIntelligencePanelOpen}
+        messages={contextIntelligenceMessages}
+        input={contextIntelligenceInput}
+        loading={contextIntelligenceChatLoading}
+        onInputChange={setContextIntelligenceInput}
+        onSend={() => { void sendContextIntelligenceMessage(); }}
+        onClose={() => {
+          setContextIntelligencePanelOpen(false);
+          setContextIntelligenceChatLoading(false);
+        }}
+      />
+      <GuidedChatPanel
+        title="Problem and transformation"
+        description="Refine the problem, symptoms, transformation, mechanism, and authority domains."
+        open={problemTransformationInferPanelOpen}
+        messages={problemTransformationInferMessages}
+        input={problemTransformationInferInput}
+        loading={problemTransformationInferLoading}
+        onInputChange={setProblemTransformationInferInput}
+        onSend={() => { void sendProblemTransformationRefineMessage(); }}
+        onClose={() => {
+          setProblemTransformationInferPanelOpen(false);
+          setProblemTransformationInferLoading(false);
+        }}
+      />
     </>
   );
 }

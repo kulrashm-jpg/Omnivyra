@@ -2,6 +2,17 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import EmptyState from '../../shared/EmptyState';
 import LeadsCapabilityStatusPanel from './LeadsCapabilityStatusPanel';
+import ListeningExecutionsPanel from './ListeningExecutionsPanel';
+import CommunityDiscoveryPanel from './CommunityDiscoveryPanel';
+import OpportunityFeedPanel from './OpportunityFeedPanel';
+import IntelligencePanel from './IntelligencePanel';
+import AnalystWorkspacePanel from './AnalystWorkspacePanel';
+import EnterpriseConsolePanel from './EnterpriseConsolePanel';
+import EnterpriseScalePanel from './EnterpriseScalePanel';
+import EnterpriseRuntimePanel from './EnterpriseRuntimePanel';
+import ProductionMaturityPanel from './ProductionMaturityPanel';
+import ProductionLaunchPanel from './ProductionLaunchPanel';
+import GALaunchPanel from './GALaunchPanel';
 import type { OpportunityTabProps } from './types';
 
 type SourceType = 'engagement' | 'listening';
@@ -130,6 +141,13 @@ export default function CanonicalActiveLeadsTab({
   fetchWithAuth,
 }: OpportunityTabProps) {
   const router = useRouter();
+  const [listeningSources, setListeningSources] = useState<Array<{
+    id: string;
+    display_name: string;
+    source_identifier: string;
+    status: string;
+    metadata?: { platform?: string; keywords?: string[] } & Record<string, unknown>;
+  }>>([]);
   const [sourceType, setSourceType] = useState<'all' | SourceType>('all');
   const [platform, setPlatform] = useState<string>('all');
   const [minScore, setMinScore] = useState<string>('');
@@ -162,6 +180,47 @@ export default function CanonicalActiveLeadsTab({
     }, FILTER_DEBOUNCE_MS);
     return () => window.clearTimeout(timeout);
   }, [sourceType, platform, minScore, maxScore, dateFrom, dateTo]);
+
+  useEffect(() => {
+    if (!companyId) {
+      setListeningSources([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetchWithAuth(
+          `/api/active-leads/sources?companyId=${encodeURIComponent(companyId)}`,
+        );
+        if (!resp.ok) return;
+        const json = (await resp.json()) as {
+          items?: Array<{
+            id: string;
+            display_name: string;
+            source_identifier: string;
+            status: string;
+            metadata?: Record<string, unknown>;
+          }>;
+        };
+        if (cancelled) return;
+        setListeningSources(
+          (json.items ?? []).map((s) => ({
+            id: s.id,
+            display_name: s.display_name,
+            source_identifier: s.source_identifier,
+            status: s.status,
+            metadata: s.metadata as { platform?: string; keywords?: string[] } & Record<string, unknown> | undefined,
+          })),
+        );
+      } catch {
+        // Phase 3 — sources fetch is advisory for the executions panel. A
+        // failure here should not break the signals view.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, fetchWithAuth]);
 
   const fetchSignals = useCallback(
     async (targetPage: number, append: boolean) => {
@@ -268,6 +327,46 @@ export default function CanonicalActiveLeadsTab({
   return (
     <div className="space-y-6">
       <LeadsCapabilityStatusPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      {companyId && (
+        <CommunityDiscoveryPanel
+          companyId={companyId}
+          fetchWithAuth={fetchWithAuth}
+        />
+      )}
+      {companyId && (
+        <ListeningExecutionsPanel
+          companyId={companyId}
+          fetchWithAuth={fetchWithAuth}
+          sources={listeningSources}
+        />
+      )}
+      {companyId && (
+        <OpportunityFeedPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <IntelligencePanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <AnalystWorkspacePanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <EnterpriseConsolePanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <EnterpriseScalePanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <EnterpriseRuntimePanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <ProductionMaturityPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <ProductionLaunchPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
+      {companyId && (
+        <GALaunchPanel companyId={companyId} fetchWithAuth={fetchWithAuth} />
+      )}
       <section className="rounded-lg border border-gray-200 bg-white p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>

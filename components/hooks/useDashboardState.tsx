@@ -280,6 +280,8 @@ export function useDashboardState() {
           scheduled_for: ev.scheduled_for,
           is_overdue: ev.is_overdue,
           content: ev.content || null,
+          media_urls: Array.isArray(ev.media_urls) ? ev.media_urls : [],
+          media_types: Array.isArray(ev.media_types) ? ev.media_types : [],
         }));
         setCalendarStageEvents(all.filter((ev) => getEventStage(ev) === stage));
       })
@@ -635,7 +637,7 @@ export function useDashboardState() {
         list.forEach((ev: any) => {
           const d = ev.date || '';
           if (!d) return;
-          allItems.push({ type: 'activity', date: d, platform: ev.platform, title: ev.title, repurpose_index: 1, repurpose_total: 1, campaign_id: ev.campaign_id, content_type: ev.content_type || 'post', execution_id: ev.execution_id, scheduled_post_id: ev.scheduled_post_id, status: ev.status, scheduled_for: ev.scheduled_for, is_overdue: ev.is_overdue, content: ev.content || null });
+          allItems.push({ type: 'activity', date: d, platform: ev.platform, title: ev.title, repurpose_index: 1, repurpose_total: 1, campaign_id: ev.campaign_id, content_type: ev.content_type || 'post', execution_id: ev.execution_id, scheduled_post_id: ev.scheduled_post_id, status: ev.status, scheduled_for: ev.scheduled_for, is_overdue: ev.is_overdue, content: ev.content || null, media_urls: Array.isArray(ev.media_urls) ? ev.media_urls : [], media_types: Array.isArray(ev.media_types) ? ev.media_types : [] });
         });
         // Recompute repurpose_index/total campaign-wide: group by title across ALL dates,
         // sort chronologically — total = how many times topic appears in campaign.

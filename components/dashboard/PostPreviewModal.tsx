@@ -18,6 +18,8 @@ export type ActivityEvent = {
   status?: string;
   scheduled_for?: string | null;
   is_overdue?: boolean;
+  media_urls?: string[];
+  media_types?: string[];
 };
 
 const PLATFORM_CONFIG: Record<string, {
@@ -106,6 +108,66 @@ const PLATFORM_CONFIG: Record<string, {
   },
 };
 
+function MediaThumb({
+  mediaUrls,
+  className,
+  fallback,
+}: {
+  mediaUrls?: string[];
+  className: string;
+  fallback: React.ReactNode;
+}) {
+  const urls = (mediaUrls || []).filter((u) => typeof u === 'string' && u.trim().length > 0);
+  if (urls.length === 0) {
+    return <div className={`${className} flex items-center justify-center`}>{fallback}</div>;
+  }
+  if (urls.length === 1) {
+    return (
+      <div className={`${className} relative overflow-hidden`}>
+        <img
+          src={urls[0]}
+          alt="Post media"
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      </div>
+    );
+  }
+  // LinkedIn-style multi-image grid: up to 4 visible, overflow badge on the last.
+  // 2 → side-by-side, 3 → first tall + two stacked, 4+ → 2×2.
+  const display = urls.slice(0, 4);
+  const extra = urls.length - display.length;
+  const gridClass =
+    display.length === 2 ? 'grid-cols-2 grid-rows-1'
+    : 'grid-cols-2 grid-rows-2';
+  return (
+    <div className={`${className} relative overflow-hidden`}>
+      <div className={`absolute inset-0 grid gap-0.5 ${gridClass}`}>
+        {display.map((url, i) => (
+          <div
+            key={`${url}-${i}`}
+            className={`relative overflow-hidden bg-gray-100 ${
+              display.length === 3 && i === 0 ? 'row-span-2' : ''
+            }`}
+          >
+            <img
+              src={url}
+              alt={`Post media ${i + 1}`}
+              loading="lazy"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            {extra > 0 && i === display.length - 1 && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                <span className="text-xl font-bold text-white">+{extra}</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const DEFAULT_PLATFORM_CONFIG: typeof PLATFORM_CONFIG[string] = {
   headerBg: 'bg-indigo-600 text-white',
   avatarBg: 'bg-indigo-600',
@@ -170,6 +232,13 @@ export default function PostPreviewModal({
     : event.date || '';
   const showCharCount = cfg.charLimit != null;
 
+  const hasMedia = (event.media_urls?.length ?? 0) > 0;
+  const contentTypeLabel = (() => {
+    const base = (event.content_type || 'post').replace(/_/g, ' ').trim() || 'post';
+    if (hasMedia && /^post$/i.test(base)) return 'Post with asset';
+    return base;
+  })();
+
   const isLinkedIn = platform === 'linkedin';
   const isX = platform === 'x' || platform === 'twitter';
   const isInstagram = platform === 'instagram';
@@ -197,7 +266,7 @@ export default function PostPreviewModal({
             <PlatformIcon platform={platform} size={16} />
             <span className="font-semibold text-sm">{platformLabel}</span>
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/20 capitalize">
-              {event.content_type?.replace(/_/g, ' ') || 'post'}
+              {contentTypeLabel}
             </span>
           </div>
           <button onClick={onClose} className="text-white/80 hover:text-white text-base leading-none p-1">✕</button>
@@ -249,17 +318,21 @@ export default function PostPreviewModal({
                 </div>
                 <span className="text-gray-400 text-lg">•••</span>
               </div>
-              {(isVisualMedia || contentType === 'post') && (
-                <div className={`w-full bg-gradient-to-br from-purple-100 via-pink-100 to-orange-100 flex items-center justify-center ${
-                  contentType === 'story' ? 'aspect-[9/16] max-h-52' : 'aspect-square'
-                }`}>
-                  <div className="text-center opacity-40">
-                    <PlatformIcon platform="instagram" size={32} />
-                    <p className="text-xs text-gray-500 mt-1">
-                      {contentType === 'reel' ? 'Reel' : contentType === 'story' ? 'Story' : contentType === 'carousel' ? 'Carousel' : 'Photo'}
-                    </p>
-                  </div>
-                </div>
+              {(isVisualMedia || contentType === 'post' || (event.media_urls?.length ?? 0) > 0) && (
+                <MediaThumb
+                  mediaUrls={event.media_urls}
+                  className={`w-full bg-gradient-to-br from-purple-100 via-pink-100 to-orange-100 ${
+                    contentType === 'story' ? 'aspect-[9/16] max-h-52' : 'aspect-square'
+                  }`}
+                  fallback={
+                    <div className="text-center opacity-40">
+                      <PlatformIcon platform="instagram" size={32} />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {contentType === 'reel' ? 'Reel' : contentType === 'story' ? 'Story' : contentType === 'carousel' ? 'Carousel' : 'Photo'}
+                      </p>
+                    </div>
+                  }
+                />
               )}
               <div className="px-3 pt-2 flex items-center gap-3 text-gray-800">
                 <span>❤</span><span>💬</span><span>📤</span>
@@ -284,13 +357,17 @@ export default function PostPreviewModal({
                     <span className="text-gray-400 text-xs ml-auto">{scheduledDate || 'Scheduled'}</span>
                   </div>
                   <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="Write the first draft in Workspace to preview how this post will read." className="text-[15px] text-gray-900 leading-relaxed" />
-                  {isVisualMedia && (
-                    <div className="mt-2 rounded-xl overflow-hidden border border-gray-200 bg-gray-100 aspect-video flex items-center justify-center">
-                      <div className="text-center opacity-40">
-                        <PlatformIcon platform="x" size={28} />
-                        <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : 'Media'}</p>
-                      </div>
-                    </div>
+                  {(isVisualMedia || (event.media_urls?.length ?? 0) > 0) && (
+                    <MediaThumb
+                      mediaUrls={event.media_urls}
+                      className="mt-2 rounded-xl border border-gray-200 bg-gray-100 aspect-video"
+                      fallback={
+                        <div className="text-center opacity-40">
+                          <PlatformIcon platform="x" size={28} />
+                          <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : 'Media'}</p>
+                        </div>
+                      }
+                    />
                   )}
                   <div className="mt-3 flex items-center gap-5 text-gray-400 text-xs">
                     {['💬 0', '🔁 0', '❤ 0', '🔖', '📤'].map((a, i) => <span key={i}>{a}</span>)}
@@ -324,13 +401,17 @@ export default function PostPreviewModal({
                   </div>
                 )}
                 <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="Write the first draft in Workspace to preview how this post will read." className="text-sm text-gray-800 leading-relaxed" />
-                {isVisualMedia && !isLinkedInArticle && (
-                  <div className="mt-3 rounded-lg overflow-hidden bg-gray-100 aspect-video flex items-center justify-center border border-gray-200">
-                    <div className="text-center opacity-40">
-                      <PlatformIcon platform="linkedin" size={28} />
-                      <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : contentType === 'carousel' ? 'Carousel' : 'Image'}</p>
-                    </div>
-                  </div>
+                {(isVisualMedia || (event.media_urls?.length ?? 0) > 0) && !isLinkedInArticle && (
+                  <MediaThumb
+                    mediaUrls={event.media_urls}
+                    className="mt-3 rounded-lg bg-gray-100 aspect-video border border-gray-200"
+                    fallback={
+                      <div className="text-center opacity-40">
+                        <PlatformIcon platform="linkedin" size={28} />
+                        <p className="text-xs text-gray-500 mt-1">{contentType === 'video' ? 'Video' : contentType === 'carousel' ? 'Carousel' : 'Image'}</p>
+                      </div>
+                    }
+                  />
                 )}
               </div>
               <div className="px-4 py-2 border-t border-gray-100">
@@ -355,13 +436,17 @@ export default function PostPreviewModal({
                   <span className="ml-auto text-gray-400">•••</span>
                 </div>
                 <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={showCharCount} emptyText="Write the first draft in Workspace to preview how this post will read." className="text-sm text-gray-800 leading-relaxed" />
-                {isVisualMedia && (
-                  <div className="mt-3 -mx-4 bg-gray-100 aspect-video flex items-center justify-center">
-                    <div className="text-center opacity-40">
-                      <PlatformIcon platform="facebook" size={32} />
-                      <p className="text-xs text-gray-500 mt-1">Photo / Video</p>
-                    </div>
-                  </div>
+                {(isVisualMedia || (event.media_urls?.length ?? 0) > 0) && (
+                  <MediaThumb
+                    mediaUrls={event.media_urls}
+                    className="mt-3 -mx-4 bg-gray-100 aspect-video"
+                    fallback={
+                      <div className="text-center opacity-40">
+                        <PlatformIcon platform="facebook" size={32} />
+                        <p className="text-xs text-gray-500 mt-1">Photo / Video</p>
+                      </div>
+                    }
+                  />
                 )}
               </div>
               <div className="px-4 py-2 border-t border-gray-100 flex items-center gap-1 text-xs text-gray-600">
@@ -400,12 +485,17 @@ export default function PostPreviewModal({
 
           {isPinterest && (
             <div className="bg-white">
-              <div className="aspect-[2/3] max-h-64 bg-gradient-to-br from-rose-100 to-orange-100 flex items-center justify-center rounded-2xl mx-3 mt-3 overflow-hidden">
-                <div className="text-center opacity-40">
-                  <PlatformIcon platform="pinterest" size={36} />
-                  <p className="text-xs text-gray-500 mt-1">Pin Image</p>
-                </div>
-              </div>
+              <MediaThumb
+                mediaUrls={event.media_urls}
+                className="aspect-[2/3] max-h-64 bg-gradient-to-br from-rose-100 to-orange-100 rounded-2xl mx-3 mt-3"
+                fallback={
+                  <div className="text-center opacity-40">
+                    <PlatformIcon platform="pinterest" size={36} />
+                    <p className="text-xs text-gray-500 mt-1">Pin Image</p>
+                  </div>
+                }
+              />
+
               <div className="px-4 py-3">
                 <p className="text-base font-bold text-gray-900 mb-1">{event.title}</p>
                 <ContentRenderer content={content ?? ''} platform={platform} contentType={contentType} accentBg={cfg.avatarBg} showCharCount={false} emptyText="Add a helpful description in Workspace so this pin is ready to publish." className="text-sm text-gray-600 leading-relaxed" />

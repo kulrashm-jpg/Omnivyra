@@ -12,6 +12,7 @@ import { PLATFORM_LABELS } from '../../lib/shared/platforms';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
 import {
   POST_CREATOR_ASSET_TYPES,
+  assetLabel,
   buildWriterCreatorPrefill,
   createWriterSourceId,
   launchCreatorFromWriter,
@@ -20,6 +21,12 @@ import {
   type CreatorAssetLaunchType,
   type WriterAttachedAsset,
 } from '../../lib/content/writerCreatorAssetLaunch';
+import {
+  attachmentModeLabel,
+  defaultAttachmentModeForAsset,
+  type AttachmentMode,
+  type SourceTextTransform,
+} from '../../lib/content/writerCreatorAttachmentContracts';
 
 const WRITER_CREATOR_SOCIAL_PLATFORMS = ['linkedin', 'x', 'instagram', 'facebook', 'threads', 'reddit'];
 
@@ -88,6 +95,8 @@ export default function ShortformResultPage({
   const [connectedPlatforms, setConnectedPlatforms] = useState<Array<{ key: string; label: string }>>([]);
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
   const [selectedCreatorPlatform, setSelectedCreatorPlatform] = useState('linkedin');
+  const [selectedAttachmentMode, setSelectedAttachmentMode] = useState<AttachmentMode>('supporting_visual');
+  const [selectedSourceTextTransform, setSelectedSourceTextTransform] = useState<SourceTextTransform>('none');
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
 
   const token = typeof router.query.prefill === 'string' ? router.query.prefill : '';
@@ -222,6 +231,7 @@ export default function ShortformResultPage({
   }, [selectedCompanyId, writerSourceId]);
 
   const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
+    const attachmentMode = selectedAttachmentMode || defaultAttachmentModeForAsset(assetType);
     setAssetMenuOpen(false);
     launchCreatorFromWriter({
       router,
@@ -229,9 +239,11 @@ export default function ShortformResultPage({
       source: buildWriterCreatorPrefill({
         sourceType: 'post',
         sourceId: writerSourceId,
+        assetType,
+        attachmentMode,
+        sourceTextTransform: selectedSourceTextTransform,
         title: topic,
         body: generatedContent,
-        cta: masterTrace?.outcome_promise || '',
         audience: '',
         tone: masterTrace?.tone_used || adaptationTrace?.style_strategy || '',
         platform: selectedCreatorPlatform,
@@ -456,6 +468,49 @@ export default function ShortformResultPage({
                           <div className="border-b border-slate-100 px-4 py-3">
                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset from post</p>
                             <p className="mt-1 text-xs text-slate-500">Choose a supported Creator asset and we will prefill it from this post.</p>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              {(['supporting_visual', 'embedded_copy'] as AttachmentMode[]).map((mode) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedAttachmentMode(mode);
+                                  }}
+                                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                                    selectedAttachmentMode === mode
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
+                                  }`}
+                                >
+                                  {attachmentModeLabel(mode)}
+                                </button>
+                              ))}
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              {([
+                                ['none', 'Support visually'],
+                                ['summarize', 'Summarize'],
+                                ['extract_points', 'Extract points'],
+                                ['quote', 'Quote'],
+                              ] as Array<[SourceTextTransform, string]>).map(([transform, label]) => (
+                                <button
+                                  key={transform}
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedSourceTextTransform(transform);
+                                  }}
+                                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                                    selectedSourceTextTransform === transform
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
+                                  }`}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
                             <div className="mt-3 flex flex-wrap gap-2">
                               {WRITER_CREATOR_SOCIAL_PLATFORMS.map((platform) => (
                                 <button
@@ -477,6 +532,13 @@ export default function ShortformResultPage({
                               ))}
                             </div>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => setAssetMenuOpen(false)}
+                            className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-500 transition hover:bg-slate-50"
+                          >
+                            No asset
+                          </button>
                           {POST_CREATOR_ASSET_TYPES.map((assetType) => (
                             <button
                               key={assetType}
@@ -484,9 +546,9 @@ export default function ShortformResultPage({
                               onClick={() => launchAssetCreator(assetType)}
                               className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                             >
-                              <span>{assetType.charAt(0).toUpperCase() + assetType.slice(1)}</span>
+                              <span>{assetLabel(assetType)}</span>
                               <span className="mt-1 block text-xs font-normal text-slate-500">
-                                Opens {assetType.charAt(0).toUpperCase() + assetType.slice(1)} Creator with this post attached.
+                                Opens {assetLabel(assetType)} Creator with this post attached.
                               </span>
                             </button>
                           ))}
@@ -510,7 +572,7 @@ export default function ShortformResultPage({
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
                 {attachedAssets.length === 0 ? (
                   <p className="mt-3 text-sm leading-6 text-slate-600">
-                    No Creator assets attached yet. Use Add Asset to launch Image, Banner, Infographic, Carousel, or PDF with this post prefilled.
+                    No Creator assets attached yet. Use Add Asset to launch a supporting image, banner, infographic, carousel, or brand card with this post prefilled.
                   </p>
                 ) : (
                   <div className="mt-3 space-y-2">
@@ -524,10 +586,8 @@ export default function ShortformResultPage({
                       >
                         <span className="font-semibold">{asset.title}</span>
                         <span className="mt-1 block text-xs text-slate-500">
-                          {asset.creatorType.charAt(0).toUpperCase() + asset.creatorType.slice(1)}
-                          {asset.creatorType === 'image' && asset.imageMode
-                            ? ` - ${asset.imageMode === 'text_embedded' ? 'Text Inside Image' : 'Post + Image'}`
-                            : ''}
+                          {assetLabel(asset.creatorType)}
+                          {asset.attachmentMode ? ` - ${attachmentModeLabel(asset.attachmentMode)}` : ''}
                           {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
                         </span>
                       </a>

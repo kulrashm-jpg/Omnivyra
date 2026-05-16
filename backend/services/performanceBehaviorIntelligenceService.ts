@@ -300,6 +300,13 @@ export async function buildPerformanceBehaviorIntelligence(params: {
       conversions: { total_conversions: 0, by_type: [], conversion_rate_per_session: 0 },
       insights: [],
       recommendations: [],
+      analytics_provenance: {
+        source: 'fallback_no_analytics',
+        readiness_status: 'no_prior_period',
+        last_successful_ingestion_at: null,
+        events_last_30_days: 0,
+        confidence: 'none',
+      },
     }),
     summaries: {
       engagement_quality: summarizeEngagement(current),

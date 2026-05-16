@@ -15,8 +15,11 @@ import type { BOLTProgress } from './BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import BoltPlatformPicker from './bolt/BoltPlatformPicker';
 import { isCrossPlatformShareableFormat } from '../lib/shared/bolt/crossPlatformSharing';
-
-type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story' | 'banner' | 'infographic' | 'pdf' | 'slider' | 'post' | 'thread';
+import {
+  CREATOR_FORMAT_CAPABILITY,
+  type CreatorContentFormat,
+} from '../lib/shared/bolt/creatorFormatCapability';
+import { platformSupportsCapability } from '../lib/shared/social/platformCapabilities';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
 type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
 type SharingMode = 'shared' | 'unique' | 'ai';
@@ -33,23 +36,16 @@ const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
 // `lib/shared/bolt/crossPlatformSharing.ts` (single source of truth).
 
 const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: string; hint: string }[] = [
-  { value: 'video',    label: 'Video',    icon: '🎬', hint: 'Long-form video content' },
-  { value: 'reel',     label: 'Reel',     icon: '🎥', hint: 'Short vertical video (15–90s)' },
-  { value: 'carousel', label: 'Carousel', icon: '🖼️', hint: 'Multi-slide visual story' },
-  { value: 'image',    label: 'Image',    icon: '📸', hint: 'Static photo or graphic' },
-  { value: 'podcast',  label: 'Podcast',  icon: '🎙️', hint: 'Audio episode or clip' },
-  { value: 'short',    label: 'Short',    icon: '⚡', hint: 'YouTube / TikTok short' },
-  { value: 'story',    label: 'Story',    icon: '📱', hint: '24hr ephemeral story format' },
+  { value: 'video',       label: 'Video',       icon: '🎬', hint: 'Long-form video content' },
+  { value: 'reel',        label: 'Reel',        icon: '🎥', hint: 'Short vertical video (15–90s)' },
+  { value: 'short',       label: 'Short',       icon: '⚡', hint: 'YouTube / TikTok short' },
+  { value: 'carousel',    label: 'Carousel',    icon: '🖼️', hint: 'Multi-slide visual story' },
+  { value: 'image',       label: 'Image',       icon: '📸', hint: 'Static photo or graphic' },
+  { value: 'banner',      label: 'Banner',      icon: '🎨', hint: 'Promotional visual asset' },
+  { value: 'infographic', label: 'Infographic', icon: '📊', hint: 'Visual explainer asset' },
+  { value: 'pdf',         label: 'PDF',         icon: '📄', hint: 'Document-style creator asset' },
+  { value: 'slider',      label: 'Slider',      icon: '🎞️', hint: 'Presentation-style slide asset' },
 ];
-
-CONTENT_FORMATS.push(
-  { value: 'banner',   label: 'Banner',   icon: 'Banner', hint: 'Promotional visual asset' },
-  { value: 'infographic', label: 'Infographic', icon: 'Info', hint: 'Visual explainer asset' },
-  { value: 'pdf',      label: 'PDF',      icon: 'PDF', hint: 'Document-style creator asset' },
-  { value: 'slider',   label: 'Slider',   icon: 'Slide', hint: 'Presentation-style slide asset' },
-  { value: 'post',     label: 'Post',     icon: 'Post', hint: 'Platform-ready creator post' },
-  { value: 'thread',   label: 'Thread',   icon: 'Thread', hint: 'Connected social sequence' },
-);
 
 const DURATION_OPTIONS = [
   { value: 1, label: '1 Week' },
@@ -131,7 +127,11 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
 }
 
 /* ─── BOLT stage pipeline (creator — no schedule stages) ─────────────────── */
-const BOLT_PIPELINE: { stage: string; label: string }[] = [
+// Canonical full Creator pipeline. Week Plan only runs the first 4 —
+// creator-asset-generation is gated by `shouldRunCreatorAssetGeneration`
+// which requires `outcomeView !== 'week_plan'` in
+// `backend/services/boltPipelineService.ts`.
+const BOLT_PIPELINE_FULL: { stage: string; label: string }[] = [
   { stage: 'source-recommendation',    label: 'Preparing week plan' },
   { stage: 'ai/plan',                  label: 'Creating week plan' },
   { stage: 'commit-plan',              label: 'Saving blueprint' },
@@ -139,13 +139,34 @@ const BOLT_PIPELINE: { stage: string; label: string }[] = [
   { stage: 'creator-asset-generation', label: 'Generating creator assets' },
 ];
 
-function stageIndex(stage: string | undefined): number {
+function getPipelineForOutcome(outcomeView: OutcomeView): { stage: string; label: string }[] {
+  // Week Plan: hide the asset-generation stage that the pipeline
+  // doesn't run. Daily Plan + Schedule run all five.
+  if (outcomeView === 'week_plan') return BOLT_PIPELINE_FULL.slice(0, 4);
+  return BOLT_PIPELINE_FULL;
+}
+
+// Back-compat alias for any unrefactored consumers (none inside this file).
+const BOLT_PIPELINE = BOLT_PIPELINE_FULL;
+
+function stageIndexInPipeline(
+  stage: string | undefined,
+  pipeline: { stage: string; label: string }[] = BOLT_PIPELINE_FULL,
+): number {
   if (!stage) return -1;
-  const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
+  const exact = pipeline.findIndex((s) => s.stage === stage);
   if (exact !== -1) return exact;
-  if (stage.startsWith('generate-weekly-structure')) return 3;
-  if (stage.startsWith('render-creator')) return 4;
+  if (stage.startsWith('generate-weekly-structure')) {
+    return pipeline.findIndex((s) => s.stage === 'generate-weekly-structure');
+  }
+  if (stage.startsWith('render-creator')) {
+    return pipeline.findIndex((s) => s.stage === 'creator-asset-generation');
+  }
   return -1;
+}
+
+function stageIndex(stage: string | undefined): number {
+  return stageIndexInPipeline(stage, BOLT_PIPELINE_FULL);
 }
 
 function formatElapsed(ms: number): string {
@@ -157,10 +178,11 @@ function formatElapsed(ms: number): string {
 }
 
 /* ─── Inline BOLT progress tracker ──────────────────────────────────────── */
-function CardBoltProgress({ progress, theme, startedAt }: {
+function CardBoltProgress({ progress, theme, startedAt, outcomeView }: {
   progress: BOLTProgress;
   theme: typeof CARD_THEMES[0];
   startedAt: number;
+  outcomeView: OutcomeView;
 }) {
   const [elapsedMs, setElapsedMs] = useState(Date.now() - startedAt);
   useEffect(() => {
@@ -168,8 +190,13 @@ function CardBoltProgress({ progress, theme, startedAt }: {
     return () => clearInterval(id);
   }, [startedAt]);
 
-  const currentIdx = stageIndex(progress.stage);
-  const pct = Math.min(100, Math.max(0, progress.progress_percentage ?? 0));
+  const pipeline = getPipelineForOutcome(outcomeView);
+  const isCompleted = progress.status === 'completed';
+  // When completed, push currentIdx beyond the last visible stage so
+  // every step shows ✓ — matches the Week Plan UX expectation that
+  // "100% done" means every stage in the tracker is checked.
+  const currentIdx = isCompleted ? pipeline.length : stageIndexInPipeline(progress.stage, pipeline);
+  const pct = isCompleted ? 100 : Math.min(100, Math.max(0, progress.progress_percentage ?? 0));
   const isFailed = progress.status === 'failed';
 
   return (
@@ -189,7 +216,7 @@ function CardBoltProgress({ progress, theme, startedAt }: {
         <span className="text-[11px] text-gray-400">{formatElapsed(elapsedMs)}</span>
       </div>
       <div className="space-y-1.5 mb-3">
-        {BOLT_PIPELINE.map((step, i) => {
+        {pipeline.map((step, i) => {
           const isDone    = currentIdx > i;
           const isCurrent = currentIdx === i;
           const isPending = currentIdx < i;
@@ -221,11 +248,11 @@ function CardBoltProgress({ progress, theme, startedAt }: {
 
 /* ─── Strategy Card ──────────────────────────────────────────────────────── */
 function StrategyCard({
-  card, index, selected, boltProgress, execStartedAt, anyExecuting, onSelect,
+  card, index, selected, boltProgress, execStartedAt, anyExecuting, outcomeView, onSelect,
 }: {
   card: BoltStrategyCard; index: number; selected: boolean;
   boltProgress: BOLTProgress | null; execStartedAt: number;
-  anyExecuting: boolean; onSelect: () => void;
+  anyExecuting: boolean; outcomeView: OutcomeView; onSelect: () => void;
 }) {
   const theme = CARD_THEMES[index % CARD_THEMES.length];
   const isRunningThis = selected && boltProgress !== null;
@@ -307,7 +334,7 @@ function StrategyCard({
       )}
 
       {isRunningThis && boltProgress && (
-        <CardBoltProgress progress={boltProgress} theme={theme} startedAt={execStartedAt} />
+        <CardBoltProgress progress={boltProgress} theme={theme} startedAt={execStartedAt} outcomeView={outcomeView} />
       )}
 
       {/* CTA */}
@@ -334,7 +361,10 @@ export default function BoltCreatorView({ d }: { d: S }) {
   const {
     _ef1,
     _ef2,
+    acceptedSuggestions,
+    applyChatSuggestion,
     applySuggestion,
+    resetCampaignMemory,
     audience,
     authChecked,
     campaignStartDate,
@@ -635,18 +665,63 @@ export default function BoltCreatorView({ d }: { d: S }) {
               )}
             </div>
 
-            {/* Platforms — capability-aware picker (Round-6: creator capability) */}
+            {/* Platforms — re-filtered per the formats the user has selected.
+                Map: format → capability (CREATOR_FORMAT_CAPABILITY) → registry
+                lookup. Without this the picker only honors the coarse
+                'creator' capability and hides LinkedIn/FB/Pinterest/Reddit
+                for banner/image/PDF campaigns those platforms support. */}
             <div className="px-5 pt-4 pb-4 border-t border-gray-100">
-              <BoltPlatformPicker
-                accent="indigo"
-                loading={platformsLoading}
-                blocked={platformBlocked}
-                supported={availablePlatforms}
-                hidden={platformHidden ?? []}
-                selected={selectedPlatforms}
-                onToggle={togglePlatform}
-                emptyMessage="No creator-compatible platforms connected yet. Connect Instagram, TikTok, YouTube, or Facebook to target specific platforms."
-              />
+              {(() => {
+                const derivedCapabilities = contentFormats.length > 0
+                  ? Array.from(new Set(
+                      contentFormats
+                        .map((f) => CREATOR_FORMAT_CAPABILITY[f as CreatorContentFormat])
+                        .filter(Boolean),
+                    ))
+                  : null;
+                const allConnected = [
+                  ...availablePlatforms,
+                  ...(platformHidden ?? []).map((h) => h.platform),
+                ];
+                let effectiveSupported = availablePlatforms;
+                let effectiveHidden = platformHidden ?? [];
+                if (derivedCapabilities && derivedCapabilities.length > 0) {
+                  const existingReasons = new Map(
+                    (platformHidden ?? []).map((h) => [h.platform, h.reason]),
+                  );
+                  const sup: string[] = [];
+                  const hid: { platform: string; reason: string }[] = [];
+                  const seen = new Set<string>();
+                  for (const p of allConnected) {
+                    if (seen.has(p)) continue;
+                    seen.add(p);
+                    const supports = derivedCapabilities.some((c) => platformSupportsCapability(p, c));
+                    if (supports) sup.push(p);
+                    else hid.push({
+                      platform: p,
+                      reason: existingReasons.get(p) ?? `${p} does not support the selected format(s).`,
+                    });
+                  }
+                  effectiveSupported = sup;
+                  effectiveHidden = hid;
+                }
+                return (
+                  <BoltPlatformPicker
+                    accent="indigo"
+                    loading={platformsLoading}
+                    blocked={platformBlocked}
+                    supported={effectiveSupported}
+                    hidden={effectiveHidden}
+                    selected={selectedPlatforms.filter((p) => effectiveSupported.includes(p))}
+                    onToggle={togglePlatform}
+                    emptyMessage={
+                      contentFormats.length > 0
+                        ? 'None of your connected platforms support the selected format(s). Try a different content type or connect more platforms.'
+                        : 'No creator-compatible platforms connected yet. Connect Instagram, TikTok, YouTube, or Facebook to target specific platforms.'
+                    }
+                  />
+                );
+              })()}
             </div>
 
             {/* Campaign Start Date */}
@@ -687,9 +762,14 @@ export default function BoltCreatorView({ d }: { d: S }) {
                   );
                 })}
               </div>
-              {hasGuidanceOnlyFormats && (
+              {hasGuidanceOnlyFormats && supportsAutonomousCreatorExecution && (
                 <p className="mt-2 text-[11px] leading-snug text-blue-700">
-                  Daily-plan-only creator formats are selected. BOLT will produce production guidance and keep scheduling disabled.
+                  Mixed-mode campaign: autonomous formats will render and schedule normally; attachment-required formats will hold per row pending media upload.
+                </p>
+              )}
+              {hasGuidanceOnlyFormats && !supportsAutonomousCreatorExecution && (
+                <p className="mt-2 text-[11px] leading-snug text-blue-700">
+                  Attachment-required formats selected. BOLT will produce theme treatments + creator guidance per row; scheduling unlocks per row after media upload.
                 </p>
               )}
               {!hasGuidanceOnlyFormats && contentFormats.length > 0 && supportsAutonomousCreatorExecution && (
@@ -774,8 +854,25 @@ export default function BoltCreatorView({ d }: { d: S }) {
                 <div className="border-t border-gray-100 flex flex-col" style={{ height: '320px' }}>
                   <BoltCampaignChat
                     companyId={companyId}
-                    context={{ topic, goal: goals.length > 0 ? goals.join(', ') : undefined, audience: audience.join(', '), strategicFocus, duration }}
-                    onApplyTopic={(t) => setTopic(t)}
+                    // Full context shape — same one BOLT Text passes. The shared
+                    // /api/bolt/campaign-chat endpoint uses these to (a) auto-fetch
+                    // the company profile, (b) avoid suggesting formats / platforms
+                    // the planner can't execute, and (c) build on previously
+                    // accepted directions.
+                    context={{
+                      topic,
+                      goals,
+                      audience: audience.join(', '),
+                      strategicFocus,
+                      duration,
+                      selectedPlatforms,
+                      selectedFormats: contentFormats,
+                      formatFrequency,
+                      outcomeView,
+                    }}
+                    onApplySuggestion={applyChatSuggestion}
+                    acceptedSuggestions={acceptedSuggestions}
+                    onResetMemory={resetCampaignMemory}
                   />
                 </div>
               )}
@@ -841,6 +938,7 @@ export default function BoltCreatorView({ d }: { d: S }) {
                     boltProgress={selectedIds.includes(card.id) ? execProgress : null}
                     execStartedAt={execStartedAt}
                     anyExecuting={executing}
+                    outcomeView={outcomeView}
                     onSelect={() => handleCardSelect(card.id)}
                   />
                 ))}

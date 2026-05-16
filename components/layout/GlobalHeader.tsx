@@ -6,6 +6,7 @@ import {
   BookOpen,
   Camera,
   ChevronDown,
+  ChevronRight,
   CreditCard,
   FileText,
   HelpCircle,
@@ -17,8 +18,10 @@ import {
   Menu,
   MessageSquare,
   Moon,
+  PenTool,
   Settings,
   Shield,
+  Sparkles,
   Sun,
   Users,
   X,
@@ -36,11 +39,17 @@ import {
   SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS,
   SETTINGS_ROUTE_SECURITY,
 } from '../../lib/settings/canonicalRegistry';
+import {
+  CONTENT_NAV_SECTIONS,
+  getContentNavRoutes,
+  type ContentNavSection,
+} from './contentNavigationConfig';
 
 type HeaderChildItem = {
   label: string;
   href: string;
   description: string;
+  contentSectionId?: ContentNavSection['id'];
 };
 
 type HeaderNavItem = {
@@ -96,10 +105,21 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       '/newsletters',
       '/posts',
       '/threads',
+      ...getContentNavRoutes(),
     ],
     children: [
-      { label: 'Writer Content', href: '/command-center/writer-content', description: 'Open the writer lane with 9 text-first content types.' },
-      { label: 'Creator Content', href: '/command-center/creator-content', description: 'Open the creator lane with 6 AI-supported creator content types.' },
+      {
+        label: 'Writer Content',
+        href: '/command-center/writer-content',
+        description: '9 text-first content types',
+        contentSectionId: 'writer',
+      },
+      {
+        label: 'Creator Content',
+        href: '/command-center/creator-content',
+        description: '6 AI-supported creator content types',
+        contentSectionId: 'creator',
+      },
     ],
   },
   {
@@ -213,14 +233,79 @@ function NavDropdown({
   isActive: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const isContentMenu = item.label === 'Content';
+  const [expandedSection, setExpandedSection] = useState<ContentNavSection['id']>('writer');
+  const [focusedCategoryIndex, setFocusedCategoryIndex] = useState(0);
+  const [focusedItemIndex, setFocusedItemIndex] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  const expandedContentSection = CONTENT_NAV_SECTIONS.find((section) => section.id === expandedSection) ?? CONTENT_NAV_SECTIONS[0];
 
   useClickOutside(ref, () => setOpen(false));
 
   useEffect(() => {
     setOpen(false);
   }, [router.asPath]);
+
+  useEffect(() => {
+    if (!open || !isContentMenu) return;
+    const activeSection = CONTENT_NAV_SECTIONS.find((section) =>
+      section.items.some((child) => isPathMatch(router.asPath, child.route)) || isPathMatch(router.asPath, section.href)
+    );
+    if (activeSection) setExpandedSection(activeSection.id);
+  }, [isContentMenu, open, router.asPath]);
+
+  const navigateToContentItem = (route: string) => {
+    setOpen(false);
+    router.push(route);
+  };
+
+  const handleContentKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!isContentMenu) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setOpen(false);
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (event.shiftKey) {
+        setFocusedItemIndex((value) => Math.min(expandedContentSection.items.length - 1, value + 1));
+      } else {
+        const next = Math.min(CONTENT_NAV_SECTIONS.length - 1, focusedCategoryIndex + 1);
+        setFocusedCategoryIndex(next);
+        setExpandedSection(CONTENT_NAV_SECTIONS[next].id);
+        setFocusedItemIndex(0);
+      }
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (event.shiftKey) {
+        setFocusedItemIndex((value) => Math.max(0, value - 1));
+      } else {
+        const next = Math.max(0, focusedCategoryIndex - 1);
+        setFocusedCategoryIndex(next);
+        setExpandedSection(CONTENT_NAV_SECTIONS[next].id);
+        setFocusedItemIndex(0);
+      }
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      setFocusedItemIndex(0);
+      return;
+    }
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      setFocusedItemIndex(0);
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      navigateToContentItem(expandedContentSection.items[focusedItemIndex]?.route ?? expandedContentSection.href);
+    }
+  };
 
   return (
     <div ref={ref} className="relative">
@@ -241,7 +326,143 @@ function NavDropdown({
         <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      {open ? (
+      {open && isContentMenu ? (
+        <div
+          className="absolute left-0 top-full z-50 mt-2 grid w-[760px] grid-cols-[276px_1fr] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/12 ring-1 ring-slate-900/5"
+          role="menu"
+          aria-label="Content menu"
+          onKeyDown={handleContentKeyDown}
+        >
+          <div className="border-r border-slate-200 bg-slate-50/80 p-3">
+            <div className="mb-2 px-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Content lanes</div>
+              <div className="mt-1 text-xs leading-5 text-slate-500">Choose the production mode, then open the exact asset type.</div>
+            </div>
+            {CONTENT_NAV_SECTIONS.map((section, index) => {
+              const sectionActive = expandedSection === section.id;
+              const routeActive = isPathMatch(router.asPath, section.href)
+                || section.items.some((child) => isPathMatch(router.asPath, child.route));
+              const SectionIcon = section.id === 'writer' ? PenTool : Sparkles;
+              return (
+                <button
+                  key={section.id}
+                  type="button"
+                  role="menuitem"
+                  aria-expanded={sectionActive}
+                  onMouseEnter={() => {
+                    setExpandedSection(section.id);
+                    setFocusedCategoryIndex(index);
+                    setFocusedItemIndex(0);
+                  }}
+                  onFocus={() => {
+                    setExpandedSection(section.id);
+                    setFocusedCategoryIndex(index);
+                    setFocusedItemIndex(0);
+                  }}
+                  onClick={() => {
+                    setExpandedSection(section.id);
+                    setFocusedCategoryIndex(index);
+                    setFocusedItemIndex(0);
+                  }}
+                  className={`group relative mt-2 w-full rounded-xl border px-3 py-3 text-left transition-all duration-200 ${
+                    sectionActive || routeActive
+                      ? 'border-sky-200 bg-white text-sky-900 shadow-sm'
+                      : 'border-transparent bg-transparent text-slate-700 hover:border-slate-200 hover:bg-white'
+                  }`}
+                >
+                  <div className={`absolute left-0 top-3 h-10 w-1 rounded-r-full transition-opacity ${
+                    sectionActive || routeActive ? 'bg-sky-500 opacity-100' : 'bg-slate-300 opacity-0 group-hover:opacity-100'
+                  }`} />
+                  <div className="flex items-start gap-3">
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                      sectionActive || routeActive
+                        ? 'border-sky-100 bg-sky-50 text-sky-700'
+                        : 'border-slate-200 bg-white text-slate-500'
+                    }`}>
+                      <SectionIcon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold leading-5">{section.label}</span>
+                        <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${
+                          sectionActive ? 'translate-x-0.5 text-sky-500' : 'text-slate-300 group-hover:text-slate-500'
+                        }`} />
+                      </span>
+                      <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">{section.description}</span>
+                      <span className="mt-2 inline-flex rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                        {section.badge}
+                      </span>
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Route safety</div>
+              <div className="mt-1 text-xs leading-5 text-slate-500">Each item opens its existing creation flow.</div>
+            </div>
+          </div>
+          <div className="bg-white p-4 transition-all duration-200 ease-out">
+            <div className="mb-3 rounded-xl border border-slate-100 bg-slate-50/70 px-4 py-3">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    {expandedContentSection.badge}
+                  </div>
+                  <div className="mt-1 text-base font-semibold text-slate-950">{expandedContentSection.label}</div>
+                  <div className="mt-1 max-w-sm text-xs leading-5 text-slate-500">{expandedContentSection.summary}</div>
+                </div>
+                <div className="shrink-0 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+                  {expandedContentSection.items.length} types
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              {expandedContentSection.items.map((contentItem, index) => {
+                const childActive = isPathMatch(router.asPath, contentItem.route);
+                const keyboardFocused = focusedItemIndex === index;
+                return (
+                  <button
+                    key={contentItem.id}
+                    type="button"
+                    role="menuitem"
+                    onMouseEnter={() => setFocusedItemIndex(index)}
+                    onFocus={() => setFocusedItemIndex(index)}
+                    onClick={() => navigateToContentItem(contentItem.route)}
+                    aria-label={contentItem.label}
+                    className={`group flex min-h-[74px] items-start gap-3 rounded-xl border px-3 py-3 text-left transition-all duration-200 ${
+                      childActive
+                        ? 'border-sky-500 bg-sky-600 text-white shadow-md shadow-sky-900/15'
+                        : keyboardFocused
+                          ? 'border-slate-300 bg-slate-50 text-slate-900'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-sky-200 hover:bg-sky-50/40 hover:text-slate-950'
+                    }`}
+                  >
+                    <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${
+                      childActive ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500 group-hover:bg-white group-hover:text-sky-700'
+                    }`}>
+                      {contentItem.label.slice(0, 1)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold leading-5">{contentItem.label}</span>
+                        <ChevronRight className={`h-3.5 w-3.5 shrink-0 ${childActive ? 'text-white/80' : 'text-slate-300 group-hover:text-sky-500'}`} />
+                      </span>
+                      <span className={`mt-1 block text-xs leading-4 ${childActive ? 'text-sky-50' : 'text-slate-500'}`} aria-hidden="true">
+                        {contentItem.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex items-center justify-between rounded-xl border border-slate-100 px-3 py-2 text-xs text-slate-500">
+              <span>Arrow keys navigate. Enter opens the selected type.</span>
+              <span className="font-semibold text-slate-600">Esc closes</span>
+            </div>
+          </div>
+        </div>
+      ) : open ? (
         <div className="absolute left-0 top-full z-50 mt-1.5 w-[272px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
           <div className="space-y-0.5 p-1">
             {item.children.map((child) => {
@@ -316,10 +537,12 @@ function UserMenu({
   displayName,
   roleLabel,
   isCompanyAdmin,
+  billingVisible,
 }: {
   displayName: string;
   roleLabel: string | null;
   isCompanyAdmin: boolean;
+  billingVisible: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
@@ -508,6 +731,12 @@ function UserMenu({
               <Link2 className="h-4 w-4 text-slate-400" />
               Integrations
             </Link>
+            {billingVisible ? (
+              <Link href="/company/billing" className={itemClassName}>
+                <CreditCard className="h-4 w-4 text-slate-400" />
+                Billing
+              </Link>
+            ) : null}
             {isCompanyAdmin ? (
               <Link href={SETTINGS_ROUTE_COMPANY_ADMIN_ACCESS} className={itemClassName}>
                 <Settings className="h-4 w-4 text-slate-400" />
@@ -547,6 +776,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
   const { startTour } = useTour();
   const { totalCredits, remainingCredits } = useCredits(isAuthenticated ? selectedCompanyId : null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileContentSection, setMobileContentSection] = useState<ContentNavSection['id'] | null>(null);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -559,6 +789,19 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
   const isCompanyAdmin = (() => {
     const r = (userRole || '').toUpperCase();
     return r === 'COMPANY_ADMIN' || r === 'SUPER_ADMIN' || r === 'ADMIN';
+  })();
+  // Billing nav visibility: company admins + finance roles. Standard users
+  // never see it. The /company/billing page + its APIs independently enforce
+  // org-isolation via assertOrgAccess, so this is presentation-only gating.
+  const billingVisible = (() => {
+    const r = (userRole || '').toUpperCase();
+    return (
+      r === 'COMPANY_ADMIN' ||
+      r === 'SUPER_ADMIN' ||
+      r === 'ADMIN' ||
+      r === 'FINANCE_ADMIN' ||
+      r === 'FINANCE_AUDITOR'
+    );
   })();
   const activeNav = useMemo(
     () =>
@@ -610,6 +853,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                 displayName={displayName}
                 roleLabel={roleLabel}
                 isCompanyAdmin={isCompanyAdmin}
+                billingVisible={billingVisible}
               />
             ) : null}
 
@@ -649,8 +893,74 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                       {item.children.length}
                     </span>
                   </div>
-                  <div className="space-y-1 px-1 pb-1 pt-2">
-                    {item.children.map((child) => (
+                  {item.label === 'Content' ? (
+                    <div className="space-y-1 px-1 pb-1 pt-2">
+                      {CONTENT_NAV_SECTIONS.map((section) => {
+                        const expanded = mobileContentSection === section.id;
+                        const SectionIcon = section.id === 'writer' ? PenTool : Sparkles;
+                        return (
+                          <div key={section.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                            <button
+                              type="button"
+                              aria-expanded={expanded}
+                              onClick={() => setMobileContentSection((current) => current === section.id ? null : section.id)}
+                              className={`flex w-full items-center justify-between gap-3 px-3 py-3 text-left text-sm transition-colors ${
+                                expanded ? 'bg-sky-50 text-sky-800' : 'text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span className="flex min-w-0 items-start gap-3">
+                                <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                                  expanded ? 'border-sky-100 bg-white text-sky-700' : 'border-slate-200 bg-slate-50 text-slate-500'
+                                }`}>
+                                  <SectionIcon className="h-4 w-4" />
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block font-semibold">{section.label}</span>
+                                  <span className="mt-0.5 block text-xs text-slate-500">{section.description}</span>
+                                  <span className="mt-1.5 inline-flex rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                                    {section.badge}
+                                  </span>
+                                </span>
+                              </span>
+                              <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                            </button>
+                            <div className={`grid transition-all duration-200 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                              <div className="overflow-hidden">
+                                <div className="border-t border-slate-100 px-3 py-2 text-xs leading-5 text-slate-500">
+                                  {section.summary}
+                                </div>
+                                <div className="grid grid-cols-1 gap-1.5 border-t border-slate-100 p-2">
+                                  {section.items.map((contentItem) => (
+                                    <Link
+                                      key={contentItem.id}
+                                      href={contentItem.route}
+                                      aria-label={contentItem.label}
+                                      onClick={() => setMobileOpen(false)}
+                                      className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${
+                                        isPathMatch(router.asPath, contentItem.route)
+                                          ? 'border-sky-200 bg-sky-50 text-sky-700'
+                                          : 'border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-bold text-slate-500">
+                                        {contentItem.label.slice(0, 1)}
+                                      </span>
+                                      <span>
+                                        <span className="block font-semibold">{contentItem.label}</span>
+                                        <span className="mt-0.5 block text-xs text-slate-500">{contentItem.description}</span>
+                                      </span>
+                                    </Link>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="space-y-1 px-1 pb-1 pt-2">
+                      {item.children.map((child) => (
                       <Link
                         key={child.href}
                         href={child.href}
@@ -664,8 +974,9 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                         <div className="font-medium">{child.label}</div>
                         <div className="mt-0.5 text-xs text-slate-500">{child.description}</div>
                       </Link>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

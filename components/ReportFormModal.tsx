@@ -5,6 +5,7 @@ import { getAuthToken } from '../utils/getAuthToken';
 import { useCompanyContext } from '@/components/CompanyContext';
 import StepTracker, { type StepDef, type StepTrackerAccent } from '@/components/progress/StepTracker';
 import { parseJsonResponse, type SafeFetchJsonResult } from '@/lib/utils/safeFetchJson';
+import { trackWebsiteEvent } from '../lib/websiteAnalytics';
 
 interface ReportFormModalProps {
   isOpen: boolean;
@@ -328,6 +329,13 @@ export default function ReportFormModal({
       generationContext: generationContext || null,
     };
     const diagnostics = isReportDebugMode();
+
+    trackWebsiteEvent('report_generation_started', {
+      report_type: reportType || 'unknown',
+      report_category: resolvedReportCategory,
+      report_tier: type,
+      report_source: typeof generationContext?.source === 'string' ? generationContext.source : 'unknown',
+    });
 
     if (diagnostics) {
       console.group(`[Report Submission] ${resolvedReportCategory}:${type}`);

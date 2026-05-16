@@ -44,6 +44,53 @@ export async function processCreatorContentJob(job: Job): Promise<any> {
     angle_preference,
     company_profile,
     activity_workspace,
+    user_id,
+  } = job.data;
+
+  // Phase 2 C-1 closure: same wrap-on-flag pattern as content generation.
+  // The internal `deductCredits()` is a stub; turning the flag ON activates
+  // real billing through the orchestrator with exactly-once semantics.
+  const { isBillingFlagEnabled, BILLING_FLAGS } = await import('../../services/billing/billingFeatureFlags');
+  const flag = await isBillingFlagEnabled({
+    organizationId: company_id,
+    flag:           BILLING_FLAGS.RESERVATIONS_REQUIRED,
+  });
+  if (flag.enabled) {
+    const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');
+    const wrapped = await withQueueBilling(
+      {
+        queueName:      'creator-content',
+        jobId:          String(job.id ?? `inline-${Date.now()}`),
+        payload:        { company_id, content_type, topic, audience },
+        organizationId: String(company_id),
+        userId:         String(user_id ?? company_id),
+        action:         'content_generation',
+        referenceType:  'creator_content_job',
+        referenceId:    `${job.id ?? content_type}`,
+      },
+      () => processCreatorContentJobInner(job),
+    );
+    if (wrapped.kind === 'duplicate_blocked') {
+      return { skipped: true, reason: wrapped.reason };
+    }
+    return wrapped.orchestrator.result.status === 'executed'
+      ? (wrapped.orchestrator.result.result as unknown)
+      : { skipped: true, reason: wrapped.orchestrator.result.status };
+  }
+
+  return processCreatorContentJobInner(job);
+}
+
+async function processCreatorContentJobInner(job: Job): Promise<any> {
+  const {
+    company_id,
+    content_type,
+    topic,
+    audience,
+    creator_context,
+    angle_preference,
+    company_profile,
+    activity_workspace,
   } = job.data;
 
   try {

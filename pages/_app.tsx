@@ -11,7 +11,14 @@ import { TourProvider } from '../components/tour/TourContext';
 import AppLayout from '../components/layout/AppLayout';
 import { AuthErrorBanner } from '../components/auth/AuthErrorBanner';
 import { AuthDevPanel } from '../components/auth/AuthDevPanel';
-import { WEBSITE_GA_MEASUREMENT_ID } from '../lib/websiteAnalytics';
+import {
+  WEBSITE_GA_MEASUREMENT_ID,
+  flushQueuedWebsiteEvents,
+  isWebsiteAnalyticsEnabled,
+  hasWebsiteAnalyticsConsent,
+  trackWebsiteEvent,
+  trackWebsitePageView,
+} from '../lib/websiteAnalytics';
 
 // NOTE: clearSupabaseSession() was removed here.  It wiped sb-* localStorage
 // keys (including PKCE code-verifiers) on every page load, which broke magic-
@@ -22,21 +29,59 @@ import { WEBSITE_GA_MEASUREMENT_ID } from '../lib/websiteAnalytics';
 const LANDING_PUBLIC_ROUTES = ['/', '/landing', '/pricing', '/about', '/blog', '/solutions', '/features', '/privacy', '/terms', '/data-deletion', '/marketing-performance-analytics', '/funnel-and-conversion-analysis', '/audit/website-growth-check', '/audit/lead-generation-check', '/audit/campaign-conversion-check', '/free-audit/start', '/free-audit/report'];
 
 const WebsiteAnalytics: React.FC = () => {
+  const router = useRouter();
+  const analyticsEnabled = isWebsiteAnalyticsEnabled();
+
+  useEffect(() => {
+    if (!analyticsEnabled || !router.isReady) return;
+    trackWebsitePageView(router.asPath, document.title);
+
+    const handleRouteChange = (url: string) => {
+      window.setTimeout(() => trackWebsitePageView(url, document.title), 150);
+    };
+
+    router.events.on('routeChangeComplete', handleRouteChange);
+    return () => {
+      router.events.off('routeChangeComplete', handleRouteChange);
+    };
+  }, [analyticsEnabled, router.asPath, router.events, router.isReady]);
+
+  useEffect(() => {
+    if (!analyticsEnabled) return;
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLElement>('[data-ga-primary-cta]')
+        : null;
+      if (!target) return;
+      trackWebsiteEvent('cta_click', {
+        cta_label: target.dataset.gaLabel || target.textContent?.trim().slice(0, 80) || 'primary_cta',
+        cta_location: target.dataset.gaLocation || window.location.pathname,
+      });
+    };
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, [analyticsEnabled]);
+
+  if (!analyticsEnabled || !hasWebsiteAnalyticsConsent()) {
+    return null;
+  }
+
   return (
     <>
       <Script
         src={`https://www.googletagmanager.com/gtag/js?id=${WEBSITE_GA_MEASUREMENT_ID}`}
         strategy="afterInteractive"
       />
-      <Script id="ga-init" strategy="afterInteractive">
+      <Script id="ga-init" strategy="afterInteractive" onReady={flushQueuedWebsiteEvents}>
         {`
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   window.gtag = gtag;
   gtag('js', new Date());
   gtag('config', '${WEBSITE_GA_MEASUREMENT_ID}', {
-    send_page_view: true
+    send_page_view: false
   });
+  window.__omnivyraGaReady = true;
         `}
       </Script>
     </>
@@ -113,6 +158,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const { isAuthenticated, authChecked } = useCompanyContext();
   const [mounted, setMounted] = useState(false);
+  const [authWaitExpired, setAuthWaitExpired] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -150,15 +196,24 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // triggers "Invariant: attempted to hard navigate to the same URL".
   useEffect(() => {
     if (!mounted) return;
-    if (!isPublic && authChecked && !isAuthenticated) {
+    if (!isPublic && (authChecked || authWaitExpired) && !isAuthenticated) {
       router.replace('/login');
     }
-  }, [mounted, isPublic, authChecked, isAuthenticated, router]);
+  }, [mounted, isPublic, authChecked, authWaitExpired, isAuthenticated, router]);
+
+  useEffect(() => {
+    if (isPublic || authChecked || isAuthenticated) {
+      setAuthWaitExpired(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setAuthWaitExpired(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, [isPublic, authChecked, isAuthenticated, router.pathname]);
 
   // Protected routes: hold the render until the backend probe has resolved.
   // This prevents a flash of protected content before we know the user's auth state,
   // and prevents a premature redirect to /login before we know the user is NOT authenticated.
-  if (!isPublic && (!mounted || !authChecked)) {
+  if (!isPublic && (!mounted || (!authChecked && !authWaitExpired))) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
@@ -167,7 +222,7 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }
 
   // While authChecked but unauthenticated, render nothing (useEffect above handles redirect).
-  if (!isPublic && !isAuthenticated) {
+  if (!isPublic && (authChecked || authWaitExpired) && !isAuthenticated) {
     return null;
   }
 
@@ -203,7 +258,9 @@ function MyApp({ Component, pageProps }: AppProps) {
       <TourProvider>
         <Head>
           <link rel="icon" href="/favicon.jpg" />
-          <meta name="google-analytics-measurement-id" content={WEBSITE_GA_MEASUREMENT_ID} />
+          {isWebsiteAnalyticsEnabled() && (
+            <meta name="google-analytics-measurement-id" content={WEBSITE_GA_MEASUREMENT_ID} />
+          )}
         </Head>
         <WebsiteAnalytics />
         <RouteProgressBar />

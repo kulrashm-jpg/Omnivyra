@@ -55,7 +55,7 @@ async function refundCredits(_company_id: string, _key: string): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function processContentGenerationJob(job: Job): Promise<any> {
-  const { company_id, content_type, bulk_mode } = job.data;
+  const { company_id, content_type, bulk_mode, user_id } = job.data;
 
   console.info('[contentGenerationProcessor][start]', {
     jobId: job.id,
@@ -67,6 +67,47 @@ export async function processContentGenerationJob(job: Job): Promise<any> {
   // Pre-flight checks
   void job.updateProgress(5);
 
+  // Phase 2 C-1 closure: when `billing.reservations_required` is enabled for
+  // the org, route the job through the enterprise billing middleware so the
+  // credit reservation lifecycle is exactly-once across Bull MQ retries.
+  // The legacy in-job `deductCredits()` calls are stubs today (no-ops), so
+  // turning the flag ON for the first time activates real billing.
+  const { isBillingFlagEnabled, BILLING_FLAGS } = await import('../../services/billing/billingFeatureFlags');
+  const flag = await isBillingFlagEnabled({
+    organizationId: company_id,
+    flag:           BILLING_FLAGS.RESERVATIONS_REQUIRED,
+  });
+  if (flag.enabled) {
+    const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');
+    const action: 'content_generation' | 'content_basic' = bulk_mode
+      ? 'content_basic'
+      : 'content_generation';
+    const wrapped = await withQueueBilling(
+      {
+        queueName:      'content-generation',
+        jobId:          String(job.id ?? `inline-${Date.now()}`),
+        payload:        { company_id, content_type, bulk_mode, ts: job.data?.run_token ?? null },
+        organizationId: String(company_id),
+        userId:         String(user_id ?? company_id),
+        action,
+        referenceType: 'content_job',
+        referenceId:   `${job.id ?? content_type}`,
+      },
+      () => processContentGenerationJobInner(job),
+    );
+    if (wrapped.kind === 'duplicate_blocked') {
+      return { skipped: true, reason: wrapped.reason };
+    }
+    return wrapped.orchestrator.result.status === 'executed'
+      ? (wrapped.orchestrator.result.result as unknown)
+      : { skipped: true, reason: wrapped.orchestrator.result.status };
+  }
+
+  return processContentGenerationJobInner(job);
+}
+
+async function processContentGenerationJobInner(job: Job): Promise<any> {
+  const { company_id, content_type, bulk_mode } = job.data;
   try {
     if (!bulk_mode && typeof content_type === 'string' && isLongFormContentType(content_type)) {
       return await processLongFormRedirectJob(job);

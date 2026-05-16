@@ -29,8 +29,10 @@ import type { ContentBlock } from '../../lib/blog/blockTypes';
 export interface CreatorContinuityMetadata {
   /** 'image' | 'banner' | 'infographic' | 'carousel' | 'pdf' | 'slider' */
   asset_type?:           string | null;
-  image_mode?:           'composition' | 'text_embedded' | null;
-  recommended_image_mode?: 'composition' | 'text_embedded' | null;
+  attachment_mode?:      'embedded_copy' | 'supporting_visual' | null;
+  asset_composition_intent?: Record<string, unknown> | null;
+  copy_policy?: Record<string, unknown> | null;
+  source_text_transform?: string | null;
   overlay_text?: {
     hook?:           string;
     headline?:       string;
@@ -78,7 +80,7 @@ const SUPPORTED_CONTINUITY_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([1]);
  * the set is dropped during {@link sanitizeCreatorContinuity} so the
  * downstream restore can rely on the values it sees.
  */
-const KNOWN_IMAGE_MODES = new Set(['composition', 'text_embedded']);
+const KNOWN_ATTACHMENT_MODES = new Set(['embedded_copy', 'supporting_visual']);
 const KNOWN_BRAND_MODES = new Set(['brand-aware', 'independent']);
 const KNOWN_BRAND_PRESENCE = new Set(['minimal', 'balanced', 'strong']);
 
@@ -138,12 +140,16 @@ function sanitizeCreatorContinuity(raw: unknown): CreatorContinuityMetadata | nu
   const out: CreatorContinuityMetadata = {};
 
   if (typeof data.asset_type === 'string') out.asset_type = data.asset_type;
-  if (typeof data.image_mode === 'string' && KNOWN_IMAGE_MODES.has(data.image_mode)) {
-    out.image_mode = data.image_mode as 'composition' | 'text_embedded';
+  if (typeof data.attachment_mode === 'string' && KNOWN_ATTACHMENT_MODES.has(data.attachment_mode)) {
+    out.attachment_mode = data.attachment_mode as 'embedded_copy' | 'supporting_visual';
   }
-  if (typeof data.recommended_image_mode === 'string' && KNOWN_IMAGE_MODES.has(data.recommended_image_mode)) {
-    out.recommended_image_mode = data.recommended_image_mode as 'composition' | 'text_embedded';
+  if (data.asset_composition_intent && typeof data.asset_composition_intent === 'object') {
+    out.asset_composition_intent = data.asset_composition_intent as Record<string, unknown>;
   }
+  if (data.copy_policy && typeof data.copy_policy === 'object') {
+    out.copy_policy = data.copy_policy as Record<string, unknown>;
+  }
+  if (typeof data.source_text_transform === 'string') out.source_text_transform = data.source_text_transform;
   if (data.overlay_text && typeof data.overlay_text === 'object') {
     out.overlay_text = data.overlay_text as CreatorContinuityMetadata['overlay_text'];
   }

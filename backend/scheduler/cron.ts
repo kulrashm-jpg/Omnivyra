@@ -32,7 +32,14 @@ import {
 } from '../services/intentExecutionService';
 
 function formatCaughtError(error: unknown): string {
-  return error instanceof Error ? formatCaughtError(error) : String(error);
+  if (error instanceof Error) {
+    return error.stack || error.message;
+  }
+  try {
+    return typeof error === 'string' ? error : JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 // Fail fast if required env vars are missing
@@ -69,6 +76,7 @@ import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
 import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
+import { refreshAnalyticsEnterpriseSnapshot } from '../services/analyticsEnterpriseSnapshotService';
 import { runLeadThreadRecomputeQueueCleanup } from '../workers/leadThreadRecomputeWorker';
 import {
   getLeadThreadRecomputeQueue,
@@ -1197,6 +1205,17 @@ async function runSchedulerCycle() {
           );
         }
       }
+      const refreshedCompanies = result.companies
+        .filter((company) => company.sources.some((source) => source.source === 'ga4' && source.success))
+        .slice(0, 10);
+      await Promise.all(refreshedCompanies.map((company) =>
+        refreshAnalyticsEnterpriseSnapshot(company.companyId).catch((error) => {
+          console.warn('[analytics-enterprise-snapshot][cron-refresh-failed]', {
+            company_id: company.companyId,
+            message: formatCaughtError(error),
+          });
+        }),
+      ));
     } catch (error: unknown) {
       console.error('❌ GA4 ingestion scheduler error:', formatCaughtError(error));
     }

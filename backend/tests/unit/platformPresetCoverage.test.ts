@@ -37,7 +37,7 @@ describe('platform-specific prompt polish', () => {
       eyebrow:      'image',
       metadata:     { platform },
       assetPayload: {},
-      imageMode:    'text_embedded',
+      attachmentMode: 'embedded_copy',
     });
     // Prompt must echo the platform name. This pins the
     // `${platform ? 'Platform intent: ...' : ''}` branch.

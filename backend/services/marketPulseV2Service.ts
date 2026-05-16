@@ -1,6 +1,7 @@
 import { supabase } from '../db/supabaseClient';
 import { getProfile } from './companyProfileService';
 import { buildCompanyContext } from './companyContextService';
+import { getCompanyContextIntelligence } from './companyContextIntelligenceService';
 import { ownedDbTable } from '../db/writeOwner';
 import { buildExecutorContext, type MarketPulseExecutorContext } from './marketPulse/executorContext';
 import { scoreFinding } from './marketPulse/scoringService';
@@ -18,6 +19,28 @@ import { enrichFindingsCrossProduct } from './marketPulse/crossProductCorrelatio
 import { deriveEscalationLevel, evolveMemoryAfterFinding } from './marketPulse/marketMemoryEvolutionService';
 import { buildExecutivePanels } from './marketPulse/executivePanelsService';
 import { sendDeterministicIntelligenceAlert } from './intelligenceAlertService';
+import {
+  buildSignalFromFinding,
+  getAdaptiveMarketPulseFeed,
+  persistMarketPulseSignalForCompany,
+} from './marketPulseIntelligenceService';
+import {
+  getMarketPulseSynthesis,
+  synthesizeMarketPulseIntelligence,
+} from './marketPulseSynthesisService';
+import {
+  getMarketPulseBusinessImpact,
+  synthesizeMarketPulseBusinessImpact,
+} from './marketPulseBusinessImpactService';
+import {
+  getMarketPulseExecutiveExperience,
+  synthesizeMarketPulseExecutiveExperience,
+} from './marketPulseExecutiveExperienceService';
+import { getMarketPulseCollaborationContext } from './marketPulseCollaborationService';
+import {
+  getMarketPulseProductionHardening,
+  synthesizeMarketPulseProductionHardening,
+} from './marketPulseProductionHardeningService';
 
 export const MARKET_PULSE_CATEGORIES = [
   'competitor_moves',
@@ -138,9 +161,22 @@ function slugify(value: string): string {
     .replace(/(^-|-$)/g, '');
 }
 
-export async function getMarketPulseContext(companyId: string) {
+type MarketPulseExecutiveViewType = 'executive' | 'operational' | 'compliance' | 'workforce' | 'funding';
+
+export async function getMarketPulseContext(
+  companyId: string,
+  executiveViewType: MarketPulseExecutiveViewType = 'executive',
+  options?: { limit?: number; offset?: number }
+) {
   const profile = await getProfile(companyId, { autoRefine: false, languageRefine: true });
-  const companyContext = buildCompanyContext(profile);
+  const intelligenceContext = await getCompanyContextIntelligence(companyId).catch(() => null);
+  const adaptiveFeed = await getAdaptiveMarketPulseFeed(companyId, 'executive').catch(() => []);
+  const synthesis = await getMarketPulseSynthesis(companyId, 'executive').catch(() => null);
+  const businessImpact = await getMarketPulseBusinessImpact(companyId).catch(() => null);
+  const executiveExperience = await getMarketPulseExecutiveExperience(companyId, executiveViewType).catch(() => null);
+  const collaborationContext = await getMarketPulseCollaborationContext({ companyId }).catch(() => null);
+  const productionHardening = await getMarketPulseProductionHardening(companyId, options).catch(() => null);
+  const companyContext = buildCompanyContext(profile, { intelligence: intelligenceContext });
   const settings = (profile?.report_settings?.market_pulse ?? {}) as MarketPulseProfileSettings;
   const operatingMarkets = normalizeStringArray(settings.primary_operating_markets);
   const expansionMarkets = normalizeStringArray(settings.target_expansion_markets);
@@ -174,6 +210,12 @@ export async function getMarketPulseContext(companyId: string) {
       website_url: profile?.website_url ?? null,
     },
     companyContext,
+    adaptiveFeed,
+    synthesis,
+    businessImpact,
+    executiveExperience,
+    collaborationContext,
+    productionHardening,
     marketPulseProfile: {
       primary_operating_markets: operatingMarkets,
       target_expansion_markets: expansionMarkets,
@@ -910,6 +952,33 @@ export async function syncLegacyJobIntoRun(runId: string, companyId: string) {
       // Skip this finding but continue the loop — one bad row should not abort
       // the whole run.
       continue;
+    }
+
+    try {
+      const { signal, impacts } = buildSignalFromFinding({
+        title: p.title,
+        summary: p.summary,
+        category: p.category,
+        regions: p.regions,
+        impactType: p.impactType,
+        confidenceScore: p.scored.confidence_score,
+        freshnessScore: p.scored.freshness_score,
+        momentumScore: p.momentum_score,
+        canonicalEventKey: p.canonicalEventKey,
+        sourceName: 'Market Pulse legacy scan',
+      });
+      await persistMarketPulseSignalForCompany({
+        companyId,
+        signal,
+        impacts,
+        profile: (run.context_snapshot?.profile ?? null) as Record<string, unknown> | null,
+      });
+      await synthesizeMarketPulseIntelligence(companyId);
+      await synthesizeMarketPulseBusinessImpact(companyId);
+      await synthesizeMarketPulseExecutiveExperience(companyId);
+      await synthesizeMarketPulseProductionHardening(companyId);
+    } catch (error) {
+      console.warn('[marketpulse-intelligence] failed to persist signal relevance', (error as Error)?.message);
     }
 
     await upsertMemory(companyId, p.canonicalEventKey, p.itemHash, p.changeStatus);

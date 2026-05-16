@@ -7,6 +7,7 @@ import {
 import { getAnalyticsReadiness } from './analyticsDataReadinessService';
 import { getLatestCompletedRun } from './ingestionRunService';
 import { getSearchConsoleDataReadiness } from './searchConsoleReadinessService';
+import { buildOmnivyraGscReportContext } from './omnivyraGscAnalyticsService';
 
 export type GoogleCapabilityKey = 'google_analytics' | 'google_search_console';
 
@@ -17,6 +18,7 @@ export type GoogleCapabilityReadinessStatus =
   | 'property_required'
   | 'property_unverified'
   | 'domain_mapping_required'
+  | 'failed'
   | 'ingestion_pending'
   | 'limited_coverage'
   | 'setup_required';
@@ -56,6 +58,9 @@ function normalizeString(value: unknown): string | null {
 function normalizeDomain(value: unknown): string | null {
   const raw = normalizeString(value);
   if (!raw) return null;
+  if (/^sc-domain:/i.test(raw)) {
+    return raw.replace(/^sc-domain:/i, '').replace(/^www\./i, '').toLowerCase();
+  }
 
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   try {
@@ -161,13 +166,15 @@ export async function getGoogleAnalyticsCapabilityReadiness(companyId: string): 
   }
 
   if (status.ready && analyticsReadiness && !analyticsReadiness.ready) {
+    const readinessStatus: GoogleCapabilityReadinessStatus =
+      analyticsReadiness.status === 'failed' ? 'failed' : 'ingestion_pending';
     return {
       provider: 'google',
       capability: 'google_analytics',
       provider_authenticated: true,
       capability_ready: false,
       connected: false,
-      status: 'ingestion_pending',
+      status: readinessStatus,
       message: analyticsReadiness.reason || 'Google Analytics is connected. Sync analytics data to make it report-ready.',
       action_label: 'Sync Google Analytics',
       details: {
@@ -299,6 +306,34 @@ export async function getGoogleSearchConsoleReadiness(companyId: string): Promis
       details: {
         property,
         verified_domains: verifiedDomains,
+      },
+    };
+  }
+
+  const platformGscContext = await buildOmnivyraGscReportContext(companyId).catch(() => null);
+  if (
+    platformGscContext?.provenance.source === 'gsc_canonical_ingestion' &&
+    platformGscContext.provenance.property_url === property &&
+    (platformGscContext.status.status === 'live' ||
+      platformGscContext.status.status === 'stale' ||
+      platformGscContext.status.status === 'partial')
+  ) {
+    return {
+      provider: 'google',
+      capability: 'google_search_console',
+      provider_authenticated: true,
+      capability_ready: platformGscContext.status.status === 'live',
+      connected: true,
+      status: platformGscContext.status.status === 'live' ? 'ready' : 'limited_coverage',
+      message: platformGscContext.status.message,
+      action_label: 'Connected',
+      details: {
+        property,
+        last_successful_ingestion_at: platformGscContext.status.last_sync,
+        search_data_status: platformGscContext.status.status,
+        rows_ingested: platformGscContext.status.rows_ingested,
+        latest_metric_date: platformGscContext.status.last_successful_data_date,
+        provenance: platformGscContext.provenance.source,
       },
     };
   }

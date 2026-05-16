@@ -11,12 +11,27 @@ type IdempotencyRecord = {
   request_hash: string;
   response_status: number | null;
   response_body: unknown;
+  locked_at: string | null;
+  request_id: string | null;
 };
 
 type Options = {
   methods?: string[];
   scope?: string;
+  /**
+   * A `processing` row whose `locked_at` is older than this many milliseconds
+   * is considered abandoned (the handler that set it crashed/was killed
+   * before finalizing). The next request for the same key reclaims the lock
+   * via a guarded UPDATE instead of returning 409 forever. Defaults to
+   * IDEMPOTENCY_STALE_LOCK_MS env (or 10 minutes). Replay protection is
+   * unaffected — COMPLETED rows still short-circuit before this branch, and
+   * the financial ledger's UNIQUE idempotency_key remains the real
+   * double-settlement guard.
+   */
+  staleLockMs?: number;
 };
+
+const DEFAULT_STALE_LOCK_MS = Number(process.env.IDEMPOTENCY_STALE_LOCK_MS ?? '') || 10 * 60 * 1000;
 
 function parseBody(req: NextApiRequest): unknown {
   if (typeof req.body === 'string') {
@@ -48,7 +63,7 @@ function buildRequestHash(req: NextApiRequest, scope: string): string {
 
 async function loadExisting(scope: string, key: string): Promise<IdempotencyRecord | null> {
   const { data, error } = await ownedDbTable('api_idempotency_keys')
-    .select('id, idempotency_key, status, request_hash, response_status, response_body')
+    .select('id, idempotency_key, status, request_hash, response_status, response_body, locked_at, request_id')
     .eq('scope', scope)
     .eq('idempotency_key', key)
     .maybeSingle();
@@ -98,6 +113,7 @@ export function withIdempotency(
 ): NextApiHandler {
   const methods = new Set((options.methods ?? ['POST', 'PUT', 'PATCH', 'DELETE']).map((m) => m.toUpperCase()));
   const scope = options.scope ?? 'default';
+  const staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
 
   return async (req: NextApiRequest, res: NextApiResponse) => {
     const method = (req.method ?? 'GET').toUpperCase();
@@ -143,7 +159,75 @@ export function withIdempotency(
       }
 
       if (existing.status === 'processing') {
-        return res.status(409).json({ error: 'Request with this Idempotency-Key is already in progress', code: 'IDEMPOTENCY_IN_PROGRESS' });
+        // Ownership short-circuit: if THIS request created the row (its
+        // request_id is on the row), the lock is ours — proceed to execute.
+        // This is what lets a brand-new request run: createRecord() stamps
+        // the row with our requestId, loadExisting() reads it back, and we
+        // recognize it as our own rather than treating it as a concurrent
+        // in-flight request.
+        if (existing.request_id && existing.request_id === requestId) {
+          // fall through to handler execution
+        } else {
+        // Is the in-flight holder provably dead? A `processing` row whose
+        // `locked_at` is older than the stale window means the handler that
+        // set it crashed/was killed before finalizing. Reclaim the lock via
+        // a guarded UPDATE so a fresh request is not blocked forever.
+        const lockedAtMs = existing.locked_at ? Date.parse(existing.locked_at) : NaN;
+        const isStale =
+          !existing.locked_at ||
+          (Number.isFinite(lockedAtMs) && Date.now() - lockedAtMs > staleLockMs);
+
+        if (!isStale) {
+          // A genuinely active request holds the lock — correct to reject.
+          return res.status(409).json({
+            error: 'Request with this Idempotency-Key is already in progress',
+            code: 'IDEMPOTENCY_IN_PROGRESS',
+          });
+        }
+
+        // Stale-lock takeover. The WHERE clause re-asserts status='processing'
+        // AND the same stale `locked_at`, so exactly one concurrent reclaimer
+        // can win; the loser falls through to the 409 below. Replay
+        // protection is unaffected: COMPLETED rows already short-circuited
+        // above, and the ledger's UNIQUE idempotency_key prevents double
+        // settlement even if a takeover races a late-finishing original.
+        const staleCutoffIso = new Date(Date.now() - staleLockMs).toISOString();
+        let takeover = ownedDbTable('api_idempotency_keys')
+          .update({
+            status: 'processing',
+            request_id: requestId,
+            request_hash: requestHash,
+            locked_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            last_error: 'stale_lock_reclaimed',
+          })
+          .eq('scope', scope)
+          .eq('idempotency_key', idempotencyKey)
+          .eq('status', 'processing');
+        // Only reclaim rows that are actually stale (older than cutoff) OR
+        // have a null lock timestamp. This prevents stealing a lock that was
+        // refreshed between our read and this write.
+        takeover = existing.locked_at
+          ? takeover.lt('locked_at', staleCutoffIso)
+          : takeover.is('locked_at', null);
+
+        const { data: reclaimed, error: takeoverErr } = await takeover
+          .select('id')
+          .maybeSingle();
+
+        if (takeoverErr) {
+          return res.status(500).json({ error: 'Failed to reclaim stale idempotency lock' });
+        }
+        if (!reclaimed) {
+          // Another concurrent request won the takeover, or the original
+          // finished and finalized the row between our read and write.
+          return res.status(409).json({
+            error: 'Request with this Idempotency-Key is already in progress',
+            code: 'IDEMPOTENCY_IN_PROGRESS',
+          });
+        }
+        // We own the lock now — fall through to execute the handler.
+        } // end else (not our own freshly-created lock)
       }
 
       if (existing.status === 'failed') {

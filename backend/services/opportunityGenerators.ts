@@ -128,7 +128,10 @@ Consider cultural context, market sentiment, and seasonal timing for the region.
       competitive_pressure: string;
       cultural_considerations: string;
       priority_score: number;
-    }>(systemPrompt, userPrompt);
+    }>(systemPrompt, userPrompt, {
+      organizationId: companyId,
+      processType: 'generateTrendRecommendationForRegion',
+    });
 
     return {
       opportunities: Array.isArray(data?.opportunities) ? data.opportunities : [],
@@ -310,7 +313,8 @@ ${executorBlock ? `COMPANY-AWARE PRIORITIZATION (REQUIRED — do not skip):
   try {
     const { data } = await runDiagnosticPrompt<{ topics: (MarketPulseTopic & { trend_velocity?: number })[] }>(
       systemPrompt,
-      userPrompt
+      userPrompt,
+      { organizationId: companyId, processType: 'generateMarketPulseForRegion' }
     );
     const topics = Array.isArray(data?.topics) ? data.topics : [];
     const sanitized = topics.slice(0, 8).map((t) => {

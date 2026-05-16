@@ -25,6 +25,7 @@ import {
 import { getThreadContinuationLink, getThreadSchedulerLink } from '../../lib/thread/threadLinks';
 import {
   THREAD_CREATOR_ASSET_TYPES,
+  assetLabel,
   buildWriterCreatorPrefill,
   createWriterSourceId,
   launchCreatorFromWriter,
@@ -33,6 +34,13 @@ import {
   type CreatorAssetLaunchType,
   type WriterAttachedAsset,
 } from '../../lib/content/writerCreatorAssetLaunch';
+import {
+  attachmentModeLabel,
+  defaultAttachmentModeForAsset,
+  defaultTransformForAsset,
+  type AttachmentMode,
+  type SourceTextTransform,
+} from '../../lib/content/writerCreatorAttachmentContracts';
 
 type ApiResponse = {
   success?: boolean;
@@ -108,6 +116,8 @@ export default function ThreadResultView() {
   const [copied, setCopied] = useState(false);
   const [activeSessionToken, setActiveSessionToken] = useState('');
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
+  const [selectedAttachmentMode, setSelectedAttachmentMode] = useState<AttachmentMode>('supporting_visual');
+  const [selectedSourceTextTransform, setSelectedSourceTextTransform] = useState<SourceTextTransform>('none');
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
 
   useEffect(() => {
@@ -276,6 +286,10 @@ export default function ThreadResultView() {
 
   const launchAssetCreator = (assetType: CreatorAssetLaunchType) => {
     if (!session) return;
+    const attachmentMode = selectedAttachmentMode || defaultAttachmentModeForAsset(assetType);
+    const sourceTextTransform = selectedSourceTextTransform === 'none'
+      ? defaultTransformForAsset(assetType, attachmentMode)
+      : selectedSourceTextTransform;
     setAssetMenuOpen(false);
     launchCreatorFromWriter({
       router,
@@ -283,9 +297,11 @@ export default function ThreadResultView() {
       source: buildWriterCreatorPrefill({
         sourceType: 'thread',
         sourceId: writerSourceId,
+        assetType,
+        attachmentMode,
+        sourceTextTransform,
         title: session.topic,
         body: fullThread,
-        cta: session.cta,
         audience: session.audience,
         tone: decisionTrace?.tone_used || session.tone,
         platform: session.platform,
@@ -296,7 +312,6 @@ export default function ThreadResultView() {
           productsServices: session.productsServices,
           brandVoice: session.brandVoice,
         },
-        threadSegments: segments,
       }),
     });
   };
@@ -473,7 +488,57 @@ export default function ThreadResultView() {
                         <div className="border-b border-slate-100 px-4 py-3">
                           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset from thread</p>
                           <p className="mt-1 text-xs text-slate-500">Choose a supported Creator asset and we will prefill it from this thread sequence.</p>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            {(['supporting_visual', 'embedded_copy'] as AttachmentMode[]).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedAttachmentMode(mode);
+                                }}
+                                className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                                  selectedAttachmentMode === mode
+                                    ? 'border-violet-600 bg-violet-600 text-white'
+                                    : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200'
+                                }`}
+                              >
+                                {attachmentModeLabel(mode)}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            {([
+                              ['none', 'Support visually'],
+                              ['summarize', 'Summarize visually'],
+                              ['framework', 'Framework visualization'],
+                              ['quote', 'Quote extraction'],
+                            ] as Array<[SourceTextTransform, string]>).map(([transform, label]) => (
+                              <button
+                                key={transform}
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedSourceTextTransform(transform);
+                                }}
+                                className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                                  selectedSourceTextTransform === transform
+                                    ? 'border-violet-600 bg-violet-600 text-white'
+                                    : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => setAssetMenuOpen(false)}
+                          className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-500 transition hover:bg-slate-50"
+                        >
+                          No asset
+                        </button>
                         {THREAD_CREATOR_ASSET_TYPES.map((assetType) => (
                           <button
                             key={assetType}
@@ -481,9 +546,9 @@ export default function ThreadResultView() {
                             onClick={() => launchAssetCreator(assetType)}
                             className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                           >
-                            <span>{assetType.charAt(0).toUpperCase() + assetType.slice(1)}</span>
+                            <span>{assetLabel(assetType)}</span>
                             <span className="mt-1 block text-xs font-normal text-slate-500">
-                              Opens {assetType.charAt(0).toUpperCase() + assetType.slice(1)} Creator with this thread attached.
+                              Opens {assetLabel(assetType)} Creator with this thread attached.
                             </span>
                           </button>
                         ))}
@@ -509,7 +574,7 @@ export default function ThreadResultView() {
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Attached Assets</p>
                 {attachedAssets.length === 0 ? (
                   <p className="mt-3 text-sm leading-6 text-slate-600">
-                    No Creator assets attached yet. Use Add Asset to launch Image, Banner, Infographic, Carousel, PDF, or Slider with this thread prefilled.
+                    No Creator assets attached yet. Use Add Asset to launch a supporting image, banner, infographic, carousel, or brand card with this thread prefilled.
                   </p>
                 ) : (
                   <div className="mt-3 space-y-2">
@@ -523,10 +588,8 @@ export default function ThreadResultView() {
                       >
                         <span className="font-semibold">{asset.title}</span>
                         <span className="mt-1 block text-xs text-slate-500">
-                          {asset.creatorType.charAt(0).toUpperCase() + asset.creatorType.slice(1)}
-                          {asset.creatorType === 'image' && asset.imageMode
-                            ? ` - ${asset.imageMode === 'text_embedded' ? 'Text Inside Image' : 'Post + Image'}`
-                            : ''}
+                          {assetLabel(asset.creatorType)}
+                          {asset.attachmentMode ? ` - ${attachmentModeLabel(asset.attachmentMode)}` : ''}
                           {asset.previewKind ? ` - ${asset.previewKind.replace(/_/g, ' ')}` : ''}
                         </span>
                       </a>

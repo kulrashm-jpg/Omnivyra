@@ -6,6 +6,7 @@ import type {
   IntegrationCapability,
 } from '../types/integrationCapabilities';
 import { normalizePlatform } from '../constants/platforms';
+import { invalidateCapabilityAggregate } from './capabilityCacheService';
 
 export type RecordConsentInput = {
   organizationId: string;
@@ -49,6 +50,7 @@ export async function recordConsent(input: RecordConsentInput): Promise<ConsentR
   if (error || !data) {
     throw new Error(`Failed to record consent: ${error?.message ?? 'unknown error'}`);
   }
+  invalidateCapabilityAggregate(input.organizationId);
   return data as ConsentRecord;
 }
 
@@ -68,6 +70,9 @@ export async function revokeConsent(input: RevokeConsentInput): Promise<ConsentR
 
   if (error) {
     throw new Error(`Failed to revoke consent: ${error.message}`);
+  }
+  if (data) {
+    invalidateCapabilityAggregate(input.organizationId);
   }
   return (data as ConsentRecord | null) ?? null;
 }

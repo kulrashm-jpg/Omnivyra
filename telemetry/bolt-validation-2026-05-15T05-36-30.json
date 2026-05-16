@@ -1,0 +1,135 @@
+[
+  {
+    "phase": "phase-4",
+    "name": "PHASE 4 — Medium load (Schedule, 2wk, LinkedIn+X, Post+Article)",
+    "run_id": "f45c6b78-dc2f-432a-b53f-030119a71328",
+    "started_at": "2026-05-15T05:36:30.932Z",
+    "ended_at": "2026-05-15T05:38:25.435Z",
+    "runtime_ms": 113954,
+    "runtime_human": "114.0s",
+    "runtime_error_caught": "Unsupported creator format: article, feed_post.",
+    "memory": {
+      "before": {
+        "rss_mb": 297.1,
+        "heapUsed_mb": 109.1
+      },
+      "after": {
+        "rss_mb": 166.6,
+        "heapUsed_mb": 90.8
+      },
+      "rss_delta_mb": -130.5
+    },
+    "run_row": {
+      "id": "f45c6b78-dc2f-432a-b53f-030119a71328",
+      "status": "failed",
+      "current_stage": "schedule-structured-plan",
+      "progress_percentage": 83,
+      "result_campaign_id": null,
+      "error_message": "Your campaign plan was disrupted due to a technical glitch. Please try again. If the problem persists, try again later or reach out for support.",
+      "raw_error_message": "Unsupported creator format: article, feed_post.",
+      "failed_stage": "pipeline-outer",
+      "failed_after_ms": "113732",
+      "pipeline_mode": "schedule",
+      "campaign_type": "bolt-text",
+      "weeks_generated": null,
+      "daily_slots_created": null,
+      "scheduled_posts_created": null,
+      "content_jobs_total": 0,
+      "content_jobs_done": 0,
+      "ai_calls_total": null,
+      "ai_tokens_input": null,
+      "ai_tokens_output": null,
+      "ai_cost_usd": null
+    },
+    "db_writes": {
+      "daily_content_plans": 0,
+      "scheduled_posts": 0
+    },
+    "stage_breakdown": [
+      {
+        "stage": "source-recommendation",
+        "started_at": "2026-05-15T05:36:34.564Z",
+        "ended_at": "2026-05-15T05:36:35.434Z",
+        "status": "completed",
+        "duration_ms": 1009,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "ai/plan",
+        "started_at": "2026-05-15T05:36:35.987Z",
+        "ended_at": "2026-05-15T05:38:01.411Z",
+        "status": "completed",
+        "duration_ms": 85309,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "commit-plan",
+        "started_at": "2026-05-15T05:38:02.011Z",
+        "ended_at": "2026-05-15T05:38:03.461Z",
+        "status": "completed",
+        "duration_ms": 1612,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "generate-weekly-structure-weeks-1-2",
+        "started_at": "2026-05-15T05:38:04.066Z",
+        "ended_at": null,
+        "status": null,
+        "duration_ms": null
+      },
+      {
+        "stage": "generate-weekly-structure-week-1",
+        "started_at": null,
+        "ended_at": "2026-05-15T05:38:22.615Z",
+        "status": "completed",
+        "duration_ms": null,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "generate-weekly-structure-week-2",
+        "started_at": null,
+        "ended_at": "2026-05-15T05:38:22.740Z",
+        "status": "completed",
+        "duration_ms": null,
+        "error_message": null,
+        "raw_error_message": null
+      },
+      {
+        "stage": "schedule-structured-plan",
+        "started_at": "2026-05-15T05:38:23.189Z",
+        "ended_at": "2026-05-15T05:38:25.648Z",
+        "status": "failed",
+        "duration_ms": 2459,
+        "error_message": "Your campaign plan was disrupted due to a technical glitch. Please try again. If the problem persists, try again later or reach out for support.",
+        "raw_error_message": "Unsupported creator format: article, feed_post."
+      },
+      {
+        "stage": "pipeline-outer",
+        "started_at": null,
+        "ended_at": "2026-05-15T05:38:25.869Z",
+        "status": "failed",
+        "duration_ms": null,
+        "error_message": "Your campaign plan was disrupted due to a technical glitch. Please try again. If the problem persists, try again later or reach out for support.",
+        "raw_error_message": "Unsupported creator format: article, feed_post."
+      }
+    ],
+    "success_evaluation": {
+      "completed": false,
+      "within_max_runtime": true,
+      "max_runtime_ms": 1200000,
+      "failed_event_count": 2,
+      "failed_event_stages": [
+        "schedule-structured-plan",
+        "pipeline-outer"
+      ],
+      "final_status": "failed",
+      "failed_stage": "pipeline-outer",
+      "raw_error_message": "Unsupported creator format: article, feed_post.",
+      "failed_after_ms": "113732"
+    }
+  }
+]

@@ -1,7 +1,19 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess, resolveUserContext } from '../../../../backend/services/userContextService';
-import { createCreatorExecutionEngine } from '../../../../backend/services/executionEngines/creatorExecutionEngine';
-import { renderAsset } from '../../../../backend/services/creatorAssetRenderer';
+import { measureCreatorDuration } from '../../../../backend/services/creatorRuntimeMetrics';
+import { isGuidanceOnlyContentType } from '../../../../backend/services/creatorTemplateRegistryService';
+import {
+  buildAssetCompositionIntent,
+  normalizeAttachmentMode,
+  normalizeSourceTextTransform,
+  normalizeWriterCreatorAssetType,
+  validateAttachmentPayload,
+  type AssetCompositionIntent,
+} from '../../../../lib/content/writerCreatorAttachmentContracts';
+import { containsDirectThreadDuplication, transformThreadForVisual } from '../../../../lib/content/writerCreatorThreadTransform';
+import { detectSemanticThreadDuplication } from '../../../../backend/services/creatorSemanticDuplication';
+import { enqueueDurableCreatorRenderJob } from '../../../../backend/services/creatorRenderDurableQueue';
+import { createCreatorAuditId } from '../../../../backend/services/creatorRenderObservability';
 
 type GenerateCreatorBody = {
   company_id?: string;
@@ -59,6 +71,86 @@ function safeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function normalizeCreatorCardForAttachment(input: {
+  creatorCard: Record<string, unknown>;
+  creatorType: string;
+  contentType: string;
+}): { creatorCard: Record<string, unknown>; compositionIntent: AssetCompositionIntent | null; errors: string[] } {
+  const rawIntent = safeObject(input.creatorCard.asset_composition_intent);
+  const hasWriterIntent = typeof input.creatorCard.attachment_mode === 'string' || Object.keys(rawIntent).length > 0;
+  if (!hasWriterIntent) return { creatorCard: input.creatorCard, compositionIntent: null, errors: [] };
+
+  const assetType = normalizeWriterCreatorAssetType(
+    rawIntent.assetType ?? input.creatorCard.writer_asset_type ?? input.creatorType ?? input.contentType,
+  );
+  const attachmentMode = normalizeAttachmentMode(rawIntent.attachmentMode ?? input.creatorCard.attachment_mode);
+  const rawCopyPolicy = safeObject(input.creatorCard.copy_policy);
+  const sourceTextTransform = normalizeSourceTextTransform(
+    safeObject(rawIntent.copyPolicy).sourceTextTransform ?? rawCopyPolicy.sourceTextTransform ?? input.creatorCard.source_text_transform,
+  );
+  const compositionIntent = buildAssetCompositionIntent({
+    assetType,
+    attachmentMode,
+    sourceTextTransform,
+    copyPolicy: rawCopyPolicy.sourceTextTransform
+      ? {
+          allowHeadline: rawCopyPolicy.allowHeadline === true,
+          allowKeyInsight: rawCopyPolicy.allowKeyInsight === true,
+          allowCTA: rawCopyPolicy.allowCTA === true,
+          sourceTextTransform,
+        }
+      : undefined,
+  });
+  const overlayText = safeObject(input.creatorCard.overlay_text);
+  const sourceContent = safeObject(input.creatorCard.source_content);
+  const validation = validateAttachmentPayload({
+    attachmentMode,
+    assetType,
+    copyPolicy: compositionIntent.copyPolicy,
+    overlayText,
+    cta: input.creatorCard.cta ?? input.creatorCard.CTA ?? overlayText.cta,
+    sourceText: String(sourceContent.snippet || ''),
+    sourceType: sourceContent.source_type === 'thread' ? 'thread' : 'post',
+  });
+  const creatorCard: Record<string, unknown> = {
+    ...input.creatorCard,
+    writer_asset_type: assetType,
+    attachment_mode: attachmentMode,
+    asset_composition_intent: compositionIntent,
+    copy_policy: compositionIntent.copyPolicy,
+    source_text_transform: compositionIntent.copyPolicy?.sourceTextTransform ?? 'none',
+    renderer_text_policy: attachmentMode === 'supporting_visual' ? 'background_only' : 'deterministic_typography',
+  };
+  if (sourceContent.source_type === 'thread') {
+    const transformed = transformThreadForVisual({
+      sourceText: String(sourceContent.snippet || ''),
+      transform: sourceTextTransform,
+    });
+    creatorCard.thread_visual_transform = transformed;
+    if (containsDirectThreadDuplication({
+      rawSourceText: String(sourceContent.snippet || ''),
+      visualItems: transformed.items,
+    })) {
+      validation.errors.push('raw thread segments cannot map directly to visual output');
+    }
+    const semanticDuplication = detectSemanticThreadDuplication({
+      rawSourceText: String(sourceContent.snippet || ''),
+      visualItems: transformed.items,
+      transform: sourceTextTransform,
+    });
+    creatorCard.semantic_thread_duplication = semanticDuplication;
+    if (!semanticDuplication.ok) {
+      validation.errors.push('semantic thread duplication detected');
+    }
+  }
+  if (attachmentMode === 'supporting_visual') {
+    delete creatorCard.overlay_text;
+    delete creatorCard.cta;
+    delete creatorCard.CTA;
+  }
+  return { creatorCard, compositionIntent, errors: validation.errors };
+}
+
 function mergeRenderedMedia(output: any, rendered: { url?: string | null; files?: string[] | null; metadata?: Record<string, unknown> | null }) {
   const mediaBundle = safeObject(output?.asset_payload?.media_bundle);
   return {
@@ -89,6 +181,7 @@ function humanize(value: string): string {
 function resolveBetaAssetType(contentType: string): string {
   const normalized = String(contentType || '').toLowerCase();
   if (['carousel', 'pdf', 'slider'].includes(normalized)) return 'carousel';
+  if (['banner', 'infographic', 'brand_card'].includes(normalized)) return normalized;
   return 'image';
 }
 
@@ -171,6 +264,185 @@ function buildBetaCreatorFallback(input: {
   };
 }
 
+/**
+ * Theme Treatment generator. Thin delegation to the shared service
+ * {@link backend/services/creatorThemeTreatmentService.ts} so the BOLT
+ * runtime and this standalone API path produce identical blueprints,
+ * including the marketing package and creator guidance bundle.
+ */
+async function generateThemeTreatment(input: {
+  companyId: string;
+  userId: string | null;
+  topic: string;
+  contentType: string;
+  targetPlatforms: string[];
+  audience?: string;
+  objective?: string;
+  summary?: string;
+  creatorCard: Record<string, unknown>;
+}): Promise<any> {
+  const { generateCreatorThemeTreatment } = await import('../../../../backend/services/creatorThemeTreatmentService');
+  return generateCreatorThemeTreatment({
+    companyId: input.companyId,
+    userId: input.userId,
+    topic: input.topic,
+    contentType: input.contentType,
+    targetPlatforms: input.targetPlatforms,
+    audience: input.audience,
+    objective: input.objective,
+    summary: input.summary,
+    creatorCard: input.creatorCard,
+  });
+}
+
+/**
+ * Returns true for text-only creator formats (post / thread) where the
+ * canonical asset family is 'text' and the renderer doesn't apply. These
+ * paths produce platform-ready text content directly via LLM — caption,
+ * hashtags, CTA, and (for threads) a connected segment sequence.
+ */
+function isTextOnlyContentType(contentType: string): boolean {
+  const normalized = String(contentType || '').trim().toLowerCase();
+  return normalized === 'post' || normalized === 'thread';
+}
+
+async function generateTextContent(input: {
+  companyId: string;
+  userId: string | null;
+  topic: string;
+  contentType: string;
+  targetPlatforms: string[];
+  audience?: string;
+  objective?: string;
+  summary?: string;
+  creatorCard: Record<string, unknown>;
+}): Promise<any> {
+  const [{ runCompletionWithOperation }, { config: appConfig }] = await Promise.all([
+    import('../../../../backend/services/aiGateway'),
+    import('@/config'),
+  ]);
+
+  const isThread = String(input.contentType).toLowerCase() === 'thread';
+  const platform = (input.targetPlatforms[0] || 'linkedin').toLowerCase();
+  const subtype = String(input.creatorCard.subtype || '').trim();
+  const tone = String(input.creatorCard.tone || '').trim();
+  const cta = String(input.creatorCard.cta || '').trim();
+  const constraints = String(input.creatorCard.constraints || '').trim();
+
+  const platformHints: Record<string, string> = {
+    linkedin: 'LinkedIn: professional voice, 1-3 short paragraphs, 3-5 hashtags, end with one clear ask.',
+    x: 'X / Twitter: under 280 chars, sharp hook, no formatting, 1-2 hashtags max.',
+    facebook: 'Facebook: conversational, 1-2 paragraphs, 3-4 hashtags, encourage replies.',
+    threads: 'Threads: concise, casual, optional hashtags, lead with the hook.',
+    reddit: 'Reddit: no marketing language, lead with curiosity or insight, avoid emojis/hashtags.',
+    instagram: 'Instagram: visual hook in opening line, line breaks for scanability, 5-10 hashtags.',
+  };
+
+  const systemPrompt = isThread
+    ? `You are a senior social copywriter specialized in connected ${platform} threads. You produce native, scroll-stopping thread sequences with a strong hook, 3-7 progression posts, and a clear CTA close. Return JSON only.
+
+Output JSON shape:
+{
+  "hook_segment": "first post in the thread — strongest scroll-stop line",
+  "segments": ["post 2", "post 3", ...],
+  "cta_segment": "final CTA close",
+  "caption": "the FULL combined thread as one block, segments separated by double newlines",
+  "hashtags": ["tag1", "tag2"],
+  "meta_description": "60-160 char summary"
+}`
+    : `You are a senior social copywriter specialized in native ${platform} posts. You produce scroll-stopping, platform-native content with a strong hook, useful body, and one clear CTA. Return JSON only.
+
+Output JSON shape:
+{
+  "hook": "scroll-stop opening line",
+  "body": "main post body (markdown-light, line breaks ok)",
+  "cta_line": "single CTA line",
+  "caption": "the FULL post text — hook + body + cta as one block",
+  "hashtags": ["tag1", "tag2"],
+  "meta_description": "60-160 char summary"
+}`;
+
+  const userPrompt = `Generate a ${input.contentType} for ${platform}.
+
+Topic: ${input.topic}
+Audience: ${input.audience || 'general professional audience'}
+Objective: ${input.objective || 'awareness'}
+${subtype ? `Subtype: ${subtype}` : ''}
+${tone ? `Tone: ${tone}` : ''}
+${cta ? `Desired CTA: ${cta}` : ''}
+${input.summary ? `Key message: ${input.summary}` : ''}
+${constraints ? `Constraints: ${constraints}` : ''}
+
+Platform guidance: ${platformHints[platform] || 'Match the conventions of the target platform.'}
+
+Avoid generic marketing adjectives (premium, game-changing, unlock, elevate) unless the user supplied that language. Lead with specifics. Return JSON only.`;
+
+  const result = await runCompletionWithOperation({
+    companyId: input.companyId,
+    model: appConfig.OPENAI_MODEL,
+    operation: `creator_text_content_${input.contentType}`,
+    temperature: 0.5,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+  });
+
+  const parsed = JSON.parse(String(result?.output || '{}')) as Record<string, unknown>;
+  const caption = String(parsed.caption || '').trim()
+    || (isThread
+        ? [parsed.hook_segment, ...(Array.isArray(parsed.segments) ? parsed.segments : []), parsed.cta_segment].filter(Boolean).map(String).join('\n\n')
+        : [parsed.hook, parsed.body, parsed.cta_line].filter(Boolean).map(String).join('\n\n'));
+  const hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags.map(String).filter(Boolean) : [];
+  const metaDescription = String(parsed.meta_description || '').trim() || caption.slice(0, 160);
+  const threadSegments = isThread && Array.isArray(parsed.segments)
+    ? parsed.segments.map(String).filter(Boolean)
+    : [];
+
+  return {
+    intent_type: 'creator',
+    asset_type: 'image',
+    asset_instruction: {
+      blueprint: parsed,
+      structure: { output_shape: isThread ? 'thread_sequence' : 'single_post' },
+      visual_style: tone || 'native_platform_voice',
+      template_id: `text-content-${input.contentType}`,
+    },
+    asset_payload: {
+      asset_kind: 'text_content',
+      content_type: input.contentType,
+      hook: String(parsed.hook || parsed.hook_segment || '').trim(),
+      body: String(parsed.body || '').trim(),
+      cta_line: String(parsed.cta_line || parsed.cta_segment || cta || '').trim(),
+      thread_segments: threadSegments,
+      media_bundle: {
+        metadata: {
+          preview_kind: 'text_content',
+          content_type: input.contentType,
+          platform,
+          generated_by: 'creator_text_content',
+        },
+      },
+    },
+    packaging: {
+      caption,
+      hashtags,
+      cta: String(parsed.cta_line || parsed.cta_segment || cta || 'Learn more'),
+      meta_description: metaDescription,
+      keywords: [input.topic, input.contentType, platform].filter(Boolean),
+      platform_variants: {},
+    },
+    generation_prompt: `creator-text-content:${input.contentType}:${input.topic}`,
+    metadata: {
+      content_type: input.contentType,
+      target_platforms: input.targetPlatforms,
+      preview_kind: 'text_content',
+      text_only: true,
+    },
+  };
+}
+
 function shouldUseCreatorFallback(error: unknown): boolean {
   const anyError = error as { code?: unknown; status?: unknown; statusCode?: unknown; message?: unknown };
   const code = String(anyError?.code || '').toUpperCase();
@@ -210,6 +482,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const targetPlatforms = Array.isArray(body.target_platforms)
     ? body.target_platforms.map((platform) => String(platform || '').trim().toLowerCase()).filter(Boolean)
     : [];
+  const creatorCardInput = safeObject(body.creator_card);
+  const normalizedAttachment = normalizeCreatorCardForAttachment({
+    creatorCard: creatorCardInput,
+    creatorType: String(body.creator_type || ''),
+    contentType,
+  });
+  if (normalizedAttachment.errors.length > 0) {
+    return res.status(400).json({
+      error: 'Invalid Writer attachment payload',
+      details: normalizedAttachment.errors,
+    });
+  }
+  const creatorCard = normalizedAttachment.creatorCard;
 
   if (!companyId) {
     return res.status(400).json({ error: 'company_id required' });
@@ -227,12 +512,93 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
 
+  // Text-only formats (post / thread) take a separate path: they produce
+  // platform-ready text content directly via LLM. The existing creator
+  // engine throws for these (canonical_asset_family: 'text', ai_renderable:
+  // false), so we short-circuit to a dedicated text generator that returns
+  // a CanonicalCreatorOutput-shaped response.
+  if (isTextOnlyContentType(contentType)) {
+    try {
+      const textOutput = await withCreatorTimeout(
+        generateTextContent({
+          companyId,
+          userId: user?.userId ?? null,
+          topic,
+          contentType,
+          targetPlatforms,
+          audience: String(body.audience || '').trim() || undefined,
+          objective: String(body.objective || '').trim() || undefined,
+          summary: String(body.summary || '').trim() || undefined,
+          creatorCard,
+        }),
+        'Creator text content',
+      );
+      return res.status(200).json({
+        success: true,
+        primary_platform: targetPlatforms[0],
+        intelligence_brief: null,
+        output: textOutput,
+      });
+    } catch (error) {
+      const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+      return res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to generate text content',
+      });
+    }
+  }
+
+  // Guidance-only formats (video / reel / short / podcast) take a separate
+  // path: they produce a structured Theme Treatment (scenes, hook, audio
+  // cues, CTA, platform notes) and skip the asset renderer entirely. The
+  // response shape matches the renderable path so the frontend can switch
+  // on `preview_kind === 'theme_treatment'` to render the scene breakdown.
+  if (isGuidanceOnlyContentType(contentType)) {
+    try {
+      const treatment = await withCreatorTimeout(
+        generateThemeTreatment({
+          companyId,
+          userId: user?.userId ?? null,
+          topic,
+          contentType,
+          targetPlatforms,
+          audience: String(body.audience || '').trim() || undefined,
+          objective: String(body.objective || '').trim() || undefined,
+          summary: String(body.summary || '').trim() || undefined,
+          creatorCard,
+        }),
+        'Creator theme treatment',
+      );
+      return res.status(200).json({
+        success: true,
+        primary_platform: targetPlatforms[0],
+        intelligence_brief: null,
+        output: treatment,
+      });
+    } catch (error) {
+      const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+      return res.status(statusCode).json({
+        error: error instanceof Error ? error.message : 'Failed to generate theme treatment',
+      });
+    }
+  }
+
   try {
     const intelligenceBrief = null;
+    const [{ createCreatorExecutionEngine }, { renderAsset }] = await Promise.all([
+      import('../../../../backend/services/executionEngines/creatorExecutionEngine'),
+      import('../../../../backend/services/creatorAssetRenderer'),
+    ]);
     const creatorEngine = createCreatorExecutionEngine();
     const primaryPlatform = targetPlatforms[0];
     const output = await withCreatorTimeout((async () => {
-      const generated = await creatorEngine.generateFromIntent({
+      const generated = await measureCreatorDuration('creator_generate_intent', {
+        contentType,
+        platform: primaryPlatform,
+      }, () => creatorEngine.generateFromIntent({
         campaignId: `creator-content-${Date.now()}`,
         companyId,
         userId: user?.userId ?? null,
@@ -242,7 +608,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         audience: String(body.audience || '').trim() || undefined,
         objective: String(body.objective || '').trim() || undefined,
         summary: String(body.summary || '').trim() || undefined,
-        creatorCard: safeObject(body.creator_card),
+        creatorCard,
         enrichedIntent: intelligenceBrief ? {
           analytics_intelligence: {
             content_type: intelligenceBrief.content_type,
@@ -253,16 +619,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             recommended_uses: intelligenceBrief.recommended_uses,
           },
         } : undefined,
-      });
+      }));
 
-      const adapted = await creatorEngine.adaptForPlatform(generated, primaryPlatform);
-      const rendered = await renderAsset(safeObject(adapted.asset_payload), {
+      const adapted = await measureCreatorDuration('creator_adapt_platform', {
+        contentType,
+        platform: primaryPlatform,
+      }, () => creatorEngine.adaptForPlatform(generated, primaryPlatform));
+      const renderInput = safeObject(adapted.asset_payload);
+      if (['carousel', 'pdf', 'slider', 'infographic'].includes(contentType)) {
+        const auditId = createCreatorAuditId({ companyId, contentType, platform: primaryPlatform, renderInput });
+        const renderJob = await enqueueDurableCreatorRenderJob({
+          idempotencyKey: `creator-render:${companyId}:${contentType}:${primaryPlatform}:${JSON.stringify(renderInput).slice(0, 500)}`,
+          renderer: contentType as 'carousel' | 'pdf' | 'slider' | 'infographic',
+          auditId,
+          timeoutMs: 180_000,
+          maxAttempts: 3,
+          payload: {
+            assetPayload: renderInput,
+            options: {
+              campaignId: null,
+              userId: user?.userId ?? null,
+              companyId,
+            },
+          },
+        });
+        return mergeRenderedMedia(adapted, {
+          metadata: {
+            render_async: true,
+            render_job: renderJob,
+            render_audit_id: auditId,
+          },
+        });
+      }
+      const rendered = await measureCreatorDuration('creator_render_asset_api', {
+        contentType,
+        platform: primaryPlatform,
+      }, () => renderAsset(renderInput, {
         campaignId: null,
         userId: user?.userId ?? null,
         companyId,
-      });
+      }));
       return mergeRenderedMedia(adapted, rendered);
     })(), 'Creator generation').catch((error) => {
+      if (normalizedAttachment.compositionIntent) {
+        throw error;
+      }
       if (!shouldUseCreatorFallback(error)) {
         throw error;
       }
@@ -278,7 +679,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         audience: String(body.audience || '').trim() || undefined,
         objective: String(body.objective || '').trim() || undefined,
         summary: String(body.summary || '').trim() || undefined,
-        creatorCard: safeObject(body.creator_card),
+        creatorCard,
         fallbackReason: error instanceof Error ? error.message : String(error),
       });
     });

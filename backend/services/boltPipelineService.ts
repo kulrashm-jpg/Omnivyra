@@ -40,15 +40,29 @@ import {
 import {
   getCreatorFormatsFromExecutionConfig,
   getUnsupportedCreatorFormats,
-  getCreatorGovernance,
-  supportsAutonomousExecution,
+  getCreatorCampaignAggregate,
+  isAutonomousRenderableFormat,
+  isAttachmentRequiredFormat,
   validateCreatorScheduleRequest,
+  type CreatorCampaignAggregate,
 } from '../../lib/shared/creatorGovernanceRegistry';
 import {
   runCreatorAssetGenerationRuntime,
   type CreatorAssetGenerationMode,
   type CreatorAssetGenerationResult,
 } from './creatorAssetGenerationRuntime';
+import {
+  persistPipelineFailure,
+  deriveBoltCampaignType,
+  type BoltPipelineMode,
+  type BoltCampaignType,
+} from './boltPipelineFailurePersistence';
+import {
+  acquireRunLock,
+  extendRunLock,
+  releaseRunLock,
+  DEFAULT_LOCK_TTL_MS,
+} from './boltExecutionLock';
 
 const AI_PLAN_TIMEOUT_MS = 120_000;
 const GENERATE_WEEKLY_TIMEOUT_MS = 90_000;
@@ -105,6 +119,19 @@ export interface BoltRunRecord {
   updated_at: string;
 }
 
+/**
+ * In-process snapshot of the highest progress we've already written for
+ * each runId. Lets `updateRun` enforce progress monotonicity (criterion
+ * C11): once we've reported 60%, a later write of 40% (e.g. during a
+ * retry/resume) is clamped back up to 60%. This is purely defensive —
+ * the pipeline's stage loop is monotonic by construction, but retries
+ * inside a stage have historically caused brief regressions in the UI.
+ *
+ * Map lives for the process lifetime; harmless if it grows because
+ * runIds are UUIDs and old entries become unreachable.
+ */
+const highestProgressByRun = new Map<string, number>();
+
 async function updateRun(
   runId: string,
   updates: Partial<{
@@ -139,11 +166,43 @@ async function updateRun(
     cache_hit_ratio: number;
   }>
 ): Promise<void> {
+  // ── Progress monotonicity guard ────────────────────────────────────
+  // Reset the tracked high-water mark when a terminal status arrives,
+  // and clamp incoming progress to never regress from the highest we
+  // already wrote. The 100% completion path is allowed unconditionally
+  // (it's always a forward write).
+  const sanitizedUpdates: Record<string, unknown> = { ...updates };
+  if (typeof updates.progress_percentage === 'number') {
+    const incoming = Math.max(0, Math.min(100, updates.progress_percentage));
+    const prev = highestProgressByRun.get(runId) ?? 0;
+    const next = Math.max(prev, incoming);
+    sanitizedUpdates.progress_percentage = next;
+    highestProgressByRun.set(runId, next);
+  }
+  if (typeof updates.status === 'string' && ['completed', 'failed', 'cancelled', 'aborted', 'partially_completed'].includes(updates.status)) {
+    // Terminal status — clear the high-water mark so a re-execution of
+    // the same runId (if it ever happens) starts fresh.
+    highestProgressByRun.delete(runId);
+  }
+  // Touch heartbeat on every meaningful update; the sweeper uses this
+  // as its liveness signal independent of `status`. Cheap; column is
+  // indexed only on the running subset.
+  //
+  // Also extend the lock TTL on every update. Combined with a 2-min
+  // base TTL, this means any pipeline that's actually making progress
+  // (writes happen multiple times per stage) keeps its lock fresh,
+  // while a truly abandoned pipeline lapses within 2 min and becomes
+  // re-claimable. Token-less extension here is safe because we're
+  // already inside the pipeline that holds the lock — if we don't
+  // hold it, the caller is in an inconsistent state anyway.
+  const heartbeatNow = new Date();
+  sanitizedUpdates.heartbeat_at = heartbeatNow.toISOString();
+  sanitizedUpdates.updated_at = heartbeatNow.toISOString();
+  // Sliding-window lock extension. 2 minutes from each write.
+  sanitizedUpdates.lock_expires_at = new Date(heartbeatNow.getTime() + 2 * 60 * 1000).toISOString();
+
   const { error } = await ownedDbTable('bolt_execution_runs')
-    .update({
-      ...updates,
-      updated_at: new Date().toISOString(),
-    })
+    .update(sanitizedUpdates)
     .eq('id', runId);
   if (error) throw new Error(`Failed to update run: ${error.message}`);
 }
@@ -489,19 +548,49 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     ...(Array.isArray(execConfig.campaign_goals) && (execConfig.campaign_goals as string[]).length > 0
       ? { campaign_goals: execConfig.campaign_goals }
       : {}),
+    // ── Campaign Brief surface for the planner ──────────────────────────────
+    // These three keys come from the BOLT Text "Campaign Brief" section in
+    // the UI (hooks/useBoltStrategy.tsx). The planner prompt uses them to
+    // answer WHY (goals), WHO (target_audience), and HOW (tone) — without
+    // them the AI plan falls back to topic-only inference, which is what
+    // happened pre-Brief.
+    ...(typeof execConfig.campaign_description === 'string' && (execConfig.campaign_description as string).trim()
+      ? { campaign_description: execConfig.campaign_description }
+      : {}),
+    ...(Array.isArray(execConfig.tone) && (execConfig.tone as string[]).length > 0
+      ? { tone: execConfig.tone, communication_style: execConfig.communication_style ?? execConfig.tone }
+      : {}),
+    // brief_fields_filled stays opaque to the planner (it's diagnostic only)
+    // but we surface it so it appears in [bolt/plan-input] logs alongside
+    // the rest of the planning context.
+    ...(execConfig.brief_fields_filled && typeof execConfig.brief_fields_filled === 'object'
+      ? { brief_fields_filled: execConfig.brief_fields_filled }
+      : {}),
   };
 
   const planMessage = `Yes, generate my ${durationWeeks}-week plan now.`;
 
-  // Diagnostic: log what we're sending so failures are traceable
+  // Diagnostic: log what we're sending so failures are traceable. Brief
+  // fields are included so we can correlate AI plan quality against which
+  // optional inputs the user supplied.
   console.log('[bolt/plan-input]', JSON.stringify({
     platform_content_requests: collectedPlanningContext.platform_content_requests,
     weekly_capacity: collectedPlanningContext.weekly_capacity,
     content_capacity: collectedPlanningContext.content_capacity,
     campaign_duration: collectedPlanningContext.campaign_duration,
+    brief: {
+      has_description: Boolean(collectedPlanningContext.campaign_description),
+      goals_count: Array.isArray(collectedPlanningContext.campaign_goals) ? (collectedPlanningContext.campaign_goals as unknown[]).length : 0,
+      tone_count: Array.isArray(collectedPlanningContext.tone) ? (collectedPlanningContext.tone as unknown[]).length : 0,
+      audience_present: typeof collectedPlanningContext.target_audience === 'string' && (collectedPlanningContext.target_audience as string).trim().length > 0,
+      brief_fields_filled: collectedPlanningContext.brief_fields_filled ?? null,
+    },
     format_frequency: collectedPlanningContext.format_frequency,
   }));
 
+  // Single retry on ai/plan. Each attempt is bounded by AI_PLAN_TIMEOUT_MS (120s); 3 retries
+  // turned a slow OpenAI call into ~8 min of wall time, blowing past the UI polling deadline
+  // without measurably improving success rate.
   const result = await retryWithBackoff(
     () =>
       withTimeout(
@@ -519,7 +608,7 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
         AI_PLAN_TIMEOUT_MS,
         'ai/plan'
       ),
-    { maxRetries: 3, initialDelayMs: 2000 }
+    { maxRetries: 1, initialDelayMs: 2000 }
   );
 
   // Diagnostic: log what came back so we can tell if it's a capacity block, QA block, or AI failure
@@ -823,6 +912,10 @@ function validateExecutionConfig(execConfig: Record<string, unknown> | undefined
 }
 
 async function executeBoltPipelineRuntime(runId: string): Promise<void> {
+  // Wall-clock anchor for `failed_after_ms`. Captured before any DB work so
+  // even pre-validation failures get a meaningful elapsed-time stamp.
+  const runStartedAt = Date.now();
+
   const { data: run, error: fetchError } = await ownedDbTable('bolt_execution_runs')
     .select('*')
     .eq('id', runId)
@@ -833,24 +926,51 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   }
 
   const status = (run as { status?: string }).status;
-  if (status === 'failed' || status === 'completed' || status === 'running') {
-    // 'running' guard prevents double execution when both direct call and BullMQ worker fire
+  // Terminal states never re-enter. Note: 'running' is NO LONGER a
+  // bail-out condition — we use the lock for liveness instead, so a
+  // crashed worker that left status='running' but lapsed its lock can
+  // be recovered by the next attempt.
+  if (status === 'failed' || status === 'completed' || status === 'cancelled') {
     return;
   }
 
-  // Atomically claim the run — prevents a BullMQ worker from starting it again
+  // ── Atomic lock claim with stale-lock recovery ─────────────────────
+  // Replaces the prior `status === 'running'` soft guard. The previous
+  // guard had no expiry, so a crashed worker permanently locked the run.
+  // acquireRunLock atomically claims when nobody holds a non-expired
+  // lock, generates a token we present on every subsequent extend /
+  // release, and refreshes heartbeat at the same time.
+  const lock = await acquireRunLock(runId, DEFAULT_LOCK_TTL_MS);
+  if (!lock) {
+    // A live worker already holds a valid lock. Back off silently —
+    // this is the normal "BullMQ also fired the same job" case.
+    return;
+  }
+
+  // Set status='running' AFTER claiming the lock so observers see the
+  // running state only when there's a live worker to back it.
   await updateRun(runId, { status: 'running' });
 
   const payload = run.payload as BoltPayload;
   const { companyId, outcomeView } = payload;
+  // Stamped on every failure persistence so dashboards can filter
+  // "show me all bolt-text schedule-view failures from this week".
+  const pipelineMode: BoltPipelineMode = (outcomeView ?? 'week_plan') as BoltPipelineMode;
+  const campaignType: BoltCampaignType = deriveBoltCampaignType(payload.executionConfig);
   const executionProfile = getExecutionProfile(payload.executionConfig);
   if (executionProfile === 'creator') {
     const formats = getCreatorFormatsFromExecutionConfig(payload.executionConfig);
     const unsupportedFormats = getUnsupportedCreatorFormats(formats);
     if (unsupportedFormats.length > 0) {
-      const msg = `Unsupported creator format: ${unsupportedFormats.join(', ')}`;
-      await updateRun(runId, { status: 'failed', error_message: msg });
-      throw new Error(msg);
+      const err = new Error(`Unsupported creator format: ${unsupportedFormats.join(', ')}`);
+      await persistPipelineFailure({
+        runId, stage: 'pre-validate-creator-format', error: err,
+        runStartedAt, pipelineMode, campaignType,
+      });
+      // Release the lock so a fast-failing validation doesn't hold the
+      // row in "running with valid lock" for the full TTL.
+      await releaseRunLock(runId, lock.token);
+      throw err;
     }
     const scheduleValidation = validateCreatorScheduleRequest({
       campaignMode: 'creator',
@@ -858,8 +978,13 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       executionConfig: payload.executionConfig,
     });
     if (scheduleValidation.ok === false) {
-      await updateRun(runId, { status: 'failed', error_message: scheduleValidation.message });
-      throw new Error(scheduleValidation.message);
+      const err = new Error(scheduleValidation.message);
+      await persistPipelineFailure({
+        runId, stage: 'pre-validate-creator-schedule', error: err,
+        runStartedAt, pipelineMode, campaignType,
+      });
+      await releaseRunLock(runId, lock.token);
+      throw err;
     }
   }
   const usesUnifiedMediaFlow = executionProfile === 'creator';
@@ -870,28 +995,53 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   const creatorFormats = usesUnifiedMediaFlow
     ? getCreatorFormatsFromExecutionConfig(payload.executionConfig)
     : [];
-  const hasGuidanceOnlyCreatorFormats = creatorFormats.some((format) => {
-    const governance = getCreatorGovernance(format);
-    return Boolean(governance?.guidance_only || governance?.daily_plan_only);
-  });
-  const hasRenderableCreatorFormats = creatorFormats.some((format) => supportsAutonomousExecution(format));
+  // ── Per-row eligibility (replaces the old campaign-wide veto) ─────────────
+  // We classify EACH format independently. Autonomous formats render and
+  // schedule on their own. Attachment-required formats produce a theme
+  // treatment + creator guidance and wait in `awaiting_media_upload` for a
+  // user-uploaded media URL — they no longer poison the rest of the campaign.
+  // The previous code collapsed Row[] → boolean (`hasGuidanceOnlyCreatorFormats`)
+  // and used that to downgrade the whole campaign to RENDER_ONLY; that
+  // category error is removed here.
+  const rowEligibility = creatorFormats.map((format) => ({
+    format,
+    is_autonomous: isAutonomousRenderableFormat(format),
+    is_attachment_required: isAttachmentRequiredFormat(format),
+  }));
+  const hasAutonomousCreatorFormats = rowEligibility.some((row) => row.is_autonomous);
+  const hasAttachmentRequiredCreatorFormats = rowEligibility.some((row) => row.is_attachment_required);
+  const creatorCampaignAggregate: CreatorCampaignAggregate = usesUnifiedMediaFlow
+    ? getCreatorCampaignAggregate(creatorFormats)
+    : 'empty';
   const wantsSchedule = outcomeView === 'schedule' || outcomeView === 'campaign_schedule';
+
+  // The generation runtime mode is purely a HINT to the runtime about what
+  // mix to expect; it no longer gates anything. The runtime evaluates each
+  // row independently and decides render vs. theme-treatment per row.
   const creatorExecutionMode: CreatorAssetGenerationMode | null = usesUnifiedMediaFlow
-    ? wantsSchedule && !hasGuidanceOnlyCreatorFormats && hasRenderableCreatorFormats
-      ? 'SCHEDULE_AND_RENDER'
-      : hasRenderableCreatorFormats
-        ? 'RENDER_ONLY'
-        : 'GUIDANCE_ONLY'
+    ? (hasAutonomousCreatorFormats && hasAttachmentRequiredCreatorFormats)
+      ? 'MIXED'
+      : hasAutonomousCreatorFormats
+        ? (wantsSchedule ? 'SCHEDULE_AND_RENDER' : 'RENDER_ONLY')
+        : hasAttachmentRequiredCreatorFormats
+          ? 'ATTACHMENT_ONLY'
+          : 'RENDER_ONLY'
     : null;
+
+  // Run the creator asset generation stage whenever there's at least one
+  // creator format and the user wanted more than a week plan. The stage
+  // itself decides per row whether to render or emit awaiting_media_upload.
   const shouldRunCreatorAssetGeneration =
     usesUnifiedMediaFlow &&
     outcomeView !== 'week_plan' &&
-    creatorExecutionMode !== 'SCHEDULE_AND_RENDER';
+    creatorFormats.length > 0;
 
-  // Unified creator campaigns schedule only when every selected format is schedulable/renderable.
-  // Mixed-mode creator campaigns render autonomous formats in the separate render-only stage.
+  // shouldSchedule fires when the user asked to schedule AND there is at
+  // least one row that can be scheduled NOW. Autonomous rows count as
+  // schedulable; attachment-required rows do not block scheduling — they
+  // simply stay in `awaiting_media_upload` until the user uploads media.
   const shouldSchedule = wantsSchedule && (
-    (usesUnifiedMediaFlow && creatorExecutionMode === 'SCHEDULE_AND_RENDER') ||
+    (usesUnifiedMediaFlow && hasAutonomousCreatorFormats) ||
     (!requiresMediaFlow)
   );
   const isWeekPlanOnly = outcomeView === 'week_plan';
@@ -903,8 +1053,13 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
     const msg = invalidDuration
       ? `BOLT execution blocked. Campaign duration must be 1–4 weeks.${filtered.length > 0 ? ` Missing: ${filtered.join(', ')}` : ''}`
       : `BOLT execution blocked. Missing execution inputs: ${missing.join(', ')}`;
-    await updateRun(runId, { status: 'failed', error_message: msg });
-    throw new Error(msg);
+    const err = new Error(msg);
+    await persistPipelineFailure({
+      runId, stage: 'validate-execution-config', error: err,
+      runStartedAt, pipelineMode, campaignType,
+    });
+    await releaseRunLock(runId, lock.token);
+    throw err;
   }
 
   let eligiblePlatforms: string[] = [];
@@ -959,8 +1114,13 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
   if (needsPlatformsForContent && eligiblePlatforms.length === 0) {
     const msg =
       'No social platforms configured for this company. Add platform URLs (LinkedIn, Instagram, X, etc.) in the company profile before generating or scheduling content.';
-    await updateRun(runId, { status: 'failed', error_message: msg });
-    throw new Error(msg);
+    const err = new Error(msg);
+    await persistPipelineFailure({
+      runId, stage: 'validate-platforms', error: err,
+      runStartedAt, pipelineMode, campaignType,
+    });
+    await releaseRunLock(runId, lock.token);
+    throw err;
   }
 
   let campaignId: string | null = null;
@@ -981,14 +1141,52 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       // daily_content_plans rows (activity cards) are created and visible
       // on the campaign detail page.
 
+      // ── Cancellation checkpoint ────────────────────────────────────
+      // Polled between stages, NOT mid-stage. Mid-stage cancellation
+      // would risk leaving daily_content_plans / scheduled_posts in
+      // partial state — between-stage gives us a clean boundary.
+      // The campaign's already-completed stages are preserved; we
+      // mark remaining stages as skipped on the way out.
+      const { data: cancelCheck } = await ownedDbTable('bolt_execution_runs')
+        .select('cancel_requested')
+        .eq('id', runId)
+        .maybeSingle();
+      if ((cancelCheck as { cancel_requested?: boolean } | null)?.cancel_requested) {
+        await updateRun(runId, {
+          status: 'cancelled',
+          error_message: 'Cancelled by user',
+        });
+        await logEvent(runId, stage, 'cancelled', { campaign_id: campaignId ?? undefined });
+        await releaseRunLock(runId, lock.token);
+        return;
+      }
+
+      // ── Lock extension ──────────────────────────────────────────────
+      // Push the lock expiry forward at the start of every stage so a
+      // long AI plan call (up to 120s × retries) can't let the lock
+      // lapse mid-stage and invite a second worker. Token-checked, so
+      // if our lock has already been stolen by stale-recovery we hit
+      // the failure path with a clean message.
+      const lockStillOurs = await extendRunLock(runId, lock.token, DEFAULT_LOCK_TTL_MS);
+      if (!lockStillOurs) {
+        // Another worker took over via stale-lock recovery. Bail
+        // silently — the other worker is the source of truth now.
+        return;
+      }
+
       if (campaignId) {
         try {
           await assertCampaignValid(campaignId);
         } catch (guardErr) {
-          const rawMsg = guardErr instanceof Error ? guardErr.message : String(guardErr);
-          const msg = await getUserFriendlyMessage(guardErr, 'campaign').catch(() => rawMsg);
-          await updateRun(runId, { status: 'aborted', error_message: msg });
-          await logEvent(runId, stage, 'aborted', { error: rawMsg });
+          // Aborted path (campaign was deleted mid-run, etc.) — still
+          // capture raw cause so operators can tell why the run gave up.
+          // We re-set status='aborted' AFTER persistPipelineFailure to
+          // preserve the "aborted vs failed" distinction the UI relies on.
+          await persistPipelineFailure({
+            runId, stage, error: guardErr,
+            runStartedAt, pipelineMode, campaignType, campaignId,
+          });
+          await updateRun(runId, { status: 'aborted' });
           return;
         }
       }
@@ -1137,17 +1335,21 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
           });
         }
       } catch (stageErr) {
-        const { msg, details } = unwrapErrorForLog(stageErr);
-        if (details) {
-          console.error('[bolt] Stage failed with underlying errors:', details);
-        }
-        const userMessage = await getUserFriendlyMessage(stageErr, 'campaign');
-        await logEvent(runId, stage, 'failed', {
-          duration_ms: Date.now() - stageStart,
-          campaign_id: campaignId ?? undefined,
-          error_message: userMessage,
+        // Single instrumentation entry: writes raw + friendly to the run,
+        // emits the standardized `[bolt/pipeline-error]` log line, and
+        // inserts a `failed` event with raw fields in metadata. Never
+        // throws — we still re-raise the ORIGINAL stageErr below so
+        // upper-level handling stays identical.
+        await persistPipelineFailure({
+          runId,
+          stage,
+          error: stageErr,
+          runStartedAt,
+          stageStartedAt: stageStart,
+          pipelineMode,
+          campaignType,
+          campaignId,
         });
-        await updateRun(runId, { status: 'failed', error_message: userMessage });
         throw stageErr;
       }
     }
@@ -1222,13 +1424,32 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       actual_posts_published: scheduledPostsCreated,
       ...aiMetrics,
     });
+
+    // Success path — release the lock so the row's lock columns
+    // reflect "no live worker holds this" and downstream operators
+    // know the run is fully terminal.
+    await releaseRunLock(runId, lock.token);
   } catch (err) {
-    const { details } = unwrapErrorForLog(err);
-    if (details) {
-      console.error('[bolt] Pipeline failed with underlying errors:', details);
-    }
-    const userMessage = await getUserFriendlyMessage(err, 'campaign');
-    await updateRun(runId, { status: 'failed', error_message: userMessage });
+    // Outer pipeline safety net. A per-stage catch usually fires first and
+    // has already populated the run row, but we ALSO instrument here so any
+    // throw outside a stage (post-loop metrics aggregation, campaign-status
+    // update, the final updateRun, …) still leaves an operator-queryable
+    // record. persistPipelineFailure is safe to call twice — the run row
+    // ends up reflecting the last writer, and a second event row makes the
+    // double-write visible.
+    await persistPipelineFailure({
+      runId,
+      stage: 'pipeline-outer',
+      error: err,
+      runStartedAt,
+      pipelineMode,
+      campaignType,
+      campaignId,
+    });
+    // Release lock on failure too — keeps stale-lock rows out of the
+    // sweeper's queue. Token-checked, so if our lock was already
+    // recovered by a successor this is a no-op.
+    await releaseRunLock(runId, lock.token);
     throw err;
   }
 }
@@ -1267,19 +1488,8 @@ export async function runPlannerCommitAndGenerateWeekly(params: {
   });
 }
 
-/** Unwrap AggregateError so we log underlying causes; return human-readable msg for UI. */
-function unwrapErrorForLog(err: unknown): { msg: string; details?: string } {
-  const errObj = err as { errors?: unknown[]; message?: string };
-  if (errObj && typeof errObj === 'object' && Array.isArray(errObj.errors) && errObj.errors.length > 0) {
-    const messages = errObj.errors.map((e: unknown) => (e instanceof Error ? e.message : String(e)));
-    const details = messages.join('; ');
-    const first = messages[0] ?? errObj.message ?? 'Unknown error';
-    return {
-      msg: messages.length > 1 ? `${first} (${messages.length} errors)` : first,
-      details,
-    };
-  }
-  return {
-    msg: err instanceof Error ? err.message : String(err),
-  };
-}
+// `unwrapErrorForLog` was the previous instrumentation helper. It has been
+// superseded by `normalizePipelineError` + `persistPipelineFailure`, which
+// also persist the raw failure to bolt_execution_runs (raw_error_message,
+// error_stack, failed_stage, failed_after_ms, pipeline_mode, campaign_type).
+// See `backend/services/boltPipelineFailurePersistence.ts`.

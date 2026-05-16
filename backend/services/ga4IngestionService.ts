@@ -63,6 +63,17 @@ export interface Ga4IngestionResult {
   conversionsInserted: number;
 }
 
+type Ga4RunReportResponse = {
+  rows?: any[];
+  rowCount?: number;
+};
+
+type Ga4ReportKind = 'sessions' | 'events';
+
+const GA4_PAGE_SIZE = 10000;
+const GA4_MAX_RETRIES = 3;
+const GA4_BASE_RETRY_DELAY_MS = 750;
+
 function normalizePath(path: string | null | undefined): string {
   const value = String(path ?? '/').trim();
   if (!value) return '/';
@@ -127,6 +138,103 @@ function normalizeSource(source: string | null | undefined): 'organic' | 'paid' 
   return 'unknown';
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryAfterMs(error: unknown): number | null {
+  if (!axios.isAxiosError(error)) return null;
+  const header = error.response?.headers?.['retry-after'];
+  const value = Array.isArray(header) ? header[0] : header;
+  const seconds = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+}
+
+function isRetryableGa4Error(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status;
+  if (status === 408 || status === 409 || status === 425 || status === 429) return true;
+  if (typeof status === 'number' && status >= 500) return true;
+  return error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET';
+}
+
+async function postGa4RunReportWithRetry(params: {
+  propertyId: string;
+  accessToken: string;
+  reportKind: Ga4ReportKind;
+  body: Record<string, unknown>;
+  offset: number;
+}): Promise<Ga4RunReportResponse> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      const response = await axios.post(
+        `https://analyticsdata.googleapis.com/v1beta/properties/${params.propertyId}:runReport`,
+        {
+          ...params.body,
+          limit: GA4_PAGE_SIZE,
+          offset: params.offset,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${params.accessToken}`,
+          },
+          timeout: 15000,
+        },
+      );
+      return response.data as Ga4RunReportResponse;
+    } catch (error) {
+      attempt += 1;
+      if (attempt > GA4_MAX_RETRIES || !isRetryableGa4Error(error)) {
+        throw error;
+      }
+
+      const retryAfterMs = getRetryAfterMs(error);
+      const backoffMs = retryAfterMs ?? GA4_BASE_RETRY_DELAY_MS * 2 ** (attempt - 1);
+      console.warn('[ga4Ingestion] retrying GA4 runReport', {
+        property_id: params.propertyId,
+        report_kind: params.reportKind,
+        offset: params.offset,
+        attempt,
+        retry_after_ms: backoffMs,
+        status: axios.isAxiosError(error) ? error.response?.status ?? null : null,
+        code: axios.isAxiosError(error) ? error.code ?? null : null,
+      });
+      await sleep(backoffMs);
+    }
+  }
+}
+
+async function fetchGa4ReportPages(params: {
+  propertyId: string;
+  accessToken: string;
+  reportKind: Ga4ReportKind;
+  body: Record<string, unknown>;
+}): Promise<any[]> {
+  const rows: any[] = [];
+  for (let offset = 0; ; offset += GA4_PAGE_SIZE) {
+    const data = await postGa4RunReportWithRetry({
+      ...params,
+      offset,
+    });
+    const pageRows = Array.isArray(data.rows) ? data.rows : [];
+    rows.push(...pageRows);
+
+    console.info('[ga4Ingestion] fetched GA4 page', {
+      property_id: params.propertyId,
+      report_kind: params.reportKind,
+      offset,
+      rows_fetched: pageRows.length,
+      total_rows_fetched: rows.length,
+      reported_row_count: data.rowCount ?? null,
+    });
+
+    if (pageRows.length < GA4_PAGE_SIZE) break;
+    if (typeof data.rowCount === 'number' && rows.length >= data.rowCount) break;
+  }
+  return rows;
+}
+
 async function fetchGa4Rows(input: Ga4IngestionInput): Promise<Ga4SessionRow[]> {
   if (Array.isArray(input.rows)) {
     return input.rows;
@@ -136,9 +244,11 @@ async function fetchGa4Rows(input: Ga4IngestionInput): Promise<Ga4SessionRow[]> 
     return [];
   }
 
-  const response = await axios.post(
-    `https://analyticsdata.googleapis.com/v1beta/properties/${input.propertyId}:runReport`,
-    {
+  const rows = await fetchGa4ReportPages({
+    propertyId: input.propertyId,
+    accessToken: input.accessToken,
+    reportKind: 'sessions',
+    body: {
       dateRanges: [
         {
           startDate: input.startDate ?? '7daysAgo',
@@ -164,17 +274,8 @@ async function fetchGa4Rows(input: Ga4IngestionInput): Promise<Ga4SessionRow[]> 
         { name: 'totalUsers' },
         { name: 'activeUsers' },
       ],
-      limit: 10000,
     },
-    {
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-      },
-      timeout: 15000,
-    }
-  );
-
-  const rows = Array.isArray(response.data?.rows) ? response.data.rows : [];
+  });
   return rows.map((row: any) => ({
     sessionDate: row.dimensionValues?.[0]?.value ?? todayIsoDate(),
     pagePath: row.dimensionValues?.[1]?.value ?? '/',
@@ -203,9 +304,11 @@ async function fetchGa4EventRows(input: Ga4IngestionInput): Promise<Ga4EventRow[
     return [];
   }
 
-  const response = await axios.post(
-    `https://analyticsdata.googleapis.com/v1beta/properties/${input.propertyId}:runReport`,
-    {
+  const rows = await fetchGa4ReportPages({
+    propertyId: input.propertyId,
+    accessToken: input.accessToken,
+    reportKind: 'events',
+    body: {
       dateRanges: [
         {
           startDate: input.startDate ?? '7daysAgo',
@@ -233,17 +336,8 @@ async function fetchGa4EventRows(input: Ga4IngestionInput): Promise<Ga4EventRow[
         { name: 'eventCount' },
         { name: 'totalRevenue' },
       ],
-      limit: 10000,
     },
-    {
-      headers: {
-        Authorization: `Bearer ${input.accessToken}`,
-      },
-      timeout: 15000,
-    }
-  );
-
-  const rows = Array.isArray(response.data?.rows) ? response.data.rows : [];
+  });
   return rows.map((row: any) => ({
     eventTimestamp: row.dimensionValues?.[0]?.value ?? todayIsoDate(),
     eventName: row.dimensionValues?.[1]?.value ?? 'unknown_event',
@@ -522,6 +616,15 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
     accessToken = context.accessToken;
   }
 
+  console.info('[ga4Ingestion] starting GA4 ingestion', {
+    company_id: input.companyId,
+    property_id: propertyId ?? null,
+    start_date: input.startDate ?? '7daysAgo',
+    end_date: input.endDate ?? 'today',
+    session_rows_supplied: Array.isArray(input.rows),
+    event_rows_supplied: Array.isArray(input.eventRows),
+  });
+
   const rows = await fetchGa4Rows({
     ...input,
     propertyId,
@@ -702,6 +805,18 @@ export async function ingestGa4Data(input: Ga4IngestionInput): Promise<Ga4Ingest
   const { eventsInserted, conversionsInserted } = await persistBehavioralBatch({
     events: eventRecords,
     conversions: conversionRecords,
+  });
+
+  console.info('[ga4Ingestion] completed GA4 ingestion', {
+    company_id: input.companyId,
+    property_id: propertyId ?? null,
+    sessions_processed: rows.length,
+    sessions_inserted: sessionsInserted,
+    users_upserted: usersUpserted,
+    page_views_inserted: pageViewsInserted,
+    events_processed: eventRows.reduce((sum, row) => sum + Math.max(1, safeInteger(row.eventCount, 1)), 0),
+    events_inserted: eventsInserted,
+    conversions_inserted: conversionsInserted,
   });
 
   return {

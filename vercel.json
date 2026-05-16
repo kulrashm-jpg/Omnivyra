@@ -12,12 +12,16 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/cron/serp-acquisition",
+      "schedule": "30 2 * * *"
+    },
+    {
       "path": "/api/cron/market-pulse-automation",
       "schedule": "30 4 * * *"
     },
     {
       "path": "/api/cron/email-jobs",
-      "schedule": "* * * * *"
+      "schedule": "0 1 * * *"
     }
   ],
   "experimentalServices": {

@@ -9,6 +9,10 @@ import {
 import { blueprintItemToUnifiedExecutionUnit } from '@/lib/planning/unifiedExecutionAdapter';
 import { buildRepurposingContext } from '@/lib/planning/repurposingContext';
 import { buildMasterContentDocument } from '@/lib/planning/masterContentDocument';
+// Step-10: flag-gated, Creator-only load enrichment. Returns
+// `{ok:false}` for Text / malformed / flag-OFF ⇒ Text behavior is
+// byte-identical (the block below is a no-op in those cases).
+import { loadCreatorWorkspace } from '@/backend/services/creator/intelligence/workspace';
 
 /**
  * GET /api/activity-workspace/resolve?workspaceKey=... OR ?campaignId=...&executionId=...
@@ -170,6 +174,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (dailyPlanRow?.content_status != null) {
       content_status = dailyPlanRow.content_status;
     }
+    // ── Step-10 Phase-1: Creator-only workspace reconstruction ──────────
+    // Additive + flag-gated. Fetches the FULL row separately (the
+    // existing creator_asset/content_status query above is left intact)
+    // and attaches `payload.creator_workspace` ONLY when the row
+    // reconstructs as a Creator task. Text rows / flag OFF / malformed
+    // ⇒ `creatorWorkspace` stays null and the payload is unchanged.
+    let creatorWorkspace: unknown = null;
+    let creatorWorkspaceRowId: string | null = null;
+    try {
+      const { data: fullRow } = await supabase
+        .from('daily_content_plans')
+        .select(
+          'id, content, content_type, platform, content_status, asset_type, intent_type, week_number, topic, title',
+        )
+        .eq('campaign_id', campaignId)
+        .eq('execution_id', targetExecId)
+        .maybeSingle();
+      if (fullRow) {
+        const loaded = loadCreatorWorkspace(fullRow as any, {
+          now: new Date().toISOString(),
+        });
+        if (loaded.ok) {
+          creatorWorkspace = loaded.task;
+          // The daily_content_plans row id — the path param the
+          // creator-lifecycle endpoint needs for save/advance.
+          creatorWorkspaceRowId = String((fullRow as { id?: unknown }).id ?? '') || null;
+        }
+      }
+    } catch {
+      /* non-fatal: never block the existing load on reconstruction */
+    }
+
     const distribution_strategy = (found.week as any)?.distribution_strategy ?? null;
     const distribution_reason = (found.week as any)?.distribution_reason ?? null;
     const planning_adjustment_reason = (found.week as any)?.planning_adjustment_reason ?? null;
@@ -311,6 +347,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...(week_extras != null ? { week_extras } : {}),
       ...(repurposing_context != null ? { repurposing_context } : {}),
       ...(master_content_document != null ? { master_content_document } : {}),
+      ...(creatorWorkspace != null ? { creator_workspace: creatorWorkspace } : {}),
+      ...(creatorWorkspaceRowId != null ? { creator_workspace_row_id: creatorWorkspaceRowId } : {}),
     };
 
     return res.status(200).json({

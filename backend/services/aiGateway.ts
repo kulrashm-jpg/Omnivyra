@@ -54,10 +54,12 @@ const FEATURE_AREA_MAP: Record<string, string> = {
   generateContentBlueprint:          'Activity Workspace',
   generatePlatformVariants:          'Activity Workspace',
   parsePlatformCustomization:        'Activity Workspace',
+  contentSuggestions:                'Activity Workspace',
 
   // AI Chat / Planner Assistant
   chatModeration:                    'AI Chat',
   extractPlannerCommands:            'AI Chat',
+  plannerSuggestUpdate:              'AI Chat',
 
   // Engagement
   conversationTriage:                'Engagement',
@@ -786,16 +788,25 @@ const executeGatewayCompletion = async (
   const totalTokens  = normalized.usage?.total_tokens     ?? inputTokens + outputTokens;
   // BUG#8 fix: advisory LLM token tracking
   trackLlmTokens(totalTokens);
-  const cost = await resolveLlmCost({
-    providerName: effectiveProvider,
-    modelName: effectiveModel,
-    inputTokens,
-    outputTokens,
-    processType: request.operation,
-    organizationId: request.companyId ?? UNKNOWN_ORG,
-  });
+  const orgIdForBilling = request.companyId ?? UNKNOWN_ORG;
+  const isSystemOrgCall = orgIdForBilling === UNKNOWN_ORG;
+  let cost: Awaited<ReturnType<typeof resolveLlmCost>> | null = null;
+  if (!isSystemOrgCall) {
+    try {
+      cost = await resolveLlmCost({
+        providerName: effectiveProvider,
+        modelName: effectiveModel,
+        inputTokens,
+        outputTokens,
+        processType: request.operation,
+        organizationId: orgIdForBilling,
+      });
+    } catch (err) {
+      console.warn('[aiGateway] resolveLlmCost failed; logging without cost:', err instanceof Error ? err.message : err);
+    }
+  }
   void logUsageEvent({
-    organization_id: request.companyId ?? UNKNOWN_ORG,
+    organization_id: orgIdForBilling,
     campaign_id: request.campaignId ?? null,
     user_id: null,
     source_type: 'llm',
@@ -810,23 +821,23 @@ const executeGatewayCompletion = async (
     total_tokens: totalTokens || null,
     latency_ms: latency,
     error_flag: false,
-    unit_cost: totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
-    total_cost: cost.total_cost_usd,
-    total_cost_usd: cost.total_cost_usd,
-    input_cost_usd: cost.input_cost_usd,
-    output_cost_usd: cost.output_cost_usd,
-    final_price_usd: cost.final_price_usd,
-    pricing_snapshot: cost.pricing_snapshot,
+    unit_cost: cost && totalTokens > 0 ? cost.total_cost_usd / totalTokens : null,
+    total_cost: cost?.total_cost_usd ?? null,
+    total_cost_usd: cost?.total_cost_usd ?? null,
+    input_cost_usd: cost?.input_cost_usd ?? null,
+    output_cost_usd: cost?.output_cost_usd ?? null,
+    final_price_usd: cost?.final_price_usd ?? null,
+    pricing_snapshot: cost?.pricing_snapshot ?? null,
     retry_attempt: normalized.retry_attempt,
     final_attempt: true,
   });
   void incrementUsageMeter({
-    organization_id: request.companyId ?? UNKNOWN_ORG,
+    organization_id: orgIdForBilling,
     source_type: 'llm',
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     total_tokens: totalTokens,
-    total_cost: cost.total_cost_usd ?? undefined,
+    total_cost: cost?.total_cost_usd ?? undefined,
   });
   const contextTypeMap: Record<string, string> = {
     generateRecommendation: 'recommendation',
@@ -932,10 +943,32 @@ export const generateCampaignPlan = async (
 /**
  * Generic completion with custom operation name for logging.
  * Use for services that previously used direct OpenAI (contentGenerationService, campaignPlanParser, etc.)
+ *
+ * C-2 binding (Phase 1):
+ *   Each call invokes the AI billing guard. In shadow mode (default) the guard
+ *   only emits an anomaly + counter when the operation lacks a credit handle
+ *   and is not allowlisted — it does NOT block the call. Set
+ *   BILLING_REQUIRE_AI_HANDLE=true to enforce. Callers that need to bypass
+ *   billing for a justified reason must register the operation key in
+ *   credit_untracked_actions (see super-admin tooling).
  */
 export const runCompletionWithOperation = async (
   request: GatewayRequest & { operation: string }
 ): Promise<GatewayResponse<string>> => {
+  const { checkAiBillingGuard, isAiBillingEnforced } = await import('./billing/aiGatewayBillingGuard');
+  const guard = await checkAiBillingGuard({
+    operation: request.operation,
+    orgId:     request.companyId ?? undefined,
+    // No creditHandle here — by design. Callers that have one use
+    // runBilledAiCompletion() which wraps this same gateway path inside an
+    // executeWithCredits scope.
+  });
+  if (!guard.allowed && isAiBillingEnforced()) {
+    throw new Error(
+      `[aiGateway] BILLING_REQUIRED: operation "${request.operation}" called without a credit handle. ` +
+      'Migrate to runBilledAiCompletion() or add an allowlist entry in credit_untracked_actions.'
+    );
+  }
   return executeGatewayCompletion(request);
 };
 

@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { assessVirality } from '../../../../../backend/services/viralityAdvisorService';
+import { buildCampaignSnapshotWithHash } from '../../../../../backend/services/viralitySnapshotBuilder';
 import { requireCampaignAccess } from '../../../../../backend/services/campaignAccessService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -18,7 +19,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!access) return;
 
   try {
-    const assessment = await assessVirality(id);
+    const { snapshot, snapshot_hash } = await buildCampaignSnapshotWithHash(id);
+    const assessment = await assessVirality(id, {
+      snapshot,
+      snapshot_hash,
+      organizationId: access.companyId,
+    });
     return res.status(200).json(assessment);
   } catch (error: any) {
     console.error('Error in virality assess API:', error);

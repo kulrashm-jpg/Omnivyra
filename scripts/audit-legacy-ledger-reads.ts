@@ -10,7 +10,7 @@
  *   - backend/services/usageLedgerService.ts        (writer)
  *   - backend/services/creditExecutionService.ts    (trackUsage→credit_usage_log, reservation state machine)
  *   - backend/services/usageTrackingService.ts      (writer for credit_usage_log)
- *   - scripts/backfill-unified-transactions.ts      (historical backfill reader)
+ *   - scripts/operator/db/backfill-unified-transactions.ts      (historical backfill reader)
  *
  * Usage:  npx ts-node scripts/audit-legacy-ledger-reads.ts
  */
@@ -26,7 +26,7 @@ const ALLOW_LIST = new Set([
   'backend/services/usageLedgerService.ts',
   'backend/services/creditExecutionService.ts',
   'backend/services/usageTrackingService.ts',
-  'scripts/backfill-unified-transactions.ts',
+  'scripts/operator/db/backfill-unified-transactions.ts',
   'scripts/audit-legacy-ledger-reads.ts',  // this file (contains the pattern in strings)
 ]);
 

@@ -1,4 +1,13 @@
 import type { CompanyProfile } from './companyProfile/types';
+import type {
+  CompetitorCategory as NormalizedCompetitorCategory,
+  CompetitorCapabilityVector,
+  CompetitorDimensionScores,
+  CompetitorDiscoverySource,
+  CompetitorIntelligenceTier,
+  CompetitorScoreCard,
+  DebugCompetitorScoring,
+} from '../../types/competitor';
 import { isAudienceLedArchetype, isArchetypeInfluential, isBusinessFirstOnlyArchetype } from './companyProfile/entityArchetype';
 import type { EntityArchetypeIntelligence } from './companyProfile/types';
 import type { ResolvedReportInput } from './reportInputResolver';
@@ -114,6 +123,8 @@ export type CompetitorCandidate = {
   confidenceScore?: number | null;
   enrichment?: CompetitorEnrichmentProfile | null;
   competitorIntelligence?: CompetitorIntelligence | null;
+  discoverySources?: CompetitorDiscoverySource[] | null;
+  capabilityVector?: CompetitorCapabilityVector | null;
 };
 
 export type RankedCompetitor = {
@@ -124,6 +135,10 @@ export type RankedCompetitor = {
   source: CompetitorSource;
   classification: CompetitorClassification;
   relevance_score: number;
+  score_card: CompetitorScoreCard;
+  reasoning: string[];
+  discoverySources: CompetitorDiscoverySource[];
+  capabilityVector: CompetitorCapabilityVector;
   problem_overlap: number;
   icp_overlap: number;
   market_overlap: number;
@@ -159,6 +174,10 @@ export type CompetitorScoreBreakdown = Pick<
   | 'category'
   | 'tags'
   | 'relevance_score'
+  | 'score_card'
+  | 'reasoning'
+  | 'discoverySources'
+  | 'capabilityVector'
   | 'problem_overlap'
   | 'icp_overlap'
   | 'market_overlap'
@@ -202,15 +221,22 @@ const SOURCE_BASE_SCORE: Record<CompetitorSource, number> = {
   serp_unavailable_fallback: 0,
 };
 
-export const FINAL_COMPETITOR_MIN_SCORE = 42;
+export const FINAL_COMPETITOR_MIN_SCORE = 40;
 export const HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE = 85;
 export const MARKET_SUBSTITUTE_MAX_COUNT = 3;
-const FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP = 0.5;
-const FINAL_COMPETITOR_MIN_ICP_OVERLAP = 0.4;
-const FINAL_COMPETITOR_MIN_FINAL_SCORE = 0.5;
+const FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP = 0.4;
+const FINAL_COMPETITOR_MIN_ICP_OVERLAP = 0.25;
+const FINAL_COMPETITOR_MIN_FINAL_SCORE = 0.4;
 const FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE = 0.6;
 const FINAL_COMPETITOR_MIN_COUNT = 3;
 const FINAL_COMPETITOR_MAX_COUNT = 6;
+
+let latestDebugCompetitorScoring: DebugCompetitorScoring | undefined;
+
+export function getLatestDebugCompetitorScoring(): DebugCompetitorScoring | undefined {
+  if (process.env.NODE_ENV === 'production') return undefined;
+  return latestDebugCompetitorScoring;
+}
 const HIGH_AUTHORITY_MISMATCH_AUTHORITY = 0.7;
 const HIGH_AUTHORITY_MISMATCH_PROBLEM = 0.4;
 
@@ -376,6 +402,238 @@ function revenueAdjustment(companyTier: CompetitorRevenueTier, competitorTier: C
   if (distance === 1) return 0.85;
   if (distance === 2) return 0.7;
   return 0.6;
+}
+
+function toPercentScore(value: number): number {
+  return Math.round(roundDimension(value) * 100);
+}
+
+function scoreFromPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function competitorIntelligenceTier(score: number): CompetitorIntelligenceTier {
+  if (score >= 85) return 'core';
+  if (score >= 70) return 'strong';
+  if (score >= 55) return 'adjacent';
+  return 'strategic';
+}
+
+function weightedCompetitorScore(dimensions: CompetitorDimensionScores): number {
+  return scoreFromPercent(
+    dimensions.productServiceFit * 0.25 +
+    dimensions.workflowFit * 0.20 +
+    dimensions.icpFit * 0.15 +
+    dimensions.customerEvaluationFit * 0.15 +
+    dimensions.useCaseFit * 0.10 +
+    dimensions.revenueScaleFit * 0.05 +
+    dimensions.employeeScaleFit * 0.03 +
+    dimensions.geographyFit * 0.02 +
+    dimensions.seoIntentFit * 0.05,
+  );
+}
+
+const CAPABILITY_PATTERNS: Record<string, RegExp[]> = {
+  crm: [/\bcrm\b/i, /\bcustomer relationship/i],
+  automation: [/\bautomation\b/i, /\bworkflow automation\b/i, /\bautomate\b/i],
+  analytics: [/\banalytics?\b/i, /\breporting\b/i, /\bdashboard/i, /\binsights?\b/i],
+  ai_assistance: [/\bai\b/i, /\bartificial intelligence\b/i, /\bassistant\b/i, /\bcopilot\b/i],
+  growth_marketing: [/\bgrowth\b/i, /\bmarketing\b/i, /\bcampaign\b/i, /\bdemand generation\b/i],
+  enterprise_workflows: [/\benterprise\b/i, /\boperations?\b/i, /\bworkflow\b/i, /\bapproval\b/i],
+  sales_enablement: [/\bsales\b/i, /\benablement\b/i, /\bdeal\b/i, /\bquota\b/i],
+  customer_support: [/\bsupport\b/i, /\bhelp ?desk\b/i, /\bservice desk\b/i, /\bticket/i],
+  marketing_automation: [/\bmarketing automation\b/i, /\bemail marketing\b/i, /\blead nurture\b/i],
+  pipeline_management: [/\bpipeline\b/i, /\bfunnel\b/i, /\bopportunit(?:y|ies)\b/i],
+  lead_scoring: [/\blead scoring\b/i, /\blead qualification\b/i, /\bqualification\b/i],
+  seo_intelligence: [/\bseo\b/i, /\bsearch visibility\b/i, /\bkeyword\b/i],
+  content_intelligence: [/\bcontent\b/i, /\bcopy\b/i, /\bpost\b/i, /\bbrief\b/i],
+  integrations: [/\bintegration/i, /\bconnectors?\b/i, /\bapi\b/i],
+};
+
+export function extractCapabilityVectorFromText(text: string | null | undefined): CompetitorCapabilityVector {
+  const normalized = String(text ?? '').toLowerCase();
+  const vector: CompetitorCapabilityVector = {};
+  for (const [capability, patterns] of Object.entries(CAPABILITY_PATTERNS)) {
+    const matchCount = patterns.reduce((count, pattern) => count + (pattern.test(normalized) ? 1 : 0), 0);
+    if (matchCount > 0) {
+      vector[capability] = Math.min(1, 0.45 + (matchCount * 0.18));
+    }
+  }
+  return vector;
+}
+
+function mergeCapabilityVectors(...vectors: Array<CompetitorCapabilityVector | null | undefined>): CompetitorCapabilityVector {
+  const merged: CompetitorCapabilityVector = {};
+  vectors.forEach((vector) => {
+    Object.entries(vector ?? {}).forEach(([key, value]) => {
+      const score = Number(value);
+      if (Number.isFinite(score)) merged[key] = Math.max(merged[key] ?? 0, Math.max(0, Math.min(1, score)));
+    });
+  });
+  return merged;
+}
+
+function buildCompanyCapabilityVector(context: CompanyCompetitiveContext): CompetitorCapabilityVector {
+  return extractCapabilityVectorFromText([
+    context.marketFocus,
+    context.primaryService,
+    context.targetCustomer,
+    context.idealCustomerProfile,
+    context.brandPositioning,
+    context.businessModel,
+  ].filter(Boolean).join(' '));
+}
+
+function buildCandidateCapabilityVector(candidate: CompetitorCandidate): CompetitorCapabilityVector {
+  const enrichment = candidate.enrichment;
+  return mergeCapabilityVectors(
+    candidate.capabilityVector,
+    extractCapabilityVectorFromText([
+      candidate.name,
+      candidate.domain,
+      candidate.category,
+      candidate.description,
+      candidate.targetCustomer,
+      candidate.useCase,
+      candidate.businessModel,
+      candidate.rationale,
+      ...(candidate.productSignals ?? []),
+      enrichment?.category,
+      enrichment?.description,
+      enrichment?.business_model,
+      enrichment?.product_type,
+      enrichment?.icp.use_case,
+      enrichment?.icp.user_intent,
+      ...(enrichment?.tags ?? []),
+      candidate.competitorIntelligence?.ecosystem_role,
+      candidate.competitorIntelligence?.reasoning,
+    ].filter(Boolean).join(' ')),
+  );
+}
+
+function capabilityVectorOverlap(
+  target: CompetitorCapabilityVector,
+  candidate: CompetitorCapabilityVector,
+): number {
+  const keys = Array.from(new Set([...Object.keys(target), ...Object.keys(candidate)]));
+  if (keys.length === 0) return 0;
+  let shared = 0;
+  let targetWeight = 0;
+  for (const key of keys) {
+    const targetScore = Number(target[key] ?? 0);
+    const candidateScore = Number(candidate[key] ?? 0);
+    targetWeight += targetScore;
+    shared += Math.min(targetScore, candidateScore);
+  }
+  if (targetWeight <= 0) return 0;
+  return roundDimension(shared / targetWeight);
+}
+
+function discoverySourceFromCandidate(candidate: CompetitorCandidate): CompetitorDiscoverySource {
+  if (candidate.source === 'manual' || candidate.source === 'user') return 'manual';
+  if (candidate.source === 'website' || candidate.source === 'social') return 'stored';
+  if (candidate.source === 'serp_live') return 'serp';
+  if (candidate.source === 'profile_ai' || candidate.source === 'archetype_native_peer') return 'ai-inferred';
+  if (candidate.source === 'known_category_dataset' || candidate.source === 'market_substitute') return 'ecosystem';
+  return 'provider';
+}
+
+function candidateDiscoverySources(candidate: CompetitorCandidate): CompetitorDiscoverySource[] {
+  return Array.from(new Set([
+    ...(candidate.discoverySources ?? []),
+    discoverySourceFromCandidate(candidate),
+  ]));
+}
+
+function employeeScaleFitForCandidate(candidate: CompetitorCandidate, signalText: string): number {
+  const explicitScale = [
+    scaleSignalValue(candidate, 'notes'),
+    scaleSignalValue(candidate, 'funding'),
+    candidate.revenueRange,
+  ].filter(Boolean).join(' ').toLowerCase();
+  const text = `${explicitScale} ${signalText}`.toLowerCase();
+  if (/\b(enterprise|public|global|10000\+|5000\+|1000\+)\b/.test(text)) return 60;
+  if (/\b(scale|500\+|1000|large)\b/.test(text)) return 72;
+  if (/\b(growth|100\+|250\+|mid[-\s]?market)\b/.test(text)) return 84;
+  return 88;
+}
+
+function classifyNormalizedCompetitorCategory(params: {
+  overallScore: number;
+  dimensions: CompetitorDimensionScores;
+  revenueTier: CompetitorRevenueTier;
+  competitor: CompetitorCandidate;
+  affinity: 'same' | 'functional' | 'substitute';
+}): NormalizedCompetitorCategory | null {
+  if (params.overallScore < 40) return null;
+
+  const primaryAverage = (
+    params.dimensions.productServiceFit +
+    params.dimensions.workflowFit +
+    params.dimensions.customerEvaluationFit +
+    params.dimensions.useCaseFit
+  ) / 4;
+  const nameText = `${params.competitor.name} ${params.competitor.description ?? ''} ${params.competitor.businessModel ?? ''}`.toLowerCase();
+
+  if (
+    params.overallScore >= 70 &&
+    params.revenueTier === 'enterprise' &&
+    primaryAverage >= 65
+  ) return 'enterprise';
+
+  if (
+    params.overallScore >= 55 &&
+    /\b(startup|emerging|new|early|seed|series a|indie)\b/.test(nameText)
+  ) return 'emerging';
+
+  if (
+    params.overallScore >= 55 &&
+    params.dimensions.geographyFit >= 80 &&
+    params.dimensions.productServiceFit >= 50 &&
+    params.affinity !== 'same'
+  ) return 'regional';
+
+  if (params.overallScore >= 70) return 'direct';
+  if (params.overallScore >= 55) return 'adjacent';
+  return 'workflow-alternative';
+}
+
+function competitorReasoning(params: {
+  dimensions: CompetitorDimensionScores;
+  category: NormalizedCompetitorCategory;
+  revenueTier: CompetitorRevenueTier;
+  affinity: 'same' | 'functional' | 'substitute';
+  competitor: CompetitorCandidate;
+}): string[] {
+  const reasons: string[] = [];
+  if (params.dimensions.productServiceFit >= 70) reasons.push('Strong product/service overlap');
+  if (params.dimensions.workflowFit >= 70) reasons.push('Strong operational workflow overlap');
+  if (params.dimensions.icpFit >= 65) reasons.push('Shared ICP or buyer segment');
+  if (params.dimensions.customerEvaluationFit >= 65) reasons.push('Appears in the same customer evaluation space');
+  if (params.dimensions.useCaseFit >= 65) reasons.push('Competes around the same business use case');
+  if (
+    params.dimensions.productServiceFit >= 65 &&
+    params.dimensions.workflowFit >= 65 &&
+    params.dimensions.useCaseFit >= 65
+  ) reasons.push('Capability vector overlaps across product, workflow, and use case');
+  if (params.category === 'enterprise') reasons.push('Enterprise player retained because workflow and problem overlap are strong');
+  if (params.category === 'workflow-alternative') reasons.push('Strategic workflow alternative with meaningful overlap');
+  if (params.category === 'regional') reasons.push('Regional competitor signal with relevant market overlap');
+  if (params.category === 'emerging') reasons.push('Emerging competitor signal with relevant category overlap');
+  if (params.affinity === 'same') reasons.push('Same normalized category affinity');
+  if (params.affinity === 'functional') reasons.push('Functional category adjacency');
+  return Array.from(new Set(reasons)).slice(0, 5);
+}
+
+function failedCompetitorDimensions(competitor: Partial<RankedCompetitor>): string[] {
+  const scoreCard = competitor.score_card;
+  if (!scoreCard) return ['missing score card'];
+  const failed = Object.entries(scoreCard.dimensions)
+    .filter(([, value]) => Number(value) < 40)
+    .map(([key]) => key);
+  if (Number(scoreCard.overallScore) < 40) failed.push('overallScore');
+  if (!competitor.enrichment) failed.push('enrichment');
+  return failed;
 }
 
 function scaleSignalText(candidate: CompetitorCandidate): string {
@@ -1227,7 +1485,7 @@ function buildScoringRationale(
 ): string {
   return [
     base,
-    `Competitive scoring: category ${breakdown.category}, tags ${breakdown.tags.join(', ') || 'none'}, problem overlap ${breakdown.problem_overlap.toFixed(2)}, ICP overlap ${breakdown.icp_overlap.toFixed(2)}, market overlap ${breakdown.market_overlap.toFixed(2)}, product depth ${breakdown.product_depth.toFixed(2)}, authority ${breakdown.authority_score.toFixed(2)}, revenue tier ${breakdown.revenue_tier}; final score ${breakdown.final_score.toFixed(2)} (${breakdown.tier}).`,
+    `Competitive scoring: normalized category ${breakdown.score_card.category}, category ${breakdown.category}, tags ${breakdown.tags.join(', ') || 'none'}, product/service ${breakdown.score_card.dimensions.productServiceFit}, workflow ${breakdown.score_card.dimensions.workflowFit}, ICP ${breakdown.score_card.dimensions.icpFit}, customer evaluation ${breakdown.score_card.dimensions.customerEvaluationFit}, use case ${breakdown.score_card.dimensions.useCaseFit}, revenue scale ${breakdown.score_card.dimensions.revenueScaleFit}, employee scale ${breakdown.score_card.dimensions.employeeScaleFit}, geography ${breakdown.score_card.dimensions.geographyFit}, SEO intent ${breakdown.score_card.dimensions.seoIntentFit}; weighted score ${breakdown.score_card.overallScore} (${breakdown.tier}).`,
   ].join(' ');
 }
 
@@ -1333,20 +1591,37 @@ export function evaluateCompetitorCandidate(
   const productDepth = roundDimension(featureDepth);
   const revenue = revenueAdjustment(companyRevenueTier, competitorRevenueTier);
   const authority = computeCompetitorAuthorityScore(enrichedCandidate);
-  let finalScore = roundDimension(
-    (0.30 * problemOverlap) +
-    (0.20 * icpOverlap) +
-    (0.15 * marketOverlap) +
-    (0.15 * productDepth) +
-    (0.10 * authority.authority_score) +
-    (0.10 * revenue),
+  const targetCapabilityVector = buildCompanyCapabilityVector(context);
+  const candidateCapabilityVector = buildCandidateCapabilityVector(enrichedCandidate);
+  const vectorOverlap = capabilityVectorOverlap(targetCapabilityVector, candidateCapabilityVector);
+  const workflowFit = roundDimension((marketFocusOverlap * 0.45) + (productOverlap * 0.35) + (intentOverlap * 0.20));
+  const customerEvaluationFit = roundDimension(
+    (intentOverlap * 0.45) +
+    (targetOverlap * 0.30) +
+    ((affinity === 'same' ? 1 : affinity === 'functional' ? 0.72 : 0.35) * 0.25),
   );
+  const useCaseFit = roundDimension((productDepth * 0.60) + (problemOverlap * 0.40));
+  const seoIntentFit = roundDimension((intentOverlap * 0.55) + (authority.authority_score * 0.45));
+  const dimensions: CompetitorDimensionScores = {
+    productServiceFit: toPercentScore((problemOverlap * 0.60) + (vectorOverlap * 0.40)),
+    workflowFit: toPercentScore((workflowFit * 0.55) + (vectorOverlap * 0.45)),
+    icpFit: toPercentScore(icpOverlap),
+    customerEvaluationFit: toPercentScore(customerEvaluationFit),
+    useCaseFit: toPercentScore((useCaseFit * 0.60) + (vectorOverlap * 0.40)),
+    revenueScaleFit: toPercentScore(revenue),
+    employeeScaleFit: employeeScaleFitForCandidate(enrichedCandidate, candidateSignalText(enrichedCandidate, domain)),
+    geographyFit: toPercentScore(geographyOverlap),
+    seoIntentFit: toPercentScore(seoIntentFit),
+  };
+  let overallScore = weightedCompetitorScore(dimensions);
+  let finalScore = roundDimension(overallScore / 100);
   if (
     enrichedCandidate.source === 'archetype_native_peer' &&
     hasArchetypeNativePeerEvidence(candidateSignalText(enrichedCandidate, domain)) &&
     hasArchetypeNativeContextEvidence(context)
   ) {
     finalScore = roundDimension(Math.max(finalScore, FINAL_COMPETITOR_MIN_SCORE / 100));
+    overallScore = Math.max(overallScore, FINAL_COMPETITOR_MIN_SCORE);
   }
 
   const tags = enrichedCandidate.tags ?? normalizeCompetitorTags({
@@ -1356,10 +1631,41 @@ export function evaluateCompetitorCandidate(
     category: competitorCategory,
   });
 
+  const tier = classifyCompetitiveTier({ problemOverlap, icpOverlap, affinity });
+  const normalizedCategory = classifyNormalizedCompetitorCategory({
+    overallScore,
+    dimensions,
+    revenueTier: competitorRevenueTier,
+    competitor: enrichedCandidate,
+    affinity,
+  }) ?? 'workflow-alternative';
+  const reasoning = competitorReasoning({
+    dimensions,
+    category: normalizedCategory,
+    revenueTier: competitorRevenueTier,
+    affinity,
+    competitor: enrichedCandidate,
+  });
+  const discoverySources = candidateDiscoverySources(enrichedCandidate);
+  const intelligenceTier = competitorIntelligenceTier(overallScore);
+
   return {
     category: competitorCategory,
     tags,
-    relevance_score: Math.round(finalScore * 100),
+    relevance_score: overallScore,
+    score_card: {
+      overallScore,
+      category: normalizedCategory,
+      tier: intelligenceTier,
+      dimensions,
+      reasoning,
+      confidence: Math.round((enrichedCandidate.confidenceScore ?? enrichedCandidate.enrichment?.confidence_score ?? 0.15) * 100),
+      discoverySources,
+      capabilityVector: candidateCapabilityVector,
+    },
+    reasoning,
+    discoverySources,
+    capabilityVector: candidateCapabilityVector,
     problem_overlap: problemOverlap,
     icp_overlap: icpOverlap,
     market_overlap: marketOverlap,
@@ -1368,7 +1674,7 @@ export function evaluateCompetitorCandidate(
     authority_score: authority.authority_score,
     authority_signals: authority.authority_signals,
     final_score: finalScore,
-    tier: classifyCompetitiveTier({ problemOverlap, icpOverlap, affinity }),
+    tier,
   };
 }
 
@@ -1377,10 +1683,7 @@ export function scoreCompetitorCandidate(
   context: CompanyCompetitiveContext,
 ): number {
   const enrichedCandidate = enrichCompetitorCandidateSync(candidate);
-  const legacySourceFloor = SOURCE_BASE_SCORE[enrichedCandidate.source] ?? 10;
-  const score = evaluateCompetitorCandidate(enrichedCandidate, context).relevance_score;
-  if (TRUSTED_SOURCES.has(enrichedCandidate.source)) return Math.max(score, Math.min(70, legacySourceFloor));
-  return score;
+  return evaluateCompetitorCandidate(enrichedCandidate, context).score_card.overallScore;
 }
 
 function classifyByIndex(index: number): CompetitorClassification {
@@ -1510,20 +1813,36 @@ export function dedupeCompetitorCandidates<T extends Pick<CompetitorCandidate, '
   candidates: T[],
 ): T[] {
   const byKey = new Map<string, T & { name: string; domain: string | null }>();
+  const keysByEntity = new Map<string, string>();
 
   for (const candidate of candidates) {
     if (FINAL_BLOCKED_SOURCES.has(candidate.source)) continue;
     const name = cleanText(candidate.name);
-    const key = finalCompetitorKey(candidate);
-    if (!name || !key) continue;
+    const nameKey = normalizeCompetitorEntityName(name);
+    const domainKey = domainRootKey(candidate.domain ?? candidate.name);
+    const entityKeys = [nameKey ? `name:${nameKey}` : null, domainKey ? `domain:${domainKey}` : null].filter(Boolean) as string[];
+    const key = entityKeys.map((entityKey) => keysByEntity.get(entityKey)).find(Boolean) ?? finalCompetitorKey(candidate);
+    if (!name || !key || entityKeys.length === 0) continue;
     const normalizedCandidate = {
       ...candidate,
       name,
       domain: normalizeCompetitorDomain(candidate.domain ?? candidate.name),
     };
     const existing = byKey.get(key);
-    if (!existing || candidateDedupeQuality(normalizedCandidate) > candidateDedupeQuality(existing)) {
-      byKey.set(key, normalizedCandidate);
+    const mergedDiscoverySources = Array.from(new Set([
+      ...((existing as Partial<CompetitorCandidate> | undefined)?.discoverySources ?? []),
+      ...((normalizedCandidate as Partial<CompetitorCandidate>).discoverySources ?? []),
+      discoverySourceFromCandidate(normalizedCandidate as CompetitorCandidate),
+    ]));
+    const winner = !existing || candidateDedupeQuality(normalizedCandidate) > candidateDedupeQuality(existing)
+      ? normalizedCandidate
+      : existing;
+    byKey.set(key, {
+      ...winner,
+      discoverySources: mergedDiscoverySources,
+    });
+    for (const entityKey of entityKeys) {
+      keysByEntity.set(entityKey, key);
     }
   }
 
@@ -1709,8 +2028,11 @@ function filterFinalCompetitorsWithAudit(params: {
     suppressed_by_feedback: [] as string[],
     boosted_by_feedback: [] as string[],
     final_count: 0,
+    debugCompetitorScoring: undefined as DebugCompetitorScoring | undefined,
   };
   const filtered: RankedCompetitor[] = [];
+  const fallbackFiltered: RankedCompetitor[] = [];
+  const rejected: DebugCompetitorScoring['rejected'] = [];
 
   for (const competitor of dedupeRankedCompetitors(params.competitors)) {
     const feedbackDecision = getCompetitorFeedbackDecision(params.feedbackMemory, competitor);
@@ -1723,22 +2045,43 @@ function filterFinalCompetitorsWithAudit(params: {
     );
     if (!Number.isFinite(enrichmentConfidence) || enrichmentConfidence < FINAL_COMPETITOR_MIN_ENRICHMENT_CONFIDENCE) {
       audit.removed_due_to_confidence += 1;
+      rejected.push({
+        company: competitor.name,
+        score: competitor.score_card?.overallScore ?? competitor.relevance_score ?? 0,
+        failedDimensions: failedCompetitorDimensions(competitor),
+      });
       continue;
     }
     if (!hasStrictCategoryFit(competitor, params.context)) {
       audit.removed_due_to_category += 1;
+      rejected.push({
+        company: competitor.name,
+        score: competitor.score_card?.overallScore ?? competitor.relevance_score ?? 0,
+        failedDimensions: ['categoryFit', ...failedCompetitorDimensions(competitor)],
+      });
       continue;
     }
-    if (!hasPassedFinalCompetitorGate(competitor, minScore)) {
+    const gateCandidate: Partial<RankedCompetitor> = competitor;
+    if (!hasPassedFinalCompetitorGate(gateCandidate, FINAL_COMPETITOR_MIN_SCORE)) {
       audit.removed_due_to_threshold += 1;
+      rejected.push({
+        company: gateCandidate.name ?? 'unknown',
+        score: gateCandidate.score_card?.overallScore ?? gateCandidate.relevance_score ?? 0,
+        failedDimensions: failedCompetitorDimensions(gateCandidate),
+      });
       continue;
     }
     const boosted = applyCompetitorFeedbackBoost(competitor, feedbackDecision);
     if (boosted !== competitor) audit.boosted_by_feedback.push(competitor.name);
-    filtered.push(boosted);
+    if (Number(boosted.score_card?.overallScore ?? boosted.relevance_score ?? 0) >= minScore) {
+      filtered.push(boosted);
+    } else {
+      fallbackFiltered.push(boosted);
+    }
   }
 
-  const sortedCompetitors = filtered
+  const accepted = filtered.length > 0 ? filtered : fallbackFiltered;
+  const sortedCompetitors = accepted
     .sort(sortFinalCompetitors)
     .filter((competitor, _index, sorted) => {
       if (competitor.source !== 'market_substitute') return true;
@@ -1746,6 +2089,12 @@ function filterFinalCompetitorsWithAudit(params: {
     });
   const finalCompetitors = applyHybridCompositionPreservation(sortedCompetitors, params.context, params.max);
   audit.final_count = finalCompetitors.length;
+  if (process.env.NODE_ENV !== 'production') {
+    audit.debugCompetitorScoring = { rejected };
+    latestDebugCompetitorScoring = audit.debugCompetitorScoring;
+  } else {
+    latestDebugCompetitorScoring = undefined;
+  }
   console.info('[competitor-final-filter][audit]', audit);
   console.info('[competitor-feedback][trace]', {
     suppressed_by_feedback: audit.suppressed_by_feedback,
@@ -1765,8 +2114,24 @@ export function hasPassedFinalCompetitorGate(
   if (!Number.isFinite(competitor.relevance_score) || Number(competitor.relevance_score) < minScore) return false;
   if (!Number.isFinite(competitor.final_score) || Number(competitor.final_score) <= 0) return false;
   if (Math.round(Number(competitor.final_score) * 100) < minScore) return false;
-  if (Number(competitor.problem_overlap ?? 0) < FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP) return false;
-  if (Number(competitor.icp_overlap ?? 0) < FINAL_COMPETITOR_MIN_ICP_OVERLAP) return false;
+  const scoreCard = competitor.score_card;
+  if (!scoreCard || !scoreCard.dimensions || Number(scoreCard.overallScore ?? 0) < 40) return false;
+  const primaryDominance = Math.max(
+    Number(scoreCard.dimensions.productServiceFit ?? 0),
+    Number(scoreCard.dimensions.workflowFit ?? 0),
+    Number(scoreCard.dimensions.useCaseFit ?? 0),
+    Number(scoreCard.dimensions.customerEvaluationFit ?? 0),
+  );
+  if (primaryDominance < 40) return false;
+  if (
+    Number(competitor.problem_overlap ?? 0) < FINAL_COMPETITOR_MIN_PROBLEM_OVERLAP &&
+    Number(scoreCard.dimensions.workflowFit ?? 0) < 50 &&
+    Number(scoreCard.dimensions.useCaseFit ?? 0) < 50
+  ) return false;
+  if (
+    Number(competitor.icp_overlap ?? 0) < FINAL_COMPETITOR_MIN_ICP_OVERLAP &&
+    Number(scoreCard.dimensions.customerEvaluationFit ?? 0) < 50
+  ) return false;
   if (Number(competitor.final_score ?? 0) < FINAL_COMPETITOR_MIN_FINAL_SCORE) return false;
   if (!Number.isFinite(competitor.authority_score) || Number(competitor.authority_score) < 0) return false;
   if (!competitor.authority_signals || typeof competitor.authority_signals !== 'object') return false;
@@ -1825,10 +2190,10 @@ function toRevalidationCandidate(candidate: CompetitorCandidate): CompetitorCand
     : revalidationCandidate;
 }
 
-function hasHighConfidenceNamedCompetitor(competitors: RankedCompetitor[]): boolean {
+function hasStrongNamedCompetitor(competitors: RankedCompetitor[]): boolean {
   return competitors.some((competitor) =>
     competitor.source !== 'market_substitute' &&
-    Number(competitor.relevance_score ?? 0) >= HIGH_CONFIDENCE_NAMED_COMPETITOR_SCORE
+    Number(competitor.score_card?.overallScore ?? competitor.relevance_score ?? 0) >= 70
   );
 }
 
@@ -1842,12 +2207,12 @@ function addMarketSubstitutesWhenNeeded(params: {
   if (params.includeMarketSubstitutes !== true) return params.candidates;
   if (params.finalCompetitors.length === 0) return params.candidates;
   if (params.finalCompetitors.length >= finalCompetitorOutputLimit(params.max)) return params.candidates;
-  if (hasHighConfidenceNamedCompetitor(params.finalCompetitors)) return params.candidates;
+  if (hasStrongNamedCompetitor(params.finalCompetitors)) return params.candidates;
   if (params.candidates.some((candidate) => candidate.source === 'market_substitute')) return params.candidates;
   const substitutes = inferCompetitorArchetypeCandidates(params.context, 'market_substitute');
   if (substitutes.length === 0) return params.candidates;
   console.info('[competitor-final-filter][market-substitutes-added]', {
-    reason: 'no_named_competitor_at_or_above_85',
+    reason: 'no_strong_named_competitor_at_or_above_70',
     substitute_count: substitutes.length,
     substitutes: substitutes.map((candidate) => candidate.name),
   });
@@ -1951,7 +2316,7 @@ export async function getFinalCompetitors(params: {
       candidates: enriched,
       context: params.context,
       max: finalCompetitorRankingPoolSize(enriched.length, params.max),
-      minScore,
+      minScore: FINAL_COMPETITOR_MIN_SCORE,
       allowTrustedBelowThreshold: false,
     });
     return filterFinalCompetitorsWithAudit({
@@ -1998,7 +2363,7 @@ export function getFinalCompetitorsSync(params: {
       candidates: pipelineCandidates,
       context: params.context,
       max: finalCompetitorRankingPoolSize(pipelineCandidates.length, params.max),
-      minScore,
+      minScore: FINAL_COMPETITOR_MIN_SCORE,
       allowTrustedBelowThreshold: false,
     });
     return filterFinalCompetitorsWithAudit({

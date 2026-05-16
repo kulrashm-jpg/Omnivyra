@@ -246,7 +246,13 @@
       "Bash(tee C:/tmp/typecheck-scripts.log)",
       "Bash(tee C:/tmp/lint.log)",
       "Bash(tee C:/tmp/build.log)",
-      "Bash(tasklist /FI \"PID eq 16636\")"
+      "Bash(tasklist /FI \"PID eq 16636\")",
+      "Bash(tee C:/tmp/vercel-deploy.log)",
+      "Bash(tee C:/tmp/vercel-deploy2.log)",
+      "Bash(echo \"TC_EXIT=$?\")",
+      "Bash(echo \"LINT_EXIT=$?\")",
+      "PowerShell(Test-NetConnection *)",
+      "Bash(echo \"PID=$!\")"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

@@ -45,6 +45,20 @@ export function resolveOmnivyraCompanyName(company: OmnivyraWebsiteCompanyRecord
   );
 }
 
+function isCanonicalOmnivyraName(value: string | null | undefined): boolean {
+  return String(value || '').trim().toLowerCase() === 'omnivyra';
+}
+
+function scoreOmnivyraWebsiteCompany(company: OmnivyraWebsiteCompanyRecord): number {
+  let score = 0;
+  if (isCanonicalOmnivyraName(company.name)) score += 100;
+  if (isCanonicalOmnivyraName(company.company_profiles?.[0]?.name)) score += 50;
+  if (normalizeWebsiteDomain(company.website_domain) === 'omnivyra.com') score += 10;
+  if (normalizeWebsiteDomain(company.website) === 'omnivyra.com') score += 5;
+  if (normalizeWebsiteDomain(company.company_profiles?.[0]?.website_url) === 'omnivyra.com') score += 5;
+  return score;
+}
+
 export async function resolveOmnivyraWebsiteCompany(): Promise<OmnivyraWebsiteCompanyRecord | null> {
   const { data, error } = await supabase
     .from('companies')
@@ -80,20 +94,19 @@ export async function resolveOmnivyraWebsiteCompany(): Promise<OmnivyraWebsiteCo
     company_profiles: profilesByCompanyId.get(company.id) ?? [],
   }));
 
-  // Match strictly on verified website-domain. The previous implementation
-  // also accepted any active company whose name CONTAINED 'omnivyra', which
-  // meant a tenant signing up as e.g. "Omnivyra Test Co" with a corrupted
-  // website value would silently shadow the real Omnivyra row in the
-  // Super Admin GA tab. That's the multi-tenant footgun the audit flagged.
-  return (
-    enrichedCompanies.find(
-      (company) =>
-        company.status === 'active' &&
-        (
-          isOmnivyraWebsiteDomain(company.website_domain) ||
-          isOmnivyraWebsiteDomain(company.website) ||
-          isOmnivyraWebsiteDomain(company.company_profiles?.[0]?.website_url)
-        ),
-    ) ?? null
+  // Match strictly on verified website-domain, then prefer the canonical
+  // Omnivyra tenant when QA/test tenants also claim omnivyra.com.
+  const candidates = enrichedCompanies.filter(
+    (company) =>
+      company.status === 'active' &&
+      (
+        isOmnivyraWebsiteDomain(company.website_domain) ||
+        isOmnivyraWebsiteDomain(company.website) ||
+        isOmnivyraWebsiteDomain(company.company_profiles?.[0]?.website_url)
+      ),
   );
+
+  return candidates.sort(
+    (a, b) => scoreOmnivyraWebsiteCompany(b) - scoreOmnivyraWebsiteCompany(a),
+  )[0] ?? null;
 }

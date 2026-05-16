@@ -18,6 +18,11 @@ import { requireAdminRateLimit, requireAuthenticatedInternalUser } from '../../.
 import { recordAdminAudit } from '../../../../backend/services/adminAuditService';
 import { logger } from '../../../../backend/services/logger';
 import { withIdempotency } from '../../../../backend/middleware/withIdempotency';
+import {
+  proposeApproval,
+  markApprovalExecuted,
+  recordAdminFinancialOperation,
+} from '../../../../backend/services/billing';
 
 async function assertSuperAdmin(req: NextApiRequest, res: NextApiResponse): Promise<string | null> {
   const user = await requireAuthenticatedInternalUser(req, res);
@@ -75,53 +80,164 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         if (typeof credits !== 'number' || credits <= 0) {
           return res.status(400).json({ error: 'credits must be a positive number' });
         }
+        // Approval-chain gate (C-4)
+        const proposal = await proposeApproval({
+          actionType: 'admin_grant',
+          proposedBy: userId,
+          payload: {
+            organizationId: companyId,
+            amountCredits:  credits,
+            category:       'paid',
+            reason:         note ?? 'admin grant (legacy endpoint)',
+            metadata:       { usdEquivalent: usdEquivalent ?? null },
+          },
+        });
+        if (!proposal.ok) return res.status(400).json({ error: proposal.message, code: proposal.code });
+        if (!proposal.autoApproved) {
+          return res.status(202).json({
+            ok: true,
+            status: 'pending_approval',
+            approvalId: proposal.approvalId,
+            requiredApprovals: proposal.requiredApprovals,
+            message: 'Grant requires additional approval. Sign via /api/admin/credits/approvals/sign.',
+          });
+        }
+
         const { grantCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await grantCredits({ organizationId: companyId, credits, usdEquivalent, note, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
+        const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({
           actorUserId: userId,
           action: 'ADMIN_CREDITS_GRANT',
           targetType: 'organization',
           targetId: companyId,
-          metadata: { credits, usdEquivalent: usdEquivalent ?? null, note: note ?? null },
-          idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+          metadata: { credits, usdEquivalent: usdEquivalent ?? null, note: note ?? null, approvalId: proposal.approvalId },
+          idempotencyKey: ledgerIdem,
         });
-        return res.status(200).json({ ok: true, action: 'grant', credits });
+        await markApprovalExecuted({
+          approvalId:             proposal.approvalId,
+          executedIdempotencyKey: ledgerIdem,
+          actorUserId:            userId,
+        });
+        await recordAdminFinancialOperation({
+          module:               'http:admin_credits_legacy_grant',
+          actorUserId:          userId,
+          organizationId:       companyId,
+          action:               'admin_grant',
+          amountCredits:        credits,
+          reason:               note ?? undefined,
+          approvalId:           proposal.approvalId,
+          ledgerIdempotencyKey: ledgerIdem,
+        });
+        return res.status(200).json({ ok: true, action: 'grant', credits, approvalId: proposal.approvalId });
       }
 
       if (action === 'adjust') {
         if (typeof credits !== 'number') return res.status(400).json({ error: 'credits must be a number (positive or negative)' });
         if (!note) return res.status(400).json({ error: 'note required for adjustments' });
+        const proposal = await proposeApproval({
+          actionType: 'admin_adjust',
+          proposedBy: userId,
+          payload: {
+            organizationId: companyId,
+            amountCredits:  credits,
+            reason:         note,
+          },
+        });
+        if (!proposal.ok) return res.status(400).json({ error: proposal.message, code: proposal.code });
+        if (!proposal.autoApproved) {
+          return res.status(202).json({
+            ok: true,
+            status: 'pending_approval',
+            approvalId: proposal.approvalId,
+            requiredApprovals: proposal.requiredApprovals,
+            message: 'Adjustment requires additional approval. Sign via /api/admin/credits/approvals/sign.',
+          });
+        }
+
         const { adjustCredits } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await adjustCredits({ organizationId: companyId, credits, note, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
+        const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({
           actorUserId: userId,
           action: 'ADMIN_CREDITS_ADJUST',
           targetType: 'organization',
           targetId: companyId,
-          metadata: { credits, note },
-          idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+          metadata: { credits, note, approvalId: proposal.approvalId },
+          idempotencyKey: ledgerIdem,
         });
-        return res.status(200).json({ ok: true, action: 'adjust', credits });
+        await markApprovalExecuted({
+          approvalId:             proposal.approvalId,
+          executedIdempotencyKey: ledgerIdem,
+          actorUserId:            userId,
+        });
+        await recordAdminFinancialOperation({
+          module:               'http:admin_credits_legacy_adjust',
+          actorUserId:          userId,
+          organizationId:       companyId,
+          action:               'admin_adjust',
+          amountCredits:        credits,
+          reason:               note,
+          approvalId:           proposal.approvalId,
+          ledgerIdempotencyKey: ledgerIdem,
+        });
+        return res.status(200).json({ ok: true, action: 'adjust', credits, approvalId: proposal.approvalId });
       }
 
       if (action === 'set_rate') {
         if (typeof creditRateUsd !== 'number' || creditRateUsd < 0) {
           return res.status(400).json({ error: 'creditRateUsd must be a non-negative number' });
         }
+        // Rate changes always require 2 approvers (governance §10 / threshold seed)
+        const proposal = await proposeApproval({
+          actionType: 'admin_rate_change',
+          proposedBy: userId,
+          payload: {
+            organizationId:   companyId,
+            newCreditRateUsd: creditRateUsd,
+            reason:           note ?? 'credit_rate_usd change',
+          },
+        });
+        if (!proposal.ok) return res.status(400).json({ error: proposal.message, code: proposal.code });
+        if (!proposal.autoApproved) {
+          return res.status(202).json({
+            ok: true,
+            status: 'pending_approval',
+            approvalId: proposal.approvalId,
+            requiredApprovals: proposal.requiredApprovals,
+            message: 'Rate change requires additional approval. Sign via /api/admin/credits/approvals/sign.',
+          });
+        }
+
         const { updateOrgCreditRate } = await import('../../../../backend/services/consumptionAnalyticsService');
         const result = await updateOrgCreditRate({ organizationId: companyId, creditRateUsd, performedBy: userId });
         if (!result.ok) return res.status(500).json({ error: result.error });
+        const ledgerIdem = String(req.headers['idempotency-key'] ?? `${proposal.approvalId}:exec`);
         await recordAdminAudit({
           actorUserId: userId,
           action: 'ADMIN_CREDITS_SET_RATE',
           targetType: 'organization',
           targetId: companyId,
-          metadata: { creditRateUsd },
-          idempotencyKey: String(req.headers['idempotency-key'] ?? ''),
+          metadata: { creditRateUsd, approvalId: proposal.approvalId },
+          idempotencyKey: ledgerIdem,
         });
-        return res.status(200).json({ ok: true, action: 'set_rate', creditRateUsd });
+        await markApprovalExecuted({
+          approvalId:             proposal.approvalId,
+          executedIdempotencyKey: ledgerIdem,
+          actorUserId:            userId,
+        });
+        await recordAdminFinancialOperation({
+          module:               'http:admin_credits_set_rate',
+          actorUserId:          userId,
+          organizationId:       companyId,
+          action:               'admin_rate_change',
+          reason:               note ?? undefined,
+          approvalId:           proposal.approvalId,
+          ledgerIdempotencyKey: ledgerIdem,
+        });
+        return res.status(200).json({ ok: true, action: 'set_rate', creditRateUsd, approvalId: proposal.approvalId });
       }
 
       return res.status(400).json({ error: `Unknown action: ${action}. Valid: grant, adjust, set_rate` });

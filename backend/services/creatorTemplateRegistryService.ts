@@ -102,6 +102,41 @@ export function resolveCreatorAssetType(contentType: string): CreatorAssetType {
   throw new Error(`Creator format "${value}" is not mapped to a renderable asset family`);
 }
 
+/**
+ * Same family-resolution as {@link resolveCreatorAssetType} but allows the
+ * caller to opt in to guidance-only formats (video/reel/short/podcast). Used
+ * by the theme-treatment generation path which produces a written blueprint
+ * — scenes / hook / CTA / audio cues — instead of a rendered asset.
+ *
+ * The 'audio' family is mapped onto 'video' here because the prompt + asset
+ * payload shape are scene-based for both video and audio episodes; the
+ * downstream consumer differentiates via `content_type`.
+ */
+export function resolveCreatorAssetTypeAllowGuidance(contentType: string): CreatorAssetType {
+  const value = normalizeCreatorFormat(contentType);
+  const governance = getCreatorGovernance(value);
+  if (!governance) {
+    throw new Error(`Unsupported creator content type: ${String(contentType || '').trim() || 'unknown'}`);
+  }
+  if (governance.canonical_asset_family === 'image') return 'image';
+  if (governance.canonical_asset_family === 'carousel') return 'carousel';
+  // 'video' and 'audio' both produce scene-based theme blueprints.
+  return 'video';
+}
+
+/**
+ * @deprecated With the per-row eligibility refactor, "guidance-only" no
+ * longer maps cleanly to a single flag. The four formats that previously
+ * set `guidance_only: true` are now attachment-required. This helper now
+ * delegates to {@link isAttachmentRequiredFormat} so existing routing
+ * (e.g. the generate API's theme-treatment branch) keeps working without
+ * a callsite migration.
+ */
+export function isGuidanceOnlyContentType(contentType: string): boolean {
+  const governance = getCreatorGovernance(contentType);
+  return Boolean(governance?.media_upload_required);
+}
+
 export function deriveCreatorAssetTypeFromIntent(input: {
   contentType: string;
   targetPlatforms?: string[];

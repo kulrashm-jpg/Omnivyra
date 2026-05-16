@@ -740,32 +740,118 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Current content is required for refinement' });
       }
 
-      const aiResult = await runCompletionWithOperation({
-        companyId,
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        operation: 'regenerateContent',
-        temperature: 0.2,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a senior social content editor. Apply user refinement instructions while preserving factual meaning and platform fit. Preserve all paragraph line breaks and blank lines between paragraphs. Return only refined content — no labels, no commentary.',
+      if (!companyId) {
+        return res.status(400).json({ error: 'companyId required for credit reservation on refine_variant' });
+      }
+      const { isRefineVariantBillingEnabled, runBilledAiCompletion } = await import('@/backend/services/billing');
+      const activityDbIdForBilling = String((req.body as any)?.activity?.id || `refine-${platform}-${Date.now()}`).trim();
+      const refineBilling = await isRefineVariantBillingEnabled({ organizationId: companyId });
+
+      if (!refineBilling.enabled) {
+        const directResult = await runCompletionWithOperation({
+          companyId,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          operation: 'regenerateContent',
+          temperature: 0.2,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a senior social content editor. Apply user refinement instructions while preserving factual meaning and platform fit. Preserve all paragraph line breaks and blank lines between paragraphs. Return only refined content - no labels, no commentary.',
+            },
+            {
+              role: 'user',
+              content: JSON.stringify({
+                platform,
+                content_type: contentType,
+                refinement_instruction: prompt,
+                current_content: currentContent,
+              }),
+            },
+          ],
+        });
+        let refined = String(directResult.output || '').trim();
+        if (!refined) {
+          return res.status(500).json({ error: 'AI refinement returned empty output' });
+        }
+        const refinedOutput = await processContent({
+          content: refined,
+          platform,
+          card_type: 'repurpose_card',
+          enforce_char_limit: true,
+        });
+        refined = refinedOutput.content || refined;
+
+        const activityDbId = String((req.body as any)?.activity?.id || '').trim();
+        await persistVariantsToDb(activityDbId, [{
+          platform,
+          content_type: contentType,
+          generated_content: refined,
+          generation_status: 'generated',
+          refinement_status: 'in_progress',
+          refinement_finalized: false,
+        }], asObject((dailyExecutionItemRaw as any)?.master_content));
+        return res.status(200).json({
+          success: true,
+          refined_content: refined,
+          usage: directResult.usage,
+          billing: {
+            charged: false,
+            reason: refineBilling.reason,
           },
-          {
-            role: 'user',
-            content: JSON.stringify({
-              platform,
-              content_type: contentType,
-              refinement_instruction: prompt,
-              current_content: currentContent,
-              objective: item?.intent?.objective ?? null,
-              audience: item?.intent?.target_audience ?? null,
-              cta: item?.intent?.cta_type ?? null,
-            }),
-          },
-        ],
+        });
+      }
+
+      const billed = await runBilledAiCompletion({
+        module:        'http:activity_workspace_refine_variant',
+        userId:        user.id,
+        orgId:         companyId,
+        action:        'content_rewrite',
+        referenceType: 'variant_refine',
+        referenceId:   activityDbIdForBilling,
+        llmPricing: {
+          provider:        'openai',
+          model:           process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          maxInputTokens:  4000,
+          maxOutputTokens: 1500,
+          actionKey:       'content_rewrite',
+        },
+        idempotency: {
+          kind:        'http',
+          actorUserId: user.id,
+          action:      'content_rewrite',
+          referenceId: activityDbIdForBilling,
+          requestBody: { platform, contentType, prompt, currentContent },
+          requestHeaderIdempotency: typeof req.headers['idempotency-key'] === 'string'
+            ? (req.headers['idempotency-key'] as string)
+            : undefined,
+        },
+        completion: {
+          companyId,
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          operation: 'regenerateContent',
+          temperature: 0.2,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a senior social content editor. Apply user refinement instructions while preserving factual meaning and platform fit. Preserve all paragraph line breaks and blank lines between paragraphs. Return only refined content — no labels, no commentary.',
+            },
+            {
+              role: 'user',
+              content: JSON.stringify({
+                platform,
+                content_type: contentType,
+                refinement_instruction: prompt,
+                current_content: currentContent,
+                objective: item?.intent?.objective ?? null,
+                audience: item?.intent?.target_audience ?? null,
+                cta: item?.intent?.cta_type ?? null,
+              }),
+            },
+          ],
+        },
       });
 
-      let refined = String(aiResult?.output || '').trim();
+      let refined = String(billed.text || '').trim();
       if (!refined) {
         return res.status(500).json({ error: 'AI refinement returned empty output' });
       }

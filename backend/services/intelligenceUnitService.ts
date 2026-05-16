@@ -162,7 +162,7 @@ export const DEFAULT_INTELLIGENCE_UNITS: IntelligenceUnit[] = [
   },
 ];
 
-async function listIntelligenceUnits(): Promise<IntelligenceUnit[]> {
+export async function listIntelligenceUnits(): Promise<IntelligenceUnit[]> {
   const { data, error } = await ownedDbTable('intelligence_units')
     .select('id, name, category, decision_types, required_entities, cost_weight, report_tiers')
     .order('id');

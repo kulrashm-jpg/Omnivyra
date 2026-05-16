@@ -294,10 +294,30 @@ function readDevLock() {
   return readJson(devLockPath);
 }
 
+function findProcessByPid(pid) {
+  const wanted = Number(pid);
+  if (!Number.isInteger(wanted) || wanted <= 0) return null;
+  return listProcesses().find((proc) => Number(proc.pid) === wanted) || null;
+}
+
+function lockProcessIsRuntime(lock) {
+  if (!lock?.pid || !pidAlive(lock.pid)) return false;
+
+  const runtimeProc = findProcessByPid(lock.pid);
+  if (runtimeProc && classifyRuntimeProcess(runtimeProc)) return true;
+
+  if (lock.supervisorPid && pidAlive(lock.supervisorPid)) {
+    const supervisorProc = findProcessByPid(lock.supervisorPid);
+    if (supervisorProc && classifyRuntimeProcess(supervisorProc)) return true;
+  }
+
+  return false;
+}
+
 function activeLockState() {
   const lock = readDevLock();
   if (!lock) return { lock: null, active: false, stale: false };
-  const active = pidAlive(lock.pid);
+  const active = lockProcessIsRuntime(lock);
   return { lock, active, stale: !active };
 }
 

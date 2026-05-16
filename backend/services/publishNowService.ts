@@ -23,6 +23,141 @@ import { checkAndCompleteCampaignIfEligible } from './CampaignCompletionService'
 import { validatePlatformContentCompatibility } from './platformContentValidator';
 import { logger } from './logger';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
+import {
+  isAttachmentRequiredFormat,
+  normalizeCreatorFormat,
+} from '../../lib/shared/creatorGovernanceRegistry';
+import { validateMediaUpload } from './mediaUploadValidationService';
+import { applyTransition, LIFECYCLE_STATES, CreatorLifecycleTransitionError } from '../../lib/shared/creatorLifecycleStateMachine';
+import { ownedDbTable as ownedDbTableShared } from '../db/writeOwner';
+import { emitCreatorEvent, CREATOR_EVENTS } from './creatorOperationalTelemetryService';
+import { recordAuditEntry } from './creatorAuditTrailService';
+import { recordPublishFailure } from './creatorQueueReliabilityService';
+import { validateCreatorPublishSemanticsLive } from './creatorPublishValidation';
+
+/**
+ * Publish-time re-validation for attachment-required posts. The
+ * `uploaded_media_url` on the row could be hours/days old by the time
+ * the publish job fires — signed URLs may have expired, CDN entries
+ * removed, etc. We re-hit the URL right before the platform adapter so
+ * a dead asset surfaces as a structured workspace error rather than a
+ * platform-level publish failure.
+ *
+ * Only runs for attachment-required content types. Autonomous rows
+ * (image / banner / infographic / carousel / pdf / slider) skip this
+ * check — their media was just rendered by Omnivyra and is trusted.
+ */
+async function revalidateAttachmentMediaBeforePublish(input: {
+  scheduledPostId: string;
+  contentType: string;
+  mediaUrls: string[] | null | undefined;
+}): Promise<{ ok: true } | { ok: false; reason: string; errors: string[] }> {
+  const normalized = normalizeCreatorFormat(input.contentType);
+  if (!isAttachmentRequiredFormat(normalized)) return { ok: true };
+  const firstUrl = Array.isArray(input.mediaUrls) && input.mediaUrls.length > 0 ? String(input.mediaUrls[0] || '').trim() : '';
+  if (!firstUrl) {
+    return { ok: false, reason: 'No uploaded media URL recorded on the scheduled post.', errors: ['missing_media_url'] };
+  }
+  const validation = await validateMediaUpload({
+    mediaUrl: firstUrl,
+    contentType: normalized,
+    skipLiveness: false,
+  });
+  if (validation.valid === true) return { ok: true };
+  const failureErrors: string[] = Array.isArray((validation as { errors?: unknown }).errors)
+    ? ((validation as { errors: string[] }).errors)
+    : [];
+  return {
+    ok: false,
+    reason: failureErrors.join(' | ') || 'Media validation failed at publish time.',
+    errors: failureErrors,
+  };
+}
+
+/**
+ * Roll back the daily_content_plans row to `upload_failed` when
+ * publish-time re-validation rejects the media. The row's
+ * `scheduled_post_id` linkage is preserved on the lifecycle history so
+ * the audit trail remains continuous. Best-effort — failure to write
+ * doesn't block the platform error response below.
+ */
+async function markAttachmentRowPublishFailed(input: {
+  scheduledPostId: string;
+  reason: string;
+  validationErrors: string[];
+}): Promise<void> {
+  try {
+    // ── Preferred: direct FK lookup via daily_content_plans.scheduled_post_id ──
+    // The migration at supabase/migrations/20260656_creator_attachment_scheduled_post_fk.sql
+    // adds this column + backfill + index. Use it when available; fall
+    // back to the legacy heuristic scan if the column doesn't exist (so
+    // pre-migration environments still get rollback coverage).
+    let target: any = null;
+    try {
+      const { data: fkRow } = await supabase
+        .from('daily_content_plans')
+        .select('id, content')
+        .eq('scheduled_post_id', input.scheduledPostId)
+        .maybeSingle();
+      if (fkRow) target = fkRow;
+    } catch {
+      /* fall through to heuristic */
+    }
+
+    if (!target) {
+      const { data: rows } = await supabase
+        .from('daily_content_plans')
+        .select('id, content')
+        .eq('content_status', 'scheduled')
+        .limit(50);
+      const rowsArr = Array.isArray(rows) ? rows : [];
+      target = rowsArr.find((r: any) => {
+        const c = typeof r.content === 'string'
+          ? (() => { try { return JSON.parse(r.content); } catch { return {}; } })()
+          : (r.content && typeof r.content === 'object' ? r.content : {});
+        return c?.scheduled_post_id === input.scheduledPostId;
+      });
+    }
+
+    if (!target) return;
+    const parsed = (() => {
+      const c = (target as any).content;
+      if (typeof c === 'string') {
+        try { return JSON.parse(c); } catch { return {}; }
+      }
+      return c && typeof c === 'object' ? c : {};
+    })() as Record<string, unknown>;
+    const transition = applyTransition(parsed, LIFECYCLE_STATES.UPLOAD_FAILED, {
+      contentPatch: {
+        publish_validation_error: input.reason,
+        publish_validation_errors: input.validationErrors,
+        publish_validation_failed_at: new Date().toISOString(),
+      },
+      reason: 'publish_validation_failed',
+    });
+    await ownedDbTableShared('daily_content_plans')
+      .update({
+        content: JSON.stringify(transition.content),
+        content_status: transition.contentStatus,
+        failure_reason: input.reason,
+        failure_type: 'transient',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', (target as any).id);
+  } catch (error) {
+    if (error instanceof CreatorLifecycleTransitionError) {
+      console.warn('[publishNow] publish-revalidation rollback skipped (invalid transition)', {
+        scheduled_post_id: input.scheduledPostId,
+        message: error.message,
+      });
+      return;
+    }
+    console.warn('[publishNow] publish-revalidation rollback failed', {
+      scheduled_post_id: input.scheduledPostId,
+      message: (error as Error)?.message,
+    });
+  }
+}
 
 export type PublishNowInput = {
   scheduled_post_id: string;
@@ -112,6 +247,103 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     };
   }
 
+  // ── Publish-time re-validation for attachment-required posts ──────────
+  // For video / reel / short / podcast scheduled posts, re-validate the
+  // `media_urls[0]` URL right before the platform adapter so an expired
+  // signed URL or removed CDN object surfaces as a structured workspace
+  // error rather than a platform publish failure. Autonomous rows are
+  // exempt (their media is just-rendered).
+  const creatorPublishValidation = await validateCreatorPublishSemanticsLive({
+    platform: scheduledPost.platform,
+    contentType: scheduledPost.content_type,
+    text: scheduledPost.content,
+    mediaUrls: scheduledPost.media_urls ?? [],
+    creatorAttachmentMetadata: scheduledPost.creator_attachment_metadata,
+    scheduledPostId: scheduled_post_id,
+  });
+  if (creatorPublishValidation.ok === false) {
+    const message = `Creator attachment publish validation failed: ${creatorPublishValidation.errors.join(', ')}`;
+    emitCreatorEvent({
+      event: CREATOR_EVENTS.PUBLISH_VALIDATION_FAILED,
+      severity: 'critical',
+      scheduledPostId: scheduled_post_id,
+      campaignId: scheduledPost.campaign_id,
+      creatorFormat: String(scheduledPost.content_type ?? ''),
+      metadata: {
+        errors: creatorPublishValidation.errors,
+        warnings: creatorPublishValidation.warnings,
+        source: input.publish_source ?? 'unknown',
+      },
+    });
+    await updateScheduledPostOnFailure(scheduled_post_id, message);
+    await ownedDbTable('scheduled_posts')
+      .update({
+        error_code: 'CREATOR_ATTACHMENT_PUBLISH_VALIDATION_FAILED',
+        error_message: message,
+      })
+      .eq('id', scheduled_post_id);
+    return {
+      status: 'FAILED',
+      message,
+      timestamp,
+    };
+  }
+
+  const reval = await revalidateAttachmentMediaBeforePublish({
+    scheduledPostId: scheduled_post_id,
+    contentType: String(scheduledPost.content_type || ''),
+    mediaUrls: scheduledPost.media_urls ?? [],
+  });
+  if (!reval.ok) {
+    const failure = reval as { ok: false; reason: string; errors: string[] };
+    emitCreatorEvent({
+      event: CREATOR_EVENTS.PUBLISH_VALIDATION_FAILED,
+      severity: 'critical',
+      scheduledPostId: scheduled_post_id,
+      campaignId: scheduledPost.campaign_id,
+      creatorFormat: String(scheduledPost.content_type ?? ''),
+      metadata: { reason: failure.reason, errors: failure.errors, source: input.publish_source ?? 'unknown' },
+    });
+    void recordPublishFailure({
+      scheduledPostId: scheduled_post_id,
+      errorCode: 'PUBLISH_MEDIA_REVALIDATION_FAILED',
+      errorMessage: failure.reason,
+      attemptCount: 1,
+    });
+    logger.warn('publishNow.attachment_revalidation_failed', {
+      surface: 'publishNow',
+      publishSource: input.publish_source ?? 'unknown',
+      scheduledPostId: scheduled_post_id,
+      reason: failure.reason,
+      errors: failure.errors,
+    });
+    await updateScheduledPostOnFailure(scheduled_post_id, failure.reason);
+    await ownedDbTable('scheduled_posts')
+      .update({
+        error_code: 'PUBLISH_MEDIA_REVALIDATION_FAILED',
+        error_message: failure.reason,
+      })
+      .eq('id', scheduled_post_id);
+    await markAttachmentRowPublishFailed({
+      scheduledPostId: scheduled_post_id,
+      reason: failure.reason,
+      validationErrors: failure.errors,
+    });
+    return {
+      status: 'FAILED',
+      message: failure.reason,
+      timestamp,
+    };
+  }
+
+  emitCreatorEvent({
+    event: CREATOR_EVENTS.PUBLISH_VALIDATION_PASSED,
+    scheduledPostId: scheduled_post_id,
+    campaignId: scheduledPost.campaign_id,
+    creatorFormat: String(scheduledPost.content_type ?? ''),
+    metadata: { source: input.publish_source ?? 'unknown' },
+  });
+
   const result = await publishToPlatform(scheduled_post_id, social_account_id);
 
   if (result.success && result.platform_post_id) {
@@ -121,6 +353,22 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       result.post_url || '',
       result.published_at
     );
+    emitCreatorEvent({
+      event: CREATOR_EVENTS.ATTACHMENT_PUBLISH_SUCCESS,
+      scheduledPostId: scheduled_post_id,
+      campaignId: scheduledPost.campaign_id,
+      creatorFormat: String(scheduledPost.content_type ?? ''),
+      metadata: { platform_post_id: result.platform_post_id, platform: scheduledPost.platform },
+    });
+    recordAuditEntry({
+      action: 'publish_succeeded',
+      actorUserId: user_id,
+      actorKind: 'worker',
+      source: 'worker',
+      scheduledPostId: scheduled_post_id,
+      campaignId: scheduledPost.campaign_id,
+      newState: { platform_post_id: result.platform_post_id, post_url: result.post_url ?? null },
+    });
 
     try {
       await recordPostAnalytics(
@@ -173,6 +421,30 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
       error_message: errorDetail,
     })
     .eq('id', scheduled_post_id);
+
+  emitCreatorEvent({
+    event: CREATOR_EVENTS.ATTACHMENT_PUBLISH_FAILURE,
+    severity: 'critical',
+    scheduledPostId: scheduled_post_id,
+    campaignId: scheduledPost.campaign_id,
+    creatorFormat: String(scheduledPost.content_type ?? ''),
+    metadata: { error_code: platformError.code, error_message: errorDetail, platform: scheduledPost.platform },
+  });
+  void recordPublishFailure({
+    scheduledPostId: scheduled_post_id,
+    errorCode: platformError.code,
+    errorMessage: errorDetail,
+    attemptCount: 1,
+  });
+  recordAuditEntry({
+    action: 'publish_failed',
+    actorUserId: user_id,
+    actorKind: 'worker',
+    source: 'worker',
+    scheduledPostId: scheduled_post_id,
+    campaignId: scheduledPost.campaign_id,
+    metadata: { error_code: platformError.code, error_message: errorDetail },
+  });
 
   return {
     status: 'FAILED',

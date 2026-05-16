@@ -8,7 +8,11 @@ import AIGenerationProgress from '../components/AIGenerationProgress';
 import { getAuthToken } from '../utils/getAuthToken';
 import {
   type CompanyProfile,
+  type CompanyContextIntelligence,
+  type CompanyContextEnrichmentSuggestion,
+  type CompanyContextQuality,
   type CompanyProfileRefinement,
+  type IntelligenceReadiness,
   type UserGuidedIntelligence,
   emptyProfile,
   splitToList,
@@ -69,6 +73,14 @@ export function useCompanyProfileState() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [overallProfileCompletion, setOverallProfileCompletion] = useState<number | null>(null);
   const [problemTransformationCompletion, setProblemTransformationCompletion] = useState<number | null>(null);
+  const [intelligenceContext, setIntelligenceContext] = useState<CompanyContextIntelligence | null>(null);
+  const [intelligenceReadiness, setIntelligenceReadiness] = useState<IntelligenceReadiness | null>(null);
+  const [contextQuality, setContextQuality] = useState<CompanyContextQuality | null>(null);
+  const [enrichmentSuggestions, setEnrichmentSuggestions] = useState<CompanyContextEnrichmentSuggestion[]>([]);
+  const [enrichmentLoading, setEnrichmentLoading] = useState(false);
+  const [enrichmentReviewingId, setEnrichmentReviewingId] = useState<string | null>(null);
+  const [intelligenceContextLoading, setIntelligenceContextLoading] = useState(false);
+  const [intelligenceContextSaving, setIntelligenceContextSaving] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [lastFetchStatus, setLastFetchStatus] = useState<number | null>(null);
   const [lastFetchError, setLastFetchError] = useState<string | null>(null);
@@ -90,6 +102,12 @@ export function useCompanyProfileState() {
   >([]);
   const [marketingIntelligenceInput, setMarketingIntelligenceInput] = useState('');
   const [marketingIntelligenceChatLoading, setMarketingIntelligenceChatLoading] = useState(false);
+  const [contextIntelligencePanelOpen, setContextIntelligencePanelOpen] = useState(false);
+  const [contextIntelligenceMessages, setContextIntelligenceMessages] = useState<
+    Array<{ role: 'user' | 'assistant'; content: string }>
+  >([]);
+  const [contextIntelligenceInput, setContextIntelligenceInput] = useState('');
+  const [contextIntelligenceChatLoading, setContextIntelligenceChatLoading] = useState(false);
   const [problemTransformationPanelOpen, setProblemTransformationPanelOpen] = useState(false);
   const [problemTransformationQuestions, setProblemTransformationQuestions] = useState<string[]>([]);
   const [problemTransformationAnswers, setProblemTransformationAnswers] = useState<string[]>([]);
@@ -398,6 +416,7 @@ export function useCompanyProfileState() {
         }
         setOverallProfileCompletion(data.overall_profile_completion ?? null);
         setProblemTransformationCompletion(data.problem_transformation_completion ?? null);
+        setIntelligenceReadiness(data.intelligence_readiness ?? null);
         setNotFound(false);
         setErrorMessage(null);
         setLastFetchError(null);
@@ -417,6 +436,56 @@ export function useCompanyProfileState() {
 
     loadProfile();
   }, [companyId, isAuthenticated, isCompanyLoading, isCompanyAdmin, companies, isOnboardingMode, user?.userId]);
+
+  useEffect(() => {
+    const loadIntelligenceContext = async () => {
+      if (isCompanyLoading || !isAuthenticated || !companyId) {
+        setIntelligenceContext(null);
+        setIntelligenceReadiness(null);
+        setContextQuality(null);
+        setEnrichmentSuggestions([]);
+        return;
+      }
+      setIntelligenceContextLoading(true);
+      try {
+        const response = await fetchWithAuth(
+          `/api/company-profile/intelligence-context?companyId=${encodeURIComponent(companyId)}`
+        );
+        if (!response.ok) return;
+        const data = await response.json();
+        setIntelligenceContext(data.intelligence_context ?? null);
+        setIntelligenceReadiness(data.intelligence_readiness ?? null);
+        setContextQuality(data.context_quality ?? null);
+      } catch {
+        console.warn('Failed to load company intelligence context');
+      } finally {
+        setIntelligenceContextLoading(false);
+      }
+    };
+    loadIntelligenceContext();
+  }, [companyId, isAuthenticated, isCompanyLoading]);
+
+  useEffect(() => {
+    const loadEnrichmentSuggestions = async () => {
+      if (isCompanyLoading || !isAuthenticated || !companyId) return;
+      setEnrichmentLoading(true);
+      try {
+        const response = await fetchWithAuth(
+          `/api/company-profile/intelligence-enrichment?companyId=${encodeURIComponent(companyId)}`
+        );
+        if (!response.ok) return;
+        const data = await response.json();
+        setEnrichmentSuggestions(data.suggestions ?? []);
+        setContextQuality(data.context_quality ?? null);
+        setIntelligenceReadiness(data.intelligence_readiness ?? null);
+      } catch {
+        console.warn('Failed to load intelligence enrichment suggestions');
+      } finally {
+        setEnrichmentLoading(false);
+      }
+    };
+    loadEnrichmentSuggestions();
+  }, [companyId, isAuthenticated, isCompanyLoading]);
 
   useEffect(() => {
     const loadRefinements = async () => {
@@ -748,6 +817,124 @@ export function useCompanyProfileState() {
     }
   };
 
+  const updateIntelligenceContext = (patch: Partial<CompanyContextIntelligence>) => {
+    setIntelligenceContext((current) => ({
+      revenue_segments: [],
+      geographic_exposures: [],
+      dependencies: [],
+      regulatory_exposures: [],
+      workforce_profile: null,
+      technology_dependencies: [],
+      ...(current || {}),
+      ...patch,
+    }));
+    if (!isEditing) setIsEditing(true);
+  };
+
+  const saveIntelligenceContext = async (nextContext?: CompanyContextIntelligence | null) => {
+    const resolvedCompanyId = companyId || activeProfile.company_id;
+    if (!resolvedCompanyId) {
+      setErrorMessage('Select a company before saving intelligence context.');
+      return null;
+    }
+    const payload = nextContext ?? intelligenceContext;
+    setIntelligenceContextSaving(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetchWithAuth('/api/company-profile/intelligence-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: resolvedCompanyId,
+          intelligence_context: payload ?? {
+            revenue_segments: [],
+            geographic_exposures: [],
+            dependencies: [],
+            regulatory_exposures: [],
+            workforce_profile: null,
+            technology_dependencies: [],
+          },
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to save intelligence context');
+      setIntelligenceContext(data.intelligence_context ?? null);
+      setIntelligenceReadiness(data.intelligence_readiness ?? null);
+      setContextQuality(data.context_quality ?? null);
+      setSuccessMessage('Intelligence context saved.');
+      notifyCompanyProfileUpdated(resolvedCompanyId);
+      return data.intelligence_context as CompanyContextIntelligence | null;
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to save intelligence context');
+      return null;
+    } finally {
+      setIntelligenceContextSaving(false);
+    }
+  };
+
+  const runIntelligenceEnrichment = async () => {
+    const resolvedCompanyId = companyId || activeProfile.company_id;
+    if (!resolvedCompanyId) return null;
+    setEnrichmentLoading(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetchWithAuth('/api/company-profile/intelligence-enrichment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: resolvedCompanyId, action: 'run' }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to run intelligence enrichment');
+      setEnrichmentSuggestions(data.suggestions ?? []);
+      setContextQuality(data.context_quality ?? null);
+      setIntelligenceReadiness(data.intelligence_readiness ?? null);
+      return data.suggestions as CompanyContextEnrichmentSuggestion[];
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to run intelligence enrichment');
+      return null;
+    } finally {
+      setEnrichmentLoading(false);
+    }
+  };
+
+  const reviewIntelligenceEnrichment = async (
+    suggestionId: string,
+    action: 'accepted' | 'rejected' | 'modified' | 'snoozed',
+    modifiedPayload?: Record<string, unknown> | null,
+  ) => {
+    const resolvedCompanyId = companyId || activeProfile.company_id;
+    if (!resolvedCompanyId) return null;
+    setEnrichmentReviewingId(suggestionId);
+    setErrorMessage(null);
+    try {
+      const response = await fetchWithAuth('/api/company-profile/intelligence-enrichment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: resolvedCompanyId,
+          suggestionId,
+          action,
+          modifiedPayload: modifiedPayload ?? null,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Failed to review enrichment suggestion');
+      setEnrichmentSuggestions(data.suggestions ?? []);
+      setIntelligenceContext(data.intelligence_context ?? intelligenceContext);
+      setIntelligenceReadiness(data.intelligence_readiness ?? intelligenceReadiness);
+      setContextQuality(data.context_quality ?? contextQuality);
+      if (action === 'accepted') setSuccessMessage('Inference added for review.');
+      if (action === 'rejected') setSuccessMessage('Inference rejected.');
+      if (action === 'snoozed') setSuccessMessage('Suggestion snoozed.');
+      return data;
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to review enrichment suggestion');
+      return null;
+    } finally {
+      setEnrichmentReviewingId(null);
+    }
+  };
+
   const REFINE_STEPS = [
     'Crawling website…',
     'Reading social profiles & digital assets…',
@@ -891,21 +1078,6 @@ export function useCompanyProfileState() {
         setErrorMessage('Select a company to continue.');
         return;
       }
-      const resetCompetitorsForLoading = (current: CompanyProfile | null): CompanyProfile | null =>
-        current
-          ? {
-              ...current,
-              competitors: '',
-              competitors_list: [],
-            }
-          : current;
-      setProfile(resetCompetitorsForLoading);
-      setDraftProfile((prev) => ({
-        ...prev,
-        competitors: '',
-        competitors_list: [],
-      }));
-
       const persistedProfile = await persistProfileBeforeRefine();
       const {
         competitors: _refineCompetitors,
@@ -1212,6 +1384,77 @@ export function useCompanyProfileState() {
     setSuccessMessage(null);
     setMarketingIntelligenceChatLoading(true);
     sendMarketingIntelligenceMessage();
+  };
+
+  const sendContextIntelligenceMessage = async (userContent?: string) => {
+    const content = (userContent ?? contextIntelligenceInput).trim();
+    const isInitial = contextIntelligenceMessages.length === 0 && !content;
+    if (!content && !isInitial) return;
+    if (!companyId) return;
+
+    const nextMessages = isInitial
+      ? []
+      : [...contextIntelligenceMessages, { role: 'user' as const, content }];
+    if (!isInitial && content) setContextIntelligenceMessages(nextMessages);
+    setContextIntelligenceInput('');
+    setContextIntelligenceChatLoading(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetchWithAuth(
+        `/api/company-profile/define-context-intelligence?companyId=${encodeURIComponent(companyId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            companyId,
+            company_id: companyId,
+            conversation: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+          }),
+        }
+      );
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err?.error || 'Request failed');
+      }
+      const data = await response.json();
+      if (data.done && data.structuredContext) {
+        const nextContext = {
+          ...(intelligenceContext ?? {
+            revenue_segments: [],
+            geographic_exposures: [],
+            dependencies: [],
+            regulatory_exposures: [],
+            workforce_profile: null,
+            technology_dependencies: [],
+          }),
+          ...data.structuredContext,
+        } as CompanyContextIntelligence;
+        setIntelligenceContext(nextContext);
+        setContextIntelligencePanelOpen(false);
+        setContextIntelligenceMessages([]);
+        setSuccessMessage('Context intelligence captured. Review it, then save context intelligence.');
+      } else if (data.nextQuestion) {
+        setContextIntelligenceMessages((prev) =>
+          isInitial
+            ? [{ role: 'assistant' as const, content: data.nextQuestion }]
+            : [...prev, { role: 'assistant' as const, content: data.nextQuestion }]
+        );
+      }
+    } catch (e) {
+      setErrorMessage((e as Error).message || 'Context intelligence capture failed');
+    } finally {
+      setContextIntelligenceChatLoading(false);
+    }
+  };
+
+  const openContextIntelligencePanel = () => {
+    setContextIntelligenceMessages([]);
+    setContextIntelligenceInput('');
+    setContextIntelligencePanelOpen(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setContextIntelligenceChatLoading(true);
+    sendContextIntelligenceMessage();
   };
 
   const openProblemTransformationPanel = async () => {
@@ -1711,7 +1954,15 @@ export function useCompanyProfileState() {
     createCompanyError,
     createCompanyForm,
     createCompanyLoading,
+    contextIntelligenceChatLoading,
+    contextIntelligenceInput,
+    contextIntelligenceMessages,
+    contextIntelligencePanelOpen,
+    contextQuality,
     draftProfile,
+    enrichmentLoading,
+    enrichmentReviewingId,
+    enrichmentSuggestions,
     errorMessage,
     fetchWithAuth,
     filteredCompanies,
@@ -1724,6 +1975,10 @@ export function useCompanyProfileState() {
     handleMarketPulseSettingChange,
     handleCreateCompany,
     handleMissingAnswer,
+    intelligenceContext,
+    intelligenceContextLoading,
+    intelligenceContextSaving,
+    intelligenceReadiness,
     isAdmin,
     isAuthenticated,
     isCompanyAdmin,
@@ -1753,6 +2008,7 @@ export function useCompanyProfileState() {
     openCampaignPurposePanel,
     openInferProblemTransformationPanel,
     openMarketingIntelligencePanel,
+    openContextIntelligencePanel,
     openProblemTransformationPanel,
     openRefineProblemTransformationPanel,
     openTargetCustomerPanel,
@@ -1776,14 +2032,18 @@ export function useCompanyProfileState() {
     refreshCompanies,
     removeOtherSocial,
     renderProblemTransformationAssistantMessage,
+    reviewIntelligenceEnrichment,
+    runIntelligenceEnrichment,
     router,
     saveProblemTransformation,
+    saveIntelligenceContext,
     saveProfile,
     saveUserGuidance,
     selectedCompanyId,
     selectedCompanyName,
     sendCampaignPurposeMessage,
     sendMarketingIntelligenceMessage,
+    sendContextIntelligenceMessage,
     sendProblemTransformationRefineMessage,
     sendTargetCustomerMessage,
     setCampaignPurposeInput,
@@ -1810,6 +2070,10 @@ export function useCompanyProfileState() {
     setMarketingIntelligenceLoading,
     setMarketingIntelligenceMessages,
     setMarketingIntelligencePanelOpen,
+    setContextIntelligenceChatLoading,
+    setContextIntelligenceInput,
+    setContextIntelligenceMessages,
+    setContextIntelligencePanelOpen,
     setMissingFieldAnswers,
     setNotFound,
     setOverallProfileCompletion,
@@ -1847,6 +2111,7 @@ export function useCompanyProfileState() {
     uiOverallProfileCompletion,
     uiProblemTransformationCompletion,
     updateActiveProfile,
+    updateIntelligenceContext,
     updateOtherSocial,
     user,
     userRole,

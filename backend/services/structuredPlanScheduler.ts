@@ -18,12 +18,20 @@ import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
 import { ownedDbTable } from '../db/writeOwner';
 import {
+  makeScheduledPostIdempotencyKey,
+  isIdempotencyCollision,
+} from './boltScheduleIdempotency';
+import {
   assertCreatorFormatsSchedulable,
   assertNoUnschedulableCreatorDailyPlans,
   getCreatorFormatsFromStructuredPlanWeeks,
   getCreatorGovernance,
+  getRowSchedulingEligibility,
+  isAttachmentRequiredFormat,
   normalizeCreatorFormat,
+  CREATOR_LIFECYCLE_STATES,
 } from '../../lib/shared/creatorGovernanceRegistry';
+import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
 
 const DAY_INDEX: Record<string, number> = {
   monday: 0,
@@ -1020,7 +1028,160 @@ async function processCreatorStructuredSchedule(input: {
   for (const row of dailyPlans) {
     const rowContentType = normalizeCreatorFormat(row.content_type || '');
     const rowGovernance = getCreatorGovernance(rowContentType);
-    if (rowGovernance && !rowGovernance.schedulable) {
+    // ── Per-row eligibility gate ─────────────────────────────────────────
+    // Attachment-required formats (video / reel / short / podcast):
+    //   - Hold in `awaiting_media_upload` / `upload_failed` until the user
+    //     uploads via /api/activity-workspace/[id]/upload-media.
+    //   - Schedule directly (no engine call) once `ready_for_schedule` + a
+    //     valid upload validation, embedding `uploaded_media_url` into the
+    //     scheduled_posts row's `media_urls` array.
+    if (rowGovernance && isAttachmentRequiredFormat(rowContentType)) {
+      const attachedContent = tryParseExecutionContent(row.content) as Record<string, unknown>;
+      const eligibility = getRowSchedulingEligibility({
+        content_type: rowContentType,
+        content_status: row.content_status ?? null,
+        creator_lifecycle_state: typeof attachedContent.creator_lifecycle_state === 'string'
+          ? attachedContent.creator_lifecycle_state
+          : (typeof (row as any).creator_lifecycle_state === 'string' ? (row as any).creator_lifecycle_state : null),
+        uploaded_media_url: attachedContent.uploaded_media_url,
+        upload_validation: attachedContent.upload_validation,
+      });
+      if (!eligibility.can_schedule_now) {
+        // Preserve the row's existing per-row state — DO NOT overwrite a
+        // `upload_failed` row with `awaiting_media_upload`.
+        const currentLifecycle = typeof attachedContent.creator_lifecycle_state === 'string'
+          ? attachedContent.creator_lifecycle_state
+          : CREATOR_LIFECYCLE_STATES.AWAITING_MEDIA_UPLOAD;
+        await ownedDbTable('daily_content_plans')
+          .update({
+            content_status: String(currentLifecycle),
+            failure_reason: null,
+            failure_type: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.id);
+        skippedCount++;
+        continue;
+      }
+
+      // ── Attachment-required + ready_for_schedule: direct schedule path ──
+      const platformAttached = normalize(String(row.platform || '').trim().toLowerCase());
+      if (!platformAttached) {
+        skippedCount++;
+        continue;
+      }
+      const socialAccountAttached = accountMap.get(platformAttached);
+      if (!socialAccountAttached) {
+        if (!skippedPlatforms.includes(platformAttached)) skippedPlatforms.push(platformAttached);
+        skippedCount++;
+        continue;
+      }
+      const uploadedMediaUrl = String(attachedContent.uploaded_media_url || '').trim();
+      const marketingPackage = (attachedContent.marketing_package && typeof attachedContent.marketing_package === 'object' && !Array.isArray(attachedContent.marketing_package))
+        ? attachedContent.marketing_package as Record<string, unknown>
+        : {};
+      const themeTreatment = (attachedContent.theme_treatment && typeof attachedContent.theme_treatment === 'object' && !Array.isArray(attachedContent.theme_treatment))
+        ? attachedContent.theme_treatment as Record<string, unknown>
+        : {};
+      const captionFromPackage = String((marketingPackage.caption || (themeTreatment as any)?.marketing_package?.caption || '') as string).trim();
+      const captionFallback = String(row.topic || row.title || (attachedContent as any).caption || '').trim();
+      const finalCaption = captionFromPackage || captionFallback || `${rowContentType} for ${platformAttached}`;
+      const hashtagsRaw = Array.isArray(marketingPackage.hashtags) ? marketingPackage.hashtags : [];
+      const finalHashtags = hashtagsRaw.map((tag) => String(tag).trim()).filter(Boolean);
+      const scheduledForAttached = buildScheduledForFromDailyPlan(row.date, row.scheduled_time ?? undefined);
+
+      const { data: insertedAttached, error: attachedInsertError } = await ownedDbTable('scheduled_posts')
+        .insert({
+          user_id: userId,
+          social_account_id: socialAccountAttached,
+          campaign_id: campaignId,
+          platform: toDbPlatformKey(platformAttached),
+          content_type: toDbContentType(platformAttached, rowContentType, typeMapByPlatform),
+          title: String(row.topic || row.title || '').trim() || undefined,
+          content: finalCaption,
+          hashtags: finalHashtags.length > 0 ? finalHashtags : null,
+          media_urls: [uploadedMediaUrl],
+          scheduled_for: scheduledForAttached.toISOString(),
+          status: 'scheduled',
+          repurpose_index: 1,
+          repurpose_total: 1,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .select('id')
+        .maybeSingle();
+
+      if (attachedInsertError) {
+        if (!skippedPlatforms.includes(platformAttached)) skippedPlatforms.push(platformAttached);
+        await ownedDbTable('daily_content_plans')
+          .update({
+            content: JSON.stringify({
+              ...attachedContent,
+              schedule_error: attachedInsertError.message,
+            }),
+            content_status: CREATOR_LIFECYCLE_STATES.READY_FOR_SCHEDULE,
+            failure_reason: attachedInsertError.message,
+            failure_type: 'transient',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.id);
+        skippedCount++;
+        continue;
+      }
+
+      const scheduledPostIdAttached = (insertedAttached as { id?: string } | null)?.id ?? null;
+      if (scheduledPostIdAttached) {
+        try {
+          await enqueueScheduledPostAt(
+            String(scheduledPostIdAttached),
+            String(userId),
+            String(socialAccountAttached),
+            scheduledForAttached.toISOString(),
+          );
+        } catch (enqueueError: any) {
+          console.warn('[creator-schedule][attachment-enqueue-failed]', enqueueError?.message);
+        }
+      }
+
+      const scheduledTransition = applyTransition(attachedContent, CREATOR_LIFECYCLE_STATES.SCHEDULED, {
+        contentPatch: {
+          scheduled_post_id: scheduledPostIdAttached,
+          scheduled_at: new Date().toISOString(),
+        },
+        reason: 'attachment_required_scheduled',
+      });
+      // Set the tightened FK column on daily_content_plans so the publish
+      // rollback path (publishNowService.markAttachmentRowPublishFailed)
+      // can do a direct lookup. Falls back silently if the column doesn't
+      // exist (pre-migration environments).
+      try {
+        await ownedDbTable('daily_content_plans')
+          .update({
+            content: JSON.stringify(scheduledTransition.content),
+            content_status: scheduledTransition.contentStatus,
+            scheduled_post_id: scheduledPostIdAttached,
+            failure_reason: null,
+            failure_type: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.id);
+      } catch {
+        // Pre-migration fallback (no `scheduled_post_id` column yet).
+        await ownedDbTable('daily_content_plans')
+          .update({
+            content: JSON.stringify(scheduledTransition.content),
+            content_status: scheduledTransition.contentStatus,
+            failure_reason: null,
+            failure_type: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', row.id);
+      }
+      scheduledCount++;
+      continue;
+    } else if (rowGovernance && !rowGovernance.schedulable) {
+      // Non-attachment non-schedulable formats (e.g. text-only post/thread
+      // routed here in error) — preserve the old skip-and-hold behavior.
       await ownedDbTable('daily_content_plans')
         .update({
           content_status: 'guidance_ready',
@@ -1711,7 +1872,19 @@ async function scheduleStructuredPlanRuntime(
   const hasDailyPlans = !dailyPlansError && Array.isArray(dailyPlans) && dailyPlans.length > 0;
 
   if (hasDailyPlans && Array.isArray(dailyPlans)) {
-    assertNoUnschedulableCreatorDailyPlans(dailyPlans as DailyPlanRow[]);
+    // Creator-format governance applies ONLY to creator-intent rows. BOLT
+    // Text writes intent_type='text' rows with content_type values like
+    // 'article'/'feed_post'/'post'/'tweet' that aren't in the creator
+    // governance registry — those are governed by the text scheduling
+    // eligibility path below, not by `assertNoUnschedulableCreatorDailyPlans`.
+    // Without this filter the assertion would reject every BOLT Text
+    // Schedule run with "Unsupported creator format: article, feed_post."
+    const creatorIntentRows = (dailyPlans as DailyPlanRow[]).filter(
+      (row) => (row as { intent_type?: unknown }).intent_type === 'creator'
+    );
+    if (creatorIntentRows.length > 0) {
+      assertNoUnschedulableCreatorDailyPlans(creatorIntentRows);
+    }
     // execution_mode and creator_asset are optional columns not always selected —
     // pass them as undefined so eligibility check treats all rows as text-schedulable.
     if (!usesUnifiedMediaFlow) {
@@ -1844,7 +2017,15 @@ async function scheduleStructuredPlanRuntime(
   const schedulableJobs = extractSchedulableJobsFromWeeks(plan.weeks as any[]);
   const hasExecutionJobs = schedulableJobs.length > 0;
   const useLegacy = isLegacyPlan(plan.weeks);
-  assertNoUnschedulableCreatorPlanWeeks(plan.weeks as StructuredWeekBlueprint[]);
+  // Same gating rationale as the daily-plan branch above: this assertion
+  // checks every content type in plan.weeks against the creator governance
+  // registry, which only knows creator formats. BOLT Text plans carry
+  // `article`/`post`/`tweet`/etc. — text formats that live outside the
+  // registry. Without this gate the legacy fallback path rejects every
+  // BOLT Text Schedule run.
+  if (usesUnifiedMediaFlow) {
+    assertNoUnschedulableCreatorPlanWeeks(plan.weeks as StructuredWeekBlueprint[]);
+  }
 
   // Use effectiveUserId so legacy paths don't fail on null user_id
   const campaignWithUser = { ...campaign, user_id: effectiveUserId };
@@ -1882,23 +2063,64 @@ async function scheduleStructuredPlanRuntime(
     };
   }
 
+  // ── Idempotency-key tagging ────────────────────────────────────────
+  // Every row gets a deterministic key built from
+  // (campaign, week_number, day_of_week, platform, content_type, seq).
+  // The DB-level partial unique index `uidx_scheduled_posts_idempotency_key`
+  // is the hard duplicate guard: retries / resumes / partial recoveries
+  // can re-issue the same insert without producing duplicate posts.
+  // We use a per-(campaign,week,day,platform,content_type) sequence
+  // counter so multi-post-per-day campaigns disambiguate.
+  const idempotencySeqByKey = new Map<string, number>();
+  const postsWithKey = scheduledPosts.map((p: any) => {
+    if (p.idempotency_key) return p; // caller already stamped one
+    const keyBase = [
+      String(p.campaign_id ?? campaignId),
+      String(p.week_number ?? ''),
+      String(p.day_of_week ?? ''),
+      String(p.platform ?? '').toLowerCase(),
+      String(p.content_type ?? '').toLowerCase(),
+    ].join('::');
+    const seq = (idempotencySeqByKey.get(keyBase) ?? -1) + 1;
+    idempotencySeqByKey.set(keyBase, seq);
+    return {
+      ...p,
+      idempotency_key: makeScheduledPostIdempotencyKey({
+        campaignId: String(p.campaign_id ?? campaignId),
+        weekNumber: Number(p.week_number ?? 0),
+        dayOfWeek: String(p.day_of_week ?? ''),
+        platform: String(p.platform ?? ''),
+        contentType: String(p.content_type ?? ''),
+        sequence: seq,
+      }),
+    };
+  });
+
   // Skip posts whose (platform, date) are already scheduled for this campaign
-  let postsToInsert = scheduledPosts;
+  let postsToInsert = postsWithKey;
   let alreadyScheduledCount = 0;
   if (options?.skipExisting) {
     const { data: existingPosts } = await ownedDbTable('scheduled_posts')
-      .select('platform, scheduled_for')
+      .select('platform, scheduled_for, idempotency_key')
       .eq('campaign_id', campaignId)
       .in('status', ['scheduled', 'draft', 'publishing', 'published']);
     if (existingPosts && existingPosts.length > 0) {
-      const existingKeys = new Set(
+      // Pre-filter using BOTH the legacy (platform, date) key (older
+      // rows without idempotency_key) AND the new deterministic key
+      // (new rows). Falling back to the legacy key keeps existing
+      // campaigns that pre-date the migration behaving identically.
+      const existingLegacyKeys = new Set(
         existingPosts.map((p: any) => `${String(p.platform).toLowerCase()}_${String(p.scheduled_for || '').slice(0, 10)}`)
       );
-      postsToInsert = scheduledPosts.filter((p: any) => {
-        const key = `${String(p.platform).toLowerCase()}_${String(p.scheduled_for || '').slice(0, 10)}`;
-        return !existingKeys.has(key);
+      const existingIdempotencyKeys = new Set(
+        existingPosts.map((p: any) => p.idempotency_key).filter(Boolean)
+      );
+      postsToInsert = postsWithKey.filter((p: any) => {
+        if (p.idempotency_key && existingIdempotencyKeys.has(p.idempotency_key)) return false;
+        const legacy = `${String(p.platform).toLowerCase()}_${String(p.scheduled_for || '').slice(0, 10)}`;
+        return !existingLegacyKeys.has(legacy);
       });
-      alreadyScheduledCount = scheduledPosts.length - postsToInsert.length;
+      alreadyScheduledCount = postsWithKey.length - postsToInsert.length;
     }
   }
 
@@ -1911,11 +2133,39 @@ async function scheduleStructuredPlanRuntime(
     };
   }
 
-  const { data: insertedPosts, error: insertError } = await ownedDbTable('scheduled_posts')
+  // Insert. If the unique idempotency_key index throws (collision with
+  // a row we missed in the pre-filter — e.g. another worker raced us),
+  // fall back to per-row inserts so the successful rows still land and
+  // only the colliding rows are skipped. This is the retry-safe insert
+  // contract the spec calls for.
+  let insertedPosts: Array<{ id: string; user_id: string; social_account_id: string; scheduled_for: string }> = [];
+  const { data: bulkInsertedPosts, error: insertError } = await ownedDbTable('scheduled_posts')
     .insert(postsToInsert)
     .select('id, user_id, social_account_id, scheduled_for');
   if (insertError) {
-    throw new Error(`Failed to schedule posts: ${insertError.message}`);
+    if (isIdempotencyCollision(insertError)) {
+      console.warn('[structuredPlanScheduler] idempotency collision in bulk insert; falling back to per-row');
+      let collisionCount = 0;
+      for (const post of postsToInsert) {
+        const { data: row, error: rowErr } = await ownedDbTable('scheduled_posts')
+          .insert(post)
+          .select('id, user_id, social_account_id, scheduled_for')
+          .maybeSingle();
+        if (rowErr) {
+          if (isIdempotencyCollision(rowErr)) {
+            collisionCount += 1;
+            continue;
+          }
+          throw new Error(`Failed to schedule posts: ${rowErr.message}`);
+        }
+        if (row) insertedPosts.push(row as typeof insertedPosts[number]);
+      }
+      alreadyScheduledCount += collisionCount;
+    } else {
+      throw new Error(`Failed to schedule posts: ${insertError.message}`);
+    }
+  } else {
+    insertedPosts = (bulkInsertedPosts ?? []) as typeof insertedPosts;
   }
 
   for (const row of insertedPosts || []) {

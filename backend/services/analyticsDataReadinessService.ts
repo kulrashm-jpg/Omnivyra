@@ -11,6 +11,7 @@ export type AnalyticsReadiness = {
     | 'not_connected'
     | 'ingestion_pending'
     | 'sync_in_progress'
+    | 'failed'
     | 'stale'
     | 'no_data'
     | 'insufficient_data';
@@ -50,6 +51,28 @@ export async function getAnalyticsReadiness(companyId: string): Promise<Analytic
       last_successful_ingestion_at: null,
       events_last_30_days: eventsLast30Days,
       confidence: eventsLast30Days > 0 ? 'low' : 'none',
+    };
+  }
+
+  if (latestRun?.status === 'failed' && !latestSuccessfulRun?.completed_at) {
+    return {
+      ready: false,
+      status: 'failed',
+      reason: latestRun.error_message || 'Latest GA4 ingestion failed',
+      last_successful_ingestion_at: null,
+      events_last_30_days: eventsLast30Days,
+      confidence: eventsLast30Days > 0 ? 'low' : 'none',
+    };
+  }
+
+  if (latestRun?.status === 'failed' && latestSuccessfulRun?.completed_at) {
+    return {
+      ready: false,
+      status: 'failed',
+      reason: latestRun.error_message || 'Latest GA4 ingestion failed after the last successful sync',
+      last_successful_ingestion_at: latestSuccessfulRun.completed_at,
+      events_last_30_days: eventsLast30Days,
+      confidence: eventsLast30Days > 0 ? 'medium' : 'none',
     };
   }
 

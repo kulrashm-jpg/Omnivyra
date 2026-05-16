@@ -1,185 +1,93 @@
-/**
- * Recommendation Intelligence Enrichment Layer.
- * Runs AFTER recommendationPolishService and BEFORE recommendation card rendering.
- * Deterministic only. No external API. No scoring changes.
- */
+import type { EnterpriseOpportunity } from './analyticsEnterpriseSnapshotService';
+import type { AuthorityMarketPosition } from './authorityMarketPositionService';
+import type { PredictiveStrategicIntelligence } from './predictiveStrategicIntelligenceService';
 
-import type { CompanyProfile } from './companyProfileService';
-import type { PolishFlags } from './recommendationPolishService';
-import { sanitizeTopicForDisplay } from './recommendationPolishService';
+export type StrategicRecommendation = {
+  id: string;
+  category: 'seo' | 'growth' | 'engagement' | 'discoverability' | 'conversion' | 'authority';
+  title: string;
+  priority_score: number;
+  confidence: 'high' | 'medium' | 'low';
+  business_impact: 'high' | 'medium' | 'low';
+  implementation_difficulty: 'high' | 'medium' | 'low';
+  estimated_seo_impact: number;
+  estimated_discoverability_impact: number;
+  strategic_urgency: 'immediate' | 'near_term' | 'monitor';
+  expected_authority_gain: number;
+  action: string;
+  evidence_refs: string[];
+};
 
 export type RecommendationIntelligence = {
-  problem_being_solved: string;
-  gap_being_filled: string;
-  why_now: string;
-  authority_reason: string | null;
-  expected_transformation: string;
-  campaign_angle: string;
+  status: 'ready' | 'limited' | 'unavailable';
+  recommendations: StrategicRecommendation[];
 };
 
-export type EnrichedRecommendation = {
-  topic: string;
-  [key: string]: unknown;
-} & {
-  intelligence: RecommendationIntelligence;
-};
+export function buildRecommendationIntelligence(input: {
+  opportunities: EnterpriseOpportunity[];
+  authority: AuthorityMarketPosition;
+  predictive: PredictiveStrategicIntelligence;
+}): RecommendationIntelligence {
+  const enrich = (base: Omit<StrategicRecommendation,
+    'business_impact' | 'implementation_difficulty' | 'estimated_seo_impact' | 'estimated_discoverability_impact' | 'strategic_urgency' | 'expected_authority_gain'
+  >): StrategicRecommendation => ({
+    ...base,
+    business_impact: base.priority_score >= 75 ? 'high' : base.priority_score >= 55 ? 'medium' : 'low',
+    implementation_difficulty: base.category === 'authority' ? 'medium' : base.category === 'conversion' ? 'low' : 'medium',
+    estimated_seo_impact: base.category === 'seo' || base.category === 'authority' ? Math.min(100, base.priority_score) : Math.round(base.priority_score * 0.45),
+    estimated_discoverability_impact: base.category === 'discoverability' || base.category === 'seo' ? Math.min(100, base.priority_score) : Math.round(base.priority_score * 0.5),
+    strategic_urgency: base.priority_score >= 80 ? 'immediate' : base.priority_score >= 60 ? 'near_term' : 'monitor',
+    expected_authority_gain: base.category === 'authority' ? Math.min(100, input.authority.domain_authority_trajectory_score + 15) : Math.round(base.priority_score * 0.35),
+  });
+  const recommendations: StrategicRecommendation[] = input.opportunities
+    .filter((item) => item.score >= 50 && (item.confidence !== 'low' || item.score >= 75))
+    .slice(0, 8)
+    .map((item) => enrich({
+      id: `opp:${item.id}`,
+      category: item.category === 'attribution' ? 'conversion' : item.category,
+      title: item.title,
+      priority_score: item.score,
+      confidence: item.confidence,
+      action: item.category === 'seo'
+        ? 'Prioritize SEO title, content-depth, and query-intent alignment work for this evidence-backed opportunity.'
+        : item.category === 'conversion'
+          ? 'Prioritize conversion clarity and CTA friction reduction before scaling traffic.'
+          : 'Prioritize landing-page and discoverability improvements backed by observed analytics evidence.',
+      evidence_refs: ['enterprise.opportunities', `opportunity.${item.id}`],
+    }));
 
-const normalizeList = (v: unknown): string[] => {
-  if (!v) return [];
-  if (Array.isArray(v)) return v.map((s) => String(s).trim()).filter(Boolean);
-  const s = String(v).trim();
-  if (!s) return [];
-  return s.split(/[,;|]/).map((t) => t.trim()).filter(Boolean);
-};
-
-const firstNonEmpty = (...vals: (string | null | undefined)[]): string =>
-  vals.find((v) => v && String(v).trim())?.trim() ?? '';
-
-/** RULE A — Problem extraction: priority core_problem_statement > pain_symptoms > campaign_focus > content_themes. Topic-aware so each card has unique content. */
-function buildProblemBeingSolved(profile: CompanyProfile | null, topic: string): string {
-  const audience = firstNonEmpty(
-    profile?.target_audience,
-    profile?.target_customer_segment,
-    profile?.ideal_customer_profile,
-    (profile?.target_audience_list ?? [])[0]
-  ) || 'audience';
-  const problem =
-    firstNonEmpty(profile?.core_problem_statement) ||
-    (normalizeList(profile?.pain_symptoms).join('; ') || firstNonEmpty(profile?.campaign_focus)) ||
-    firstNonEmpty(profile?.content_themes) ||
-    'key challenges';
-  const topicPart = topic && topic.trim() ? ` — with focus on ${topic.trim()}` : '';
-  return `Helping ${audience} overcome ${problem}${topicPart}`;
-}
-
-/** RULE B — Gap identification: awareness_gap first, else polish_flags.diamond_candidate */
-function buildGapBeingFilled(
-  flags: PolishFlags | undefined,
-  profile: CompanyProfile | null
-): string {
-  const awarenessGap = (profile as { awareness_gap?: string | null })?.awareness_gap;
-  if (awarenessGap && String(awarenessGap).trim().length > 0) {
-    return `Audience lacks awareness of: ${String(awarenessGap).trim()}`;
-  }
-  if (flags?.diamond_candidate) {
-    return 'Underserved but high-alignment opportunity.';
-  }
-  return 'Existing demand lacking clear authority-driven guidance.';
-}
-
-/** RULE C — Why now: popularity + alignment reasoning */
-function buildWhyNow(
-  rec: { volume?: number; frequency?: number } & Record<string, unknown>,
-  volumeMax: number,
-  alignmentHigh: boolean
-): string {
-  const vol = Number(rec.volume ?? 0) || 0;
-  const isPopularityHigh = volumeMax > 0 && vol >= volumeMax * 0.5;
-  if (isPopularityHigh) {
-    return 'Audience attention already exists; opportunity is differentiation.';
-  }
-  if (alignmentHigh) {
-    return 'Early-stage opportunity before saturation.';
-  }
-  return 'Growing demand with room for positioning.';
-}
-
-/** RULE D — Authority reason when authority_elevated */
-function buildAuthorityReason(
-  flags: PolishFlags | undefined,
-  topic: string,
-  profile: CompanyProfile | null
-): string | null {
-  if (!flags?.authority_elevated || !profile?.authority_domains) return null;
-  const domains = profile.authority_domains;
-  const match = Array.isArray(domains) ? domains[0] : String(domains).trim();
-  if (!match) return null;
-  return `Company has credibility in ${match}.`;
-}
-
-/** RULE E — Expected transformation: pain_state -> desired_outcome. Topic-aware so each card has unique content. */
-function buildExpectedTransformation(profile: CompanyProfile | null, topic: string): string {
-  const painState =
-    firstNonEmpty(profile?.life_with_problem) ||
-    (normalizeList(profile?.pain_symptoms).join('; ') || firstNonEmpty(profile?.core_problem_statement)) ||
-    'current friction';
-  const desiredOutcome =
-    firstNonEmpty(profile?.desired_transformation) ||
-    firstNonEmpty(profile?.life_after_solution) ||
-    firstNonEmpty(profile?.campaign_focus) ||
-    'desired outcome';
-  const topicPart = topic && topic.trim() ? ` through ${topic.trim()}` : '';
-  return `Move audience from ${painState} toward ${desiredOutcome}${topicPart}`;
-}
-
-/** RULE F — Campaign angle: deterministic mapping from polish flags */
-function buildCampaignAngle(flags: PolishFlags | undefined): string {
-  if (flags?.diamond_candidate) {
-    return 'Gap exposure → Education → Conversion';
-  }
-  if (flags?.authority_elevated) {
-    return 'Pain → Awareness → Authority → Solution';
-  }
-  if (flags?.is_generic_reframed) {
-    return 'Reframe → Differentiation → Trust';
-  }
-  return 'Pain → Awareness → Authority → Solution';
-}
-
-/**
- * Enriches each recommendation with strategic intelligence fields.
- * Runs after polishing. On failure, returns original recommendations.
- */
-export function enrichRecommendationIntelligence(
-  recommendations: Array<Record<string, unknown> & { topic: string }>,
-  profile: CompanyProfile | null
-): EnrichedRecommendation[] {
-  if (!recommendations || recommendations.length === 0) {
-    return [];
+  for (const authority of input.authority.recommendations) {
+    recommendations.push(enrich({
+      id: `authority:${authority.title}`,
+      category: 'authority',
+      title: authority.title,
+      priority_score: input.authority.domain_authority_trajectory_score,
+      confidence: authority.confidence,
+      action: 'Create or improve content assets around this topic only where canonical query evidence supports demand.',
+      evidence_refs: authority.evidence_refs,
+    }));
   }
 
-  try {
-    const volumeMax = Math.max(
-      ...recommendations.map((r) => Number(r.volume ?? 0) || 0),
-      1
-    );
-
-    return recommendations.map((rec) => {
-      const topic = String(rec.topic || '').trim();
-      const polishedTitle = typeof rec.polished_title === 'string' ? rec.polished_title.trim() : '';
-      const displayTopic = polishedTitle || sanitizeTopicForDisplay(topic) || topic;
-      const flags = rec.polish_flags as PolishFlags | undefined;
-      const vol = Number(rec.volume ?? 0) || 0;
-      const alignmentHigh = (rec.diamond_score as number ?? 0) >= 0.5 || flags?.diamond_candidate === true;
-
-      const problemBeingSolved = buildProblemBeingSolved(profile, displayTopic);
-      const expectedTransformation = buildExpectedTransformation(profile, displayTopic);
-
-      const intelligence: RecommendationIntelligence = {
-        problem_being_solved: problemBeingSolved,
-        gap_being_filled: buildGapBeingFilled(flags, profile),
-        why_now: buildWhyNow(rec, volumeMax, alignmentHigh),
-        authority_reason: buildAuthorityReason(flags, displayTopic, profile),
-        expected_transformation: expectedTransformation,
-        campaign_angle: buildCampaignAngle(flags),
-      };
-
-      return {
-        ...rec,
-        intelligence,
-      } as EnrichedRecommendation;
-    });
-  } catch {
-    return recommendations.map((rec) => ({
-      ...rec,
-      intelligence: {
-        problem_being_solved: 'Helping audience overcome key challenges',
-        gap_being_filled: 'Existing demand lacking clear authority-driven guidance.',
-        why_now: 'Growing demand with room for positioning.',
-        authority_reason: null,
-        expected_transformation: 'Move audience from current friction toward desired outcome',
-        campaign_angle: 'Pain → Awareness → Authority → Solution',
-      } as RecommendationIntelligence,
-    })) as EnrichedRecommendation[];
+  const growth = input.predictive.signals.find((signal) => signal.type === 'strategic_growth_likelihood');
+  if (growth && growth.confidence !== 'none' && growth.score >= 60) {
+    recommendations.push(enrich({
+      id: 'predictive:growth-likelihood',
+      category: 'growth',
+      title: 'Use current analytics momentum to prioritize growth experiments',
+      priority_score: growth.score,
+      confidence: growth.confidence === 'high' ? 'high' : growth.confidence === 'medium' ? 'medium' : 'low',
+      action: 'Prioritize experiments tied to the highest-confidence opportunity cluster and keep prediction confidence visible.',
+      evidence_refs: growth.evidence_refs,
+    }));
   }
+
+  const ranked = recommendations
+    .filter((item) => item.priority_score >= 40)
+    .sort((a, b) => b.priority_score - a.priority_score)
+    .slice(0, 10);
+
+  return {
+    status: ranked.some((item) => item.confidence === 'medium' || item.confidence === 'high') ? 'ready' : ranked.length ? 'limited' : 'unavailable',
+    recommendations: ranked,
+  };
 }

@@ -96,6 +96,15 @@ type DashboardPayload = {
   };
   trafficState: {
     enabled: boolean;
+    status?: 'live' | 'partial' | 'stale' | 'failed' | 'no_analytics';
+    degraded?: boolean;
+    reason?: string | null;
+    lastSuccessfulIngestionAt?: string | null;
+    latestIngestionStatus?: string | null;
+    errors?: Array<{
+      table: string;
+      message: string;
+    }>;
     sessions7d: number;
     sessions30d: number;
     users30d: number;
@@ -730,6 +739,18 @@ export default function SystemStateDashboard({
             />
           ) : trafficState.data.enabled ? (
             <div className="flex min-w-0 flex-col space-y-5">
+              {trafficState.data.degraded ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <div className="font-semibold">Analytics data is degraded</div>
+                  <div className="mt-1">
+                    {trafficState.data.reason || 'Traffic metrics are available with reduced freshness or confidence.'}
+                  </div>
+                  <div className="mt-1 text-xs text-amber-700">
+                    Last successful ingestion: {formatDateTime(trafficState.data.lastSuccessfulIngestionAt ?? null)}
+                    {trafficState.data.latestIngestionStatus ? ` • latest run: ${trafficState.data.latestIngestionStatus}` : ''}
+                  </div>
+                </div>
+              ) : null}
               <div className="grid gap-4 sm:grid-cols-3">
                 <StatTile label="Sessions (7d)" value={formatNumber(trafficState.data.sessions7d)} />
                 <StatTile label="Sessions (30d)" value={formatNumber(trafficState.data.sessions30d)} />

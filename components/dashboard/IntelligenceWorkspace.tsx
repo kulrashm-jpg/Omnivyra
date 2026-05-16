@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { LineChart, Target } from 'lucide-react';
 import ActiveLeadsTab from '@/components/recommendations/tabs/ActiveLeadsTab';
 import MarketPulseTabV2 from '@/components/recommendations/tabs/MarketPulseTabV2';
+import ExecutiveMarketPulseExperience from '@/components/market-pulse/ExecutiveMarketPulseExperience';
 
 export type IntelligenceWorkspaceView = 'market-pulse' | 'active-leads';
 
@@ -106,14 +107,20 @@ export default function IntelligenceWorkspace({
       </div>
 
       {activeView === 'market-pulse' && (
-        <MarketPulseTabV2
-          companyId={companyId}
-          onPromote={handleOpportunityPromote}
-          onAction={handleOpportunityAction}
-          fetchWithAuth={fetchWithAuth}
-          overrideText={engineOverrides['market-pulse']}
-          onOverrideChange={(value) => setEngineOverride('market-pulse', value)}
-        />
+        <div className="space-y-6">
+          <ExecutiveMarketPulseExperience
+            companyId={companyId}
+            fetchWithAuth={fetchWithAuth}
+          />
+          <MarketPulseTabV2
+            companyId={companyId}
+            onPromote={handleOpportunityPromote}
+            onAction={handleOpportunityAction}
+            fetchWithAuth={fetchWithAuth}
+            overrideText={engineOverrides['market-pulse']}
+            onOverrideChange={(value) => setEngineOverride('market-pulse', value)}
+          />
+        </div>
       )}
 
       {activeView === 'active-leads' && (

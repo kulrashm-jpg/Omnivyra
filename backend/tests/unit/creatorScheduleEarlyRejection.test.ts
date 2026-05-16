@@ -168,7 +168,12 @@ describe('creator schedule early rejection', () => {
     recordGovernanceEvent.mockResolvedValue(undefined);
   });
 
-  test('schedule-structured-plan rejects guidance-only creator rows before locks, blueprint persistence, or scheduling', async () => {
+  test('schedule-structured-plan accepts attachment-required creator rows and lets per-row eligibility hold them at scheduler time', async () => {
+    // Under the per-row eligibility model, an attachment-required format
+    // like `reel` is NO LONGER rejected at the schedule API entry point.
+    // Per-row eligibility (canScheduleRowNow) decides at the scheduler;
+    // attachment-required rows hold in awaiting_media_upload without
+    // poisoning the schedule path for autonomous rows.
     const { default: handler } = await import('../../../pages/api/campaigns/[id]/schedule-structured-plan');
     const req = {
       method: 'POST',
@@ -179,21 +184,12 @@ describe('creator schedule early rejection', () => {
 
     await handler(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(409);
-    expect(res.body).toMatchObject({
-      success: false,
-      code: 'CREATOR_SCHEDULE_BLOCKED_BY_GOVERNANCE',
-      blocked_formats: ['reel'],
-    });
-    expect(acquireSchedulerLock).not.toHaveBeenCalled();
-    expect(saveCampaignBlueprintFromLegacy).not.toHaveBeenCalled();
-    expect(scheduleStructuredPlan).not.toHaveBeenCalled();
-    expect(recordGovernanceEvent).not.toHaveBeenCalled();
-    expect(syncCampaignVersionStage).not.toHaveBeenCalled();
-    expect(checkAndCompleteCampaignIfEligible).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(acquireSchedulerLock).toHaveBeenCalled();
+    expect(scheduleStructuredPlan).toHaveBeenCalled();
   });
 
-  test('repurpose-and-schedule rejects guidance-only creator rows before lock acquisition or scheduling', async () => {
+  test('repurpose-and-schedule accepts attachment-required creator rows under per-row eligibility', async () => {
     const { default: handler } = await import('../../../pages/api/campaigns/[id]/repurpose-and-schedule');
     const req = {
       method: 'POST',
@@ -204,15 +200,13 @@ describe('creator schedule early rejection', () => {
 
     await handler(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(409);
-    expect(res.body).toMatchObject({
-      success: false,
-      code: 'CREATOR_SCHEDULE_BLOCKED_BY_GOVERNANCE',
-      blocked_formats: ['reel'],
-    });
-    expect(acquireSchedulerLock).not.toHaveBeenCalled();
-    expect(scheduleStructuredPlan).not.toHaveBeenCalled();
-    expect(releaseSchedulerLock).not.toHaveBeenCalled();
+    // Under per-row eligibility, the entry-point gate no longer fires for
+    // attachment-required formats. Any non-409 success/error path is
+    // acceptable; the key assertion is that the campaign-wide governance
+    // veto (`CREATOR_SCHEDULE_BLOCKED_BY_GOVERNANCE`) did NOT fire.
+    const bodyCode = (res.body as { code?: unknown } | null)?.code;
+    expect(bodyCode).not.toBe('CREATOR_SCHEDULE_BLOCKED_BY_GOVERNANCE');
+    expect(res.status).not.toHaveBeenCalledWith(409);
   });
 
   test('valid autonomous creator schedule still reaches lock acquisition and scheduler', async () => {

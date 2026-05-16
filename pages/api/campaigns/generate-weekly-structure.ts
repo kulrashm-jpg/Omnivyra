@@ -71,6 +71,21 @@ import {
   DAYS_OF_WEEK,
 } from "./weekly-structure-helpers";
 export { type GenerateWeeklyStructureInput } from "./weekly-structure-helpers";
+// Step-4 feature-flagged Creator cutover (image/carousel only). The
+// SINGLE adapter entry point — both the main loop and the auto-optimize
+// branch route through it. Flag OFF ⇒ this returns false everywhere and
+// the legacy inline paths run byte-identically.
+import {
+  applyCreatorBlueprint,
+  isCreatorBlueprintAdapterEnabled,
+} from "../../../backend/services/creator/intelligence/applyCreatorBlueprint";
+// Step-7 feature-flagged planning-hierarchy cutover (image/carousel
+// scheduler-bound only; reel/video model-only). SINGLE planning entry
+// point; persists ONLY toSchedulerRow(task). Flag OFF ⇒ returns false
+// and the Step-4 adapter / legacy chain runs unchanged.
+import {
+  applyCreatorPlanningFlow,
+} from "../../../backend/services/creator/intelligence/planning/applyCreatorPlanningFlow";
 
 
 export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput): Promise<{
@@ -894,7 +909,13 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // so the block processor generates format-appropriate content.
         const contentType = String(item.contentType || 'post');
         const normalizedContentType = contentType.toLowerCase().trim();
-        const requiresMediaIntent = ['video', 'reel', 'short', 'carousel', 'image', 'story', 'podcast', 'banner', 'infographic', 'pdf', 'slider'].includes(normalizedContentType);
+        // intent_type='creator' is enforced by daily_content_plans_creator_capability_check,
+        // which requires asset_type ∈ (image | carousel | video | post_with_asset) per platform.
+        // Only ai_renderable formats resolve to a non-null asset_type, so guidance-only
+        // formats (video/reel/short/podcast) must NOT be tagged creator — they live in the
+        // daily-plan / human-production lane. Renderable image/carousel-family formats
+        // are the ones that can pass the constraint.
+        const requiresMediaIntent = ['carousel', 'image', 'story', 'banner', 'infographic', 'pdf', 'slider'].includes(normalizedContentType);
         const execCategory = getExecutionCategoryForContentType(contentType);
         const aiGenerated = executionCategoryToAiGenerated(execCategory);
 
@@ -934,6 +955,200 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
             derivedAssetType = null;
           }
         }
+        const rowAssetType: string | null = requiresMediaIntent
+          ? (
+              typeof creatorCardForRow?.asset_type === 'string' && creatorCardForRow.asset_type.trim()
+                ? creatorCardForRow.asset_type.trim()
+                : derivedAssetType
+            )
+          : null;
+        // Satisfy `daily_content_plans_creator_payload_check`. The deployed
+        // function is significantly stricter than its initial migration
+        // header suggested — it requires:
+        //   packaging.caption, .hashtags (array), .meta_description,
+        //                .keywords (array), .cta
+        //   asset_payload — shape varies by asset_type:
+        //     image            → { visual_descriptor: object }
+        //     carousel         → { slides: array }
+        //     video            → { scenes: array }
+        //     post_with_asset  → { caption_blueprint: object }
+        //   asset_instruction (object)
+        //
+        // The creator-asset-generation stage replaces these stubs with
+        // real values later; here we just produce the minimum well-typed
+        // structure so the row passes the CHECK at insert time. We only
+        // OVERWRITE keys that aren't already populated — if a real value
+        // is already present, it wins.
+        if (requiresMediaIntent) {
+          const e = enriched as Record<string, unknown>;
+          e.intent_type = 'creator';
+          if (rowAssetType) e.asset_type = rowAssetType;
+
+          // ── Marketing-text packaging ──────────────────────────────────
+          // Creator campaigns need BOTH the visual asset AND the
+          // marketing copy that ships with it (caption, hashtags,
+          // keywords, meta description, CTA) — the same way BOLT Text
+          // produces platform-ready text. We don't make a fresh AI call
+          // here: `creatorCardForRow` already carries summary / hashtags
+          // / keywords / seo_focus (built by buildCreatorCard via the
+          // same deriveHashtags/deriveKeywords helpers BOLT Text uses),
+          // so we project those into the packaging shape. Any value the
+          // creator-asset-generation stage later produces overrides
+          // these (existingPackaging spread wins last).
+          const cc = (creatorCardForRow ?? {}) as Record<string, unknown>;
+          const ccIntent = (cc.intent && typeof cc.intent === 'object' ? cc.intent : {}) as Record<string, unknown>;
+          const topicForCopy = String(item.topicTitle || (enriched as any)?.topic || '').trim();
+          const objectiveForCopy = String(item.dailyObjective || (enriched as any)?.objective || '').trim();
+
+          // ── Step-4 feature-flagged Creator cutover (image/carousel) ──
+          // The SINGLE adapter entry point, shared verbatim with the
+          // auto-optimize branch below — no duplicate adapter wiring.
+          // Returns false (⇒ the legacy inline path runs byte-identically)
+          // unless ENABLE_CREATOR_BLUEPRINT_ADAPTERS is ON and the
+          // asset_type is image|carousel. Existing non-empty packaging
+          // still wins inside the helper (precedence preserved).
+          // Shared pure seeds — built ONCE, fed to BOTH the Step-7
+          // planning entry point and the Step-4 adapter fallback so the
+          // two never drift.
+          const creatorContextSeeds = {
+            topic: topicForCopy || String(item.topicTitle || ''),
+            objective: objectiveForCopy,
+            contentType: normalizedContentType,
+            platforms: [normalizePlatformKey(platform)],
+            campaignTheme: String(
+              (enriched as any)?.campaign_theme || item.topicReference || topicForCopy || '',
+            ),
+            creativeObjective:
+              (typeof item.briefSummary === 'string' && item.briefSummary.trim())
+              || (typeof cc.seo_focus === 'string' && cc.seo_focus.trim())
+              || objectiveForCopy
+              || '',
+            coreMessage:
+              (typeof cc.summary === 'string' && cc.summary.trim())
+              || (typeof item.briefSummary === 'string' && item.briefSummary.trim())
+              || topicForCopy
+              || '',
+            tone: String(item.narrativeStyle || ''),
+            cta:
+              (typeof item.desiredAction === 'string' && item.desiredAction.trim())
+              || (typeof ccIntent.cta_type === 'string' && (ccIntent.cta_type as string).trim())
+              || (typeof item.ctaType === 'string' && item.ctaType.trim())
+              || 'Learn more',
+            distributionMode: 'unique' as const,
+            continuityContext: { campaign_id: campaignId, week_index: weekNumber },
+          };
+
+          // Step-7 planning hierarchy takes precedence. When ON +
+          // image/carousel it builds a CreatorBlueprintCard, expands it,
+          // and stamps ONLY toSchedulerRow(task) — no strategic leakage.
+          // reel/video return false here (tagged requires_human_production)
+          // so the existing human-production lane is untouched. When the
+          // planning flag is OFF it returns false and the Step-4 adapter
+          // helper runs exactly as before (backward compatible).
+          const planningHandled = applyCreatorPlanningFlow({
+            enriched: e,
+            assetType: rowAssetType,
+            platform: normalizePlatformKey(platform),
+            weekIndex: weekNumber,
+            context: creatorContextSeeds,
+          });
+
+          const adapterHandled = planningHandled || applyCreatorBlueprint({
+            enriched: e,
+            assetType: rowAssetType,
+            platform: normalizePlatformKey(platform),
+            context: creatorContextSeeds,
+          });
+
+          // Legacy inline construction — unchanged; runs only when the
+          // adapter path did NOT handle this row (flag OFF, or a
+          // non-image/carousel asset_type). Indentation kept as-is to
+          // keep this a behavior-preserving guard, not a rewrite.
+          if (!adapterHandled) {
+          const derivedHashtags = Array.isArray(cc.hashtags) && cc.hashtags.length > 0
+            ? (cc.hashtags as string[])
+            : deriveHashtags(topicForCopy, normalizedContentType, objectiveForCopy);
+          const derivedKeywords = Array.isArray(cc.keywords) && cc.keywords.length > 0
+            ? (cc.keywords as string[])
+            : deriveKeywords(topicForCopy, objectiveForCopy);
+          const captionSeed =
+            (typeof cc.summary === 'string' && cc.summary.trim())
+              || (typeof item.briefSummary === 'string' && item.briefSummary.trim())
+              || topicForCopy
+              || '';
+          const metaSeed =
+            (typeof item.briefSummary === 'string' && item.briefSummary.trim())
+              || (typeof cc.seo_focus === 'string' && cc.seo_focus.trim())
+              || (typeof cc.summary === 'string' && cc.summary.trim())
+              || topicForCopy
+              || '';
+          const ctaSeed =
+            (typeof item.desiredAction === 'string' && item.desiredAction.trim())
+              || (typeof ccIntent.cta_type === 'string' && (ccIntent.cta_type as string).trim())
+              || (typeof item.ctaType === 'string' && item.ctaType.trim())
+              || 'Learn more';
+
+          const existingPackaging =
+            e.packaging && typeof e.packaging === 'object' && !Array.isArray(e.packaging)
+              ? (e.packaging as Record<string, unknown>)
+              : {};
+          // Spread existing FIRST so any non-marketing extras it carries
+          // are preserved, then let the resolved marketing fields win.
+          // Each resolved field already prefers a non-empty existing
+          // value over the derived fallback, so a real value the
+          // creator-asset stage produced is never downgraded.
+          e.packaging = {
+            ...existingPackaging,
+            caption: typeof existingPackaging.caption === 'string' && existingPackaging.caption.trim()
+              ? existingPackaging.caption
+              : captionSeed,
+            hashtags: Array.isArray(existingPackaging.hashtags) && existingPackaging.hashtags.length > 0
+              ? existingPackaging.hashtags
+              : derivedHashtags,
+            meta_description: typeof existingPackaging.meta_description === 'string' && existingPackaging.meta_description.trim()
+              ? existingPackaging.meta_description
+              : metaSeed,
+            keywords: Array.isArray(existingPackaging.keywords) && existingPackaging.keywords.length > 0
+              ? existingPackaging.keywords
+              : derivedKeywords,
+            cta: typeof existingPackaging.cta === 'string' && existingPackaging.cta.trim()
+              ? existingPackaging.cta
+              : ctaSeed,
+          };
+
+          const existingPayload =
+            e.asset_payload && typeof e.asset_payload === 'object' && !Array.isArray(e.asset_payload)
+              ? (e.asset_payload as Record<string, unknown>)
+              : {};
+          if (rowAssetType === 'carousel') {
+            e.asset_payload = { slides: Array.isArray(existingPayload.slides) ? existingPayload.slides : [], ...existingPayload };
+          } else if (rowAssetType === 'image') {
+            e.asset_payload = {
+              visual_descriptor:
+                existingPayload.visual_descriptor && typeof existingPayload.visual_descriptor === 'object' && !Array.isArray(existingPayload.visual_descriptor)
+                  ? existingPayload.visual_descriptor
+                  : {},
+              ...existingPayload,
+            };
+          } else if (rowAssetType === 'video') {
+            e.asset_payload = { scenes: Array.isArray(existingPayload.scenes) ? existingPayload.scenes : [], ...existingPayload };
+          } else if (rowAssetType === 'post_with_asset' || rowAssetType === 'thread_with_asset') {
+            e.asset_payload = {
+              caption_blueprint:
+                existingPayload.caption_blueprint && typeof existingPayload.caption_blueprint === 'object' && !Array.isArray(existingPayload.caption_blueprint)
+                  ? existingPayload.caption_blueprint
+                  : {},
+              ...existingPayload,
+            };
+          } else {
+            e.asset_payload = existingPayload;
+          }
+
+          if (typeof e.asset_instruction !== 'object' || e.asset_instruction === null || Array.isArray(e.asset_instruction)) {
+            e.asset_instruction = (creatorCardForRow as Record<string, unknown>) ?? {};
+          }
+          } // end legacy inline construction (!adapterHandled)
+        }
         const row = {
           campaign_id: campaignId,
           week_number: weekNumber,
@@ -957,13 +1172,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           ai_generated: aiGenerated,
           target_audience: item.whoAreWeWritingFor,
           intent_type: requiresMediaIntent ? 'creator' : 'text',
-          asset_type: requiresMediaIntent
-            ? (
-                typeof creatorCardForRow?.asset_type === 'string' && creatorCardForRow.asset_type.trim()
-                  ? creatorCardForRow.asset_type.trim()
-                  : derivedAssetType
-              )
-            : null,
+          asset_type: rowAssetType,
           template_id: requiresMediaIntent
             ? (
                 typeof creatorCardForRow?.template_id === 'string' && creatorCardForRow.template_id.trim()
@@ -1106,6 +1315,81 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         }
         if ((entry.contentObj as any)?.creative_guidance != null) {
           (enriched as any).creative_guidance = (entry.contentObj as any).creative_guidance;
+        }
+
+        // ── Carry-forward creator payload stub ────────────────────────────
+        // The main row-building loop above stamps intent_type / asset_type /
+        // asset_payload / packaging / asset_instruction onto `enriched` for
+        // creator-intent rows so the DB-level
+        // `daily_content_plans_creator_payload_check` constraint passes.
+        // The auto-optimize branch builds a FRESH `enriched` here from
+        // `enrichDailyItemWithPlatformRequirements` and stringifies it
+        // — without those stubs the reassigned row's content JSON no
+        // longer satisfies the constraint and the whole insert batch
+        // rolls back with "Failed to save daily plans … violates
+        // creator_payload_check". The row's intent_type column is
+        // inherited from `entry.row` (which is `'creator'`), so the
+        // constraint fires.
+        //
+        // Carry the structural fields from the ORIGINAL `entry.contentObj`
+        // (which was correctly stamped upstream) onto the new `enriched`.
+        // asset_type stays consistent because the inherited `entry.row`
+        // still has the original platform-agnostic asset_type column.
+        const originalContent = entry.contentObj as Record<string, unknown> | null;
+        const inheritedIntentType = (entry.row as { intent_type?: unknown }).intent_type;
+        if (inheritedIntentType === 'creator' && originalContent) {
+          const e = enriched as Record<string, unknown>;
+          e.intent_type = 'creator';
+          if (originalContent.asset_type) e.asset_type = originalContent.asset_type;
+          if (typeof e.asset_payload !== 'object' || e.asset_payload === null) {
+            e.asset_payload = (originalContent.asset_payload as object) ?? {};
+          }
+          if (typeof e.packaging !== 'object' || e.packaging === null) {
+            e.packaging = (originalContent.packaging as object) ?? {};
+          }
+          if (typeof e.asset_instruction !== 'object' || e.asset_instruction === null) {
+            e.asset_instruction =
+              (originalContent.asset_instruction as object) ??
+              ((enriched as any).creator_card as object) ??
+              {};
+          }
+
+          // ── Step-7/4: route through the SAME planning + adapter
+          // helpers as the main loop (no branch divergence). Carry-
+          // forward above is the legacy-parity baseline that keeps the
+          // row constraint-valid (both flags OFF ⇒ nothing below
+          // changes). Step-7 planning takes precedence for the
+          // reassigned `preferredPlatform`; Step-4 adapter is the
+          // fallback. Identical entry points, which is what eliminates
+          // the prior branch-drift class of bug.
+          const reassignedSeeds = {
+            topic: String(entry.row.topic || entry.row.title || ''),
+            objective: String(entry.row.objective || ''),
+            contentType: String(entry.row.content_type || 'post'),
+            platforms: [preferredPlatform],
+            campaignTheme: String(entry.row.topic || entry.row.title || ''),
+            creativeObjective: String(entry.row.objective || ''),
+            coreMessage: String(entry.row.summary || entry.row.topic || ''),
+            tone: String(entry.row.brand_voice || ''),
+            cta: String(entry.row.cta || 'Learn more'),
+            distributionMode: 'unique' as const,
+            continuityContext: { campaign_id: campaignId, week_index: weekNumber },
+          };
+          const reassignPlanned = applyCreatorPlanningFlow({
+            enriched: e,
+            assetType: (originalContent.asset_type as string) ?? null,
+            platform: preferredPlatform,
+            weekIndex: weekNumber,
+            context: reassignedSeeds,
+          });
+          if (!reassignPlanned && isCreatorBlueprintAdapterEnabled()) {
+            applyCreatorBlueprint({
+              enriched: e,
+              assetType: (originalContent.asset_type as string) ?? null,
+              platform: preferredPlatform,
+              context: reassignedSeeds,
+            });
+          }
         }
 
         const nextRow = {

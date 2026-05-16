@@ -103,7 +103,10 @@ export async function qualifyLead(
       recommended_tone: string;
       probability_of_response: number;
       problem_indicated?: boolean;
-    }>(systemPrompt, userPrompt);
+    }>(systemPrompt, userPrompt, {
+      organizationId: companyProfile?.company_id ?? null,
+      processType: 'qualifyLead',
+    });
 
     const icp = clamp01(data?.icp_score ?? 0);
     const urgency = clamp01(data?.urgency_score ?? 0);

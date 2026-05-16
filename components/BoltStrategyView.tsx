@@ -47,14 +47,37 @@ const DURATION_OPTIONS = [
   { value: 4, label: '4 Weeks' },
 ];
 
+// Campaign Brief vocabularies — kept in sync with `hooks/useBoltStrategy.tsx`
+// (single source for the planner side; this side renders the chips). If you
+// add/rename a goal here, update the hook's GOAL_OPTIONS too.
 const GOAL_OPTIONS = [
-  'Brand Awareness', 'Lead Generation', 'Thought Leadership',
-  'Product Launch', 'Community Growth', 'Engagement',
+  'Brand Awareness',
+  'Lead Generation',
+  'Engagement',
+  'Thought Leadership',
+  'Product Education',
+  'Conversion',
+  'Community Building',
+  'Traffic Growth',
 ];
 
-const AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders',
-  'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
+const TONE_OPTIONS = [
+  'Professional',
+  'Conversational',
+  'Educational',
+  'Analytical',
+  'Bold',
+  'Inspirational',
+  'Authoritative',
+  'Friendly',
+];
+
+const AUDIENCE_HINT_EXAMPLES = [
+  'SaaS founders',
+  'HR leaders',
+  'Small business owners',
+  'Gen Z creators',
+  'Enterprise marketers',
 ];
 
 const STRATEGIC_FOCUS_OPTIONS = [
@@ -559,6 +582,186 @@ function StrategyCard({
   );
 }
 
+/* ─── Campaign Brief ────────────────────────────────────────────────────────
+   Consolidated intent layer. Replaces the standalone Campaign Goal + Target
+   Audience sections. Topic is the only required field; everything else is
+   optional and ships to the planner via `campaign_brief` on
+   sourceStrategicTheme. The "Advanced" compact mode and the collapsed state
+   are both UI-local; nothing here is persisted because the underlying field
+   state already lives in sessionStorage via the hook. */
+function CampaignBriefSection({
+  topic, description, goals, tone, audienceText,
+  setTopic, setDescription, toggleGoal, toggleTone, setAudienceText,
+}: {
+  topic: string;
+  description: string;
+  goals: string[];
+  tone: string[];
+  audienceText: string;
+  setTopic: (v: string) => void;
+  setDescription: (v: string) => void;
+  toggleGoal: (g: string) => void;
+  toggleTone: (t: string) => void;
+  setAudienceText: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const [compact, setCompact] = useState(false);
+
+  const filledCount =
+    (topic.trim() ? 1 : 0) +
+    (description.trim() ? 1 : 0) +
+    (goals.length > 0 ? 1 : 0) +
+    (tone.length > 0 ? 1 : 0) +
+    (audienceText.trim() ? 1 : 0);
+
+  return (
+    <div className="bg-white">
+      {/* Header — click to toggle open. Always shows fill count so users
+          know how much intent context the planner is getting. */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 hover:bg-amber-50/40 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-base">📝</span>
+          <div className="text-left">
+            <p className="text-xs font-bold text-gray-800 uppercase tracking-wide">Campaign Brief</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              Tell BOLT what, why, who, and how — only Topic is required.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+            {filledCount}/5 filled
+          </span>
+          <span className="text-gray-400 text-sm">{open ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div className={`border-t border-gray-100 ${compact ? 'p-4 space-y-3' : 'p-5 space-y-4'}`}>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setCompact((v) => !v)}
+              className="text-[10px] text-gray-400 hover:text-gray-600 underline"
+              title={compact ? 'Expand spacing' : 'Compact (denser layout)'}
+            >
+              {compact ? '↕ Expand' : '↕ Compact'}
+            </button>
+          </div>
+
+          {/* Topic — only required field */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">
+              Campaign Topic <span className="text-red-400">*</span>
+            </label>
+            <p className="text-[11px] text-gray-400 mb-1.5">What is this campaign about?</p>
+            <textarea
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              rows={compact ? 2 : 3}
+              placeholder="e.g. Launch AI-powered analytics tool for e-commerce brands…"
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 placeholder:text-gray-300"
+            />
+          </div>
+
+          {/* Description — optional. AI suggestion-apply fills this. */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">
+              Campaign Description <span className="text-[10px] font-normal text-gray-400 normal-case tracking-normal">(optional)</span>
+            </label>
+            <p className="text-[11px] text-gray-400 mb-1.5">A 1–2 sentence blurb — what the campaign delivers and to whom.</p>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              placeholder="e.g. Show e-commerce teams how AI-powered analytics surface hidden revenue leaks they can fix in a week."
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 placeholder:text-gray-300"
+            />
+          </div>
+
+          {/* Goal — multi-select chips. */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                Campaign Goal <span className="text-[10px] font-normal text-gray-400 normal-case tracking-normal">(optional)</span>
+              </label>
+              {goals.length > 0 && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                  {goals.length} selected
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400 mb-1.5">Why does this campaign exist? Pick any that apply.</p>
+            <div className="flex flex-wrap gap-1.5">
+              {GOAL_OPTIONS.map((g) => (
+                <button key={g} type="button" onClick={() => toggleGoal(g)}
+                  className={`text-xs px-2.5 py-1.5 rounded-full border-2 font-medium transition-all ${
+                    goals.includes(g)
+                      ? 'border-amber-400 bg-amber-100 text-amber-900'
+                      : 'border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50/40'
+                  }`}>
+                  {goals.includes(g) && '✓ '}{g}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Tone — multi-select chips. */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                Tone <span className="text-[10px] font-normal text-gray-400 normal-case tracking-normal">(optional)</span>
+              </label>
+              {tone.length > 0 && (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                  {tone.length} selected
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400 mb-1.5">How should it sound? You can mix styles (e.g. Bold + Educational).</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TONE_OPTIONS.map((t) => (
+                <button key={t} type="button" onClick={() => toggleTone(t)}
+                  className={`text-xs px-2.5 py-1.5 rounded-full border-2 font-medium transition-all ${
+                    tone.includes(t)
+                      ? 'border-amber-400 bg-amber-100 text-amber-900'
+                      : 'border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50/40'
+                  }`}>
+                  {tone.includes(t) && '✓ '}{t}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Audience — free-form textarea. */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">
+              Target Audience <span className="text-[10px] font-normal text-gray-400 normal-case tracking-normal">(optional)</span>
+            </label>
+            <p className="text-[11px] text-gray-400 mb-1.5">
+              Who is this campaign intended for? Free-form — examples:{' '}
+              <span className="text-gray-500 italic">
+                {AUDIENCE_HINT_EXAMPLES.join(' · ')}
+              </span>
+            </p>
+            <textarea
+              value={audienceText}
+              onChange={(e) => setAudienceText(e.target.value)}
+              rows={compact ? 1 : 2}
+              placeholder="e.g. Series-A SaaS founders selling into mid-market HR teams"
+              className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 placeholder:text-gray-300"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main page ───────────────────────────────────────────────────────────── */
 import type { useBoltStrategy } from '../hooks/useBoltStrategy';
 type S = ReturnType<typeof useBoltStrategy>;
@@ -566,8 +769,11 @@ export default function BoltStrategyView({ d }: { d: S }) {
   const {
     _ef1,
     _ef2,
+    acceptedSuggestions,
+    resetCampaignMemory,
+    applyChatSuggestion,
     applySuggestion,
-    audience,
+    audienceText,
     authChecked,
     campaignStartDate,
     canGenerate,
@@ -576,6 +782,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
     confirmingCard,
     contentFormats,
     contentJobProgress,
+    description,
     duration,
     execError,
     execProgress,
@@ -595,12 +802,13 @@ export default function BoltStrategyView({ d }: { d: S }) {
     router,
     companyId,
     selectedIds,
-    setAudience,
+    setAudienceText,
     setCampaignStartDate,
     setCards,
     setConfirmingCard,
     setContentFormats,
     setContentJobProgress,
+    setDescription,
     setDuration,
     setExecError,
     setExecProgress,
@@ -636,7 +844,8 @@ export default function BoltStrategyView({ d }: { d: S }) {
     suggestions,
     suggestionsLoading,
     themeSource,
-    toggleAudience,
+    tone,
+    toggleTone,
     toggleFocus,
     toggleFormat,
     toggleGoal,
@@ -686,59 +895,29 @@ export default function BoltStrategyView({ d }: { d: S }) {
           {/* LEFT: Form */}
           <div className="flex-1 min-w-0 bg-white rounded-2xl border border-gray-200 shadow-sm divide-y divide-gray-100">
 
-            {/* Campaign Topic */}
-            <div className="p-5">
-              <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">
-                Campaign Topic <span className="text-red-400">*</span>
-              </label>
-              <p className="text-xs text-gray-400 mb-2">What is this campaign about?</p>
-              <textarea
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                rows={3}
-                placeholder="e.g. Launch AI-powered analytics tool for e-commerce brands…"
-                className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 resize-none focus:outline-none focus:ring-2 focus:ring-amber-300 focus:border-amber-400 placeholder:text-gray-300"
-              />
-            </div>
+            {/* ─── Campaign Brief ──────────────────────────────────────
+                Single intent surface — replaces the old separate Goal +
+                Audience sections. Topic is the only required field; everything
+                else is optional and feeds the AI planner as additional intent
+                context (see hooks/useBoltStrategy.tsx → handleConfirmLaunch
+                where executionConfig + sourceStrategicTheme.campaign_brief
+                are assembled).
 
-            {/* Goal + Audience */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-0 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
-              <div className="p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide">Campaign Goal</label>
-                  {goals.length > 0 && (
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                      {goals.length} selected
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-gray-400 mb-2">Select all that apply — AI will align strategy to these together.</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {GOAL_OPTIONS.map((g) => (
-                    <button key={g} type="button" onClick={() => toggleGoal(g)}
-                      className={`text-xs px-2.5 py-1.5 rounded-full border-2 font-medium transition-all ${
-                        goals.includes(g) ? 'border-amber-400 bg-amber-100 text-amber-900' : 'border-gray-200 text-gray-600 hover:border-amber-200 hover:bg-amber-50/40'
-                      }`}>
-                      {goals.includes(g) && '✓ '}{g}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="p-5">
-                <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">Target Audience</label>
-                <p className="text-xs text-gray-400 mb-3">Who should this campaign reach?</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {AUDIENCE_OPTIONS.map((a) => (
-                    <button key={a} type="button" onClick={() => toggleAudience(a)}
-                      className={`text-xs px-2.5 py-1.5 rounded-full border-2 font-medium transition-all ${
-                        audience.includes(a) ? 'border-amber-400 bg-amber-100 text-amber-900' : 'border-gray-200 text-gray-600 hover:border-amber-300 hover:bg-amber-50'
-                      }`}>
-                      {audience.includes(a) && '✓ '}{a}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+                The block is collapsible so advanced users can hide it once
+                filled, but defaults to open so first-time users see every
+                field at a glance. */}
+            <CampaignBriefSection
+              topic={topic}
+              description={description}
+              goals={goals}
+              tone={tone}
+              audienceText={audienceText}
+              setTopic={setTopic}
+              setDescription={setDescription}
+              toggleGoal={toggleGoal}
+              toggleTone={toggleTone}
+              setAudienceText={setAudienceText}
+            />
 
             {/* Strategic Focus */}
             <div className="p-5">
@@ -990,8 +1169,24 @@ export default function BoltStrategyView({ d }: { d: S }) {
                 <div className="border-t border-gray-100 flex flex-col" style={{ height: '320px' }}>
                   <BoltCampaignChat
                     companyId={companyId}
-                    context={{ topic, goal: goals.length > 0 ? goals.join(', ') : undefined, audience: audience.join(', '), strategicFocus, duration }}
-                    onApplyTopic={(t) => setTopic(t)}
+                    context={{
+                      topic,
+                      description,
+                      goals,
+                      tone,
+                      audience: audienceText,
+                      strategicFocus,
+                      duration,
+                      // Execution-awareness so the AI doesn't suggest
+                      // campaign shapes the planner can't deliver.
+                      selectedPlatforms,
+                      selectedFormats: contentFormats,
+                      formatFrequency,
+                      outcomeView,
+                    }}
+                    onApplySuggestion={applyChatSuggestion}
+                    acceptedSuggestions={acceptedSuggestions}
+                    onResetMemory={resetCampaignMemory}
                   />
                 </div>
               )}
@@ -1072,6 +1267,7 @@ export default function BoltStrategyView({ d }: { d: S }) {
                     execStartedAt={execStartedAt}
                     anyExecuting={executing}
                     contentJobProgress={selectedIds.includes(card.id) ? contentJobProgress : null}
+                    outcomeView={outcomeView}
                     onSelect={() => handleCardSelect(card.id)}
                   />
                 ))}
@@ -1148,8 +1344,14 @@ export default function BoltStrategyView({ d }: { d: S }) {
               </div>
               <div className="bg-gray-50 rounded-xl p-3">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Audience</p>
-                {audience.length > 0
-                  ? <p className="text-gray-700 font-medium">👥 {audience.slice(0, 2).join(', ')}{audience.length > 2 ? ` +${audience.length - 2}` : ''}</p>
+                {audienceText.trim()
+                  ? <p className="text-gray-700 font-medium leading-snug">👥 {audienceText.length > 80 ? `${audienceText.slice(0, 78)}…` : audienceText}</p>
+                  : <p className="text-gray-400 italic">Not specified</p>}
+              </div>
+              <div className="bg-gray-50 rounded-xl p-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1.5">Tone</p>
+                {tone.length > 0
+                  ? <p className="text-gray-700 font-medium">🎙️ {tone.join(', ')}</p>
                   : <p className="text-gray-400 italic">Not specified</p>}
               </div>
               <div className="bg-gray-50 rounded-xl p-3">
@@ -1175,12 +1377,12 @@ export default function BoltStrategyView({ d }: { d: S }) {
             </div>
 
             {/* Warning if any key input is missing */}
-            {(goals.length === 0 || audience.length === 0 || contentFormats.length === 0) && (
+            {(goals.length === 0 || !audienceText.trim() || contentFormats.length === 0) && (
               <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-xs text-yellow-800">
                 <strong>⚠️ Some inputs are not set:</strong>
                 <ul className="mt-1 space-y-0.5 list-disc list-inside">
                   {goals.length === 0 && <li>No campaign goal selected — AI will choose a default</li>}
-                  {audience.length === 0 && <li>No audience selected — AI will target a general audience</li>}
+                  {!audienceText.trim() && <li>No audience specified — AI will target a general audience</li>}
                   {contentFormats.length === 0 && <li>No content format selected — AI will decide the mix</li>}
                 </ul>
                 <p className="mt-1.5 text-yellow-700">You can go back and fill these in, or confirm to proceed with AI defaults.</p>

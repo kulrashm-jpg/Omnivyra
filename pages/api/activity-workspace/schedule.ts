@@ -12,6 +12,11 @@ import { supabase } from '@/backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthService';
 import { enqueueScheduledPostAt } from '@/backend/scheduler/schedulerService';
 import { grantEarnCredit } from '@/backend/services/earnCreditsService';
+import { ownedDbTable } from '@/backend/db/writeOwner';
+// Step-16: automatic pre-enqueue shared-media finalization. OUTSIDE
+// scheduler internals, flag-gated, hard fail-closed (cannot break
+// scheduling). Content-only Creator writes; Text untouched.
+import { runSharedMediaPreEnqueue } from '@/backend/services/creator/media';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   console.log('[schedule] method:', req.method, 'url:', req.url);
@@ -69,6 +74,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (cvErr) console.warn('[schedule] companyId lookup error:', cvErr);
     companyId = cv?.company_id || '';
     console.log('[schedule] resolved companyId:', companyId);
+  }
+
+  // ── Step-16: automatic pre-enqueue shared-media finalization ──────────
+  // Runs BEFORE any scheduled_posts persistence / enqueueScheduledPostAt,
+  // OUTSIDE scheduler internals. Hard fail-closed: ANY error is swallowed
+  // and scheduling proceeds exactly as before. OFF unless the flag is on.
+  try {
+    const sm = await runSharedMediaPreEnqueue(
+      { supabase, ownedDbTable },
+      { campaignId, executionId: executionId ? String(executionId) : null },
+    );
+    if (sm.ran) {
+      console.log('[schedule] shared-media pre-enqueue:',
+        JSON.stringify({ events: sm.events, ...sm.summary }));
+    }
+  } catch (smErr: any) {
+    // Never block scheduling on media finalization.
+    console.warn('[schedule] shared-media pre-enqueue skipped (non-fatal):', smErr?.message);
   }
 
   const timeStr =

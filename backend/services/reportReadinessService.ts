@@ -11,6 +11,13 @@ export type ReportReadinessResult = {
   missing_requirements: string[];
   estimated_credit_cost: number;
   warnings?: string[];
+  analytics_state?: {
+    status: 'no_analytics' | 'partial_analytics' | 'stale_analytics' | 'failed_analytics' | 'live_analytics' | 'upload_manual_entry';
+    source: 'ga_canonical_ingestion' | 'upload_manual_entry' | 'fallback_no_analytics';
+    reason: string;
+    last_successful_ingestion_at: string | null;
+    events_last_30_days: number;
+  };
 };
 
 export type ReportReadinessSummary = {
@@ -57,11 +64,59 @@ export async function evaluateResolvedReportReadiness(input: ResolvedReportInput
 
   if (input.reportCategory === 'performance') {
     const analyticsReadiness = await getAnalyticsReadiness(input.companyId);
+    const hasUploadOrManual = input.integrations.data_upload.connected || input.integrations.manual_entry.connected;
     const hasPerformanceData =
       input.integrations.google_analytics.connected ||
       input.integrations.google_search_console.connected ||
-      input.integrations.data_upload.connected ||
-      input.integrations.manual_entry.connected;
+      hasUploadOrManual;
+    const analyticsState: ReportReadinessResult['analytics_state'] =
+      hasUploadOrManual && !input.integrations.google_analytics.connected
+        ? {
+            status: 'upload_manual_entry',
+            source: 'upload_manual_entry',
+            reason: 'Report uses request-provided upload/manual context; GA canonical analytics are not the source of behavior metrics.',
+            last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+            events_last_30_days: analyticsReadiness.events_last_30_days,
+          }
+        : input.integrations.google_analytics.connected && analyticsReadiness.ready
+          ? {
+              status: 'live_analytics',
+              source: 'ga_canonical_ingestion',
+              reason: analyticsReadiness.reason,
+              last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+              events_last_30_days: analyticsReadiness.events_last_30_days,
+            }
+          : input.integrations.google_analytics.connected && analyticsReadiness.status === 'stale'
+            ? {
+                status: 'stale_analytics',
+                source: 'ga_canonical_ingestion',
+                reason: analyticsReadiness.reason,
+                last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+                events_last_30_days: analyticsReadiness.events_last_30_days,
+              }
+            : input.integrations.google_analytics.connected && analyticsReadiness.status === 'failed'
+              ? {
+                  status: 'failed_analytics',
+                  source: 'ga_canonical_ingestion',
+                  reason: analyticsReadiness.reason,
+                  last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+                  events_last_30_days: analyticsReadiness.events_last_30_days,
+                }
+              : input.integrations.google_analytics.connected
+                ? {
+                    status: 'partial_analytics',
+                    source: 'ga_canonical_ingestion',
+                    reason: analyticsReadiness.reason,
+                    last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+                    events_last_30_days: analyticsReadiness.events_last_30_days,
+                  }
+                : {
+                    status: 'no_analytics',
+                    source: 'fallback_no_analytics',
+                    reason: 'Google Analytics canonical data is not available.',
+                    last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+                    events_last_30_days: analyticsReadiness.events_last_30_days,
+                  };
 
     const warnings = [
       ...(!input.integrations.google_search_console.connected
@@ -69,6 +124,9 @@ export async function evaluateResolvedReportReadiness(input: ResolvedReportInput
         : []),
       ...(input.integrations.google_analytics.connected && !analyticsReadiness.ready
         ? [`Google Analytics is connected but limited: ${analyticsReadiness.reason}`]
+        : []),
+      ...(analyticsState.status === 'upload_manual_entry'
+        ? [analyticsState.reason]
         : []),
     ];
 
@@ -86,6 +144,7 @@ export async function evaluateResolvedReportReadiness(input: ResolvedReportInput
       missing_requirements: missing,
       estimated_credit_cost: estimateCredits('performance'),
       warnings,
+      analytics_state: analyticsState,
     };
   }
 
@@ -98,10 +157,65 @@ export async function evaluateResolvedReportReadiness(input: ResolvedReportInput
     input.integrations.data_upload.connected ||
     input.integrations.manual_entry.connected ||
     input.integrations.website_crawl.connected;
+  const analyticsReadiness = await getAnalyticsReadiness(input.companyId);
+  const hasUploadOrManual = input.integrations.data_upload.connected || input.integrations.manual_entry.connected;
+  const analyticsState: ReportReadinessResult['analytics_state'] =
+    hasUploadOrManual && !input.integrations.google_analytics.connected
+      ? {
+          status: 'upload_manual_entry',
+          source: 'upload_manual_entry',
+          reason: 'Growth report uses request-provided upload/manual context; GA canonical analytics are not the source of market traffic metrics.',
+          last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+          events_last_30_days: analyticsReadiness.events_last_30_days,
+        }
+      : input.integrations.google_analytics.connected && analyticsReadiness.ready
+        ? {
+            status: 'live_analytics',
+            source: 'ga_canonical_ingestion',
+            reason: analyticsReadiness.reason,
+            last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+            events_last_30_days: analyticsReadiness.events_last_30_days,
+          }
+        : input.integrations.google_analytics.connected && analyticsReadiness.status === 'stale'
+          ? {
+              status: 'stale_analytics',
+              source: 'ga_canonical_ingestion',
+              reason: analyticsReadiness.reason,
+              last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+              events_last_30_days: analyticsReadiness.events_last_30_days,
+            }
+          : input.integrations.google_analytics.connected && analyticsReadiness.status === 'failed'
+            ? {
+                status: 'failed_analytics',
+                source: 'ga_canonical_ingestion',
+                reason: analyticsReadiness.reason,
+                last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+                events_last_30_days: analyticsReadiness.events_last_30_days,
+              }
+            : input.integrations.google_analytics.connected
+              ? {
+                  status: 'partial_analytics',
+                  source: 'ga_canonical_ingestion',
+                  reason: analyticsReadiness.reason,
+                  last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+                  events_last_30_days: analyticsReadiness.events_last_30_days,
+                }
+              : {
+                  status: 'no_analytics',
+                  source: 'fallback_no_analytics',
+                  reason: 'Google Analytics canonical data is not available for growth traffic metrics.',
+                  last_successful_ingestion_at: analyticsReadiness.last_successful_ingestion_at,
+                  events_last_30_days: analyticsReadiness.events_last_30_days,
+              };
+  const hasLiveCanonicalGa =
+    analyticsState.source === 'ga_canonical_ingestion' && analyticsState.status === 'live_analytics';
 
   const missing = [
     ...advancedRequirements,
-    ...requirementIfMissing(input.resolved.competitors.length > 0, 'Add at least one competitor'),
+    ...requirementIfMissing(
+      input.resolved.competitors.length > 0 || hasLiveCanonicalGa,
+      'Add at least one competitor or connect live Google Analytics',
+    ),
     ...requirementIfMissing(
       hasGrowthData,
       'Connect market data sources, upload a file, or provide manual market inputs',
@@ -113,6 +227,13 @@ export async function evaluateResolvedReportReadiness(input: ResolvedReportInput
     ready: missing.length === 0,
     missing_requirements: missing,
     estimated_credit_cost: estimateCredits('growth'),
+    warnings: [
+      ...(input.integrations.google_analytics.connected && !analyticsReadiness.ready
+        ? [`Google Analytics is connected but limited: ${analyticsReadiness.reason}`]
+        : []),
+      ...(analyticsState.status === 'upload_manual_entry' ? [analyticsState.reason] : []),
+    ],
+    analytics_state: analyticsState,
   };
 }
 

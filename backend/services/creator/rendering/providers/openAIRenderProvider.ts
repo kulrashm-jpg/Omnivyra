@@ -1,0 +1,139 @@
+/**
+ * OpenAIRenderProvider — Step-R3 first real provider (image-only, sync).
+ * ──────────────────────────────────────────────────────────────────────────
+ * Implements the R0 RenderProvider contract. IMAGE generation ONLY,
+ * synchronous, no streaming, no batching, no video. The network call
+ * fires ONLY from submit() and ONLY when an API key is present — it is
+ * never reached unless ENABLE_CREATOR_RENDERING is on and the executor
+ * invokes it. Tests inject a mock provider; real OpenAI is never hit in
+ * unit tests.
+ *
+ * `supports()` / `capabilities()` / `estimateCost()` are PURE.
+ */
+
+import type {
+  RenderProvider,
+  RenderCapabilityMatrix,
+  RenderSpec,
+  CreditEstimate,
+  ProviderHandle,
+  ProviderStatus,
+  RenderOutputRef,
+} from '../contracts';
+
+const SUPPORTED = [
+  { w: 1024, h: 1024 }, { w: 1080, h: 1080 },
+  { w: 1024, h: 1792 }, { w: 1080, h: 1920 },
+  { w: 1792, h: 1024 }, { w: 1200, h: 627 }, { w: 1200, h: 675 },
+];
+
+/** Map an arbitrary requested resolution onto the nearest supported
+ *  OpenAI size bucket (square / portrait / landscape). Pure. */
+function bucketSize(w: number, h: number): '1024x1024' | '1024x1792' | '1792x1024' {
+  if (h > w * 1.2) return '1024x1792';
+  if (w > h * 1.2) return '1792x1024';
+  return '1024x1024';
+}
+
+export interface OpenAIProviderConfig {
+  apiKey?: string;
+  model?: string;
+  /** Injected fetch — tests pass a stub; runtime uses global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+export function createOpenAIRenderProvider(
+  cfg: OpenAIProviderConfig = {},
+): RenderProvider {
+  const model = cfg.model || 'gpt-image-1';
+
+  const capabilities = (): RenderCapabilityMatrix => ({
+    modalities: ['image'],
+    max_duration_sec: 0,
+    resolutions: SUPPORTED,
+    aspect_ratios: ['1:1', '9:16', '16:9', '1.91:1'],
+    supports_seed: false,
+    supports_audio: false,
+    supports_overlay_text: false,
+    supports_batch: false,
+    max_concurrent: 2,
+  });
+
+  const supports = (spec: RenderSpec): boolean => {
+    if (!spec || spec.render_modality !== 'image') return false;
+    if (spec.canonical_asset_family !== 'image' && spec.canonical_asset_family !== 'carousel') {
+      return false;
+    }
+    const r = spec.platform_projection?.resolution;
+    return !!r && Number.isFinite(r.w) && Number.isFinite(r.h);
+  };
+
+  const estimateCost = (_spec: RenderSpec): CreditEstimate => ({
+    estimated_credits: 5, // flat conservative HOLD ceiling for one image
+    currency: 'CREDITS',
+    provider_cost_basis: `${model}:image:standard`,
+  });
+
+  const submit = async (
+    spec: RenderSpec,
+    idempotencyKey: string,
+  ): Promise<ProviderHandle> => {
+    const key = cfg.apiKey || process.env.OPENAI_API_KEY || '';
+    if (!key) {
+      throw new Error('OPENAI_API_KEY missing — provider cannot submit');
+    }
+    const doFetch = cfg.fetchImpl || (globalThis.fetch as typeof fetch);
+    const size = bucketSize(
+      spec.platform_projection.resolution.w,
+      spec.platform_projection.resolution.h,
+    );
+    const prompt = [
+      spec.blueprint_projection.visual_prompt,
+      spec.blueprint_projection.scene_direction,
+    ].filter(Boolean).join('. ').slice(0, 3800);
+
+    const resp = await doFetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model, prompt, n: 1, size }),
+    });
+    if (!resp.ok) {
+      throw new Error(`OpenAI image API ${resp.status}`);
+    }
+    const json: any = await resp.json();
+    const url = json?.data?.[0]?.url || json?.data?.[0]?.b64_json;
+    if (!url) throw new Error('OpenAI returned no image');
+    return {
+      provider: 'openai',
+      external_job_id: idempotencyKey,
+      provider_metadata: { model, size, url },
+    };
+  };
+
+  // Synchronous provider: submit already produced the image, so poll is
+  // immediately terminal and fetchOutput reads the handle metadata.
+  const poll = async (handle: ProviderHandle): Promise<ProviderStatus> => ({
+    handle,
+    state: 'succeeded',
+    progress: 1,
+  });
+
+  const fetchOutput = async (handle: ProviderHandle): Promise<RenderOutputRef> => {
+    const url = String((handle.provider_metadata as any)?.url || '');
+    if (!url) throw new Error('no output url on handle');
+    return {
+      output_id: `out:${handle.external_job_id}`,
+      content_sha256: '', // executor fills the content hash deterministically
+      storage_ref: url,
+      modality: 'image',
+      mime_type: 'image/png',
+      byte_size: 0,
+      version: 1,
+      derived_from_output_id: null,
+    };
+  };
+
+  const cancel = async (): Promise<void> => { /* synchronous: nothing to cancel */ };
+
+  return { key: 'openai', capabilities, supports, estimateCost, submit, poll, fetchOutput, cancel };
+}

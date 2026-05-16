@@ -5,6 +5,38 @@ import type {
   ListeningSourceType,
   MonitoringMode,
 } from '../types/listeningSource';
+import { invalidateCapabilityAggregate } from './capabilityCacheService';
+
+// Phase 2 — deterministic transition table for the listening_sources.status
+// column. Narrower than the full SourceLifecycleState machine because the
+// table's status column carries fewer states; we still enforce that every
+// requested transition is on the explicit allow-list. Anything else is
+// rejected before the DB write.
+const ALLOWED_SOURCE_STATUS_TRANSITIONS: Record<ListeningSourceStatus, ListeningSourceStatus[]> = {
+  inactive: ['approved', 'revoked'],
+  approved: ['active', 'paused', 'inactive', 'revoked'],
+  active: ['paused', 'revoked'],
+  paused: ['active', 'revoked'],
+  revoked: [],
+};
+
+function canTransitionListeningSourceStatus(
+  from: ListeningSourceStatus,
+  to: ListeningSourceStatus,
+): { allowed: boolean; reason?: string } {
+  if (from === to) return { allowed: false, reason: 'no_op_same_state' };
+  const allowed = (ALLOWED_SOURCE_STATUS_TRANSITIONS[from] ?? []).includes(to);
+  return allowed
+    ? { allowed: true }
+    : { allowed: false, reason: `transition_${from}_to_${to}_not_permitted` };
+}
+
+export class ListeningSourceTransitionError extends Error {
+  constructor(public readonly fromStatus: ListeningSourceStatus, public readonly toStatus: ListeningSourceStatus, message: string) {
+    super(message);
+    this.name = 'ListeningSourceTransitionError';
+  }
+}
 
 export type CreateListeningSourceInput = {
   organizationId: string;
@@ -38,6 +70,7 @@ export async function createListeningSource(
   if (error || !data) {
     throw new Error(`Failed to create listening source: ${error?.message ?? 'unknown error'}`);
   }
+  invalidateCapabilityAggregate(input.organizationId);
   return data as ListeningSource;
 }
 
@@ -82,14 +115,31 @@ export async function listListeningSourcesForOrg(
 
 /**
  * Update status only — does not start or stop any monitoring. The orchestration
- * layer that will exist in a later phase reads this status to decide what to
- * do; today nothing reads it for execution.
+ * layer reads this status to decide what to do; today nothing in this
+ * codebase reads it for execution.
+ *
+ * Phase 2 — deterministic transition enforcement. Every status change MUST
+ * be in the allow-list; revoked is terminal. Throws ListeningSourceTransitionError
+ * on invalid transitions BEFORE the DB write so a caller cannot bypass the
+ * state machine by writing a status with no corresponding consent.
  */
 export async function updateListeningSourceStatus(
   organizationId: string,
   id: string,
   status: ListeningSourceStatus,
 ): Promise<ListeningSource | null> {
+  const existing = await getListeningSource(organizationId, id);
+  if (!existing) return null;
+
+  const transition = canTransitionListeningSourceStatus(existing.status, status);
+  if (!transition.allowed) {
+    throw new ListeningSourceTransitionError(
+      existing.status,
+      status,
+      `Invalid listening-source transition: ${transition.reason}`,
+    );
+  }
+
   const { data, error } = await ownedDbTable('listening_sources')
     .update({ status })
     .eq('organization_id', organizationId)
@@ -99,6 +149,9 @@ export async function updateListeningSourceStatus(
 
   if (error) {
     throw new Error(`Failed to update listening source status: ${error.message}`);
+  }
+  if (data) {
+    invalidateCapabilityAggregate(organizationId);
   }
   return (data as ListeningSource | null) ?? null;
 }
@@ -117,6 +170,9 @@ export async function updateListeningSourceModes(
 
   if (error) {
     throw new Error(`Failed to update listening source modes: ${error.message}`);
+  }
+  if (data) {
+    invalidateCapabilityAggregate(organizationId);
   }
   return (data as ListeningSource | null) ?? null;
 }

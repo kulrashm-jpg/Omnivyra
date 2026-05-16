@@ -2,6 +2,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getGoogleAnalyticsStatus, getGoogleSearchConsoleStatus } from '../../../backend/services/analyticsIntegrationService';
 import { getGoogleProviderReadiness, type GoogleCapabilityReadiness } from '../../../backend/services/googleProviderReadinessService';
+import { getAnalyticsReadiness, type AnalyticsReadiness } from '../../../backend/services/analyticsDataReadinessService';
+import { getLatestCompletedRun, getLatestRun, type IngestionRunRecord } from '../../../backend/services/ingestionRunService';
 import { resolveOrganizationPlanLimits, type ResolvedPlanLimits } from '../../../backend/services/planResolutionService';
 import { enforceCompanyAccess, resolveUserContext } from '../../../backend/services/userContextService';
 
@@ -44,6 +46,15 @@ type IntegrationApi = {
 
 type TrafficState = {
   enabled: boolean;
+  status: 'live' | 'partial' | 'stale' | 'failed' | 'no_analytics';
+  degraded: boolean;
+  reason: string | null;
+  lastSuccessfulIngestionAt: string | null;
+  latestIngestionStatus: string | null;
+  errors: Array<{
+    table: string;
+    message: string;
+  }>;
   sessions7d: number;
   sessions30d: number;
   users30d: number;
@@ -145,6 +156,11 @@ type SystemStateResponse = {
   };
 };
 
+type SystemStateDataError = {
+  table: string;
+  message: string;
+};
+
 const PLATFORM_LABELS: Record<string, string> = {
   linkedin: 'LinkedIn',
   twitter: 'X',
@@ -229,14 +245,26 @@ function integrationMatches(row: GenericRow, patterns: string[]): boolean {
   return patterns.some((pattern) => haystack.includes(pattern));
 }
 
-async function fetchRows(table: string, select: string, build?: (query: any) => any): Promise<GenericRow[]> {
+async function fetchRows(
+  table: string,
+  select: string,
+  build?: (query: any) => any,
+  errors?: SystemStateDataError[],
+): Promise<GenericRow[]> {
   try {
     let query = supabase.from(table).select(select);
     if (build) query = build(query);
     const { data, error } = await query;
-    if (error) return [];
+    if (error) {
+      errors?.push({ table, message: error.message });
+      console.warn('[analytics/system-state] table fetch failed', { table, message: error.message });
+      return [];
+    }
     return (data ?? []) as unknown as GenericRow[];
-  } catch {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    errors?.push({ table, message });
+    console.warn('[analytics/system-state] table fetch threw', { table, message });
     return [];
   }
 }
@@ -314,8 +342,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const since30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const currentYear = now.getUTCFullYear();
   const currentMonth = now.getUTCMonth() + 1;
+  const dataErrors: SystemStateDataError[] = [];
+  const readRows = (table: string, select: string, build?: (query: any) => any) =>
+    fetchRows(table, select, build, dataErrors);
 
-  const campaignVersionRows = await fetchRows('campaign_versions', 'campaign_id', (query) =>
+  const campaignVersionRows = await readRows('campaign_versions', 'campaign_id', (query) =>
     query.eq('company_id', companyId)
   );
   const campaignIds = Array.from(
@@ -346,55 +377,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     reportEvents,
     pricingPlans,
   ] = await Promise.all([
-    fetchRows('company_integrations', 'id, type, name, status, config, last_tested_at, updated_at, last_error', (query) =>
+    readRows('company_integrations', 'id, type, name, status, config, last_tested_at, updated_at, last_error', (query) =>
       query.eq('company_id', companyId)
     ),
-    fetchRows('social_accounts', 'id, platform, is_active, last_sync_at, updated_at, token_expires_at, access_token', (query) =>
+    readRows('social_accounts', 'id, platform, is_active, last_sync_at, updated_at, token_expires_at, access_token', (query) =>
       query.eq('company_id', companyId)
     ),
-    fetchRows('external_api_connections', 'id, provider_key, display_name, category, auth_type, is_active, updated_at', (query) =>
+    readRows('external_api_connections', 'id, provider_key, display_name, category, auth_type, is_active, updated_at', (query) =>
       query.eq('company_id', companyId)
     ),
-    fetchRows('campaigns', 'id, status, created_at', (query) =>
+    readRows('campaigns', 'id, status, created_at', (query) =>
       hasCampaigns ? query.in('id', campaignIds) : query.eq('id', ZERO_UUID)
     ),
-    fetchRows('campaign_performance_metrics', 'platform, reach, impressions, likes, comments, shares, spend, ad_spend, cost', (query) =>
+    readRows('campaign_performance_metrics', 'platform, reach, impressions, likes, comments, shares, spend, ad_spend, cost', (query) =>
       hasCampaigns ? query.in('campaign_id', campaignIds) : query.eq('campaign_id', ZERO_UUID)
     ),
-    fetchRows('scheduled_posts', 'id, campaign_id, platform, status, published_at, created_at, updated_at', (query) =>
+    readRows('scheduled_posts', 'id, campaign_id, platform, status, published_at, created_at, updated_at', (query) =>
       hasCampaigns ? query.in('campaign_id', campaignIds) : query.eq('campaign_id', ZERO_UUID)
     ),
-    fetchRows('content_plans', 'campaign_id, content_type, status, created_at', (query) =>
+    readRows('content_plans', 'campaign_id, content_type, status, created_at', (query) =>
       hasCampaigns ? query.in('campaign_id', campaignIds) : query.eq('campaign_id', ZERO_UUID)
     ),
-    fetchRows('content_assets', 'campaign_id, platform, status, created_at', (query) =>
+    readRows('content_assets', 'campaign_id, platform, status, created_at', (query) =>
       hasCampaigns ? query.in('campaign_id', campaignIds) : query.eq('campaign_id', ZERO_UUID)
     ),
-    fetchRows('user_company_roles', 'user_id', (query) =>
+    readRows('user_company_roles', 'user_id', (query) =>
       query.eq('company_id', companyId).eq('status', 'active')
     ),
-    fetchRows('usage_meter_monthly', 'llm_total_tokens, external_api_calls, automation_executions', (query) =>
+    readRows('usage_meter_monthly', 'llm_total_tokens, external_api_calls, automation_executions', (query) =>
       query.eq('organization_id', companyId).eq('year', currentYear).eq('month', currentMonth)
     ),
-    fetchRows('canonical_sessions', 'source, started_at, session_count, session_metadata', (query) =>
+    readRows('canonical_sessions', 'source, started_at, session_count, session_metadata', (query) =>
       query.eq('company_id', companyId).gte('started_at', since30d)
     ),
-    fetchRows('canonical_users', 'id, created_at', (query) =>
+    readRows('canonical_users', 'id, created_at', (query) =>
       query.eq('company_id', companyId).gte('created_at', since30d)
     ),
-    fetchRows('engagement_threads', 'id, status', (query) =>
+    readRows('engagement_threads', 'id, status', (query) =>
       query.eq('organization_id', companyId)
     ),
-    fetchRows('response_performance_metrics', 'id', (query) =>
+    readRows('response_performance_metrics', 'id', (query) =>
       query.eq('organization_id', companyId)
     ),
-    fetchRows('decision_objects', 'id, status', (query) =>
+    readRows('decision_objects', 'id, status', (query) =>
       query.eq('company_id', companyId)
     ),
-    fetchRows('report_automation_events', 'id, triggered_at', (query) =>
+    readRows('report_automation_events', 'id, triggered_at', (query) =>
       query.eq('company_id', companyId)
     ),
-    fetchRows('pricing_plans', 'plan_key, name, monthly_price, currency, is_active'),
+    readRows('pricing_plans', 'plan_key, name, monthly_price, currency, is_active'),
   ]);
 
   const contentRows = contentPlans.length > 0 ? contentPlans : contentAssets;
@@ -412,12 +443,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
   const readySocialAccounts = socialAccounts.filter(isPostableSocialAccount);
   const platformsReady = readySocialAccounts.length;
 
-  const googleAnalyticsStatus = await getGoogleAnalyticsStatus(companyId).catch(() => null);
-  const googleAnalyticsConnected = googleAnalyticsStatus?.ready === true;
-  const [googleSearchConsoleStatus, googleProviderReadiness] = await Promise.all([
+  let googleAnalyticsStatusError: string | null = null;
+  let googleProviderReadinessError: string | null = null;
+  let analyticsReadinessError: string | null = null;
+  let latestGaRunError: string | null = null;
+
+  const [googleAnalyticsStatus, googleSearchConsoleStatus, googleProviderReadiness, analyticsReadiness, latestGaRun, latestCompletedGaRun] = await Promise.all([
+    getGoogleAnalyticsStatus(companyId).catch((error) => {
+      googleAnalyticsStatusError = error instanceof Error ? error.message : String(error);
+      return null;
+    }),
     getGoogleSearchConsoleStatus(companyId).catch(() => null),
-    getGoogleProviderReadiness(companyId).catch(() => ({} as Record<string, GoogleCapabilityReadiness>)),
+    getGoogleProviderReadiness(companyId).catch((error) => {
+      googleProviderReadinessError = error instanceof Error ? error.message : String(error);
+      return {} as Record<string, GoogleCapabilityReadiness>;
+    }),
+    getAnalyticsReadiness(companyId).catch((error) => {
+      analyticsReadinessError = error instanceof Error ? error.message : String(error);
+      return null as AnalyticsReadiness | null;
+    }),
+    getLatestRun(companyId, 'ga4').catch((error) => {
+      latestGaRunError = error instanceof Error ? error.message : String(error);
+      return null as IngestionRunRecord | null;
+    }),
+    getLatestCompletedRun(companyId, 'ga4').catch(() => null as IngestionRunRecord | null),
   ]);
+  const googleAnalyticsConnected = googleAnalyticsStatus?.ready === true;
   const googleSearchConsoleConnected = googleProviderReadiness.google_search_console?.connected === true;
 
   const apis: IntegrationApi[] = [
@@ -441,7 +492,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
           name: 'Google Analytics',
           category: 'analytics',
           status: (googleAnalyticsConnected ? 'active' : googleAnalyticsStatus.integration.status === 'error' ? 'error' : 'disconnected') as HealthState,
-          lastSyncAt: mostRecentDate(googleAnalyticsStatus.integration.updated_at ?? null),
+          lastSyncAt: mostRecentDate(latestCompletedGaRun?.completed_at ?? null),
         }]
       : []),
     ...(googleSearchConsoleStatus?.integration
@@ -523,8 +574,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     return acc;
   }, {});
 
+  const analyticsErrors = [
+    ...dataErrors.filter((error) => error.table.startsWith('canonical_')),
+    ...(googleAnalyticsStatusError ? [{ table: 'google_analytics_status', message: googleAnalyticsStatusError }] : []),
+    ...(googleProviderReadinessError ? [{ table: 'google_provider_readiness', message: googleProviderReadinessError }] : []),
+    ...(analyticsReadinessError ? [{ table: 'analytics_readiness', message: analyticsReadinessError }] : []),
+    ...(latestGaRunError ? [{ table: 'ingestion_runs', message: latestGaRunError }] : []),
+  ];
+  const trafficStatus: TrafficState['status'] =
+    analyticsErrors.length > 0
+      ? 'failed'
+      : !googleAnalyticsConnected
+        ? 'no_analytics'
+        : analyticsReadiness?.status === 'stale'
+          ? 'stale'
+          : analyticsReadiness?.ready
+            ? 'live'
+            : 'partial';
+
   const trafficState: TrafficState = {
     enabled: googleAnalyticsConnected,
+    status: trafficStatus,
+    degraded: trafficStatus !== 'live',
+    reason:
+      analyticsErrors[0]?.message ??
+      analyticsReadiness?.reason ??
+      (googleAnalyticsConnected ? null : 'Google Analytics is not connected or ready'),
+    lastSuccessfulIngestionAt: analyticsReadiness?.last_successful_ingestion_at ?? null,
+    latestIngestionStatus: latestGaRun?.status ?? null,
+    errors: analyticsErrors,
     sessions7d: sessionsTrend.reduce((sum, item) => sum + item.value, 0),
     sessions30d: canonicalSessions.reduce((sum, row) => sum + safeNumber(row.session_count || 1), 0),
     users30d: canonicalUsers.length,

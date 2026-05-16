@@ -155,6 +155,37 @@ export async function saveWeekPlans(
     const { error } = await ownedDbTable('daily_content_plans').insert(chunk);
     if (error) {
       console.error('[EXECUTION_ENGINE] saveWeekPlans insert failed:', error);
+      // Diagnostic: when the creator-payload constraint fires, dump
+      // each creator-intent row's content shape so we can see WHICH
+      // row is malformed. Strictly opt-in (only on the constraint
+      // that matters); doesn't slow down healthy inserts.
+      if (typeof error.message === 'string' && error.message.includes('daily_content_plans_creator_payload_check')) {
+        for (const row of chunk) {
+          const r = row as Record<string, unknown>;
+          if (r.intent_type !== 'creator') continue;
+          let parsed: Record<string, unknown> | null = null;
+          try { parsed = typeof r.content === 'string' ? JSON.parse(r.content) : null; } catch { parsed = null; }
+          // Per-row dump: row column values + full content JSON. The
+          // surrounding constraint fires when ANY row violates, so we
+          // dump everything and search after.
+          console.error('[EXECUTION_ENGINE] creator-row content shape', {
+            week: r.week_number,
+            day: r.day_of_week,
+            platform: r.platform,
+            content_type: r.content_type,
+            row_intent_type: r.intent_type,
+            row_asset_type: r.asset_type,
+            content_keys: parsed ? Object.keys(parsed) : [],
+            content_intent_type: parsed?.intent_type ?? null,
+            content_asset_type: parsed?.asset_type ?? null,
+            asset_payload_type: parsed && parsed.asset_payload !== undefined ? (parsed.asset_payload === null ? 'null' : Array.isArray(parsed.asset_payload) ? 'array' : typeof parsed.asset_payload) : 'undefined',
+            packaging_type: parsed && parsed.packaging !== undefined ? (parsed.packaging === null ? 'null' : Array.isArray(parsed.packaging) ? 'array' : typeof parsed.packaging) : 'undefined',
+            asset_instruction_type: parsed && parsed.asset_instruction !== undefined ? (parsed.asset_instruction === null ? 'null' : Array.isArray(parsed.asset_instruction) ? 'array' : typeof parsed.asset_instruction) : 'undefined',
+            // Raw content sample so we can see what PG actually sees.
+            content_raw_sample: typeof r.content === 'string' ? r.content.slice(0, 600) : null,
+          });
+        }
+      }
       throw new Error(`Failed to save daily plans: ${error.message}`);
     }
   }

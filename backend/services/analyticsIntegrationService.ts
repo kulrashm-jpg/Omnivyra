@@ -148,6 +148,41 @@ async function getGoogleAnalyticsOauthConfig(): Promise<{
   };
 }
 
+type GoogleOauthConfig = Awaited<ReturnType<typeof getGoogleAnalyticsOauthConfig>>;
+
+function isLocalRequestBaseUrl(value: string | null | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1';
+  } catch {
+    return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?/i.test(value);
+  }
+}
+
+function buildGoogleCallbackUrl(requestBaseUrl: string | null | undefined): string | null {
+  const baseUrl = (requestBaseUrl || '').replace(/\/$/, '');
+  return baseUrl ? `${baseUrl}/api/analytics/connect/google/callback` : null;
+}
+
+function resolveGoogleRedirectUri(
+  credentials: GoogleOauthConfig,
+  capability: 'google_analytics' | 'google_search_console',
+  requestBaseUrl?: string,
+): string {
+  const requestCallback = buildGoogleCallbackUrl(requestBaseUrl);
+  if (requestCallback && isLocalRequestBaseUrl(requestBaseUrl)) {
+    return requestCallback;
+  }
+
+  return (
+    credentials.capability_redirect_uris[capability] ||
+    credentials.redirect_uri ||
+    requestCallback ||
+    ''
+  );
+}
+
 function maybeDecrypt(value: string | null | undefined): string | null {
   if (!value || !value.trim()) return null;
   try {
@@ -368,10 +403,7 @@ async function exchangeAuthorizationCode(
   capability: 'google_analytics' | 'google_search_console' = 'google_analytics',
 ): Promise<TokenExchangeResult> {
   const credentials = await getGoogleAnalyticsOauthConfig();
-  const redirectUri =
-    credentials.capability_redirect_uris[capability] ||
-    credentials.redirect_uri ||
-    `${(requestBaseUrl || '').replace(/\/$/, '')}/api/analytics/connect/google/callback`;
+  const redirectUri = resolveGoogleRedirectUri(credentials, capability, requestBaseUrl);
 
   console.log('[GA-OAUTH][token-exchange] attempt', {
     redirect_uri: redirectUri,
@@ -619,7 +651,7 @@ export async function connectGoogleAnalytics(
 
   const params = new URLSearchParams({
     client_id: credentials.client_id,
-    redirect_uri: credentials.capability_redirect_uris.google_analytics || credentials.redirect_uri || `${baseUrl}/api/analytics/connect/google/callback`,
+    redirect_uri: resolveGoogleRedirectUri(credentials, 'google_analytics', options.requestBaseUrl),
     response_type: 'code',
     access_type: 'offline',
     prompt: 'consent',
@@ -655,7 +687,7 @@ export async function connectGoogleSearchConsole(
 
   const params = new URLSearchParams({
     client_id: credentials.client_id,
-    redirect_uri: credentials.capability_redirect_uris.google_search_console || credentials.redirect_uri || `${baseUrl}/api/analytics/connect/google/callback`,
+    redirect_uri: resolveGoogleRedirectUri(credentials, 'google_search_console', options.requestBaseUrl),
     response_type: 'code',
     access_type: 'offline',
     prompt: 'consent',
@@ -839,6 +871,21 @@ export function triggerImmediateGa4Ingestion(companyId: string): void {
 export function triggerImmediateGscIngestion(companyId: string): void {
   void (async () => {
     try {
+      const { resolveOmnivyraWebsiteCompany } = await import('./omnivyraWebsiteCompanyService');
+      const omnivyraCompany = await resolveOmnivyraWebsiteCompany().catch(() => null);
+      if (omnivyraCompany?.id === companyId) {
+        const { runOmnivyraGscIngestion } = await import('./omnivyraGscAnalyticsService');
+        const result = await runOmnivyraGscIngestion({ forceBackfill: true });
+        console.log('[GSC-OAUTH][initial-platform-ingestion] completed', {
+          company_id: companyId,
+          property_url: result.property_url,
+          status: result.status,
+          rows_ingested: result.rows_ingested,
+          retries: result.retries,
+        });
+        return;
+      }
+
       const { runIngestionForCompany } = await import('./ingestionScheduler');
       const { buildGscHistoricalBackfillOverride } = await import('./gscIngestionService');
       const summary = await runIngestionForCompany({

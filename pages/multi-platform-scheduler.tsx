@@ -15,6 +15,7 @@ import { getThreadContinuationLink } from '@/lib/thread/threadLinks';
 import {
   POST_CREATOR_ASSET_TYPES,
   THREAD_CREATOR_ASSET_TYPES,
+  assetLabel,
   buildWriterCreatorPrefill,
   createWriterSourceId,
   launchCreatorFromWriter,
@@ -24,6 +25,17 @@ import {
   type WriterAttachedAsset,
   type WriterSourceType,
 } from '@/lib/content/writerCreatorAssetLaunch';
+import {
+  attachmentModeLabel,
+  defaultAttachmentModeForAsset,
+  defaultTransformForAsset,
+  type AttachmentMode,
+  type SourceTextTransform,
+} from '@/lib/content/writerCreatorAttachmentContracts';
+import {
+  mediaTypesFromCreatorAttachments,
+  mediaUrlsFromCreatorAttachments,
+} from '@/lib/content/schedulerAttachmentSemantics';
 export default function MultiPlatformSchedulerPage() {
   const router = useRouter();
   const { user, selectedCompanyId, selectedCompanyName, isLoading } = useCompanyContext();
@@ -36,6 +48,8 @@ export default function MultiPlatformSchedulerPage() {
   const [platformState, setPlatformState] = useState<Record<string, PlatformState>>({});
   const [adaptingPlatform, setAdaptingPlatform] = useState<string | null>(null);
   const [assetMenuOpen, setAssetMenuOpen] = useState(false);
+  const [selectedAttachmentMode, setSelectedAttachmentMode] = useState<AttachmentMode>('supporting_visual');
+  const [selectedSourceTextTransform, setSelectedSourceTextTransform] = useState<SourceTextTransform>('none');
   const [attachedAssets, setAttachedAssets] = useState<WriterAttachedAsset[]>([]);
   const adaptedPlatformKeysRef = useRef<Record<string, string>>({});
   const requestedPlatform = typeof router.query.platform === 'string'
@@ -305,6 +319,7 @@ export default function MultiPlatformSchedulerPage() {
     if (!draft || !writerSourceType || !writerSourceId) return;
     const sourceContent = selectedState?.content || draft.content || '';
     const hashtagText = selectedState?.hashtags || draft.hashtags.join(' ');
+    const attachmentMode = selectedAttachmentMode || defaultAttachmentModeForAsset(assetType);
     setAssetMenuOpen(false);
     launchCreatorFromWriter({
       router,
@@ -312,17 +327,18 @@ export default function MultiPlatformSchedulerPage() {
       source: buildWriterCreatorPrefill({
         sourceType: writerSourceType,
         sourceId: writerSourceId,
+        assetType,
+        attachmentMode,
+        sourceTextTransform: writerSourceType === 'thread'
+          ? (selectedSourceTextTransform === 'none' ? defaultTransformForAsset(assetType, attachmentMode) : selectedSourceTextTransform)
+          : selectedSourceTextTransform,
         title: draft.title || draft.topic || `${sourceContentLabel} draft`,
         body: sourceContent,
-        cta: 'Share, save, or schedule this content',
         audience: 'Audience from the Writer draft',
         tone: 'Platform-aware and brand-aligned',
         platform: selectedOption?.key || draft.sourcePlatform || '',
         hashtags: parseHashtags(hashtagText),
         companyName: selectedCompanyName || '',
-        threadSegments: writerSourceType === 'thread'
-          ? sourceContent.split(/\n{2,}|\n(?=\d+[\).\s])/).map((segment) => segment.trim()).filter(Boolean)
-          : undefined,
       }),
     });
   };
@@ -342,7 +358,57 @@ export default function MultiPlatformSchedulerPage() {
           <div className="border-b border-slate-100 px-4 py-3">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Create asset</p>
             <p className="mt-1 text-xs text-slate-500">Prefilled from this {sourceContentLabel.toLowerCase()}.</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {(['supporting_visual', 'embedded_copy'] as AttachmentMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSelectedAttachmentMode(mode);
+                  }}
+                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                    selectedAttachmentMode === mode
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
+                  }`}
+                >
+                  {attachmentModeLabel(mode)}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {([
+                ['none', 'Support visually'],
+                ['summarize', 'Summarize'],
+                ['framework', 'Framework'],
+                ['extract_points', 'Extract points'],
+              ] as Array<[SourceTextTransform, string]>).map(([transform, label]) => (
+                <button
+                  key={transform}
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSelectedSourceTextTransform(transform);
+                  }}
+                  className={`rounded-xl border px-2.5 py-2 text-left text-xs font-semibold transition ${
+                    selectedSourceTextTransform === transform
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-blue-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={() => setAssetMenuOpen(false)}
+            className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-500 transition hover:bg-slate-50"
+          >
+            No asset
+          </button>
           {supportedCreatorAssetTypes.map((assetType) => (
             <button
               key={assetType}
@@ -350,7 +416,7 @@ export default function MultiPlatformSchedulerPage() {
               onClick={() => launchAssetCreator(assetType)}
               className="block w-full px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
-              {assetType.charAt(0).toUpperCase() + assetType.slice(1)}
+              {assetLabel(assetType)}
             </button>
           ))}
         </div>
@@ -555,6 +621,28 @@ export default function MultiPlatformSchedulerPage() {
       const hashtagsArray = parseHashtags(selectedState.hashtags);
       let scheduledPostId = selectedState.scheduledPostId || null;
 
+      // Flatten writer-attached creator assets to a media_urls list so the
+      // scheduled_post row carries the rendered images/files. Each attached
+      // asset can contribute a primary `url` and/or a `files` array (e.g.
+      // carousel slides), and we de-dupe across attachments.
+      const mediaUrlsFromAttachments = mediaUrlsFromCreatorAttachments(attachedAssets);
+      const mediaTypesFromAttachments = mediaTypesFromCreatorAttachments({
+        mediaUrls: mediaUrlsFromAttachments,
+        attachedAssets,
+      });
+      const creatorAttachments = attachedAssets.map((asset) => ({
+        id: asset.id,
+        creatorType: asset.creatorType,
+        attachmentMode: asset.attachmentMode ?? asset.compositionIntent?.attachmentMode ?? null,
+        compositionIntent: asset.compositionIntent ?? null,
+        transformIntent: asset.compositionIntent?.copyPolicy?.sourceTextTransform ?? null,
+        platformContext: asset.platformContext ?? null,
+        renderManifest: asset.metadata?.render_manifest ?? null,
+        validationManifest: asset.metadata?.validation_manifest ?? null,
+        url: asset.url ?? null,
+        files: Array.isArray(asset.files) ? asset.files : [],
+      }));
+
       if (scheduledPostId) {
         const updateRes = await fetch(`/api/schedule/posts/${scheduledPostId}`, {
           method: 'PUT',
@@ -564,6 +652,9 @@ export default function MultiPlatformSchedulerPage() {
             title: draft?.title,
             content: selectedState.content,
             hashtags: hashtagsArray,
+            mediaUrls: mediaUrlsFromAttachments,
+            mediaTypes: mediaTypesFromAttachments,
+            creatorAttachments,
             scheduledFor: scheduleDate.toISOString(),
             status: 'scheduled',
             contentType: publishContentType,
@@ -583,6 +674,9 @@ export default function MultiPlatformSchedulerPage() {
             title: draft?.title,
             content: selectedState.content,
             hashtags: hashtagsArray.join(' '),
+            mediaUrls: mediaUrlsFromAttachments,
+            mediaTypes: mediaTypesFromAttachments,
+            creatorAttachments,
             scheduledFor: scheduleDate.toISOString(),
             contentType: publishContentType,
             platform: selectedOption.key,

@@ -53,6 +53,14 @@ export async function beginIngestionRun(params: {
     source: params.source,
     idempotency_key: params.idempotencyKey,
     status: 'running' as const,
+    completed_at: null,
+    records_processed: 0,
+    records_inserted: 0,
+    records_updated: 0,
+    events_processed: 0,
+    events_inserted: 0,
+    conversions_inserted: 0,
+    error_message: null,
     retry_count: params.retryCount ?? 0,
     cursor_payload: params.cursorPayload ?? {},
     ...(params.unifiedSource ? { unified_source: params.unifiedSource } : {}),
@@ -141,11 +149,14 @@ export async function setDataSourceStatus(params: {
 }
 
 export async function hasRunningIngestion(companyId: string, source: IngestionSource): Promise<boolean> {
+  const staleBefore = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   const { data, error } = await ownedDbTable('ingestion_runs')
-    .select('id')
+    .select('id, started_at, completed_at')
     .eq('company_id', companyId)
     .eq('source', source)
     .eq('status', 'running')
+    .is('completed_at', null)
+    .gte('started_at', staleBefore)
     .limit(1);
 
   if (error) {

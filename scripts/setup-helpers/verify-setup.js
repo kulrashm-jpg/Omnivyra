@@ -151,7 +151,7 @@ async function verifySetup() {
     console.log('2. Apply DB schema: Run db-utils/safe-database-migration.sql in Supabase');
     console.log('3. Start worker: npm run start:worker');
     console.log('4. Start cron: npm run start:cron');
-    console.log('5. Seed test data: Run scripts/seed-demo-data.sql in Supabase\n');
+    console.log('5. Seed test data: Run scripts/operator/sql/seed-demo-data.sql in Supabase\n');
   } else {
     console.log('❌ Some checks failed. Please fix the issues above before proceeding.\n');
     process.exit(1);

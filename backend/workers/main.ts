@@ -41,6 +41,8 @@ import { runConversationMemoryWorker }  from './conversationMemoryWorker';
 import { runCacheWarmup }            from '../services/cacheWarmup';
 import { startAutoScalingMonitor }   from '../services/autoScalingSignal';
 import { getMetricsSnapshot }        from '../services/metricsCollector';
+import { createCreatorRenderWorker, recoverOrphanedCreatorRenderJobs } from '../services/creatorRenderDurableQueue';
+import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
 
 // ── Worker instances ──────────────────────────────────────────────────────────
@@ -54,6 +56,11 @@ const engagementWorker  = getWorker('engagement-polling', async () => {
   await processEngagementPollingJob();
 });
 const intelligenceWorker = getIntelligencePollingWorker();
+const creatorRenderWorker = createCreatorRenderWorker(processCreatorRenderJob);
+creatorRenderWorker.on('failed', (job, err) =>
+  console.error('[creator-render-worker] failed', { jobId: job?.id, error: err.message }));
+creatorRenderWorker.on('error', (err) =>
+  console.error('[creator-render-worker] error:', err));
 
 // Event-driven workers — triggered by DB inserts, NOT polling.
 // Use new Worker() directly to avoid the noisy '✅ Job drain completed' log
@@ -133,11 +140,18 @@ async function main(): Promise<void> {
     try { _cachedLatency = (await getMetricsSnapshot()).avgLatencyMs; } catch { /* ignore */ }
   }, 300_000); // 5 min — was 30s; each call issues redis.info('memory')
   const stopMonitor = startAutoScalingMonitor(300_000, () => _cachedLatency); // 5 min — was 30s; each check queries 4 queues
+  const orphanRecoveryTimer = setInterval(() => {
+    void recoverOrphanedCreatorRenderJobs().catch((error) => {
+      console.warn('[creator-render-worker] orphan recovery failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, 10 * 60 * 1000);
 
   console.info('[main] all workers running', {
     queues: ['publish', 'bolt-execution', 'engagement-polling',
              'intelligence-polling', 'ai-heavy', 'engine-jobs',
-             'lead-thread-recompute', 'conversation-memory-rebuild'],
+             'lead-thread-recompute', 'conversation-memory-rebuild', 'creator-render'],
     boltConcurrency,
     pid: process.pid,
   });
@@ -147,6 +161,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string) => {
     console.info(`[main] ${signal} received — shutting down gracefully`);
     stopMonitor();
+    clearInterval(orphanRecoveryTimer);
     await Promise.allSettled([
       publishWorker.close(),
       boltWorker.close(),
@@ -154,6 +169,7 @@ async function main(): Promise<void> {
       intelligenceWorker.close(),
       engineWorker.close(),
       campaignWorker.close(),
+      creatorRenderWorker.close(),
       leadThreadRecomputeWorker.close(),
       conversationMemoryRebuildWorker.close(),
     ]);

@@ -48,6 +48,10 @@ export type WorkspacePayload = WorkspacePayloadWeekLike & {
   schedules?: ScheduleItem[];
   repurposing_context?: unknown;
   master_content_document?: MasterContentDocumentPayload | null;
+  // Step-10/11: present ONLY for reconstructable Creator rows when the
+  // lifecycle flag is on. Absent for Text rows → Text UI unchanged.
+  creator_workspace?: import('@/backend/services/creator/intelligence/workspace').CreatorWorkspaceTask | null;
+  creator_workspace_row_id?: string | null;
 };
 
 export type RefineChatMessage = {

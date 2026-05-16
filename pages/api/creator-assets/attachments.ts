@@ -14,6 +14,11 @@ function asSourceType(value: unknown): 'post' | 'thread' | null {
   return normalized === 'post' || normalized === 'thread' ? normalized : null;
 }
 
+function hasOverlayText(value: Record<string, unknown>): boolean {
+  return ['hook', 'headline', 'keyInsight', 'cta', 'supportingText']
+    .some((key) => typeof value[key] === 'string' && String(value[key]).trim().length > 0);
+}
+
 function mapAttachment(row: Record<string, unknown>) {
   return {
     id: String(row.creator_asset_id || row.id || ''),
@@ -22,7 +27,8 @@ function mapAttachment(row: Record<string, unknown>) {
     url: typeof row.url === 'string' ? row.url : undefined,
     files: Array.isArray(row.files) ? row.files : undefined,
     previewKind: typeof row.preview_kind === 'string' ? row.preview_kind : undefined,
-    imageMode: typeof row.image_mode === 'string' ? row.image_mode : null,
+    attachmentMode: typeof asObject(row.metadata).attachment_mode === 'string' ? asObject(row.metadata).attachment_mode : undefined,
+    compositionIntent: asObject(row.metadata).asset_composition_intent,
     platformContext: typeof row.platform_context === 'string' ? row.platform_context : undefined,
     renderIdentityHash: typeof row.render_identity_hash === 'string' ? row.render_identity_hash : undefined,
     metadata: asObject(row.metadata),
@@ -62,6 +68,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sourceType = asSourceType(req.body?.source_type);
     const sourceId = String(req.body?.source_id || '').trim();
     const asset = asObject(req.body?.asset);
+    const metadata = asObject(asset.metadata);
+    const attachmentMode = typeof asset.attachmentMode === 'string' ? asset.attachmentMode : metadata.attachment_mode;
+    if (attachmentMode === 'supporting_visual' && hasOverlayText(asObject(metadata.overlay_text))) {
+      return res.status(400).json({ error: 'supporting_visual attachments cannot persist overlay_text' });
+    }
     const creatorType = String(asset.creatorType || asset.creator_type || '').trim();
     if (!sourceType || !sourceId || !creatorType) {
       return res.status(400).json({ error: 'source_type, source_id, and asset.creatorType are required' });
@@ -79,10 +90,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         url: typeof asset.url === 'string' ? asset.url : undefined,
         files: Array.isArray(asset.files) ? asset.files.map(String) : undefined,
         previewKind: typeof asset.previewKind === 'string' ? asset.previewKind : typeof asset.preview_kind === 'string' ? asset.preview_kind : undefined,
-        imageMode: typeof asset.imageMode === 'string' ? asset.imageMode : typeof asset.image_mode === 'string' ? asset.image_mode : undefined,
         platformContext: typeof asset.platformContext === 'string' ? asset.platformContext : typeof asset.platform_context === 'string' ? asset.platform_context : undefined,
         attachmentOrder: Number.isFinite(Number(asset.attachmentOrder)) ? Number(asset.attachmentOrder) : 0,
-        metadata: asObject(asset.metadata),
+        metadata: {
+          ...metadata,
+          attachment_mode: typeof asset.attachmentMode === 'string' ? asset.attachmentMode : metadata.attachment_mode,
+          asset_composition_intent: asObject(asset.compositionIntent).assetType ? asObject(asset.compositionIntent) : metadata.asset_composition_intent,
+        },
         sourceContent: asObject(req.body?.source_content),
         renderIdentityHash: typeof asset.renderIdentityHash === 'string' ? asset.renderIdentityHash : typeof asset.render_identity_hash === 'string' ? asset.render_identity_hash : undefined,
       });

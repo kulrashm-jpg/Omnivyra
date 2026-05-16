@@ -38,7 +38,6 @@ export type CreatorAttachmentInput = {
   url?: string | null;
   files?: string[];
   previewKind?: string | null;
-  imageMode?: string | null;
   platformContext?: string | null;
   attachmentOrder?: number | null;
   metadata?: Record<string, unknown>;
@@ -504,7 +503,6 @@ export async function attachCreatorAsset(input: CreatorAttachmentInput): Promise
       url: input.url ?? null,
       files: normalizedFiles,
       preview_kind: input.previewKind ?? null,
-      image_mode: input.imageMode ?? null,
       platform_context: input.platformContext ?? null,
       attachment_order: input.attachmentOrder ?? 0,
       metadata,

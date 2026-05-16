@@ -24,6 +24,7 @@ type AccessResponse = {
     insights: '1h' | '2h' | '8h';
   };
   activity: Array<{
+    id: string;
     key: string;
     label: string;
     jobs: string[];
@@ -403,7 +404,7 @@ export default function CompanyAdminAccessPage() {
                 {expanded.activity && (
                   <div className="mt-4 ml-1 pl-4 border-l border-slate-200 space-y-4">
                     {data.activity.map((node) => (
-                      <div key={node.key} className="space-y-2">
+                      <div key={node.id || node.key} className="space-y-2">
                         <label className="flex items-center gap-3 text-sm font-medium text-slate-800">
                           <input
                             type="checkbox"

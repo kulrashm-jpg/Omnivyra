@@ -14,12 +14,17 @@ import {
   computeCompanyContextCompletion,
   FORCED_CONTEXT_FIELD_LABELS,
 } from '../../../backend/services/companyContextService';
+import {
+  calculateIntelligenceReadiness,
+  getCompanyContextIntelligence,
+} from '../../../backend/services/companyContextIntelligenceService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { resolveCompanyAccess, getContentArchitectCompanyId, isContentArchitectSession } from '../../../backend/services/contentArchitectService';
 import { getLegacySuperAdminSession } from '../../../backend/services/superAdminSession';
 import { extractDomain } from '../../../backend/services/companyMatchService';
 import { filterCompatibleCompanyRoleRows } from '../../../backend/services/companyMembershipIntegrityService';
+import { buildUnifiedCompetitorIntelligence } from '../../../backend/services/unifiedCompetitorIntelligenceService';
 import { AUTH_ERROR_CODE } from '../../../shared/contracts/security/AuthErrorCodes';
 import { sendAuthError } from '../../../backend/services/sendAuthError';
 
@@ -215,6 +220,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const responseProfile = isCompanyAdminOnly
         ? (toLimitedCompanyProfile(resolvedProfile) ?? resolvedProfile)
         : resolvedProfile;
+      const unifiedCompetitorIntelligence = await buildUnifiedCompetitorIntelligence({
+        companyId,
+        profile: resolvedProfile,
+      }).catch(() => null);
+      if (unifiedCompetitorIntelligence) {
+        responseProfile.report_settings = {
+          ...(responseProfile.report_settings ?? {}),
+          market_pulse: {
+            ...(responseProfile.report_settings?.market_pulse ?? {}),
+            unified_competitor_intelligence: unifiedCompetitorIntelligence,
+          },
+        };
+      }
       const response: Record<string, unknown> = { profile: responseProfile };
       response.company_profile_review = getCompanyProfileReviewStatus(resolvedProfile);
 
@@ -264,7 +282,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             response.problem_transformation_completion = completeness?.section_scores?.problem_transformation ?? 0;
             response.section_scores = completeness?.section_scores ?? {};
             response.completeness = completeness;
-            const companyContext = buildCompanyContext(resolvedProfile);
+            const intelligence = await getCompanyContextIntelligence(companyId);
+            const intelligenceReadiness = calculateIntelligenceReadiness({ intelligence, profile: resolvedProfile });
+            response.profile_completeness = completeness;
+            response.intelligence_readiness = intelligenceReadiness;
+            const companyContext = buildCompanyContext(resolvedProfile, { intelligence });
             const { forced_context_enabled_fields } = buildForcedCompanyContext(
               companyContext,
               resolvedProfile?.forced_context_fields

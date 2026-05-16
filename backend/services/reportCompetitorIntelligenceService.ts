@@ -10,10 +10,20 @@ import {
   type CompetitorEnrichmentProfile,
 } from './competitorEnrichmentKnowledge';
 import type { CompetitorSecondaryTag } from './competitorTaxonomy';
+import type {
+  CompetitorCapabilityVector,
+  CompetitorDimensionScores,
+  CompetitorDiscoverySource,
+  CompetitorIntelligenceTier,
+  CompetitorScoreCard,
+  DebugCompetitorScoring,
+} from '../../types/competitor';
 import {
   assertCompetitorOutputPartition,
+  dedupeCompetitorCandidates,
   getFinalCompetitors,
   getFinalCompetitorsSync,
+  getLatestDebugCompetitorScoring,
   splitRankedCompetitorsForOutput,
   MARKET_SUBSTITUTE_MAX_COUNT,
   type CompetitorCandidate,
@@ -82,6 +92,14 @@ export type DetectedCompetitor = {
   classification: CompetitorClassification;
   source: CompetitorSource;
   relevance_score: number;
+  score_card?: CompetitorScoreCard;
+  overallScore?: number;
+  scoreCategory?: CompetitorScoreCard['category'];
+  intelligence_tier?: CompetitorIntelligenceTier;
+  dimensions?: CompetitorDimensionScores;
+  reasoning?: string[];
+  discoverySources?: CompetitorDiscoverySource[];
+  capabilityVector?: CompetitorCapabilityVector;
   problem_overlap: number;
   icp_overlap: number;
   market_overlap: number;
@@ -168,6 +186,7 @@ export type CompetitorIntelligenceResult = {
     serp_status: 'live' | 'fallback';
     is_fallback_used: boolean;
   };
+  debugCompetitorScoring?: DebugCompetitorScoring;
 };
 
 function groupCompetitorsByTier(competitors: DetectedCompetitor[]): CompetitorIntelligenceResult['competitors_by_tier'] {
@@ -266,7 +285,19 @@ function toDetectedCompetitor(competitor: RankedCompetitor): DetectedCompetitor 
     ...competitor,
     source: competitor.source,
     classification: competitor.classification,
+    overallScore: competitor.score_card.overallScore,
+    scoreCategory: competitor.score_card.category,
+    intelligence_tier: competitor.score_card.tier,
+    dimensions: competitor.score_card.dimensions,
+    reasoning: competitor.score_card.reasoning ?? competitor.reasoning,
+    discoverySources: competitor.discoverySources,
+    capabilityVector: competitor.capabilityVector,
   };
+}
+
+function devCompetitorScoringDebug(): { debugCompetitorScoring?: DebugCompetitorScoring } {
+  const debugCompetitorScoring = getLatestDebugCompetitorScoring();
+  return debugCompetitorScoring ? { debugCompetitorScoring } : {};
 }
 
 function detectedToCandidate(competitor: DetectedCompetitor): CompetitorCandidate {
@@ -284,6 +315,8 @@ function detectedToCandidate(competitor: DetectedCompetitor): CompetitorCandidat
     productSignals: competitor.fit_signals?.product_service ? [competitor.fit_signals.product_service] : null,
     enrichment: competitor.enrichment,
     confidenceScore: competitor.enrichment_confidence_score,
+    discoverySources: competitor.discoverySources,
+    capabilityVector: competitor.capabilityVector,
   };
 }
 
@@ -349,6 +382,7 @@ export function enforceFinalCompetitorIntelligenceSync(params: {
     },
     generated_gaps: generatedGaps,
     competitive_summary: competitiveSummary,
+    ...devCompetitorScoringDebug(),
   };
 }
 
@@ -382,8 +416,159 @@ function buildManualCompetitorCandidates(params: {
         ),
         geography: params.geography,
         productSignals: params.companyContext.primaryService ? [params.companyContext.primaryService] : null,
+        discoverySources: ['manual'],
       } satisfies CompetitorCandidate;
     });
+}
+
+function buildStoredCompetitorCandidates(params: {
+  resolvedInput?: ResolvedReportInput | null;
+  businessType: string | null;
+  geography: string | null;
+  companyContext: CompanyCompetitiveContext;
+}): CompetitorCandidate[] {
+  const rawProfileCompetitors = params.resolvedInput?.profile?.competitors;
+  const profileCompetitors = (Array.isArray(rawProfileCompetitors) ? rawProfileCompetitors : [])
+    .filter((competitor) => competitor.state !== 'rejected' && competitor.state !== 'removed')
+    .map((competitor) => ({
+      name: competitor.name,
+      domain: competitor.domain,
+      rationale: competitor.rationale,
+      intelligence: competitor.competitor_intelligence,
+    }));
+  const defaultCompetitors = (params.resolvedInput?.defaults.competitors ?? []).map((name) => ({
+    name,
+    domain: normalizeDomain(name),
+    rationale: null,
+    intelligence: null,
+  }));
+
+  return [...profileCompetitors, ...defaultCompetitors]
+    .filter((item) => String(item.name ?? '').trim().length > 0)
+    .map((item, index) => ({
+      name: normalizeDomain(item.name) ? domainToName(normalizeDomain(item.name) ?? item.name) : titleCase(String(item.name)),
+      domain: item.domain ?? normalizeDomain(item.name),
+      category: params.companyContext.marketFocus ?? params.businessType ?? 'Stored market peer',
+      classification: index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader',
+      source: 'website' as const,
+      rationale: item.rationale ?? buildFitRationale(
+        params.companyContext,
+        params.geography,
+        'Stored competitor carried forward and revalidated by the competitor engine.',
+      ),
+      geography: params.geography,
+      productSignals: params.companyContext.primaryService ? [params.companyContext.primaryService] : null,
+      competitorIntelligence: item.intelligence ? {
+        ecosystem_role: item.intelligence.ecosystem_role ?? null,
+        reasoning: item.intelligence.reasoning ?? null,
+      } : null,
+      discoverySources: ['stored'],
+    } satisfies CompetitorCandidate));
+}
+
+function buildAiInferredCompetitorCandidates(params: {
+  companyContext: CompanyCompetitiveContext;
+  keywords: string[];
+  geography: string | null;
+}): CompetitorCandidate[] {
+  const contextText = discoveryTextFromContext(params.companyContext, params.keywords);
+  const candidates: CompetitorCandidate[] = [];
+  if (/\b(crm|sales|lead|pipeline|marketing|campaign|growth|automation)\b/.test(contextText)) {
+    candidates.push(
+      {
+        name: 'HubSpot',
+        domain: 'hubspot.com',
+        source: 'profile_ai',
+        classification: 'direct_competitor',
+        category: 'CRM, marketing automation, and growth operations',
+        description: 'CRM and marketing automation platform evaluated by buyers solving campaign, lead, sales, and growth workflow problems.',
+        productSignals: ['CRM', 'marketing automation', 'sales enablement', 'analytics', 'lead scoring', 'pipeline management'],
+        useCase: 'Unifying customer, campaign, lead, and revenue workflows',
+        geography: params.geography ?? 'Global',
+        confidenceScore: 0.82,
+        discoverySources: ['ai-inferred', 'ecosystem'],
+      },
+      {
+        name: 'Zoho',
+        domain: 'zoho.com',
+        source: 'profile_ai',
+        classification: 'seo_competitor',
+        category: 'CRM and business workflow suite',
+        description: 'Business software suite with CRM, automation, analytics, support, and marketing workflows.',
+        productSignals: ['CRM', 'workflow automation', 'analytics', 'marketing automation', 'customer support'],
+        useCase: 'Operating sales, marketing, support, and business workflows in one suite',
+        geography: params.geography ?? 'Global',
+        confidenceScore: 0.78,
+        discoverySources: ['ai-inferred', 'ecosystem'],
+      },
+      {
+        name: 'Salesforce',
+        domain: 'salesforce.com',
+        source: 'profile_ai',
+        classification: 'authority_leader',
+        category: 'Enterprise CRM and revenue operations',
+        description: 'Enterprise CRM and revenue workflow platform evaluated for sales, service, marketing, automation, and analytics.',
+        productSignals: ['CRM', 'sales enablement', 'marketing automation', 'analytics', 'enterprise workflows', 'AI assistant'],
+        useCase: 'Managing customer lifecycle, sales pipeline, and enterprise go-to-market workflows',
+        geography: params.geography ?? 'Global',
+        confidenceScore: 0.8,
+        discoverySources: ['ai-inferred', 'ecosystem'],
+      },
+    );
+  }
+  return candidates;
+}
+
+function buildProviderCompetitorCandidates(params: {
+  decisions: PersistedDecisionObject[];
+  companyContext: CompanyCompetitiveContext;
+  geography: string | null;
+}): CompetitorCandidate[] {
+  return params.decisions
+    .flatMap((decision) => {
+      const payload = decision.action_payload ?? {};
+      const names = [
+        payload.competitor_name,
+        ...((Array.isArray(payload.leading_competitors) ? payload.leading_competitors : []) as unknown[]),
+      ];
+      return names.map((name) => String(name ?? '').trim()).filter(Boolean);
+    })
+    .map((name, index) => {
+      const domain = normalizeDomain(name);
+      return {
+        name: domain ? domainToName(domain) : titleCase(name),
+        domain,
+        category: params.companyContext.marketFocus ?? 'Provider supplied competitor',
+        classification: index === 0 ? 'direct_competitor' : index === 1 ? 'seo_competitor' : 'authority_leader',
+        source: 'profile_ai' as const,
+        rationale: buildFitRationale(
+          params.companyContext,
+          params.geography,
+          'Provider/API signal named this company in competitor evidence and it was revalidated by buyer-decision-space scoring.',
+        ),
+        geography: params.geography,
+        productSignals: params.companyContext.primaryService ? [params.companyContext.primaryService] : null,
+        discoverySources: ['provider'],
+      } satisfies CompetitorCandidate;
+    });
+}
+
+function buildUnifiedCandidatePool(params: {
+  manual: CompetitorCandidate[];
+  stored?: CompetitorCandidate[];
+  provider?: CompetitorCandidate[];
+  serp?: CompetitorCandidate[];
+  aiInferred?: CompetitorCandidate[];
+  ecosystem?: CompetitorCandidate[];
+}): CompetitorCandidate[] {
+  return dedupeCompetitorCandidates([
+    ...params.manual,
+    ...(params.stored ?? []),
+    ...(params.provider ?? []),
+    ...(params.serp ?? []),
+    ...(params.aiInferred ?? []),
+    ...(params.ecosystem ?? []),
+  ]);
 }
 
 function discoveryTextFromContext(context: CompanyCompetitiveContext, keywords: string[] = []): string {
@@ -493,6 +678,7 @@ function buildKnownDatasetCandidates(params: {
       scaleSignals: profile.scale_signals,
       confidenceScore: profile.confidence_score,
       productSignals: [profile.product_type, profile.category, ...profile.tags].filter(Boolean),
+      discoverySources: ['ecosystem'],
       rationale: buildFitRationale(
         params.companyContext,
         params.geography,
@@ -845,14 +1031,34 @@ export function buildCompetitorIntelligence(params: {
     geography,
     companyContext,
   });
+  const storedCandidates = buildStoredCompetitorCandidates({
+    resolvedInput: params.resolvedInput,
+    businessType,
+    geography,
+    companyContext,
+  });
+  const providerCandidates = buildProviderCompetitorCandidates({
+    decisions: params.decisions,
+    companyContext,
+    geography,
+  });
   const knownDatasetCandidates = buildKnownDatasetCandidates({
     companyContext,
     keywords: discoveryKeywords,
     geography,
   });
-  const candidates = manualCandidates.length >= MIN_SERP_DOMAINS_PER_KEYWORD
-    ? manualCandidates
-    : [...manualCandidates, ...knownDatasetCandidates];
+  const aiInferredCandidates = buildAiInferredCompetitorCandidates({
+    companyContext,
+    keywords: discoveryKeywords,
+    geography,
+  });
+  const candidates = buildUnifiedCandidatePool({
+    manual: manualCandidates,
+    stored: storedCandidates,
+    provider: providerCandidates,
+    aiInferred: aiInferredCandidates,
+    ecosystem: knownDatasetCandidates,
+  });
   let ranked = getFinalCompetitorsSync({
     candidates,
     context: companyContext,
@@ -939,6 +1145,7 @@ export function buildCompetitorIntelligence(params: {
       serp_status: 'fallback',
       is_fallback_used: candidates.length > manualCandidates.length,
     },
+    ...devCompetitorScoringDebug(),
   };
 }
 
@@ -1001,6 +1208,17 @@ export async function buildCompetitorIntelligenceActive(params: {
     geography,
     companyContext,
   });
+  const storedCandidates = buildStoredCompetitorCandidates({
+    resolvedInput: params.resolvedInput,
+    businessType,
+    geography,
+    companyContext,
+  });
+  const providerCandidates = buildProviderCompetitorCandidates({
+    decisions: params.decisions,
+    companyContext,
+    geography,
+  });
 
   const serpCandidates: CompetitorCandidate[] = serpDomains.map((item, index) => ({
       name: domainToName(item),
@@ -1017,24 +1235,27 @@ export async function buildCompetitorIntelligenceActive(params: {
       rationale: `Discovered from top SERP domains for high-priority keywords (${keywords.slice(0, 3).join(', ') || 'core demand terms'}).`,
       geography,
       productSignals: companyContext.primaryService ? [companyContext.primaryService] : null,
+      discoverySources: ['serp'],
     }));
   const knownDatasetCandidates = buildKnownDatasetCandidates({
     companyContext,
     keywords,
     geography,
   });
-  const needsKnownDataset = serpDomains.length === 0 || serpCandidates.length + manualCandidates.length < MIN_SERP_DOMAINS_PER_KEYWORD;
-  const candidatePool = serpStatus === 'live'
-    ? [
-        ...serpCandidates,
-        ...manualCandidates,
-        ...(needsKnownDataset ? knownDatasetCandidates : []),
-      ]
-    : [
-        ...manualCandidates,
-        ...serpCandidates,
-        ...(needsKnownDataset ? knownDatasetCandidates : []),
-      ];
+  const aiInferredCandidates = buildAiInferredCompetitorCandidates({
+    companyContext,
+    keywords,
+    geography,
+  });
+  const needsKnownDataset = serpDomains.length === 0 || serpCandidates.length + manualCandidates.length + storedCandidates.length < MIN_SERP_DOMAINS_PER_KEYWORD;
+  const candidatePool = buildUnifiedCandidatePool({
+    manual: manualCandidates,
+    stored: storedCandidates,
+    provider: providerCandidates,
+    serp: serpCandidates,
+    aiInferred: aiInferredCandidates,
+    ecosystem: knownDatasetCandidates,
+  });
   let ranked = await getFinalCompetitors({
     candidates: candidatePool,
     context: companyContext,
@@ -1188,6 +1409,7 @@ export async function buildCompetitorIntelligenceActive(params: {
       serp_status: serpStatus,
       is_fallback_used: needsKnownDataset || ranked.some((competitor) => competitor.source === 'known_category_dataset' || competitor.source === 'market_substitute'),
     },
+    ...devCompetitorScoringDebug(),
   };
 }
 

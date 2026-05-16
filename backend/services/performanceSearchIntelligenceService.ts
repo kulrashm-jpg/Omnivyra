@@ -1,5 +1,6 @@
 import { supabase } from '../db/supabaseClient';
 import { getSearchConsoleDataReadiness, type SearchConsoleDataReadiness } from './searchConsoleReadinessService';
+import { buildOmnivyraGscReportContext } from './omnivyraGscAnalyticsService';
 import type { BehaviorReportData } from './performanceReportService';
 
 export type PerformanceSearchSeverity = 'high' | 'medium' | 'low';
@@ -67,6 +68,12 @@ export type KeywordOpportunity = {
 
 export type PerformanceSearchIntelligence = {
   readiness: SearchConsoleDataReadiness;
+  provenance?: {
+    source: 'gsc_canonical_ingestion' | 'fallback_no_gsc';
+    property_url: string | null;
+    status: string;
+    degraded_state: string;
+  };
   data_confidence: PerformanceSearchConfidence;
   insight_confidence: PerformanceSearchConfidence;
   recommendation_confidence: PerformanceSearchConfidence;
@@ -106,6 +113,95 @@ type KeywordRow = {
   keyword: string | null;
   landing_page_url: string | null;
 };
+
+async function loadPlatformGscMetrics(params: {
+  companyId: string;
+  previousStart: string;
+}): Promise<{
+  readiness: SearchConsoleDataReadiness;
+  provenance: NonNullable<PerformanceSearchIntelligence['provenance']>;
+  metrics: KeywordMetricRow[];
+  keywords: Map<string, KeywordRow>;
+} | null> {
+  const context = await buildOmnivyraGscReportContext(params.companyId);
+  if (!context || context.provenance.source !== 'gsc_canonical_ingestion' || !context.provenance.property_url) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('platform_gsc_query_metrics')
+    .select('metric_date, query, page_url, clicks, impressions, ctr, avg_position')
+    .eq('scope', 'omnivyra_website')
+    .eq('property_url', context.provenance.property_url)
+    .gte('metric_date', params.previousStart)
+    .order('metric_date', { ascending: false })
+    .limit(20000);
+
+  if (error) {
+    throw new Error(`Failed to load Omnivyra platform GSC metrics: ${error.message}`);
+  }
+
+  const keywords = new Map<string, KeywordRow>();
+  const metrics = ((data ?? []) as Array<{
+    metric_date: string | null;
+    query: string | null;
+    page_url: string | null;
+    clicks: number | null;
+    impressions: number | null;
+    ctr: number | null;
+    avg_position: number | null;
+  }>).map((row) => {
+    const keyword = String(row.query ?? '').trim() || '(not provided)';
+    const pageUrl = String(row.page_url ?? '').trim();
+    const keywordId = `${keyword}|${pageUrl}`;
+    if (!keywords.has(keywordId)) {
+      keywords.set(keywordId, { id: keywordId, keyword, landing_page_url: pageUrl });
+    }
+    return {
+      keyword_id: keywordId,
+      metric_date: row.metric_date,
+      page_url: pageUrl,
+      impressions: row.impressions,
+      clicks: row.clicks,
+      ctr: row.ctr,
+      avg_position: row.avg_position,
+    };
+  });
+
+  const dates = metrics.map((row) => row.metric_date).filter(Boolean) as string[];
+  const latestMetricDate = dates.sort().at(-1) ?? null;
+  const earliestMetricDate = dates.sort()[0] ?? null;
+  const pages = new Set(metrics.map((row) => row.page_url).filter(Boolean) as string[]);
+  const impressions = metrics.reduce((sum, row) => sum + Number(row.impressions ?? 0), 0);
+  const clicks = metrics.reduce((sum, row) => sum + Number(row.clicks ?? 0), 0);
+
+  return {
+    readiness: {
+      ready: context.status.status === 'live' || context.status.status === 'stale' || context.status.status === 'partial',
+      status: context.status.status === 'stale' ? 'stale' : metrics.length > 0 ? 'ready' : 'no_keyword_data',
+      reason: context.status.message,
+      confidence: metrics.length >= 10 ? 'high' : metrics.length > 0 ? 'medium' : 'none',
+      metrics_last_90_days: metrics.length,
+      keywords_last_90_days: keywords.size,
+      pages_last_90_days: pages.size,
+      total_impressions_last_90_days: impressions,
+      total_clicks_last_90_days: clicks,
+      earliest_metric_date: earliestMetricDate,
+      latest_metric_date: latestMetricDate,
+      history_days: earliestMetricDate && latestMetricDate
+        ? Math.max(1, Math.round((new Date(`${latestMetricDate}T00:00:00.000Z`).getTime() - new Date(`${earliestMetricDate}T00:00:00.000Z`).getTime()) / 86400000) + 1)
+        : 0,
+    },
+    provenance: {
+      source: context.provenance.source,
+      property_url: context.provenance.property_url,
+      status: context.status.status,
+      degraded_state: context.status.degraded_state,
+    },
+    metrics,
+    keywords,
+  };
+}
 
 function isoDateDaysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -476,24 +572,38 @@ export async function buildPerformanceSearchIntelligence(params: {
   const windowDays = params.windowDays ?? 28;
   const currentStart = isoDateDaysAgo(windowDays);
   const previousStart = isoDateDaysAgo(windowDays * 2);
-  const readiness = await getSearchConsoleDataReadiness(params.companyId);
+  const platformGsc = await loadPlatformGscMetrics({
+    companyId: params.companyId,
+    previousStart,
+  }).catch((error) => {
+    console.warn('[performance-search][platform-gsc-load-failed]', {
+      company_id: params.companyId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  });
+  const readiness = platformGsc?.readiness ?? await getSearchConsoleDataReadiness(params.companyId);
 
-  const { data: metricData, error: metricError } = await supabase
-    .from('keyword_metrics')
-    .select('keyword_id, metric_date, page_url, impressions, clicks, ctr, avg_position')
-    .eq('company_id', params.companyId)
-    .gte('metric_date', previousStart)
-    .order('metric_date', { ascending: false })
-    .limit(20000);
+  let metrics: KeywordMetricRow[] = platformGsc?.metrics ?? [];
+  const keywords = platformGsc?.keywords ?? new Map<string, KeywordRow>();
+  if (!platformGsc) {
+    const { data: metricData, error: metricError } = await supabase
+      .from('keyword_metrics')
+      .select('keyword_id, metric_date, page_url, impressions, clicks, ctr, avg_position')
+      .eq('company_id', params.companyId)
+      .gte('metric_date', previousStart)
+      .order('metric_date', { ascending: false })
+      .limit(20000);
 
-  if (metricError) {
-    throw new Error(`Failed to load Performance Search Intelligence metrics: ${metricError.message}`);
+    if (metricError) {
+      throw new Error(`Failed to load Performance Search Intelligence metrics: ${metricError.message}`);
+    }
+
+    metrics = (metricData ?? []) as KeywordMetricRow[];
   }
 
-  const metrics = (metricData ?? []) as KeywordMetricRow[];
-  const keywordIds = [...new Set(metrics.map((row) => row.keyword_id).filter(Boolean) as string[])];
-  const keywords = new Map<string, KeywordRow>();
-  if (keywordIds.length > 0) {
+  const keywordIds = platformGsc ? [] : [...new Set(metrics.map((row) => row.keyword_id).filter(Boolean) as string[])];
+  if (!platformGsc && keywordIds.length > 0) {
     const { data: keywordData, error: keywordError } = await supabase
       .from('canonical_keywords')
       .select('id, keyword, landing_page_url')
@@ -585,6 +695,12 @@ export async function buildPerformanceSearchIntelligence(params: {
 
   return {
     readiness,
+    provenance: platformGsc?.provenance ?? {
+      source: 'fallback_no_gsc',
+      property_url: null,
+      status: readiness.status,
+      degraded_state: readiness.ready ? 'live' : 'no_analytics',
+    },
     data_confidence: dataConfidence,
     insight_confidence: insightConfidence,
     recommendation_confidence: recommendationConfidence,

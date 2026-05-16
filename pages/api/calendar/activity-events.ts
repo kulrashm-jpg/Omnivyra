@@ -97,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (campaignIds.length > 0) {
       let q = supabase
         .from('scheduled_posts')
-        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status')
+        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status, media_urls, media_types')
         .in('campaign_id', campaignIds)
         .in('status', ['scheduled', 'draft', 'publishing', 'published', 'pending'])
         .order('scheduled_for', { ascending: true });
@@ -119,7 +119,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!campaignIdFilter && companyUserIds.length > 0) {
       let q = supabase
         .from('scheduled_posts')
-        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status')
+        .select('id, campaign_id, platform, title, content, scheduled_for, repurpose_index, repurpose_total, content_type, repurpose_parent_execution_id, status, media_urls, media_types')
         .in('user_id', companyUserIds)
         .is('campaign_id', null)
         .in('status', ['scheduled', 'draft', 'publishing', 'published', 'pending'])
@@ -158,6 +158,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         scheduled_for: row.scheduled_for || null,
         is_overdue: status === 'scheduled' && row.scheduled_for && row.scheduled_for < now,
         content: String(row.content || '').trim() || null,
+        media_urls: Array.isArray(row.media_urls)
+          ? row.media_urls.filter((u: unknown): u is string => typeof u === 'string' && u.trim().length > 0)
+          : [],
+        media_types: Array.isArray(row.media_types)
+          ? row.media_types.filter((t: unknown): t is string => typeof t === 'string')
+          : [],
       };
     });
 

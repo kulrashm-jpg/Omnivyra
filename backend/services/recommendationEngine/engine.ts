@@ -33,6 +33,7 @@ import {
 import { normalizeTrends } from '../trendNormalizationService';
 import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
+import { getCompanyContextIntelligence } from '../companyContextIntelligenceService';
 import { polishRecommendations } from '../recommendationPolishService';
 import { enrichRecommendationIntelligence } from '../recommendationIntelligenceService';
 import { buildCompanyStrategyDNA } from '../companyStrategyDNAService';
@@ -129,6 +130,8 @@ export const generateRecommendations = async (
   await ensureCampaignCompanyLink(input.companyId, input.campaignId);
   const useEnrichment = input.enrichmentEnabled !== false;
   const profile = await getProfile(input.companyId, { autoRefine: useEnrichment, languageRefine: true });
+  const intelligenceContext = await getCompanyContextIntelligence(input.companyId).catch(() => null);
+  const companyContext = profile ? buildCompanyContext(profile, { intelligence: intelligenceContext }) : undefined;
   await getCampaignMemory({ companyId: input.companyId, campaignId: input.campaignId ?? undefined });
   const personaSummary = extractPersonaSummary(profile);
 
@@ -544,7 +547,7 @@ export const generateRecommendations = async (
         omnivyra_metadata: {
           placeholders: ['no_external_signals', ...missingEnvPlaceholders],
         },
-        company_context: profile ? buildCompanyContext(profile) : undefined,
+        company_context: companyContext,
         omnivyra_status: {
           status: healthReport.status,
           confidence: undefined,
@@ -949,7 +952,7 @@ export const generateRecommendations = async (
       omnivyra_metadata: {
         placeholders: ['all_sources_unhealthy'],
       },
-      company_context: profile ? buildCompanyContext(profile) : undefined,
+      company_context: companyContext,
       strategy_dna: profile ? buildCompanyStrategyDNA(profile) : undefined,
       strategy_feedback: profile ? analyzeStrategySignals([], buildCompanyStrategyDNA(profile), profile) : undefined,
       omnivyra_status: {
@@ -1026,7 +1029,7 @@ export const generateRecommendations = async (
     novelty_score: noveltyScore,
     global_disclaimer: effectiveRegions.length > 1 ? 'Trend signals vary across selected geographies. Local validation recommended.' : undefined,
     signals_source: (usedFallbackContextSignals ? 'PROFILE_ONLY' : 'EXTERNAL') as 'PROFILE_ONLY' | 'EXTERNAL',
-    company_context: profile ? buildCompanyContext(profile) : undefined,
+    company_context: companyContext,
     strategy_dna: profile ? buildCompanyStrategyDNA(profile) : undefined,
     strategy_feedback:
       profile && trendsUsed.length > 0

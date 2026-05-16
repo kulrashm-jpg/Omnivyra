@@ -103,7 +103,10 @@ export async function qualifyPredictiveLead(
       risk_flag: boolean;
       recommended_tone: string;
       problem_indicated?: boolean;
-    }>(systemPrompt, userPrompt);
+    }>(systemPrompt, userPrompt, {
+      organizationId: companyProfile?.company_id ?? null,
+      processType: 'qualifyPredictiveLead',
+    });
 
     const icp = clamp01(data?.icp_score ?? 0);
     const urgency = clamp01(data?.urgency_score ?? 0);

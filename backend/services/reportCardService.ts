@@ -974,8 +974,16 @@ export async function generateReportPayload(
       }) as unknown as Record<string, unknown>;
     }
   } catch (composeError) {
-    // Non-fatal: we still persist core intelligence payload.
     console.warn('[reportCardService] composed report generation failed:', composeError);
+    if (requestedCategory === 'performance') {
+      throw new ReportRequestError(
+        composeError instanceof Error
+          ? composeError.message
+          : 'Performance report composition failed',
+        'PERFORMANCE_COMPOSE_FAILED',
+        500,
+      );
+    }
   }
 
   return {

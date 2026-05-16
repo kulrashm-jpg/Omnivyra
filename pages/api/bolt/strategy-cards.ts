@@ -40,7 +40,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { companyId, topic, goal, goals: goalsRaw, audience, strategicFocus, offerings, contentFormat, duration } = req.body || {};
+    const {
+      companyId, topic, goal, goals: goalsRaw,
+      // Campaign Brief — all optional. Older callers won't send these; the
+      // generator falls back to topic + goals + audience-only flow.
+      description, tone: toneRaw, audienceText: audienceTextRaw,
+      audience, strategicFocus, offerings, contentFormat, duration,
+    } = req.body || {};
 
     // Resolve goals: accept array (new) or string (legacy), always produce string[]
     const goalsArray: string[] = Array.isArray(goalsRaw) && goalsRaw.length > 0
@@ -49,6 +55,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? [goal.trim()]
         : [];
     const combinedGoalStr = goalsArray.join(' + ');
+
+    // Brief-derived inputs. `audienceText` is the new free-form field; fall
+    // back to the legacy `audience` string for callers that haven't migrated.
+    const briefDescription = typeof description === 'string' ? description.trim() : '';
+    const toneArray: string[] = Array.isArray(toneRaw)
+      ? (toneRaw as unknown[]).filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+      : [];
+    const resolvedAudience = (typeof audienceTextRaw === 'string' && audienceTextRaw.trim())
+      ? audienceTextRaw.trim()
+      : (typeof audience === 'string' ? audience.trim() : '');
 
     if (!companyId || typeof companyId !== 'string') {
       return res.status(400).json({ error: 'companyId is required' });
@@ -146,6 +162,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           return stripDanglingTrailingWords(quoted);
         }
       }
+      // 1b. Colon-headline collapse. Editorial topics shaped "Hook: Detail"
+      //     (e.g. "From Data to Decisions: Transform your marketing") read
+      //     as garbage when slotted whole into "The {topic} Myth, Debunked".
+      //     Pick the side that's the stronger standalone noun phrase: the
+      //     segment with more real words wins; ties favour the left (the
+      //     hook is usually the subject). Drops the ": ..." tail entirely
+      //     so the result is a clean phrase, not a compound title. Runs
+      //     after quoted-phrase extraction so an explicit quote still wins.
+      if (s.includes(':')) {
+        const segments = s.split(':').map((seg) => seg.trim()).filter(Boolean);
+        if (segments.length >= 2) {
+          const wc = (seg: string) => seg.split(/\s+/).filter(Boolean).length;
+          const best = [...segments].sort((a, b) => wc(b) - wc(a))[0];
+          if (best && wc(best) >= 2) s = best;
+        }
+      }
+
+      // 1c. Strip a leading preposition / dangling connective. A topic that
+      //     opens with "From / To / With / For / In / On / At / By / Of /
+      //     Into / About" is a sentence fragment, not a noun phrase, and
+      //     produces "How to Win With From Data to Decisions". Removing the
+      //     opener yields the actual subject ("Data to Decisions").
+      const LEADING_PREPOSITION = /^(from|to|with|for|in|on|at|by|of|into|about|toward|towards|via)\s+/i;
+      let prepGuard = 0;
+      while (LEADING_PREPOSITION.test(s) && prepGuard < 3) {
+        s = s.replace(LEADING_PREPOSITION, '').trim();
+        prepGuard += 1;
+      }
+      if (s.length < 4) s = t.trim(); // over-stripped — fallback handles it
+
       // 2. Stop before clause-break signals
       const clauseBreak = s.search(/,\s*(consider|including|focusing|this could|this includes|which|where|among|for the|for all)/i);
       const base = clauseBreak > 10 ? s.slice(0, clauseBreak).trim() : s;
@@ -185,9 +231,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const titleTopic = (() => {
       const compact = compactTopic(cleanTopic);
       if (!looksLikeQuestionOrFragment(compact)) return refineCampaignTopicForHeadlines(compact);
-      // Fallback: derive a readable noun phrase from goals + audience
-      if (goalsArray.length > 0 && typeof audience === 'string' && audience.trim()) {
-        return refineCampaignTopicForHeadlines(`${goalsArray[0]} for ${audience.trim().split(',')[0].trim()}`);
+      // Fallback: derive a readable noun phrase from goals + (new) Brief
+      // audience. `resolvedAudience` already prefers the new free-form text
+      // over the legacy chip-joined string, so this works either way.
+      if (goalsArray.length > 0 && resolvedAudience) {
+        return refineCampaignTopicForHeadlines(`${goalsArray[0]} for ${resolvedAudience.split(',')[0].trim()}`);
       }
       if (goalsArray.length > 0) return refineCampaignTopicForHeadlines(goalsArray[0]);
       return 'Your Campaign';
@@ -287,7 +335,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         weekThemes: themes,
         contentFormat: typeof contentFormat === 'string' ? contentFormat : 'post',
         duration: weeks,
-        targetAudience: typeof audience === 'string' ? audience : '',
+        // Prefer the new Brief audience field (free-form text) over the
+        // legacy chip-joined string when both arrive — older callers send
+        // only the legacy field.
+        targetAudience: resolvedAudience,
         campaignGoal: combinedGoalStr,
         campaignGoals: goalsArray,
       };

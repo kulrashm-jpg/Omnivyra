@@ -28,8 +28,7 @@ import {
 
 const sampleImageMetadata: CreatorContinuityMetadata = {
   asset_type: 'image',
-  image_mode: 'text_embedded',
-  recommended_image_mode: 'composition',
+  attachment_mode: 'embedded_copy',
   overlay_text: {
     hook:           'Stop the scroll',
     headline:       'Resonance > Reach',
@@ -53,7 +52,7 @@ describe('buildCreatorContinuityBlock', () => {
     const block = buildCreatorContinuityBlock(sampleImageMetadata) as unknown as { type: string; data: Record<string, unknown> };
     expect(block.type).toBe(CREATOR_CONTINUITY_BLOCK_TYPE);
     expect(block.data.asset_type).toBe('image');
-    expect(block.data.image_mode).toBe('text_embedded');
+    expect(block.data.attachment_mode).toBe('embedded_copy');
   });
 
   it('stamps the current schema_version', () => {
@@ -130,15 +129,15 @@ describe('extractCreatorContinuity — legacy / defensive', () => {
 });
 
 describe('extractCreatorContinuity — schema-version safety (final polish)', () => {
-  it('strips fields with values outside the documented enum (image_mode)', () => {
+  it('strips fields with values outside the documented enum (attachment mode)', () => {
     const block = {
       type: CREATOR_CONTINUITY_BLOCK_TYPE,
-      data: { asset_type: 'image', image_mode: 'invented_mode', schema_version: 1 },
+      data: { asset_type: 'image', attachment_mode: 'invented_mode', schema_version: 1 },
     } as unknown;
     const out = extractCreatorContinuity([block]);
     expect(out.metadata?.asset_type).toBe('image');
-    // image_mode value was unknown → dropped during sanitize.
-    expect(out.metadata?.image_mode).toBeUndefined();
+    // Unknown attachment mode value was dropped during sanitize.
+    expect(out.metadata?.attachment_mode).toBeUndefined();
   });
 
   it('strips brand_mode outside the canonical 2-value set', () => {
@@ -160,25 +159,25 @@ describe('extractCreatorContinuity — schema-version safety (final polish)', ()
   });
 
   it('treats schema_version=1 as the current shape (passes through)', () => {
-    const block = buildCreatorContinuityBlock({ asset_type: 'image', image_mode: 'composition' });
+    const block = buildCreatorContinuityBlock({ asset_type: 'image', attachment_mode: 'supporting_visual' });
     const out = extractCreatorContinuity([block]);
-    expect(out.metadata?.image_mode).toBe('composition');
+    expect(out.metadata?.attachment_mode).toBe('supporting_visual');
     expect(out.metadata?.schema_version).toBe(CREATOR_CONTINUITY_SCHEMA_VERSION);
   });
 
   it('treats missing schema_version as v1 (back-compat)', () => {
     const block = {
       type: CREATOR_CONTINUITY_BLOCK_TYPE,
-      data: { asset_type: 'image', image_mode: 'text_embedded' },
+      data: { asset_type: 'image', attachment_mode: 'embedded_copy' },
     } as unknown;
     const out = extractCreatorContinuity([block]);
-    expect(out.metadata?.image_mode).toBe('text_embedded');
+    expect(out.metadata?.attachment_mode).toBe('embedded_copy');
   });
 
   it('returns null metadata for unknown future schema_version + still strips the marker block', () => {
     const fakeFutureBlock = {
       type: CREATOR_CONTINUITY_BLOCK_TYPE,
-      data: { asset_type: 'image', image_mode: 'composition', schema_version: 99 },
+      data: { asset_type: 'image', attachment_mode: 'supporting_visual', schema_version: 99 },
     } as unknown;
     const otherBlock = { type: 'paragraph', data: { text: 'hello' } } as unknown;
     const out = extractCreatorContinuity([fakeFutureBlock, otherBlock]);
@@ -264,7 +263,7 @@ describe('synthesizeLegacyCreatorMetadata — legacy backfill', () => {
 
 describe('extractCreatorContinuity — per-creator-type round-trip', () => {
   it.each([
-    ['image',       { asset_type: 'image', image_mode: 'composition' as const, platform: 'linkedin' }],
+    ['image',       { asset_type: 'image', attachment_mode: 'supporting_visual' as const, platform: 'linkedin' }],
     ['banner',      { asset_type: 'banner', subtype: 'promo-banner', platform: 'linkedin' }],
     ['infographic', { asset_type: 'infographic', overlay_text: { headline: 'X' } }],
     ['carousel',    { asset_type: 'carousel', files: ['a', 'b', 'c'], platform: 'instagram' }],

@@ -74,6 +74,16 @@ function mapProperty(property: AnalyticsPropertyRecord | null) {
   };
 }
 
+function describeSearchConsolePropertyLoadError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/SERVICE_DISABLED|accessNotConfigured|Search Console API has not been used|searchconsole\.googleapis\.com/i.test(message)) {
+    const project = message.match(/project\s+(\d+)/i)?.[1] || message.match(/projects\/(\d+)/i)?.[1] || null;
+    const projectText = project ? ` in Google Cloud project ${project}` : '';
+    return `Google Search Console API is disabled${projectText}. Enable the Search Console API in the Google Cloud project used by this OAuth client, then reconnect or refresh Search Console.`;
+  }
+  return message;
+}
+
 export async function getGoogleAnalyticsStatusPayload(
   companyId: string,
 ): Promise<GoogleAnalyticsStatusPayload> {
@@ -103,6 +113,21 @@ export async function getGoogleAnalyticsStatusPayload(
       events_last_30_days: 0,
       properties: mappedProperties,
       reconnect_required: false,
+      provider_readiness: providerReadiness,
+      search_console: searchConsole,
+    };
+  }
+
+  if (connectionStatus.integration.status === 'disconnected') {
+    return {
+      connected: false,
+      property: mapProperty(connectionStatus.activeProperty),
+      status: 'not_connected',
+      message: 'Connect Google Analytics',
+      last_sync: lastCompletedRun?.completed_at ?? null,
+      events_last_30_days: readiness.events_last_30_days,
+      properties: mappedProperties,
+      reconnect_required: true,
       provider_readiness: providerReadiness,
       search_console: searchConsole,
     };
@@ -154,10 +179,20 @@ export async function getGoogleAnalyticsStatusPayload(
   }
 
   if (!readiness.ready) {
-    const status = readiness.events_last_30_days > 0 ? 'low_data' : 'waiting_for_data';
-    const message = status === 'low_data'
-      ? 'No analytics data available yet'
-      : 'Syncing analytics data...';
+    const status: GoogleAnalyticsUiStatus =
+      readiness.status === 'failed'
+        ? 'error'
+        : readiness.status === 'stale'
+          ? 'limited_coverage'
+          : readiness.events_last_30_days > 0
+            ? 'low_data'
+            : 'waiting_for_data';
+    const message =
+      readiness.status === 'failed' || readiness.status === 'stale'
+        ? readiness.reason
+        : status === 'low_data'
+          ? 'Analytics data is still below the reliable reporting threshold'
+          : 'Syncing analytics data...';
 
     return {
       connected: true,
@@ -191,7 +226,7 @@ export async function getGoogleSearchConsoleStatusPayload(
   companyId: string,
   readiness?: GoogleCapabilityReadiness,
 ): Promise<GoogleSearchConsoleStatusPayload> {
-  const [connectionStatus, properties, lastCompletedRun] = await Promise.all([
+  const [connectionStatus, storedProperties, lastCompletedRun] = await Promise.all([
     getGoogleSearchConsoleStatus(companyId),
     listSearchConsoleProperties(companyId, { syncRemote: false }).catch(() => []),
     getLatestCompletedRun(companyId, 'gsc').catch(() => null),
@@ -203,6 +238,17 @@ export async function getGoogleSearchConsoleStatusPayload(
     capability_ready: capabilityReadiness.capability_ready,
     readiness_status: capabilityReadiness.status,
   };
+  let properties = storedProperties;
+  let propertyLoadError: string | null = null;
+
+  if (connectionStatus.integration && connectionStatus.tokenValid && properties.length === 0) {
+    try {
+      properties = await listSearchConsoleProperties(companyId, { syncRemote: true });
+    } catch (error) {
+      propertyLoadError = describeSearchConsolePropertyLoadError(error);
+    }
+  }
+
   const mappedProperties = properties.map((property) => ({
     id: property.property_id,
     name: property.property_name,
@@ -229,7 +275,7 @@ export async function getGoogleSearchConsoleStatusPayload(
       ...baseReadiness,
       property: mapProperty(connectionStatus.activeProperty),
       status: 'error',
-      message: capabilityReadiness.message || 'Reconnect Search Console',
+      message: propertyLoadError || capabilityReadiness.message || 'Reconnect Search Console',
       last_sync: lastCompletedRun?.completed_at ?? null,
       properties: mappedProperties,
       reconnect_required: true,
@@ -241,8 +287,8 @@ export async function getGoogleSearchConsoleStatusPayload(
       connected: false,
       ...baseReadiness,
       property: null,
-      status: mappedProperties.length > 0 ? 'property_selection' : 'setup_required',
-      message: mappedProperties.length > 0 ? 'Select Search Console property' : 'No verified Search Console properties found',
+      status: propertyLoadError ? 'error' : mappedProperties.length > 0 ? 'property_selection' : 'setup_required',
+      message: propertyLoadError || (mappedProperties.length > 0 ? 'Select Search Console property' : 'No verified Search Console properties found'),
       last_sync: lastCompletedRun?.completed_at ?? null,
       properties: mappedProperties,
       reconnect_required: false,

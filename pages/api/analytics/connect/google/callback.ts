@@ -20,6 +20,13 @@ function resolveCallbackError(error: string): string {
 
 function buildSuccessParams(returnTo: string | null, flow: 'ga4' | 'gsc'): Record<string, string> {
   if (flow === 'gsc') {
+    if (returnTo?.startsWith('/super-admin')) {
+      return {
+        gsc: 'connected',
+        analytics: 'ga',
+      };
+    }
+
     return {
       gsc: 'connected',
       success: 'true',

@@ -21,57 +21,68 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getUserRole } from '../../../backend/services/rbacService';
 import { hasCommunityAiCapability } from '../../../backend/services/rbac/communityAiCapabilities';
-import { getPlatformsWithTokensForOrg } from '../../../backend/services/platformTokenService';
 import {
   enableCapability,
   disableCapability,
-  listCapabilitiesForOrg,
 } from '../../../backend/services/integrationCapabilityService';
 import {
-  INTEGRATION_CAPABILITIES,
   type IntegrationCapability,
   isIntegrationCapability,
 } from '../../../backend/types/integrationCapabilities';
 import type { PlatformListeningState } from '../../../backend/types/listeningState';
+import { getCachedCapabilityAggregate } from '../../../backend/services/capabilityCacheService';
+import {
+  buildCapabilityHealthReport,
+  summarisePlatformHealth,
+  type HealthSeverity,
+  type HealthFindingCode,
+} from '../../../backend/services/capabilityHealthService';
 
 type CapabilityStateEntry = {
   capability: IntegrationCapability;
   enabled: boolean;
   status: 'active' | 'revoked' | 'pending';
   granted_at: string | null;
+  consent_record_age_days: number | null;
 };
 
 type PlatformBucket = {
   platform: string;
   state: PlatformListeningState;
   capabilities: CapabilityStateEntry[];
+  monitoring_ready: boolean;
+  monitoring_blockers: string[];
+  health: {
+    severity: HealthSeverity;
+    codes: HealthFindingCode[];
+  } | null;
+  readiness_snapshot?: {
+    consent_freshness_score: number;
+    scope_sufficiency: 'sufficient' | 'insufficient' | 'not_required';
+    source_ready: boolean;
+    orchestration_eligible: boolean;
+  };
 };
 
 type GetResponse = {
   companyId: string;
+  generated_at: string;
   buckets: {
     connected: PlatformBucket[];
     available_for_listening: PlatformBucket[];
     listening_enabled: PlatformBucket[];
   };
   all_platforms: PlatformBucket[];
+  health: {
+    rollups: { info: number; warning: number; error: number };
+    findings: Array<{
+      code: HealthFindingCode;
+      severity: HealthSeverity;
+      platform: string | null;
+      detail: string;
+    }>;
+  };
 };
-
-function classifyState(
-  isConnected: boolean,
-  capabilities: CapabilityStateEntry[],
-): PlatformListeningState {
-  const listenRow = capabilities.find((c) => c.capability === 'listen');
-  if (listenRow?.enabled && listenRow?.status === 'active') {
-    return 'listening_active';
-  }
-  if (listenRow?.status === 'active' && !listenRow.enabled) {
-    // Approved historically but currently disabled.
-    return 'listening_approved';
-  }
-  if (isConnected) return 'available_for_listening';
-  return 'connected';
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === 'GET') {
@@ -93,53 +104,52 @@ async function handleGet(req: NextApiRequest, res: NextApiResponse) {
   const ctx = await enforceCompanyAccess({ req, res, companyId });
   if (!ctx) return;
 
-  let connectedPlatforms: string[];
-  let capabilityRows: Awaited<ReturnType<typeof listCapabilitiesForOrg>>;
+  // Phase 1 — single deterministic aggregate (cached, tenant-scoped). One
+  // round trip to the cache (or 4 to the DB on miss) instead of the
+  // previous N read fan-out across platformTokenService + capability list.
+  let aggregate;
   try {
-    [connectedPlatforms, capabilityRows] = await Promise.all([
-      getPlatformsWithTokensForOrg(companyId),
-      listCapabilitiesForOrg(companyId),
-    ]);
+    aggregate = await getCachedCapabilityAggregate(companyId);
   } catch (err: any) {
-    console.error('[capabilities GET] load failed:', err?.message);
+    console.error('[capabilities GET] aggregate load failed:', err?.message);
     return res.status(500).json({ error: 'Failed to load capabilities' });
   }
 
-  const platformSet = new Set<string>([
-    ...connectedPlatforms,
-    ...capabilityRows.map((r) => r.platform),
-  ]);
+  const healthReport = buildCapabilityHealthReport(aggregate);
+  const platformHealth = summarisePlatformHealth(healthReport);
 
-  const buckets: PlatformBucket[] = [];
-
-  for (const platform of platformSet) {
-    const rows = capabilityRows.filter((r) => r.platform === platform);
-    const capabilities: CapabilityStateEntry[] = INTEGRATION_CAPABILITIES.map((cap) => {
-      const row = rows.find((r) => r.capability === cap);
-      return {
-        capability: cap,
-        enabled: row?.enabled ?? false,
-        status: (row?.status as 'active' | 'revoked' | 'pending') ?? 'pending',
-        granted_at: row?.granted_at ?? null,
-      };
-    });
-
-    const isConnected = connectedPlatforms.includes(platform);
-    buckets.push({
-      platform,
-      state: classifyState(isConnected, capabilities),
+  const buckets: PlatformBucket[] = aggregate.platforms.map((p) => {
+    const capabilities: CapabilityStateEntry[] = p.capabilities.map((cap) => ({
+      capability: cap.capability,
+      enabled: cap.enabled,
+      status: cap.status,
+      granted_at: cap.granted_at,
+      consent_record_age_days: cap.consent_record_age_days,
+    }));
+    return {
+      platform: p.platform,
+      state: p.state,
       capabilities,
-    });
-  }
+      monitoring_ready: p.monitoring_ready,
+      monitoring_blockers: p.monitoring_blockers,
+      health: platformHealth[p.platform] ?? null,
+      readiness_snapshot: p.readiness_snapshot,
+    };
+  });
 
   const response: GetResponse = {
     companyId,
+    generated_at: aggregate.generated_at,
     buckets: {
       connected: buckets.filter((b) => b.state === 'connected' || b.state === 'available_for_listening'),
       available_for_listening: buckets.filter((b) => b.state === 'available_for_listening'),
       listening_enabled: buckets.filter((b) => b.state === 'listening_active'),
     },
     all_platforms: buckets,
+    health: {
+      rollups: healthReport.rollups,
+      findings: healthReport.findings,
+    },
   };
 
   return res.status(200).json(response);

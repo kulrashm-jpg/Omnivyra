@@ -45,14 +45,41 @@ const DURATION_OPTIONS = [
   { value: 4, label: '4 Weeks' },
 ];
 
+// Campaign Brief — canonical intent vocabulary for the BOLT Text planner.
+// These shape the AI plan, weekly structure, and platform variant prompts,
+// so changing the wording here ripples through every generated artifact.
 const GOAL_OPTIONS = [
-  'Brand Awareness', 'Lead Generation', 'Thought Leadership',
-  'Product Launch', 'Community Growth', 'Engagement',
+  'Brand Awareness',
+  'Lead Generation',
+  'Engagement',
+  'Thought Leadership',
+  'Product Education',
+  'Conversion',
+  'Community Building',
+  'Traffic Growth',
 ];
 
-const AUDIENCE_OPTIONS = [
-  'B2B Marketers', 'Founders / Entrepreneurs', 'Marketing Leaders',
-  'Sales Teams', 'Product Managers', 'Developers', 'General Consumers',
+const TONE_OPTIONS = [
+  'Professional',
+  'Conversational',
+  'Educational',
+  'Analytical',
+  'Bold',
+  'Inspirational',
+  'Authoritative',
+  'Friendly',
+];
+
+// Free-text audience examples. Surface as placeholder hints, not chips —
+// the Brief's Audience field is a free-form textarea so users can express
+// niche audiences the chip list couldn't capture (e.g. "Series-A SaaS
+// founders selling into mid-market HR").
+const AUDIENCE_HINT_EXAMPLES = [
+  'SaaS founders',
+  'HR leaders',
+  'Small business owners',
+  'Gen Z creators',
+  'Enterprise marketers',
 ];
 
 const STRATEGIC_FOCUS_OPTIONS = [
@@ -145,7 +172,10 @@ function TagInput({ tags, onChange, placeholder }: { tags: string[]; onChange: (
 }
 
 /* ─── BOLT stage pipeline (mirrors BOLTProgressModal stages) ─────────────── */
-const BOLT_PIPELINE: { stage: string; label: string }[] = [
+// Canonical full pipeline for Schedule view. Week Plan and Daily Plan
+// truncate this list to the stages that actually run for their
+// outcomeView — see `getPipelineForOutcome` below.
+const BOLT_PIPELINE_FULL: { stage: string; label: string }[] = [
   { stage: 'source-recommendation', label: 'Preparing week plan' },
   { stage: 'ai/plan',               label: 'Creating week plan' },
   { stage: 'commit-plan',           label: 'Saving blueprint' },
@@ -156,13 +186,48 @@ const BOLT_PIPELINE: { stage: string; label: string }[] = [
   { stage: 'schedule-writing-posts', label: 'Scheduling posts' },
 ];
 
-function stageIndex(stage: string | undefined): number {
+/**
+ * Stages the pipeline ACTUALLY runs for each outcome view.
+ *
+ *   week_plan / daily_plan  → 4 stages.  The pipeline runs source →
+ *     ai/plan → commit-plan → generate-weekly-structure even for Week
+ *     Plan (so the daily_content_plans rows exist for the campaign
+ *     detail page); the schedule-* stages are gated by `shouldSchedule`
+ *     which is false for non-schedule views.
+ *
+ *   schedule                → 8 stages. Full pipeline.
+ *
+ * Showing the schedule-* stages on Week Plan made the tracker look
+ * stuck after the run finished — five empty circles below the last
+ * green check. This filter keeps the visible stages aligned with what
+ * the backend actually executes.
+ */
+function getPipelineForOutcome(outcomeView: OutcomeView): { stage: string; label: string }[] {
+  if (outcomeView === 'schedule') return BOLT_PIPELINE_FULL;
+  // week_plan + daily_plan
+  return BOLT_PIPELINE_FULL.slice(0, 4);
+}
+
+// Back-compat re-export for any consumer still importing the constant
+// (no module-internal consumers left after this refactor).
+const BOLT_PIPELINE = BOLT_PIPELINE_FULL;
+
+function stageIndexInPipeline(
+  stage: string | undefined,
+  pipeline: { stage: string; label: string }[] = BOLT_PIPELINE_FULL,
+): number {
   if (!stage) return -1;
-  const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
+  const exact = pipeline.findIndex((s) => s.stage === stage);
   if (exact !== -1) return exact;
   // sub-stages like generate-weekly-structure-week-1
-  if (stage.startsWith('generate-weekly-structure')) return 3;
+  if (stage.startsWith('generate-weekly-structure')) {
+    return pipeline.findIndex((s) => s.stage === 'generate-weekly-structure');
+  }
   return -1;
+}
+
+function stageIndex(stage: string | undefined): number {
+  return stageIndexInPipeline(stage, BOLT_PIPELINE_FULL);
 }
 
 function formatElapsed(ms: number): string {
@@ -180,11 +245,14 @@ type ContentJobProgress = {
 };
 
 /* ─── Inline BOLT progress tracker (shown inside the card) ──────────────── */
-function CardBoltProgress({ progress, theme, startedAt, contentJobs }: {
+function CardBoltProgress({ progress, theme, startedAt, contentJobs, outcomeView }: {
   progress: BOLTProgress;
   theme: typeof CARD_THEMES[0];
   startedAt: number;
   contentJobs?: ContentJobProgress | null;
+  // Drives stage filtering — Week/Daily Plan hide the schedule-* stages
+  // because the pipeline doesn't run them for those outcomes.
+  outcomeView: OutcomeView;
 }) {
   const [elapsedMs, setElapsedMs] = useState(Date.now() - startedAt);
 
@@ -195,8 +263,9 @@ function CardBoltProgress({ progress, theme, startedAt, contentJobs }: {
 
   const isCompleted = progress.status === 'completed';
   const isFailed    = progress.status === 'failed';
+  const pipeline    = getPipelineForOutcome(outcomeView);
   // When completed, treat currentIdx as beyond the last stage so every step shows ✓
-  const currentIdx  = isCompleted ? BOLT_PIPELINE.length : stageIndex(progress.stage);
+  const currentIdx  = isCompleted ? pipeline.length : stageIndexInPipeline(progress.stage, pipeline);
   const pct         = isCompleted ? 100 : Math.min(100, Math.max(0, progress.progress_percentage ?? 0));
 
   return (
@@ -223,7 +292,7 @@ function CardBoltProgress({ progress, theme, startedAt, contentJobs }: {
 
       {/* Stage pipeline */}
       <div className="space-y-1.5 mb-3">
-        {BOLT_PIPELINE.map((step, i) => {
+        {pipeline.map((step, i) => {
           const isDone    = currentIdx > i;
           const isCurrent = !isCompleted && currentIdx === i;
           return (
@@ -338,6 +407,7 @@ function StrategyCard({
   execStartedAt,
   anyExecuting,
   contentJobProgress,
+  outcomeView,
   onSelect,
 }: {
   card: BoltStrategyCard;
@@ -347,6 +417,7 @@ function StrategyCard({
   execStartedAt: number;
   anyExecuting: boolean;
   contentJobProgress?: ContentJobProgress | null;
+  outcomeView: OutcomeView;
   onSelect: () => void;
 }) {
   const theme = CARD_THEMES[index % CARD_THEMES.length];
@@ -537,6 +608,7 @@ function StrategyCard({
           theme={theme}
           startedAt={execStartedAt}
           contentJobs={contentJobProgress}
+          outcomeView={outcomeView}
         />
       )}
 
@@ -563,16 +635,52 @@ export function useBoltStrategy() {
   const router = useRouter();
   const { user, authChecked, isLoading, selectedCompanyId: companyId } = useCompanyContext();
 
-  // Form inputs
+  // ── Campaign Brief ─────────────────────────────────────────────────────
+  // Canonical intent layer. Everything below feeds the AI planner so it can
+  // reason about WHY the campaign exists (goals), WHO it targets (audience),
+  // and HOW it should sound (tone). Only `topic` is required at launch; the
+  // rest fail soft — empty values are simply omitted from prompts.
   const [topic, setTopic] = useState('');
+  const [description, setDescription] = useState('');
   const [goals, setGoals] = useState<string[]>([]);
-  const [audience, setAudience] = useState<string[]>([]);
+  const [tone, setTone] = useState<string[]>([]);
+  // Free-form, not multi-select. Lets users write niche audiences the chip
+  // list can't capture. Empty string is the default; planner falls back to
+  // "General audience" downstream when this is blank.
+  const [audienceText, setAudienceText] = useState<string>('');
   const [strategicFocus, setStrategicFocus] = useState<string[]>([]);
   const [offerings, setOfferings] = useState<string[]>([]);
   const [contentFormats, setContentFormats] = useState<ContentFormat[]>([]);
   const [formatFrequency, setFormatFrequency] = useState<Partial<Record<ContentFormat, number>>>({});
   const [duration, setDuration] = useState(4);
   const [themeSource, setThemeSource] = useState<ThemeSource>('hybrid');
+
+  // ── Campaign Memory ────────────────────────────────────────────────────
+  // Lightweight, session-scoped memory of what the user already accepted
+  // from the AI chat. The chat API uses this to AVOID repeating directions
+  // and to BUILD ON accepted suggestions instead of restarting ideation.
+  //
+  // Persisted with the rest of the form state; reset by `resetCampaignMemory`
+  // (the chat's "Reset AI Direction" button). Capped to MAX_ACCEPTED entries
+  // — older accepts roll off so the prompt budget stays bounded.
+  //
+  // Passed-over suggestions are NOT kept here; the chat component derives
+  // them from its own per-session chat history (an accepted suggestion that
+  // isn't in this array, but does appear in chat history, was passed over).
+  // Keeping passed-over out of persisted memory is intentional — once the
+  // user reloads we forget what we showed and didn't accept, which is fine.
+  type AcceptedSuggestion = {
+    topic: string;
+    description?: string;
+    goals?: string[];
+    tone?: string[];
+    audience?: string;
+    acceptedAt: string; // ISO timestamp
+  };
+  const MAX_ACCEPTED_SUGGESTIONS = 8;
+  const CAMPAIGN_MEMORY_VERSION = 1;
+  const [acceptedSuggestions, setAcceptedSuggestions] = useState<AcceptedSuggestion[]>([]);
+  const [memoryUpdatedAt, setMemoryUpdatedAt] = useState<string | null>(null);
 
   // Right panel
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
@@ -635,9 +743,15 @@ export function useBoltStrategy() {
       if (!raw) return;
       const s = JSON.parse(raw);
       if (s.topic)          setTopic(s.topic);
+      if (typeof s.description === 'string') setDescription(s.description);
       if (s.goals)          setGoals(s.goals);
       else if (s.goal)      setGoals([s.goal]); // backward compat with old single-goal state
-      if (s.audience)       setAudience(s.audience);
+      if (Array.isArray(s.tone))             setTone(s.tone);
+      // Audience migration: pre-Brief campaigns persisted `audience: string[]`
+      // from the old chip selector. Join into the new free-form text so the
+      // user doesn't lose their previous targeting on refresh.
+      if (typeof s.audienceText === 'string')      setAudienceText(s.audienceText);
+      else if (Array.isArray(s.audience))          setAudienceText(s.audience.join(', '));
       if (s.strategicFocus) setStrategicFocus(s.strategicFocus);
       if (s.offerings)      setOfferings(s.offerings);
       if (s.contentFormats)  setContentFormats(s.contentFormats);
@@ -650,6 +764,25 @@ export function useBoltStrategy() {
       if (s.sharingMode)        setSharingMode(s.sharingMode);
       if (s.campaignStartDate)  setCampaignStartDate(s.campaignStartDate);
       if (Array.isArray(s.selectedPlatforms)) setSelectedPlatforms(s.selectedPlatforms);
+
+      // Campaign Memory restore. Only accept entries shaped like
+      // AcceptedSuggestion — old session payloads without this block
+      // simply skip restoration (fail-soft).
+      if (
+        s.campaignMemory &&
+        typeof s.campaignMemory === 'object' &&
+        Array.isArray(s.campaignMemory.acceptedSuggestions)
+      ) {
+        const cleaned: AcceptedSuggestion[] = s.campaignMemory.acceptedSuggestions
+          .filter((entry: unknown): entry is AcceptedSuggestion =>
+            !!entry && typeof entry === 'object' && typeof (entry as { topic?: unknown }).topic === 'string'
+          )
+          .slice(0, MAX_ACCEPTED_SUGGESTIONS);
+        setAcceptedSuggestions(cleaned);
+        if (typeof s.campaignMemory.updatedAt === 'string') {
+          setMemoryUpdatedAt(s.campaignMemory.updatedAt);
+        }
+      }
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -666,11 +799,19 @@ export function useBoltStrategy() {
   useEffect(() => {
     try {
       sessionStorage.setItem(BOLT_STATE_KEY, JSON.stringify({
-        topic, goals, audience, strategicFocus, offerings,
+        topic, description, goals, tone, audienceText, strategicFocus, offerings,
         contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms,
+        // Memory block — versioned so future shape changes can be
+        // recognised on restore (we currently just guard on shape, but the
+        // version stamp lets later code branch cleanly).
+        campaignMemory: {
+          version: CAMPAIGN_MEMORY_VERSION,
+          updatedAt: memoryUpdatedAt,
+          acceptedSuggestions,
+        },
       }));
     } catch {}
-  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms]);
+  }, [topic, description, goals, tone, audienceText, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms, acceptedSuggestions, memoryUpdatedAt]);
 
   useEffect(() => {
     if (authChecked && !user?.userId) router.replace('/login');
@@ -715,11 +856,21 @@ export function useBoltStrategy() {
   function toggleGoal(g: string) {
     setGoals((prev) => prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]);
   }
+  function toggleTone(t: string) {
+    setTone((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
+  }
   function toggleFocus(f: string) {
     setStrategicFocus((prev) => prev.includes(f) ? prev.filter((x) => x !== f) : [...prev, f]);
   }
   function toggleAudience(a: string) {
-    setAudience((prev) => prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]);
+    // Backward compat shim — old code still calls toggleAudience. Audience is
+    // now free-form text; treat each toggle as an append/remove of the chip
+    // label so existing callers don't break. New UI does not use this.
+    setAudienceText((prev) => {
+      const tokens = prev.split(',').map((t) => t.trim()).filter(Boolean);
+      const next = tokens.includes(a) ? tokens.filter((x) => x !== a) : [...tokens, a];
+      return next.join(', ');
+    });
   }
   function toggleFormat(f: ContentFormat) {
     setContentFormats((prev) => {
@@ -769,6 +920,19 @@ export function useBoltStrategy() {
     let mounted = true;
 
     const combinedGoal = goals.length > 0 ? goals.join(' + ') : 'Brand Awareness';
+    const trimmedDescription = description.trim();
+    const trimmedAudience = audienceText.trim();
+    const lowerTones = tone.map((t) => t.toLowerCase());
+
+    // Campaign Brief audit tag — purely diagnostic, surfaces in
+    // bolt_execution_runs.payload so analytics can later correlate engagement
+    // against which intent fields a user actually filled in.
+    const brief_fields_filled = {
+      has_description: trimmedDescription.length > 0,
+      has_goals: goals.length > 0,
+      has_tone: tone.length > 0,
+      has_audience: trimmedAudience.length > 0,
+    };
 
     const sourceStrategicTheme = {
       schema_type: 'recommendation_strategic_card',
@@ -776,12 +940,26 @@ export function useBoltStrategy() {
       topic: card.title,
       polished_title: card.title,
       summary: card.summary,
+      // Persist the user-typed brief alongside the AI-generated card summary
+      // so the planner can read user intent without round-tripping back here.
+      campaign_brief: {
+        topic: topic.trim(),
+        description: trimmedDescription || null,
+        goals: goals,
+        tone: tone,
+        target_audience: trimmedAudience || null,
+      },
       strategic_context: {
         aspect: combinedGoal,
         facets: strategicFocus,
-        audience_personas: audience,
+        // String-typed audience now; planner reads as free-form. The
+        // `audience_personas` key is kept for back-compat with consumers
+        // that expect an array — single-element when audience is set.
+        audience_personas: trimmedAudience ? [trimmedAudience] : [],
+        audience_text: trimmedAudience || null,
         messaging_hooks: [],
         campaign_goals: goals,
+        tone: tone,
       },
       intelligence: { campaign_angle: card.angle },
       blueprint: {
@@ -796,7 +974,7 @@ export function useBoltStrategy() {
 
     const totalFrequency = contentFormats.reduce((sum, f) => sum + (formatFrequency[f] ?? 3), 0);
     const executionConfig = {
-      target_audience: audience.join(', ') || 'General audience',
+      target_audience: trimmedAudience || 'General audience',
       content_depth: 'standard',
       frequency_per_week: totalFrequency,
       format_frequency: Object.fromEntries(contentFormats.map((f) => [f, formatFrequency[f] ?? 3])),
@@ -805,7 +983,17 @@ export function useBoltStrategy() {
       campaign_goal: combinedGoal,
       campaign_goals: goals,
       campaign_mode: 'fast',
-      communication_style: ['professional'],
+      // Tone drives the existing `communication_style` consumer downstream.
+      // Empty tone → default to 'professional' (existing fallback).
+      communication_style: lowerTones.length > 0 ? lowerTones : ['professional'],
+      // Surface tone separately too — anything reading executionConfig.tone
+      // (new prompts) gets the original casing; communication_style stays
+      // lower-cased for the prompt-template consumers that already expect it.
+      tone: tone,
+      // Free-form description from the Brief. Optional — planner uses when
+      // present, falls back to topic + goals otherwise.
+      campaign_description: trimmedDescription || null,
+      brief_fields_filled,
       content_formats: contentFormats,
       cross_platform_sharing: sharingMode === 'shared'
         ? { enabled: true }
@@ -844,8 +1032,11 @@ export function useBoltStrategy() {
       // Exit is driven by status, NOT by campaignId being non-null, so a null
       // result_campaign_id on completion doesn't cause an infinite loop.
       const POLL_INTERVAL_MS = 2500;
-      // Schedule outcome triggers AI content generation for all activities — allow extra time
-      const timeoutMinutes = outcomeView === 'schedule' ? 15 : 6;
+      // Schedule outcome triggers AI content generation for all activities — allow extra time.
+      // Week/Daily Plan still runs ai/plan + commit-plan + generate-weekly-structure, and ai/plan
+      // alone can take several minutes when OpenAI is slow (timeout 120s × retries). 15 min for
+      // non-schedule and 20 min for schedule gives the backend room to finish before the UI bails.
+      const timeoutMinutes = outcomeView === 'schedule' ? 20 : 15;
       const DEADLINE = Date.now() + timeoutMinutes * 60 * 1000;
       let completedCampaignId: string | null = null;
       let done = false;
@@ -952,9 +1143,16 @@ export function useBoltStrategy() {
         body: JSON.stringify({
           companyId,
           topic: topic.trim(),
+          // Optional brief fields — strategy-card generator uses them as
+          // grounding context. Omitted keys fall back to its built-in defaults.
+          description: description.trim() || undefined,
           goals,
           goal: goals.length > 0 ? goals.join(', ') : undefined,
-          audience: audience.join(', '),
+          tone,
+          // Free-form audience text (Brief). Sent both as `audience` (back-compat
+          // key the API already reads) and `audienceText` (canonical name).
+          audience: audienceText.trim(),
+          audienceText: audienceText.trim() || undefined,
           strategicFocus,
           offerings,
           contentFormat: contentFormats[0] ?? 'post',
@@ -976,12 +1174,67 @@ export function useBoltStrategy() {
 
   const canGenerate = topic.trim().length > 2;
 
+  // Called when the user presses "Use this →" on an AI chat suggestion.
+  // Always sets topic. Other fields are set ONLY when the AI returned a
+  // non-empty value for them — empty/omitted fields leave the user's
+  // existing input alone.
+  //
+  // Also records the acceptance into campaignMemory so subsequent chat
+  // turns know what the user has already committed to. The chat API uses
+  // this to BUILD ON accepted directions instead of restarting ideation,
+  // and to AVOID surfacing near-identical alternatives.
+  function applyChatSuggestion(suggestion: {
+    topic: string;
+    description?: string;
+    goals?: string[];
+    tone?: string[];
+    audience?: string;
+  }) {
+    if (suggestion.topic) setTopic(suggestion.topic);
+    if (suggestion.description && suggestion.description.trim()) setDescription(suggestion.description);
+    if (Array.isArray(suggestion.goals) && suggestion.goals.length > 0) setGoals(suggestion.goals);
+    if (Array.isArray(suggestion.tone) && suggestion.tone.length > 0) setTone(suggestion.tone);
+    if (typeof suggestion.audience === 'string' && suggestion.audience.trim()) setAudienceText(suggestion.audience.trim());
+
+    setAcceptedSuggestions((prev) => {
+      const entry: AcceptedSuggestion = {
+        topic: suggestion.topic,
+        description: suggestion.description?.trim() || undefined,
+        goals: Array.isArray(suggestion.goals) && suggestion.goals.length > 0 ? suggestion.goals : undefined,
+        tone: Array.isArray(suggestion.tone) && suggestion.tone.length > 0 ? suggestion.tone : undefined,
+        audience: suggestion.audience?.trim() || undefined,
+        acceptedAt: new Date().toISOString(),
+      };
+      // De-dupe on topic so repeated acceptance of the same suggestion
+      // doesn't fill the memory with identical entries. Push the latest
+      // copy to the end so MAX_ACCEPTED clipping keeps freshest signals.
+      const filtered = prev.filter((p) => p.topic !== entry.topic);
+      const next = [...filtered, entry].slice(-MAX_ACCEPTED_SUGGESTIONS);
+      return next;
+    });
+    setMemoryUpdatedAt(new Date().toISOString());
+  }
+
+  /**
+   * "Reset AI Direction" — clears conversational memory (accepted suggestions)
+   * without touching the user's Brief fields. The chat component clears its
+   * own per-component chat history; this hook clears the persisted memory.
+   * Spec: "clear conversational memory; keep campaign fields intact".
+   */
+  function resetCampaignMemory() {
+    setAcceptedSuggestions([]);
+    setMemoryUpdatedAt(new Date().toISOString());
+  }
 
   return {
     _ef1,
     _ef2,
+    acceptedSuggestions,
+    memoryUpdatedAt,
+    resetCampaignMemory,
+    applyChatSuggestion,
     applySuggestion,
-    audience,
+    audienceText,
     authChecked,
     campaignStartDate,
     canGenerate,
@@ -990,6 +1243,7 @@ export function useBoltStrategy() {
     confirmingCard,
     contentFormats,
     contentJobProgress,
+    description,
     duration,
     execError,
     execProgress,
@@ -1009,12 +1263,13 @@ export function useBoltStrategy() {
     router,
     companyId,
     selectedIds,
-    setAudience,
+    setAudienceText,
     setCampaignStartDate,
     setCards,
     setConfirmingCard,
     setContentFormats,
     setContentJobProgress,
+    setDescription,
     setDuration,
     setExecError,
     setExecProgress,
@@ -1051,6 +1306,9 @@ export function useBoltStrategy() {
     suggestions,
     suggestionsLoading,
     themeSource,
+    tone,
+    setTone,
+    toggleTone,
     toggleAudience,
     toggleFocus,
     toggleFormat,

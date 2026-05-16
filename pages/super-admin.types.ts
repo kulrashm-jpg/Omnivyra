@@ -61,6 +61,9 @@ export interface GoogleAnalyticsStatusSummary {
   last_sync: string | null;
   events_last_30_days: number;
   reconnect_required: boolean;
+  degraded?: boolean;
+  status_error?: string | null;
+  provider_readiness?: Record<string, unknown> | null;
   property: {
     id: string;
     name: string;
@@ -72,6 +75,27 @@ export interface GoogleAnalyticsStatusSummary {
     account_id: string | null;
     active: boolean;
   }>;
+  search_console?: {
+    connected: boolean;
+    provider_authenticated: boolean;
+    capability_ready: boolean;
+    readiness_status: string;
+    status: string;
+    message: string;
+    last_sync: string | null;
+    reconnect_required: boolean;
+    property: {
+      id: string;
+      name: string;
+      account_id: string | null;
+    } | null;
+    properties: Array<{
+      id: string;
+      name: string;
+      account_id: string | null;
+      active: boolean;
+    }>;
+  } | null;
 }
 
 export interface GoogleAnalyticsOverview {

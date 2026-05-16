@@ -450,12 +450,19 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
   pushUniqueQuery(queries, `${base} competitors`);
   pushUniqueQuery(queries, `${base} alternatives`);
   pushUniqueQuery(queries, `${base} software platforms`);
+  pushUniqueQuery(queries, `best ${base} software`);
+  pushUniqueQuery(queries, `${base} comparison`);
   if (product) {
     pushUniqueQuery(queries, `${product} competitors`);
     pushUniqueQuery(queries, `${product} alternatives`);
+    pushUniqueQuery(queries, `alternatives to ${product}`);
+    pushUniqueQuery(queries, `best ${product} software`);
     pushUniqueQuery(queries, `${product} tools`);
   }
-  if (problem) pushUniqueQuery(queries, `${problem} tools`);
+  if (problem) {
+    pushUniqueQuery(queries, `${problem} tools`);
+    pushUniqueQuery(queries, `software for ${problem}`);
+  }
   if (icp && category) pushUniqueQuery(queries, `${icp} ${category} platforms`);
 
   if (/\b(mental|wellness|wellbeing|therapy|therapeutic|reflection|self reflection|self-reflection|clarity|emotional|mood|journaling|meditation|mindfulness|stress|anxiety)\b/.test(contextText)) {
@@ -478,6 +485,10 @@ export function generateDiscoveryKeywords(companyProfile: DiscoveryKeywordInput)
       'marketing readiness tools',
       'growth workflow platforms',
       'CRM marketing automation alternatives',
+      'HubSpot alternatives',
+      'Salesforce competitors',
+      'Zoho CRM alternatives',
+      'best CRM software for marketing automation',
       'customer growth software platforms',
     ].forEach((query) => pushUniqueQuery(queries, query));
   }

@@ -74,6 +74,10 @@ const MonetizationOpsTab = dynamic(() => import('../components/super-admin/tabs/
   ssr: false,
   loading: SuperAdminTabLoader,
 });
+const CreditsBillingTab = dynamic(() => import('../components/super-admin/tabs/CreditsBillingTab'), {
+  ssr: false,
+  loading: SuperAdminTabLoader,
+});
 
 export default function SuperAdminPanel() {
   const router = useRouter();
@@ -112,6 +116,7 @@ export default function SuperAdminPanel() {
   const [plansSaveSuccess, setPlansSaveSuccess] = useState<string | null>(null);
   const [plansSubTab, setPlansSubTab] = useState<'plans' | 'consumption'>('plans');
   const [externalApisHealth, setExternalApisHealth] = useState<{ healthy: number; warning: number; failed: number; status: string } | null>(null);
+  const [billingAlertTotal, setBillingAlertTotal] = useState<number>(0);
 
   // Hydration-stability gate. The dashboard's tree depends on
   // useCompanyContext (userRole, isAuthenticated), router state, and async
@@ -124,6 +129,23 @@ export default function SuperAdminPanel() {
   // can safely render the auth-dependent UI.
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
+
+  // Phase H — billing alert badge: low-balance orgs + pending approvals +
+  // anomalies + frozen orgs. Read-only, cheap count query. Refreshes every 5m.
+  useEffect(() => {
+    let active = true;
+    const pull = async () => {
+      try {
+        const r = await fetchWithAuth('/api/super-admin/billing-alert-counts');
+        if (!active || !r.ok) return;
+        const j = await r.json();
+        setBillingAlertTotal(Number(j?.total ?? 0));
+      } catch { /* badge is non-critical */ }
+    };
+    void pull();
+    const h = setInterval(pull, 5 * 60 * 1000);
+    return () => { active = false; clearInterval(h); };
+  }, []);
 
   useEffect(() => {
     // Phase 1 — Session Integrity Diagnostics: probe the bridge-honoring
@@ -394,6 +416,7 @@ export default function SuperAdminPanel() {
             { id: 'analytics',      label: 'Analytics',         icon: BarChart3  },
             { id: 'company-users',  label: 'Companies & Users',  icon: Users      },
             { id: 'plans',          label: 'Pricing & Plans',    icon: DollarSign },
+            { id: 'credits-billing', label: 'Credits & Billing', icon: Coins      },
             { id: 'monetization-ops', label: 'Monetization Ops',  icon: Coins      },
             { id: 'community-ai',   label: 'Engagement',         icon: Activity   },
             { id: 'cost-analysis',  label: 'Cost Analysis',      icon: DollarSign },
@@ -418,6 +441,16 @@ export default function SuperAdminPanel() {
               >
                 <Icon className="h-4 w-4" />
                 {tab.label}
+                {tab.id === 'credits-billing' && billingAlertTotal > 0 && (
+                  <span
+                    title={`${billingAlertTotal} billing item(s) need attention`}
+                    className={`ml-1 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full text-[11px] font-semibold ${
+                      activeTab === tab.id ? 'bg-white text-blue-700' : 'bg-red-600 text-white'
+                    }`}
+                  >
+                    {billingAlertTotal > 99 ? '99+' : billingAlertTotal}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -465,6 +498,10 @@ export default function SuperAdminPanel() {
             isSavingPolicy={isSavingPolicy}
             openPolicyConfirm={openPolicyConfirm}
           />
+        )}
+
+        {activeTab === 'credits-billing' && (
+          <CreditsBillingTab />
         )}
 
         {activeTab === 'monetization-ops' && (

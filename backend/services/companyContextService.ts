@@ -5,6 +5,10 @@
  */
 
 import type { CompanyProfile } from './companyProfileService';
+import {
+  type CompanyContextIntelligence,
+  getCompanyContextIntelligence,
+} from './companyContextIntelligenceService';
 
 export type CompanyContextIdentity = {
   name?: string | null;
@@ -71,6 +75,13 @@ export type CompanyContext = {
   problem_transformation: CompanyContextProblemTransformation;
   campaign: CompanyContextCampaign;
   commercial: CompanyContextCommercial;
+  /**
+   * Normalized exposure/dependency intelligence. Present only when callers use
+   * buildCompanyContextWithIntelligence() or pass an enriched snapshot.
+   * Undefined means "not loaded"; state values inside the object distinguish
+   * missing / unknown / inferred / stale / explicit.
+   */
+  intelligence?: CompanyContextIntelligence;
   /** Company-only context for recommendations; used when generating recommendations for this company. */
   recommendation_notes?: string | null;
 };
@@ -82,7 +93,7 @@ export type BuildCompanyContextOptions = {
 
 export function buildCompanyContext(
   profile: CompanyProfile | null,
-  options?: BuildCompanyContextOptions
+  options?: BuildCompanyContextOptions & { intelligence?: CompanyContextIntelligence | null }
 ): CompanyContext {
   const includeEmpty = options?.includeEmpty !== false;
   const cpi = (profile?.campaign_purpose_intent ?? null) as
@@ -225,8 +236,21 @@ export function buildCompanyContext(
     problem_transformation,
     campaign,
     commercial,
+    ...(options?.intelligence ? { intelligence: options.intelligence } : {}),
     ...(recommendation_notes ? { recommendation_notes } : {}),
   };
+}
+
+export async function buildCompanyContextWithIntelligence(
+  profile: CompanyProfile | null,
+  companyId: string,
+  options?: BuildCompanyContextOptions
+): Promise<CompanyContext> {
+  const intelligence = companyId ? await getCompanyContextIntelligence(companyId) : null;
+  return buildCompanyContext(profile, {
+    ...options,
+    intelligence,
+  });
 }
 
 /**

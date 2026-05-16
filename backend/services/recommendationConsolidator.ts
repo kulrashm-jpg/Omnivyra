@@ -213,7 +213,8 @@ export type ConsolidatedV2Result = {
  * Hybrid consolidation: rule-based merge (common opportunities, rank regions, merge risks) + LLM refinement for strategic_summary.
  */
 export async function consolidateRegionalResults(
-  regionResults: Record<string, TrendRegionRecommendation>
+  regionResults: Record<string, TrendRegionRecommendation>,
+  options?: { organizationId?: string | null }
 ): Promise<ConsolidatedV2Result> {
   const regions = Object.keys(regionResults).filter(Boolean);
 
@@ -291,7 +292,8 @@ export async function consolidateRegionalResults(
         },
         null,
         2
-      )
+      ),
+      { organizationId: options?.organizationId ?? null, processType: 'consolidateRegionalResults' }
     );
     strategic_summary = typeof data?.strategic_summary === 'string' ? data.strategic_summary : '';
   } catch {

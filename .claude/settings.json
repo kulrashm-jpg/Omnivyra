@@ -1,7 +1,25 @@
 {
   "permissions": {
     "allow": [
-      "Bash(DOTENV_CONFIG_PATH=.env.local node -r dotenv/config --import tsx scripts/backfillCanonicalDomains.ts --report=/tmp/canonical-backfill-final.json)"
+      "Bash(DOTENV_CONFIG_PATH=.env.local node -r dotenv/config --import tsx scripts/backfillCanonicalDomains.ts --report=/tmp/canonical-backfill-final.json)",
+      "Bash(sed -i 's|req\\\\.removeListener\\(.close., onClientClose\\);|detachClientCloseListener\\(\\);|g' /c/virality/pages/api/activity-workspace/\\\\[id\\\\]/upload-media-direct.ts; grep -n \"removeListener\\\\|detachClient\" /c/virality/pages/api/activity-workspace/\\\\[id\\\\]/upload-media-direct.ts)",
+      "Bash(wait)",
+      "Bash(Get-ChildItem -Path \"C:\\\\virality\" -Recurse -Filter \"*credit*\" -File)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(xargs -I {} basename {})",
+      "Bash(Get-ChildItem -Path c:\\\\virality -Recurse -Filter \"contentGenerationProcessor.ts\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -First 5)",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'backend\\\\services\\\\billing' -Directory | Select-Object -ExpandProperty Name\")",
+      "Bash(npx ts-node *)",
+      "Bash(VERBOSE_BILLING_AUDIT=true npx tsx scripts/audit/no-direct-credit-deductions.ts)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(cp c:/tmp/billing-db-introspect.ts ./scripts/audit/_tmp_introspect.ts)",
+      "Bash(sed -i \"s#../virality/backend#../../backend#\" ./scripts/audit/_tmp_introspect.ts)",
+      "Bash(cd c:/virality && git status --porcelain | grep -E 'scripts/audit/\\(reconcile-migration-ledger|_tmp\\)' ; rm -f scripts/audit/_tmp_*.ts 2>/dev/null; echo \"kept: reconcile-migration-ledger.ts \\(reusable read-only tool\\)\")"
+    ],
+    "additionalDirectories": [
+      "C:\\virality\\pages\\api\\activity-workspace\\[id]",
+      "C:\\virality\\scripts\\audit"
     ]
   }
 }

@@ -267,7 +267,10 @@ function normalizeCreatorAssetPayload(input: {
 }): Record<string, unknown> {
   const { assetType, blueprint, overrideAsset } = input;
   const override = safeObject(overrideAsset);
-  const overlayText = safeObject(input.creatorCard?.overlay_text);
+  const attachmentMode = String(input.creatorCard?.attachment_mode || '').trim();
+  const overlayText = attachmentMode === 'supporting_visual'
+    ? {}
+    : safeObject(input.creatorCard?.overlay_text);
 
   if (assetType === 'carousel') {
     const sourceSlides = toArrayOfObjects(blueprint.slides);
@@ -302,7 +305,9 @@ function normalizeCreatorAssetPayload(input: {
     return {
       asset_kind: 'image',
       visual_descriptor: {
-        headline: String(overlayText.headline ?? blueprint.headline ?? blueprint.title ?? blueprint.story_title ?? hookScene.text ?? firstScene.headline ?? firstScene.dialogue ?? fallbackHeadline),
+        headline: attachmentMode === 'supporting_visual'
+          ? fallbackHeadline
+          : String(overlayText.headline ?? blueprint.headline ?? blueprint.title ?? blueprint.story_title ?? hookScene.text ?? firstScene.headline ?? firstScene.dialogue ?? fallbackHeadline),
         visual_description: String(
           blueprint.visual_description ??
           blueprint.visual ??
@@ -317,6 +322,9 @@ function normalizeCreatorAssetPayload(input: {
         composition: String(blueprint.design_note ?? blueprint.layout ?? 'single focal composition'),
       },
       overlay_text: overlayText,
+      attachment_mode: attachmentMode || undefined,
+      asset_composition_intent: safeObject(input.creatorCard?.asset_composition_intent),
+      copy_policy: safeObject(input.creatorCard?.copy_policy),
       media_bundle: override,
     };
   }
@@ -712,6 +720,15 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
               tenant_id: intent.companyId ?? null,
               company_id: intent.companyId ?? null,
               user_id: intent.userId ?? null,
+              attachment_mode: intent.creatorCard?.attachment_mode ?? null,
+              writer_asset_type: intent.creatorCard?.writer_asset_type ?? null,
+              creator_content_asset_type: intent.creatorCard?.creator_content_asset_type ?? intent.contentType,
+              asset_composition_intent: safeObject(intent.creatorCard?.asset_composition_intent),
+              copy_policy: safeObject(intent.creatorCard?.copy_policy),
+              source_text_transform: intent.creatorCard?.source_text_transform ?? null,
+              infographic_layout: intent.creatorCard?.infographic_layout ?? null,
+              renderer_text_policy: intent.creatorCard?.renderer_text_policy ?? null,
+              thread_visual_transform: safeObject(intent.creatorCard?.thread_visual_transform),
               overlay_text: safeObject(intent.creatorCard?.overlay_text),
               selected_brand_assets: safeObject(safeObject(intent.creatorCard?.brand_context).overrides),
               brand_context: safeObject(intent.creatorCard?.brand_context),

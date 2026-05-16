@@ -11,6 +11,10 @@ type GrowthReportApiResponse = {
     value: null;
     label: null;
   };
+  market_analytics?: unknown;
+  search_analytics?: unknown;
+  analytics_health?: unknown;
+  enterprise_snapshot?: unknown;
   competitive_strategy_map?: unknown;
   strategic_position?: unknown;
   sections?: Array<{

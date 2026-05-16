@@ -5,11 +5,12 @@ import {
   type CompanyExecutionFlags,
 } from '@/backend/services/intentExecutionService';
 import {
-  DEFAULT_INTELLIGENCE_UNITS,
+  listIntelligenceUnits,
   listCompanyIntelligenceUnits,
 } from '@/backend/services/intelligenceUnitService';
 
 type ActivityNode = {
+  id: string;
   key: string;
   label: string;
   jobs: string[];
@@ -39,8 +40,9 @@ type ResponsePayload = {
 
 const GLOBAL_DEFAULT_PROFILE_ID = '__GLOBAL_DEFAULT__';
 
-const ACTIVITY_TREE: Array<{ key: keyof CompanyExecutionFlags['insights']; label: string; jobs: string[] }> = [
+const ACTIVITY_TREE: Array<{ id: string; key: keyof CompanyExecutionFlags['insights']; label: string; jobs: string[] }> = [
   {
+    id: 'market-trends',
     key: 'market_trends',
     label: 'Market Trends Engines',
     jobs: [
@@ -56,6 +58,7 @@ const ACTIVITY_TREE: Array<{ key: keyof CompanyExecutionFlags['insights']; label
     ],
   },
   {
+    id: 'competitor-tracking',
     key: 'competitor_tracking',
     label: 'Competitor Tracking Engines',
     jobs: [
@@ -64,6 +67,7 @@ const ACTIVITY_TREE: Array<{ key: keyof CompanyExecutionFlags['insights']; label
     ],
   },
   {
+    id: 'ai-recommendations',
     key: 'ai_recommendations',
     label: 'AI Recommendation Engines',
     jobs: [
@@ -81,6 +85,71 @@ const ACTIVITY_TREE: Array<{ key: keyof CompanyExecutionFlags['insights']; label
       'influencerLearning',
       'insightLearning',
       'buyerIntentLearning',
+    ],
+  },
+  {
+    id: 'engagement-ai',
+    key: 'ai_recommendations',
+    label: 'Engagement AI & Response Engines',
+    jobs: [
+      'engagement_reply_suggestions',
+      'responseGeneration',
+      'reply_generation',
+      'conversationTriage',
+      'conversationMemorySummary',
+      'sentiment_classification',
+      'community_execution',
+    ],
+  },
+  {
+    id: 'voice-conversation-ai',
+    key: 'ai_recommendations',
+    label: 'Voice & Conversational Capture',
+    jobs: [
+      'voice_transcription_whisper',
+      'voice_transcription_assemblyai',
+      'conversationTriage',
+      'conversationMemorySummary',
+    ],
+  },
+  {
+    id: 'company-profile-ai',
+    key: 'ai_recommendations',
+    label: 'Company Profile AI Setup',
+    jobs: [
+      'profileExtraction',
+      'profileEnrichment',
+      'refineProblemTransformation',
+      'define_target_customer',
+      'define_campaign_purpose',
+      'define_problem_transformation',
+      'define_marketing_intelligence',
+      'define_context_intelligence',
+      'generate_marketing_intelligence',
+    ],
+  },
+  {
+    id: 'creation-intelligence-ai',
+    key: 'ai_recommendations',
+    label: 'Creation & Insight Intelligence',
+    jobs: [
+      'contentSuggestions',
+      'generateContentIdeas',
+      'blogAnalyticsInsight',
+      'story_intelligence',
+      'whitepaper_intelligence',
+      'generateAdditionalStrategicThemes',
+    ],
+  },
+  {
+    id: 'background-ai-utilities',
+    key: 'ai_recommendations',
+    label: 'Background AI Utilities',
+    jobs: [
+      'embedding_generation',
+      'external_api_request',
+      'plannerSuggestUpdate',
+      'extractPlannerCommands',
     ],
   },
 ];
@@ -191,6 +260,7 @@ function toPayload(params: {
     insights: params.flags.insights,
     frequency: params.flags.frequency,
     activity: ACTIVITY_TREE.map((node) => ({
+      id: node.id,
       key: node.key,
       label: node.label,
       jobs: node.jobs,
@@ -264,106 +334,114 @@ function parseBody(body: unknown): {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'GET' && req.method !== 'PUT') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const body = parseBody(req.body);
-  const queryCompanyId = typeof req.query.companyId === 'string' ? req.query.companyId : undefined;
-  const queryMode = typeof req.query.mode === 'string' ? req.query.mode : undefined;
-  const mode = body.mode === 'global' || queryMode === 'global' ? 'global' : 'company';
-  const requestedCompanyId = body.companyId || queryCompanyId;
-
-  const access = await resolveAccess(user.id, requestedCompanyId, mode);
-  if (!access) {
-    return res.status(403).json({ error: 'Only company admins or super admins can access this setting' });
-  }
-
-  if (req.method === 'PUT') {
-    if (!access.canWrite) {
-      return res.status(403).json({ error: 'Forbidden' });
+  try {
+    if (req.method !== 'GET' && req.method !== 'PUT') {
+      return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    if (body.resetToDefault === true && mode === 'company') {
-      await resetCompanyOverrides(access.companyId);
+    const { user, error } = await getSupabaseUserFromRequest(req);
+    if (error || !user?.id) {
+      return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    if (body.insights || body.frequency) {
-      const currentFlags = rowToFlags(await getFlagsRow(access.companyId));
-      const nextFlags: CompanyExecutionFlags = {
-        insights: {
-          ...currentFlags.insights,
-          ...(body.insights ?? {}),
-        },
-        frequency: {
-          ...currentFlags.frequency,
-          ...(body.frequency ?? {}),
-        },
+    const body = parseBody(req.body);
+    const queryCompanyId = typeof req.query.companyId === 'string' ? req.query.companyId : undefined;
+    const queryMode = typeof req.query.mode === 'string' ? req.query.mode : undefined;
+    const mode = body.mode === 'global' || queryMode === 'global' ? 'global' : 'company';
+    const requestedCompanyId = body.companyId || queryCompanyId;
+
+    const access = await resolveAccess(user.id, requestedCompanyId, mode);
+    if (!access) {
+      return res.status(403).json({ error: 'Only company admins or super admins can access this setting' });
+    }
+
+    if (req.method === 'PUT') {
+      if (!access.canWrite) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+
+      if (body.resetToDefault === true && mode === 'company') {
+        await resetCompanyOverrides(access.companyId);
+      }
+
+      if (body.insights || body.frequency) {
+        const currentFlags = rowToFlags(await getFlagsRow(access.companyId));
+        const nextFlags: CompanyExecutionFlags = {
+          insights: {
+            ...currentFlags.insights,
+            ...(body.insights ?? {}),
+          },
+          frequency: {
+            ...currentFlags.frequency,
+            ...(body.frequency ?? {}),
+          },
+        };
+        await upsertFlags(access.companyId, nextFlags, user.id);
+      }
+
+      if (Array.isArray(body.units) && body.units.length > 0) {
+        await setCompanyUnitOverrides(
+          access.companyId,
+          body.units.filter((u) => typeof u?.id === 'string' && typeof u?.enabled === 'boolean')
+        );
+      }
+    }
+
+    const [globalFlagsRow, targetFlagsRow, baseUnits, targetUnitOverrides, availableCompanies] = await Promise.all([
+      getFlagsRow(GLOBAL_DEFAULT_PROFILE_ID),
+      getFlagsRow(access.companyId),
+      listIntelligenceUnits(),
+      mode === 'global' ? Promise.resolve(new Map<string, { enabled: boolean }>()) : getCompanyUnitOverrides(access.companyId),
+      access.isSuperAdmin && mode === 'company' ? listCompaniesForPicker() : Promise.resolve(undefined),
+    ]);
+
+    const globalFlags = rowToFlags(globalFlagsRow);
+    const targetFlags = rowToFlags(targetFlagsRow);
+
+    const resolvedFlags: CompanyExecutionFlags = mode === 'global'
+      ? targetFlags
+      : {
+          insights: {
+            market_trends: targetFlagsRow?.insights_market_trends === undefined ? globalFlags.insights.market_trends : targetFlags.insights.market_trends,
+            competitor_tracking: targetFlagsRow?.insights_competitor_tracking === undefined ? globalFlags.insights.competitor_tracking : targetFlags.insights.competitor_tracking,
+            ai_recommendations: targetFlagsRow?.insights_ai_recommendations === undefined ? globalFlags.insights.ai_recommendations : targetFlags.insights.ai_recommendations,
+          },
+          frequency: {
+            insights: targetFlagsRow?.frequency_insights === undefined ? globalFlags.frequency.insights : targetFlags.frequency.insights,
+          },
+        };
+
+    const resolvedUnits: IntelligenceUnitNode[] = baseUnits.map((unit) => {
+      const override = targetUnitOverrides.get(unit.id);
+      return {
+        id: unit.id,
+        name: unit.name,
+        category: unit.category,
+        report_tiers: unit.report_tiers,
+        enabled: mode === 'global' ? true : (override?.enabled ?? true),
       };
-      await upsertFlags(access.companyId, nextFlags, user.id);
-    }
+    });
 
-    if (Array.isArray(body.units) && body.units.length > 0) {
-      await setCompanyUnitOverrides(
-        access.companyId,
-        body.units.filter((u) => typeof u?.id === 'string' && typeof u?.enabled === 'boolean')
-      );
-    }
+    const hasExecutionOverride = mode === 'company' && !!targetFlagsRow;
+    const hasUnitsOverride = mode === 'company' && targetUnitOverrides.size > 0;
+    const hasCompanyOverrides = hasExecutionOverride || hasUnitsOverride;
+
+    return res.status(200).json(
+      toPayload({
+        companyId: access.companyId,
+        mode,
+        isSuperAdmin: access.isSuperAdmin,
+        availableCompanies,
+        hasCompanyOverrides,
+        flags: resolvedFlags,
+        units: resolvedUnits,
+      })
+    );
+  } catch (error) {
+    console.error('settings_intelligence_access_failed', error);
+    return res.status(500).json({
+      error: 'Failed to load company admin access settings',
+      details: error instanceof Error ? error.message : String(error),
+    });
   }
-
-  const [globalFlagsRow, targetFlagsRow, globalUnits, targetUnitOverrides, availableCompanies] = await Promise.all([
-    getFlagsRow(GLOBAL_DEFAULT_PROFILE_ID),
-    getFlagsRow(access.companyId),
-    listCompanyIntelligenceUnits(GLOBAL_DEFAULT_PROFILE_ID),
-    mode === 'global' ? Promise.resolve(new Map<string, { enabled: boolean }>()) : getCompanyUnitOverrides(access.companyId),
-    access.isSuperAdmin && mode === 'company' ? listCompaniesForPicker() : Promise.resolve(undefined),
-  ]);
-
-  const globalFlags = rowToFlags(globalFlagsRow);
-  const targetFlags = rowToFlags(targetFlagsRow);
-
-  const resolvedFlags: CompanyExecutionFlags = mode === 'global'
-    ? targetFlags
-    : {
-        insights: {
-          market_trends: targetFlagsRow?.insights_market_trends === undefined ? globalFlags.insights.market_trends : targetFlags.insights.market_trends,
-          competitor_tracking: targetFlagsRow?.insights_competitor_tracking === undefined ? globalFlags.insights.competitor_tracking : targetFlags.insights.competitor_tracking,
-          ai_recommendations: targetFlagsRow?.insights_ai_recommendations === undefined ? globalFlags.insights.ai_recommendations : targetFlags.insights.ai_recommendations,
-        },
-        frequency: {
-          insights: targetFlagsRow?.frequency_insights === undefined ? globalFlags.frequency.insights : targetFlags.frequency.insights,
-        },
-      };
-
-  const resolvedUnits: IntelligenceUnitNode[] = globalUnits.map((unit) => {
-    const override = targetUnitOverrides.get(unit.id);
-    return {
-      id: unit.id,
-      name: unit.name,
-      category: unit.category,
-      report_tiers: unit.report_tiers,
-      enabled: mode === 'global' ? unit.enabled : (override?.enabled ?? unit.enabled),
-    };
-  });
-
-  const hasExecutionOverride = mode === 'company' && !!targetFlagsRow;
-  const hasUnitsOverride = mode === 'company' && targetUnitOverrides.size > 0;
-  const hasCompanyOverrides = hasExecutionOverride || hasUnitsOverride;
-
-  return res.status(200).json(
-    toPayload({
-      companyId: access.companyId,
-      mode,
-      isSuperAdmin: access.isSuperAdmin,
-      availableCompanies,
-      hasCompanyOverrides,
-      flags: resolvedFlags,
-      units: resolvedUnits,
-    })
-  );
 }

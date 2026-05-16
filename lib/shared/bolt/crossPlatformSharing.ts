@@ -36,16 +36,29 @@ export type CrossPlatformShareableCreatorFormat =
   | 'video'
   | 'reel'
   | 'short'
-  | 'story'
-  | 'carousel';
+  | 'carousel'
+  | 'image'
+  | 'banner'
+  | 'infographic'
+  | 'pdf'
+  | 'slider';
 
+// Image-class assets (image / banner / infographic / pdf / slider) ARE
+// cross-platform shareable: the same banner or infographic uploaded to
+// LinkedIn + Instagram + Facebook from a single brief is the user's
+// intent. The earlier exclusion ("one upload isn't really sharing")
+// blocked the Shared mode whenever any image-class format was picked.
 export const FORMATS_SUPPORTING_CROSS_PLATFORM: ReadonlySet<CrossPlatformShareableCreatorFormat> =
   new Set<CrossPlatformShareableCreatorFormat>([
     'video',
     'reel',
     'short',
-    'story',
     'carousel',
+    'image',
+    'banner',
+    'infographic',
+    'pdf',
+    'slider',
   ]);
 
 /**

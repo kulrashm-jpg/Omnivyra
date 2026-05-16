@@ -303,6 +303,34 @@ export type CompanyProfile = {
         threshold_met?: boolean | null;
         detail_mode?: 'high_confidence' | 'expanded_context' | null;
       } | null;
+      unified_competitor_intelligence?: {
+        status: 'ready' | 'limited' | 'unavailable';
+        generated_at: string;
+        summary: string;
+        competitors: Array<{
+          name: string;
+          domain?: string | null;
+          sources: string[];
+          confidence: 'high' | 'medium' | 'low';
+          freshness: 'fresh' | 'aging' | 'stale' | 'unverified';
+          latest_evidence_at?: string | null;
+          scores: Record<string, number>;
+          evidence_refs: string[];
+          evidence: Record<string, unknown>;
+        }>;
+        opportunities: Array<{
+          id: string;
+          type: string;
+          title: string;
+          competitor_domain?: string | null;
+          priority_score: number;
+          confidence: 'high' | 'medium' | 'low';
+          recommendation: string;
+          evidence_refs: string[];
+          evidence: Record<string, unknown>;
+        }>;
+        quality: Record<string, number>;
+      } | null;
       market_alternatives?: Array<{
         name: string;
         domain?: string | null;

@@ -15,14 +15,16 @@ import type { BOLTProgress } from '../components/BOLTProgressModal';
 import { readCampaignSourcePayload } from '../lib/content/launchCampaignFromContent';
 import { useBoltPlatformPicker } from './useBoltPlatformPicker';
 import { FORMATS_SUPPORTING_CROSS_PLATFORM } from '../lib/shared/bolt/crossPlatformSharing';
+import { CREATOR_FORMAT_CAPABILITY, type CreatorContentFormat } from '../lib/shared/bolt/creatorFormatCapability';
+import { platformSupportsCapability } from '../lib/shared/social/platformCapabilities';
 import {
   getCreatorGovernance,
+  isAttachmentRequiredFormat,
+  isAutonomousRenderableFormat,
   isDailyPlanOnlyFormat,
   isGuidanceOnlyFormat,
   supportsAutonomousExecution,
 } from '../lib/shared/creatorGovernanceRegistry';
-
-type CreatorContentFormat = 'video' | 'reel' | 'carousel' | 'image' | 'podcast' | 'short' | 'story' | 'banner' | 'infographic' | 'pdf' | 'slider' | 'post' | 'thread';
 type ThemeSource = 'hybrid' | 'api' | 'ai';
 type OutcomeView = 'week_plan' | 'daily_plan' | 'schedule';
 type SharingMode = 'shared' | 'unique' | 'ai';
@@ -40,23 +42,16 @@ const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
 // (non-capability) rationale.
 
 const CONTENT_FORMATS: { value: CreatorContentFormat; label: string; icon: string; hint: string }[] = [
-  { value: 'video',    label: 'Video',    icon: '🎬', hint: 'Long-form video content' },
-  { value: 'reel',     label: 'Reel',     icon: '🎥', hint: 'Short vertical video (15–90s)' },
-  { value: 'carousel', label: 'Carousel', icon: '🖼️', hint: 'Multi-slide visual story' },
-  { value: 'image',    label: 'Image',    icon: '📸', hint: 'Static photo or graphic' },
-  { value: 'podcast',  label: 'Podcast',  icon: '🎙️', hint: 'Audio episode or clip' },
-  { value: 'short',    label: 'Short',    icon: '⚡', hint: 'YouTube / TikTok short' },
-  { value: 'story',    label: 'Story',    icon: '📱', hint: '24hr ephemeral story format' },
+  { value: 'video',       label: 'Video',       icon: '🎬', hint: 'Long-form video content' },
+  { value: 'reel',        label: 'Reel',        icon: '🎥', hint: 'Short vertical video (15–90s)' },
+  { value: 'short',       label: 'Short',       icon: '⚡', hint: 'YouTube / TikTok short' },
+  { value: 'carousel',    label: 'Carousel',    icon: '🖼️', hint: 'Multi-slide visual story' },
+  { value: 'image',       label: 'Image',       icon: '📸', hint: 'Static photo or graphic' },
+  { value: 'banner',      label: 'Banner',      icon: '🎨', hint: 'Promotional visual asset' },
+  { value: 'infographic', label: 'Infographic', icon: '📊', hint: 'Visual explainer asset' },
+  { value: 'pdf',         label: 'PDF',         icon: '📄', hint: 'Document-style creator asset' },
+  { value: 'slider',      label: 'Slider',      icon: '🎞️', hint: 'Presentation-style slide asset' },
 ];
-
-CONTENT_FORMATS.push(
-  { value: 'banner',   label: 'Banner',   icon: 'Banner', hint: 'Promotional visual asset' },
-  { value: 'infographic', label: 'Infographic', icon: 'Info', hint: 'Visual explainer asset' },
-  { value: 'pdf',      label: 'PDF',      icon: 'PDF', hint: 'Document-style creator asset' },
-  { value: 'slider',   label: 'Slider',   icon: 'Slide', hint: 'Presentation-style slide asset' },
-  { value: 'post',     label: 'Post',     icon: 'Post', hint: 'Platform-ready creator post' },
-  { value: 'thread',   label: 'Thread',   icon: 'Thread', hint: 'Connected social sequence' },
-);
 
 const DURATION_OPTIONS = [
   { value: 1, label: '1 Week' },
@@ -345,6 +340,28 @@ export function useBoltCreator() {
   const [goals, setGoals] = useState<string[]>([]);
   const [audience, setAudience] = useState<string[]>([]);
   const [strategicFocus, setStrategicFocus] = useState<string[]>([]);
+
+  // ── AI Chat memory + suggestion-apply (parity with BOLT Text) ─────────
+  // The shared BoltCampaignChat now supports a full Campaign Brief
+  // suggestion shape (topic + description + goals[] + tone[] + audience)
+  // and a persistent memory of accepted directions. BOLT Creator's form
+  // currently exposes only topic / goals / audience as input fields, so
+  // we apply ONLY those — description / tone returned by the AI are
+  // stored in memory (so the prompt knows what the user accepted) but
+  // not auto-injected anywhere visible. When/if Creator gets dedicated
+  // Description + Tone fields, just wire setters in below.
+  type AcceptedSuggestion = {
+    topic: string;
+    description?: string;
+    goals?: string[];
+    tone?: string[];
+    audience?: string;
+    acceptedAt: string;
+  };
+  const MAX_ACCEPTED_SUGGESTIONS = 8;
+  const CAMPAIGN_MEMORY_VERSION = 1;
+  const [acceptedSuggestions, setAcceptedSuggestions] = useState<AcceptedSuggestion[]>([]);
+  const [memoryUpdatedAt, setMemoryUpdatedAt] = useState<string | null>(null);
   const [offerings, setOfferings] = useState<string[]>([]);
   const [contentFormats, setContentFormats] = useState<CreatorContentFormat[]>([]);
   const [formatFrequency, setFormatFrequency] = useState<Partial<Record<CreatorContentFormat, number>>>({});
@@ -363,6 +380,36 @@ export function useBoltCreator() {
       return filtered.length > 0 ? filtered : platformPicker.supported;
     });
   }, [platformPicker.loading, platformPicker.supported]);
+
+  // ── Format-aware platform reconciliation ──────────────────────────────────
+  // The per-format picker in BoltCreatorView visually hides platforms that
+  // can't publish any of the currently-selected formats (e.g. YouTube when
+  // only `image` is selected). The view's `selected={selectedPlatforms.filter(
+  // ...)}` only filters the DISPLAY, leaving the underlying state with the
+  // now-incompatible platforms still selected. That's the source of the
+  // "instagram, youtube, facebook for an image campaign" → constraint-violation
+  // we just hit: YouTube was hidden but never deselected, then sent to the
+  // executor as a chosen platform.
+  //
+  // This effect prunes `selectedPlatforms` to the union of platforms that
+  // can publish AT LEAST ONE of the currently-selected formats' canonical
+  // capabilities. Runs whenever the user changes content formats.
+  useEffect(() => {
+    if (contentFormats.length === 0) return;
+    const caps = Array.from(
+      new Set(
+        contentFormats
+          .map((f) => CREATOR_FORMAT_CAPABILITY[f as CreatorContentFormat])
+          .filter(Boolean),
+      ),
+    );
+    if (caps.length === 0) return;
+    setSelectedPlatforms((prev) => {
+      const next = prev.filter((p) => caps.some((c) => platformSupportsCapability(p, c)));
+      // Prevent state churn — only commit when something actually changed.
+      return next.length === prev.length && next.every((p, i) => p === prev[i]) ? prev : next;
+    });
+  }, [contentFormats]);
 
   const [campaignStartDate, setCampaignStartDate] = useState<string>(
     () => new Date().toISOString().split('T')[0]
@@ -385,15 +432,30 @@ export function useBoltCreator() {
   const selectedGovernance = contentFormats
     .map((format) => getCreatorGovernance(format))
     .filter(Boolean);
-  const hasGuidanceOnlyFormats = contentFormats.some((format) => isGuidanceOnlyFormat(format) || isDailyPlanOnlyFormat(format));
+  // Per-row eligibility model: scheduling is available as long as AT LEAST
+  // ONE selected format is autonomous-renderable. Attachment-required
+  // formats (video/reel/short/podcast) no longer disable scheduling — they
+  // hold individually in `awaiting_media_upload` while autonomous rows
+  // schedule normally.
+  const hasAttachmentRequiredFormats = contentFormats.some((format) => isAttachmentRequiredFormat(format));
+  const hasAutonomousRenderableFormats = contentFormats.some((format) => isAutonomousRenderableFormat(format));
   const supportsScheduling =
     contentFormats.length > 0 &&
     selectedGovernance.length === contentFormats.length &&
-    contentFormats.every((format) => getCreatorGovernance(format)?.schedulable === true) &&
-    !hasGuidanceOnlyFormats;
+    hasAutonomousRenderableFormats;
   const supportsAutonomousCreatorExecution =
     contentFormats.length > 0 &&
     contentFormats.some((format) => supportsAutonomousExecution(format));
+  // Telemetry / UI hint surface (no veto): `hasGuidanceOnlyFormats` is now
+  // an alias for `hasAttachmentRequiredFormats`. The legacy `guidance_only`
+  // flag is no longer true for the four attachment-required formats after
+  // the per-row eligibility refactor, so the UI consumer (BoltCreatorView)
+  // needs the new signal to render the mixed-mode helper copy correctly.
+  // The legacy helpers stay imported for ad-hoc callers that haven't
+  // migrated.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _legacyGuidanceFlag = contentFormats.some((format) => isGuidanceOnlyFormat(format) || isDailyPlanOnlyFormat(format));
+  const hasGuidanceOnlyFormats = hasAttachmentRequiredFormats;
 
   useEffect(() => {
     if (!supportsScheduling && outcomeView === 'schedule') {
@@ -435,6 +497,25 @@ export function useBoltCreator() {
       if (s.outcomeView)       setOutcomeView(s.outcomeView);
       if (s.campaignStartDate) setCampaignStartDate(s.campaignStartDate);
       if (s.selectedPlatforms) setSelectedPlatforms(s.selectedPlatforms);
+
+      // Campaign Memory restore — same shape BOLT Text uses. Fails soft
+      // if the stored payload pre-dates this addition (old sessions just
+      // start with an empty memory).
+      if (
+        s.campaignMemory &&
+        typeof s.campaignMemory === 'object' &&
+        Array.isArray(s.campaignMemory.acceptedSuggestions)
+      ) {
+        const cleaned: AcceptedSuggestion[] = s.campaignMemory.acceptedSuggestions
+          .filter((entry: unknown): entry is AcceptedSuggestion =>
+            !!entry && typeof entry === 'object' && typeof (entry as { topic?: unknown }).topic === 'string'
+          )
+          .slice(0, MAX_ACCEPTED_SUGGESTIONS);
+        setAcceptedSuggestions(cleaned);
+        if (typeof s.campaignMemory.updatedAt === 'string') {
+          setMemoryUpdatedAt(s.campaignMemory.updatedAt);
+        }
+      }
     } catch {}
   }, []);
 
@@ -451,9 +532,16 @@ export function useBoltCreator() {
         topic, goals, audience, strategicFocus, offerings,
         contentFormats, formatFrequency, duration, themeSource,
         cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms,
+        // Same memory shape BOLT Text persists — versioned so future
+        // shape migrations can branch on it.
+        campaignMemory: {
+          version: CAMPAIGN_MEMORY_VERSION,
+          updatedAt: memoryUpdatedAt,
+          acceptedSuggestions,
+        },
       }));
     } catch {}
-  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms]);
+  }, [topic, goals, audience, strategicFocus, offerings, contentFormats, formatFrequency, duration, themeSource, cards, hasGenerated, outcomeView, sharingMode, campaignStartDate, selectedPlatforms, acceptedSuggestions, memoryUpdatedAt]);
 
   useEffect(() => {
     if (authChecked && !user?.userId) router.replace('/login');
@@ -477,6 +565,61 @@ export function useBoltCreator() {
   const _ef2 = !user?.userId;
 
   function toggleGoal(g: string) { setGoals((p) => p.includes(g) ? p.filter((x) => x !== g) : [...p, g]); }
+
+  /**
+   * Apply an AI Chat suggestion (parity with BOLT Text). The shared
+   * BoltCampaignChat passes a full Campaign Brief shape — we apply the
+   * fields Creator's form actually exposes and ALWAYS record the
+   * acceptance in memory so subsequent chat turns build on / diversify
+   * accepted directions instead of restarting ideation.
+   *
+   * Description and tone are not auto-applied today (Creator's form
+   * doesn't surface them). They're still stored in memory so the AI
+   * sees what the user accepted and respects the direction.
+   */
+  function applyChatSuggestion(suggestion: {
+    topic: string;
+    description?: string;
+    goals?: string[];
+    tone?: string[];
+    audience?: string;
+  }) {
+    if (suggestion.topic) setTopic(suggestion.topic);
+    if (Array.isArray(suggestion.goals) && suggestion.goals.length > 0) setGoals(suggestion.goals);
+    // Creator's audience is multi-select chips, while the AI returns a
+    // free-form string. Split on commas / semicolons so a comma-separated
+    // suggestion ("Series-A SaaS founders, HR leaders") populates two chips.
+    if (typeof suggestion.audience === 'string' && suggestion.audience.trim()) {
+      const tokens = suggestion.audience
+        .split(/[,;]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (tokens.length > 0) setAudience(tokens);
+    }
+
+    setAcceptedSuggestions((prev) => {
+      const entry: AcceptedSuggestion = {
+        topic: suggestion.topic,
+        description: suggestion.description?.trim() || undefined,
+        goals: Array.isArray(suggestion.goals) && suggestion.goals.length > 0 ? suggestion.goals : undefined,
+        tone: Array.isArray(suggestion.tone) && suggestion.tone.length > 0 ? suggestion.tone : undefined,
+        audience: suggestion.audience?.trim() || undefined,
+        acceptedAt: new Date().toISOString(),
+      };
+      // De-dupe on topic — repeated acceptance of the same suggestion
+      // doesn't fill memory with identical entries. Newest wins.
+      const filtered = prev.filter((p) => p.topic !== entry.topic);
+      return [...filtered, entry].slice(-MAX_ACCEPTED_SUGGESTIONS);
+    });
+    setMemoryUpdatedAt(new Date().toISOString());
+  }
+
+  /** "Reset AI Direction" — clears conversational memory without touching
+   *  the user's form fields. The chat clears its own local history. */
+  function resetCampaignMemory() {
+    setAcceptedSuggestions([]);
+    setMemoryUpdatedAt(new Date().toISOString());
+  }
   function toggleFocus(f: string) { setStrategicFocus((p) => p.includes(f) ? p.filter((x) => x !== f) : [...p, f]); }
   function toggleAudience(a: string) { setAudience((p) => p.includes(a) ? p.filter((x) => x !== a) : [...p, a]); }
 
@@ -701,6 +844,10 @@ export function useBoltCreator() {
   return {
     _ef1,
     _ef2,
+    acceptedSuggestions,
+    memoryUpdatedAt,
+    resetCampaignMemory,
+    applyChatSuggestion,
     applySuggestion,
     audience,
     authChecked,

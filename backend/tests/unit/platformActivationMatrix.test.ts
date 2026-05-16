@@ -67,8 +67,8 @@ describe('resolveContentCapabilitySet', () => {
     expect(set.has('image')).toBe(true);
   });
 
-  it('treats banner + infographic as image-class', () => {
-    for (const assetType of ['image', 'banner', 'infographic']) {
+  it('treats supporting image, banner, infographic, and brand card as image-class', () => {
+    for (const assetType of ['supporting_image', 'image', 'banner', 'infographic', 'brand_card']) {
       const set = new Set(resolveContentCapabilitySet({
         contentType: 'post',
         attachedAssetTypes: [assetType],
@@ -137,6 +137,13 @@ describe('filterConnectedPlatformsForContent — Post matrix', () => {
     expect([...a].sort()).toEqual([...b].sort());
   });
 
+  it('standalone Infographic: normalizes as image-class content', () => {
+    const active = activeOn({ contentType: 'infographic' });
+    expect(active.has('instagram')).toBe(true);
+    expect(active.has('pinterest')).toBe(true);
+    expect(active.has('linkedin')).toBe(true);
+  });
+
   it('Post + carousel: Instagram + Pinterest + carousel-supporting platforms', () => {
     const active = activeOn({ contentType: 'post', attachedAssetTypes: ['carousel'] });
     expect(active.has('instagram')).toBe(true);
@@ -165,6 +172,13 @@ describe('filterConnectedPlatformsForContent — Thread matrix', () => {
 
   it('Thread + image: Instagram + Pinterest light up', () => {
     const active = activeOn({ contentType: 'thread', attachedAssetTypes: ['image'] });
+    expect(active.has('instagram')).toBe(true);
+    expect(active.has('pinterest')).toBe(true);
+    expect(active.has('linkedin')).toBe(true);
+  });
+
+  it('Thread + infographic: Instagram + Pinterest light up', () => {
+    const active = activeOn({ contentType: 'thread', attachedAssetTypes: ['infographic'] });
     expect(active.has('instagram')).toBe(true);
     expect(active.has('pinterest')).toBe(true);
     expect(active.has('linkedin')).toBe(true);

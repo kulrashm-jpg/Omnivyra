@@ -130,8 +130,8 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       },
       {
         label: 'Market Pulse',
-        description: 'Watch trends and engagement movement.',
-        href: '/dashboard/intelligence?intelTab=market-pulse',
+        description: 'Open the executive MarketPulse intelligence room.',
+        href: '/market-pulse',
         icon: Lightbulb,
       },
       {

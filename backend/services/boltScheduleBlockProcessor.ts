@@ -1,4 +1,8 @@
 import { ownedDbTable } from '../db/writeOwner';
+import {
+  makeScheduledPostIdempotencyKey,
+  isIdempotencyCollision,
+} from './boltScheduleIdempotency';
 /**
  * BOLT Schedule Block Processor
  *
@@ -637,6 +641,19 @@ async function executeBlockScheduleRuntime(
         }
 
         // ── Insert scheduled_post immediately ───────────────────────────────
+        // The deterministic idempotency_key + partial unique index makes
+        // this insert retry-safe: a resumed pipeline or a retry of this
+        // exact (row, platform) hits the unique constraint instead of
+        // creating a duplicate scheduled_post. repurpose.index is part
+        // of the sequence so multi-post-per-day campaigns disambiguate.
+        const idempotencyKey = makeScheduledPostIdempotencyKey({
+          campaignId,
+          weekNumber: Number(row.week_number ?? 0),
+          dayOfWeek: String(row.day_of_week ?? ''),
+          platform,
+          contentType: rowContentType,
+          sequence: Math.max(0, Number(repurpose.index ?? 1) - 1),
+        });
         const { data: inserted, error: insertError } = await ownedDbTable('scheduled_posts').insert({
           user_id:           campaign.user_id,
           social_account_id: socialAccountId,
@@ -649,11 +666,23 @@ async function executeBlockScheduleRuntime(
           status:            postStatus,
           repurpose_index:   repurpose.index,
           repurpose_total:   repurpose.total,
+          idempotency_key:   idempotencyKey,
           created_at:        new Date().toISOString(),
           updated_at:        new Date().toISOString(),
         }).select('id').maybeSingle();
 
         if (insertError) {
+          // Idempotency collision = a prior run / retry already
+          // scheduled THIS exact post. Treat as success-by-prior-run:
+          // log as skipped (don't increment failures), don't blame
+          // the platform, and move on.
+          if (isIdempotencyCollision(insertError)) {
+            console.info('[block-processor] idempotency-skip (already scheduled by prior run)', {
+              platform, topic, idempotencyKey,
+            });
+            blockSkipped++;
+            continue;
+          }
           if (!skippedPlatforms.includes(platform)) skippedPlatforms.push(platform);
           blockSkipped++;
           console.warn('[block-processor] Insert failed for', platform, topic, insertError.message);

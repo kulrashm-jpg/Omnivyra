@@ -43,7 +43,11 @@ export async function resolveExecutionContext(args: {
   const tryFullPipeline = async () => {
     const { snapshot, snapshot_hash } = await buildCampaignSnapshotWithHash(input.campaignId);
     const [viralityAssessment, platformStrategiesResult] = await Promise.all([
-      assessVirality(input.campaignId, { snapshot, snapshot_hash }),
+      assessVirality(input.campaignId, {
+        snapshot,
+        snapshot_hash,
+        organizationId: versionRow?.company_id ?? null,
+      }),
       getPlatformStrategies().catch((e) => {
         console.warn('getPlatformStrategies failed, using defaults:', e);
         return DEFAULT_PLATFORM_STRATEGIES;

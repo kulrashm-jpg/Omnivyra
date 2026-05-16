@@ -119,7 +119,7 @@ export async function processRecommendationJobV2(jobId: string): Promise<void> {
     await ownedDbTable('recommendation_jobs_v2').update({ progress_stage: 'CONSOLIDATING', updated_at: new Date().toISOString() }).eq('id', jobId);
     const consolidated =
       successCount > 0
-        ? await consolidateRegionalResults(successfulResults)
+        ? await consolidateRegionalResults(successfulResults, { organizationId: companyId })
         : { global_opportunities: [], region_specific_insights: {}, execution_priority_order: [], consolidated_risks: [], strategic_summary: '', confidence_index: 0 };
 
     await ownedDbTable('recommendation_jobs_v2')

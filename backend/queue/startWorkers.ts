@@ -36,6 +36,9 @@ let boltWorker: ReturnType<typeof getWorker>;
 let engagementWorker: ReturnType<typeof getWorker>;
 let engineWorker: ReturnType<typeof getWorker>;
 let intelligencePollingWorker: ReturnType<typeof getIntelligencePollingWorker>;
+let listeningExecutionWorker: ReturnType<typeof getWorker>;
+let semanticIndexingWorker: ReturnType<typeof getWorker>;
+let replayPartitionWorker: ReturnType<typeof getWorker>;
 
 const shutdown = async () => {
   await publishWorker?.close?.();
@@ -43,6 +46,9 @@ const shutdown = async () => {
   await boltWorker?.close?.();
   await engineWorker?.close?.();
   await intelligencePollingWorker?.close?.();
+  await listeningExecutionWorker?.close?.();
+  await semanticIndexingWorker?.close?.();
+  await replayPartitionWorker?.close?.();
   process.exit(0);
 };
 
@@ -116,6 +122,7 @@ export async function startWorkers(): Promise<void> {
   // and MARKET_PULSE failures retain their existing logging.
   try {
     const { buildLeadJobFailureMetadata } = await import('./leadQueueHardening');
+    const { recordLeadJobFailure } = await import('./leadQueueObservability');
     engineWorker.on('failed', (job, err) => {
       if (!job) return;
       const data = job.data as { type?: string } | undefined;
@@ -129,7 +136,14 @@ export async function startWorkers(): Promise<void> {
         stack: err?.stack ?? null,
         data: job.data,
       });
-      console.warn('[lead-job-failed]', JSON.stringify(meta));
+      const { category } = recordLeadJobFailure({
+        jobId: String(job.id ?? 'unknown'),
+        reason: err?.message ?? null,
+      });
+      console.warn(
+        '[lead-job-failed]',
+        JSON.stringify({ category, ...meta }),
+      );
     });
   } catch (e) {
     _diag('startWorkers:lead-failed-handler-attach-failed', {
@@ -137,6 +151,71 @@ export async function startWorkers(): Promise<void> {
     });
   }
   intelligencePollingWorker = getIntelligencePollingWorker();
+
+  // Phase 3 — listening-executions worker. Bounded; one execution per source
+  // at a time per the DB UNIQUE partial index. Concurrency 2 across the org
+  // pool keeps a single rogue source from starving others.
+  try {
+    const { LISTENING_EXECUTION_QUEUE_NAME } = await import('./listeningExecutionQueue');
+    const { processListeningExecution } = await import('../services/listeningExecutionService');
+    listeningExecutionWorker = getWorker(
+      LISTENING_EXECUTION_QUEUE_NAME,
+      async (job) => {
+        const data = job.data as { executionId?: string } | undefined;
+        if (!data?.executionId) return;
+        await processListeningExecution(data.executionId);
+      },
+      { concurrency: 2 },
+    );
+    console.log('[workers] listening-executions worker started');
+  } catch (e) {
+    _diag('startWorkers:listeningExecutionWorker-attach-failed', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  // Phase 9 — semantic indexing partition worker. Bounded concurrency so a
+  // single large job cannot starve the rest of the system; per-partition
+  // jobId is deterministic so re-enqueue is idempotent.
+  try {
+    const { SEMANTIC_PARTITION_QUEUE_NAME } = await import('./semanticIndexingQueue');
+    const { processSemanticPartition } = await import('../services/asyncSemanticRuntimeService');
+    semanticIndexingWorker = getWorker(
+      SEMANTIC_PARTITION_QUEUE_NAME,
+      async (job) => {
+        const data = job.data as { partitionId?: string } | undefined;
+        if (!data?.partitionId) return;
+        await processSemanticPartition(data.partitionId);
+      },
+      { concurrency: 2 },
+    );
+    console.log('[workers] semantic-indexing worker started');
+  } catch (e) {
+    _diag('startWorkers:semanticIndexingWorker-attach-failed', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  // Phase 9 — replay partition worker. Same bounded-concurrency model;
+  // partitions hold their own checkpoints so failures are recoverable.
+  try {
+    const { REPLAY_PARTITION_QUEUE_NAME } = await import('./replayPartitionQueue');
+    const { processReplayPartition } = await import('../services/replayCoordinationService');
+    replayPartitionWorker = getWorker(
+      REPLAY_PARTITION_QUEUE_NAME,
+      async (job) => {
+        const data = job.data as { partitionId?: string } | undefined;
+        if (!data?.partitionId) return;
+        await processReplayPartition(data.partitionId);
+      },
+      { concurrency: 2 },
+    );
+    console.log('[workers] replay-partition worker started');
+  } catch (e) {
+    _diag('startWorkers:replayPartitionWorker-attach-failed', {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

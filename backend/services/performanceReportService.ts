@@ -22,6 +22,9 @@ import { buildPublicDomainAuditDecisions } from './publicDomainAuditService';
 import { buildDecisionBusinessImpact } from './businessImpactFormatter';
 import { getAnalyticsReadiness } from './analyticsDataReadinessService';
 import { getGoogleProviderReadiness } from './googleProviderReadinessService';
+import { getAnalyticsHealthSummary, type AnalyticsHealthSummary } from './analyticsHealthService';
+import { getAnalyticsEnterpriseSnapshot, type AnalyticsEnterpriseSnapshot } from './analyticsEnterpriseSnapshotService';
+import { runDedupedReport, type ReportConcurrencyMetadata } from './reportConcurrencyService';
 import {
   getTrafficSources,
   getTopPages,
@@ -351,6 +354,13 @@ export interface BehaviorReportData {
   conversions:     ConversionSummary;
   insights:        BehaviorInsight[];
   recommendations: BehaviorRecommendation[];
+  analytics_provenance: {
+    source: 'ga_canonical_ingestion' | 'upload_manual_entry' | 'fallback_no_analytics';
+    readiness_status: string;
+    last_successful_ingestion_at: string | null;
+    events_last_30_days: number;
+    confidence: 'none' | 'low' | 'medium' | 'high';
+  };
 }
 
 export type BehaviorReportResponse =
@@ -364,6 +374,7 @@ export type BehaviorReportResponse =
         events_last_30_days: number;
         confidence: 'none' | 'low' | 'medium' | 'high';
       };
+      analytics_provenance: BehaviorReportData['analytics_provenance'];
     }
   | ({ status: 'partial'; generated_at: string; window_days: number; warnings: string[] } & BehaviorReportData)
   | ({ status: 'ready'; generated_at: string; window_days: number; warnings: string[] } & BehaviorReportData);
@@ -380,7 +391,12 @@ export type PerformanceIntelligenceReportResponse =
         events_last_30_days: number;
         confidence: 'none' | 'low' | 'medium' | 'high';
       };
+      analytics_provenance: BehaviorReportData['analytics_provenance'];
       provider_readiness?: Awaited<ReturnType<typeof getGoogleProviderReadiness>>;
+      analytics_health?: AnalyticsHealthSummary;
+      enterprise_snapshot?: AnalyticsEnterpriseSnapshot;
+      stage_timings_ms?: Record<string, number>;
+      concurrency?: ReportConcurrencyMetadata;
       html: string;
     }
   | {
@@ -394,6 +410,10 @@ export type PerformanceIntelligenceReportResponse =
       mapped_data: PerformanceReportMappedData;
       html: string;
       provider_readiness?: Awaited<ReturnType<typeof getGoogleProviderReadiness>>;
+      analytics_health?: AnalyticsHealthSummary;
+      enterprise_snapshot?: AnalyticsEnterpriseSnapshot;
+      stage_timings_ms?: Record<string, number>;
+      concurrency?: ReportConcurrencyMetadata;
       source_data: BehaviorReportData;
       snapshot_foundation?: PerformanceSnapshotFoundation | null;
       search_intelligence?: PerformanceSearchIntelligence;
@@ -407,6 +427,98 @@ type ReadyBehaviorReportResponse = Extract<BehaviorReportResponse, { status: 're
 
 function isReadyBehaviorReportResponse(value: BehaviorReportResponse): value is ReadyBehaviorReportResponse {
   return value.status === 'ready' || value.status === 'partial';
+}
+
+function elapsedSince(start: number): number {
+  return Math.round(performance.now() - start);
+}
+
+function escapePerformanceText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderEnterpriseMarketIntelligence(snapshot: AnalyticsEnterpriseSnapshot | null): string {
+  if (!snapshot) return '';
+  const external = snapshot.external_competitive_intelligence;
+  const authority = snapshot.authority_market_position;
+  const leadGen = snapshot.lead_generation_authority_intelligence;
+  const unifiedCompetitors = snapshot.unified_competitor_intelligence.competitors.slice(0, 3);
+  const competitorOpportunities = snapshot.unified_competitor_intelligence.opportunities.slice(0, 3);
+  const recommendations = snapshot.recommendation_intelligence.recommendations.slice(0, 3);
+  const signals = [
+    ...external.signals.slice(0, 3).map((signal) => ({
+      title: signal.title,
+      meta: `${signal.provenance}; confidence ${signal.confidence}; score ${signal.score}`,
+    })),
+    ...leadGen.signals.slice(0, 3).map((signal) => ({
+      title: signal.title,
+      meta: `${signal.type}; confidence ${signal.confidence}; priority ${signal.priority_score}`,
+    })),
+    ...unifiedCompetitors.map((competitor) => ({
+      title: `${competitor.name} competitor benchmark`,
+      meta: `priority ${competitor.scores.strategic_priority}; threat ${competitor.scores.discoverability_threat}; ${competitor.confidence} confidence`,
+    })),
+    ...competitorOpportunities.map((opportunity) => ({
+      title: opportunity.title,
+      meta: `${opportunity.type}; priority ${opportunity.priority_score}; ${opportunity.confidence} confidence`,
+    })),
+  ];
+
+  if (!signals.length && !recommendations.length && external.status !== 'ready') {
+    return `
+      <section class="perf-section">
+        <h2>Enterprise Market Intelligence</h2>
+        <p class="perf-section-subtitle">${escapePerformanceText(external.summary)}</p>
+        <div class="perf-empty">External SERP evidence is not populated yet. Performance recommendations remain limited to canonical GA/GSC evidence.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="perf-section">
+      <h2>Enterprise Market Intelligence</h2>
+      <p class="perf-section-subtitle">
+        Authority score ${escapePerformanceText(authority.domain_authority_trajectory_score)}; market position ${escapePerformanceText(authority.market_position_score)}; visibility moat ${escapePerformanceText(authority.visibility_moat)}.
+      </p>
+      <div class="perf-list">
+        ${signals.map((signal) => `
+          <div class="perf-list-item">
+            <strong>${escapePerformanceText(signal.title)}</strong>
+            <div class="perf-list-meta">${escapePerformanceText(signal.meta)}</div>
+          </div>
+        `).join('')}
+        ${recommendations.map((rec) => `
+          <div class="perf-list-item">
+            <strong>${escapePerformanceText(rec.title)}</strong>
+            <div class="perf-list-meta">${escapePerformanceText(rec.business_impact)}; ${escapePerformanceText(rec.strategic_urgency)} urgency; ${escapePerformanceText(rec.confidence)} confidence</div>
+            <p class="perf-card-note">${escapePerformanceText(rec.action)}</p>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+async function withReportTimeout<T>(label: string, promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn('[performance-report][stage-timeout]', { stage: label, timeout_ms: timeoutMs });
+          resolve(null);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function buildSnapshotFoundationForPerformance(params: {
@@ -485,6 +597,13 @@ export async function composeBehaviorReport(
         ? 'Google Analytics sync is still in progress'
         : 'No analytics data available',
       readiness,
+      analytics_provenance: {
+        source: 'fallback_no_analytics',
+        readiness_status: readiness.status,
+        last_successful_ingestion_at: readiness.last_successful_ingestion_at,
+        events_last_30_days: readiness.events_last_30_days,
+        confidence: readiness.confidence,
+      },
     };
   }
 
@@ -538,6 +657,13 @@ export async function composeBehaviorReport(
     conversions,
     insights,
     recommendations,
+    analytics_provenance: {
+      source: readiness.last_successful_ingestion_at ? 'ga_canonical_ingestion' : 'fallback_no_analytics',
+      readiness_status: readiness.status,
+      last_successful_ingestion_at: readiness.last_successful_ingestion_at,
+      events_last_30_days: readiness.events_last_30_days,
+      confidence: readiness.confidence,
+    },
   };
 }
 
@@ -552,12 +678,57 @@ export function renderPerformanceReport(
   return renderPerformanceDocument(renderedSections, meta);
 }
 
-export async function composePerformanceIntelligenceReport(
+async function composePerformanceIntelligenceReportInternal(
   companyId: string,
   opts?: PerformanceIntelligenceOptions,
 ): Promise<PerformanceIntelligenceReportResponse> {
+  const reportStarted = performance.now();
+  const stageTimings: Record<string, number> = {};
+  const baseStarted = performance.now();
   const base = await composeBehaviorReport(companyId, opts);
-  const providerReadiness = await getGoogleProviderReadiness(companyId).catch(() => null);
+  stageTimings.behavior_report = elapsedSince(baseStarted);
+
+  const providerStarted = performance.now();
+  const [providerReadiness, enterpriseSnapshot] = await Promise.all([
+    getGoogleProviderReadiness(companyId).catch(() => null),
+    getAnalyticsEnterpriseSnapshot(companyId).catch((error) => {
+      console.warn('[performance-report][enterprise-snapshot-failed]', {
+        company_id: companyId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }),
+  ]);
+  stageTimings.provider_and_snapshot = elapsedSince(providerStarted);
+  const analyticsHealth: AnalyticsHealthSummary | null = enterpriseSnapshot ? {
+    company_id: companyId,
+    generated_at: enterpriseSnapshot.generated_at,
+    freshness: enterpriseSnapshot.freshness,
+    health: {
+      status: enterpriseSnapshot.governance.trust_score >= 70 ? 'healthy' : enterpriseSnapshot.governance.trust_score >= 40 ? 'degraded' : 'failed',
+      message: 'Analytics health derived from enterprise GA/GSC intelligence snapshot.',
+      confidence: enterpriseSnapshot.governance.trust_score >= 70 ? 'high' : enterpriseSnapshot.governance.trust_score >= 40 ? 'medium' : 'low',
+    },
+    ingestion_history: [],
+    degraded_history: [],
+    operational_metrics: {
+      ga_events_last_30_days: base.analytics_provenance.events_last_30_days,
+      gsc_rows_ingested: 0,
+      total_retries_last_10_runs: enterpriseSnapshot.observability.ingestion_history.reduce((sum, run) => sum + run.retry_count, 0),
+      avg_duration_ms_last_10_runs: null,
+      quota_or_api_errors: enterpriseSnapshot.observability.quota_warnings,
+    },
+    correlation: enterpriseSnapshot.correlation,
+    gsc_intelligence: enterpriseSnapshot.gsc_intelligence,
+    enterprise: {
+      cache_status: enterpriseSnapshot.cache_status,
+      trust_score: enterpriseSnapshot.governance.trust_score,
+      completeness_score: enterpriseSnapshot.governance.completeness_score,
+      opportunity_count: enterpriseSnapshot.opportunities.length,
+      provider_uptime: enterpriseSnapshot.observability.provider_uptime,
+      quota_warnings: enterpriseSnapshot.observability.quota_warnings,
+    },
+  } : await withReportTimeout('analytics_health', getAnalyticsHealthSummary(companyId), 8000);
 
   if (base.status === 'no_data' || base.status === 'low_data') {
     return {
@@ -565,7 +736,11 @@ export async function composePerformanceIntelligenceReport(
       status: base.status,
       message: base.message,
       readiness: base.readiness,
+      analytics_provenance: base.analytics_provenance,
       provider_readiness: providerReadiness ?? undefined,
+      analytics_health: analyticsHealth ?? undefined,
+      enterprise_snapshot: enterpriseSnapshot ?? undefined,
+      stage_timings_ms: { ...stageTimings, total: elapsedSince(reportStarted) },
       html: renderPerformanceStateDocument({
         status: base.status,
         message: base.message,
@@ -578,28 +753,45 @@ export async function composePerformanceIntelligenceReport(
   }
 
   const reportData: ReadyBehaviorReportResponse = base;
-  const searchIntelligence = await buildPerformanceSearchIntelligence({
-    companyId,
-    behaviorData: reportData,
-    windowDays: reportData.window_days,
-  }).catch((error) => {
-    console.warn('[performance-report][search-intelligence-failed]', {
-      company_id: companyId,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  });
-  const behaviorIntelligence = await buildPerformanceBehaviorIntelligence({
-    companyId,
-    currentData: reportData,
-    windowDays: reportData.window_days,
-  }).catch((error) => {
-    console.warn('[performance-report][behavior-intelligence-failed]', {
-      company_id: companyId,
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  });
+  const intelligenceStarted = performance.now();
+  const [searchIntelligence, behaviorIntelligence, resolvedInput] = await Promise.all([
+    withReportTimeout('search_intelligence', buildPerformanceSearchIntelligence({
+      companyId,
+      behaviorData: reportData,
+      windowDays: reportData.window_days,
+    }).catch((error) => {
+      console.warn('[performance-report][search-intelligence-failed]', {
+        company_id: companyId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }), 15000),
+    withReportTimeout('behavior_intelligence', buildPerformanceBehaviorIntelligence({
+      companyId,
+      currentData: reportData,
+      windowDays: reportData.window_days,
+    }).catch((error) => {
+      console.warn('[performance-report][behavior-intelligence-failed]', {
+        company_id: companyId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }), 15000),
+    opts?.resolvedInput
+      ? Promise.resolve(opts.resolvedInput)
+      : withReportTimeout('resolve_competitor_input', resolveInputForCompetitorStrategy({
+        companyId,
+        reportCategory: 'performance',
+        resolvedInput: null,
+      }).catch((error) => {
+        console.warn('[performance-report][input-resolution-failed]', {
+          company_id: companyId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }), 12000),
+  ]);
+  stageTimings.parallel_intelligence = elapsedSince(intelligenceStarted);
   const sharedPrimitives = buildSharedPerformanceIntelligencePrimitives({
     behavior: behaviorIntelligence,
     search: searchIntelligence,
@@ -618,15 +810,20 @@ export async function composePerformanceIntelligenceReport(
   const providerWarnings = gscDisconnected
     ? providerWarningsRaw.filter((w) => !/^Search intelligence:/.test(w))
     : providerWarningsRaw;
-  const resolvedInput = await resolveInputForCompetitorStrategy({
-    companyId,
-    reportCategory: 'performance',
-    resolvedInput: opts?.resolvedInput ?? null,
-  });
-  const snapshotFoundation = await buildSnapshotFoundationForPerformance({
-    companyId,
-    resolvedInput,
-  });
+  const freshnessWarnings = analyticsHealth
+    ? [analyticsHealth.freshness.ga, analyticsHealth.freshness.gsc]
+        .filter((snapshot) => ['aging', 'stale', 'failed', 'unavailable'].includes(snapshot.classification))
+        .map((snapshot) => `${snapshot.source.toUpperCase()} freshness is ${snapshot.classification}: ${snapshot.reason}`)
+    : [];
+  const snapshotStarted = performance.now();
+  const shouldBuildSnapshotFoundation = process.env.PERFORMANCE_REPORT_SYNC_SNAPSHOT_FOUNDATION === 'true';
+  const snapshotFoundation = resolvedInput && shouldBuildSnapshotFoundation
+    ? await withReportTimeout('snapshot_foundation', buildSnapshotFoundationForPerformance({
+      companyId,
+      resolvedInput,
+    }), 7000)
+    : null;
+  stageTimings.snapshot_foundation = elapsedSince(snapshotStarted);
   const competitivePressure = buildCompetitivePressureSafely({
     decisions: [],
     resolvedInput,
@@ -638,7 +835,10 @@ export async function composePerformanceIntelligenceReport(
     snapshotFoundation,
   });
 
-  const warnings = uniqueReportWarnings([...reportData.warnings, ...providerWarnings]);
+  const lazyWarnings = resolvedInput && !shouldBuildSnapshotFoundation
+    ? ['Snapshot foundation enrichment was deferred to preserve report runtime; analytics-derived sections remain canonical.']
+    : [];
+  const warnings = uniqueReportWarnings([...reportData.warnings, ...providerWarnings, ...freshnessWarnings, ...lazyWarnings]);
   const response: PerformanceIntelligenceReportResponse = {
     report_type: 'performance_intelligence',
     status: reportData.status,
@@ -649,7 +849,10 @@ export async function composePerformanceIntelligenceReport(
     competitive_pressure_analysis: competitivePressure,
     mapped_data: mappedData,
     html: renderPerformanceDocument(
-      performanceSections.map((sectionKey) => performanceRendererMap[sectionKey](mappedData)).join(''),
+      [
+        performanceSections.map((sectionKey) => performanceRendererMap[sectionKey](mappedData)).join(''),
+        renderEnterpriseMarketIntelligence(enterpriseSnapshot),
+      ].join(''),
       {
         companyName: resolvedInput?.resolved.companyName ?? resolvedInput?.profile?.name ?? null,
         dateRangeLabel: `Last ${reportData.window_days} days`,
@@ -659,6 +862,9 @@ export async function composePerformanceIntelligenceReport(
       },
     ),
     provider_readiness: providerReadiness ?? undefined,
+    analytics_health: analyticsHealth ?? undefined,
+    enterprise_snapshot: enterpriseSnapshot ?? undefined,
+    stage_timings_ms: { ...stageTimings, total: elapsedSince(reportStarted) },
     source_data: reportData,
     snapshot_foundation: snapshotFoundation,
     search_intelligence: searchIntelligence ?? undefined,
@@ -670,4 +876,22 @@ export async function composePerformanceIntelligenceReport(
     ...response,
     real_user_review_evaluation: evaluatePerformanceReportForRealUserReview(response),
   };
+}
+
+export async function composePerformanceIntelligenceReport(
+  companyId: string,
+  opts?: PerformanceIntelligenceOptions,
+): Promise<PerformanceIntelligenceReportResponse> {
+  const resolvedKey = opts?.resolvedInput
+    ? `${opts.resolvedInput.resolved.companyName ?? opts.resolvedInput.profile?.name ?? 'resolved'}`
+    : 'auto';
+  const { result, metadata } = await runDedupedReport({
+    key: `performance:${companyId}:${resolvedKey}`,
+    timeoutMs: 45_000,
+    run: () => composePerformanceIntelligenceReportInternal(companyId, opts),
+  });
+  return {
+    ...result,
+    concurrency: metadata,
+  } as PerformanceIntelligenceReportResponse;
 }

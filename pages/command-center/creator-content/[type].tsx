@@ -8,15 +8,21 @@ import { buildCreatorFlowContext, serializeCreatorFlowContext, type CreatorFlowC
 import { appendCreatorVisualReviewCandidate } from '../../../lib/content/creatorVisualReview';
 import {
   appendWriterAttachedAssetDurable,
-  extractWriterOverlayCandidates,
   getWriterCreatorPrefillKey,
-  DEFAULT_WRITER_IMAGE_MODE,
-  IMAGE_MODE,
   type CreatorAssetLaunchType,
   type WriterOverlayText,
   type WriterCreatorSourcePayload,
-  type ImageMode,
 } from '../../../lib/content/writerCreatorAssetLaunch';
+import {
+  buildAssetCompositionIntent,
+  normalizeAttachmentMode,
+  normalizeSourceTextTransform,
+  normalizeWriterCreatorAssetType,
+  validateAttachmentPayload,
+  type AssetCompositionIntent,
+  type AttachmentMode,
+  type WriterCreatorAssetType,
+} from '../../../lib/content/writerCreatorAttachmentContracts';
 
 type CreatorTypeId =
   | 'carousel'
@@ -26,7 +32,18 @@ type CreatorTypeId =
   | 'pdf'
   | 'slider'
   | 'post'
-  | 'thread';
+  | 'thread'
+  | 'video'
+  | 'reel'
+  | 'short'
+  | 'podcast'
+  | 'story';
+
+const GUIDANCE_ONLY_TYPES: CreatorTypeId[] = ['video', 'reel', 'short', 'podcast'];
+
+function isGuidanceOnlyType(type: CreatorTypeId | null): boolean {
+  return Boolean(type && GUIDANCE_ONLY_TYPES.includes(type));
+}
 
 type ChoiceOption = {
   value: string;
@@ -240,9 +257,12 @@ const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
         label: 'How should the information be organized?',
         kind: 'single-select',
         options: [
-          { value: 'top-to-bottom', label: 'Top to Bottom', description: 'Linear, sequential explanation.' },
-          { value: 'sectioned-grid', label: 'Sectioned Grid', description: 'Grouped modules with clear separation.' },
-          { value: 'comparison-layout', label: 'Comparison', description: 'Side-by-side understanding or contrast.' },
+          { value: 'stats', label: 'Stats', description: 'Metric-led sections with compact proof points.' },
+          { value: 'comparison', label: 'Comparison', description: 'Side-by-side understanding or contrast.' },
+          { value: 'process', label: 'Process', description: 'Linear, sequential explanation.' },
+          { value: 'framework', label: 'Framework', description: 'Grouped modules with clear separation.' },
+          { value: 'hierarchy', label: 'Hierarchy', description: 'Priority-led structure with nested importance.' },
+          { value: 'timeline', label: 'Timeline', description: 'Chronological sequence with clear stages.' },
         ],
       },
       { id: 'audience', label: 'Who is it for?', placeholder: 'Audience segment', kind: 'text' },
@@ -444,6 +464,156 @@ const WORKFLOW_CONFIG: Record<CreatorTypeId, WorkflowConfig> = {
       { id: 'cta', label: 'What action should readers take?', placeholder: 'Desired CTA', kind: 'text' },
     ],
   },
+  video: {
+    title: 'Video',
+    contentType: 'video',
+    intro: 'AI cannot film the video for you, but it can produce a complete theme treatment — hook scene, scene-by-scene direction, audio cues, and CTA — so your team has clear direction to shoot.',
+    subtypeLabel: 'What kind of video are you producing?',
+    subtypeOptions: [
+      { value: 'long-form-narrative', label: 'Long-form narrative', description: 'Multi-minute story, interview, or deep-dive.' },
+      { value: 'educational-explainer', label: 'Educational explainer', description: 'Walk-through, tutorial, or concept breakdown.' },
+      { value: 'brand-anthem', label: 'Brand anthem', description: 'High-emotion brand spot or manifesto.' },
+    ],
+    primaryPlatforms: ['youtube', 'linkedin', 'facebook'],
+    fields: [
+      { id: 'topic', label: 'What is the video about?', placeholder: 'Core narrative, story, or topic', kind: 'text' },
+      {
+        id: 'objective',
+        label: 'What should the video achieve?',
+        kind: 'single-select',
+        options: [
+          { value: 'awareness', label: 'Awareness', description: 'Brand visibility and recall.' },
+          { value: 'education', label: 'Education', description: 'Help the viewer understand something deeply.' },
+          { value: 'conversion', label: 'Conversion', description: 'Drive a specific action or signup.' },
+        ],
+      },
+      {
+        id: 'styleDirection',
+        label: 'What visual style fits best?',
+        kind: 'single-select',
+        options: [
+          { value: 'cinematic', label: 'Cinematic', description: 'Atmospheric, composed, moody.' },
+          { value: 'documentary', label: 'Documentary', description: 'Real, observational, talking-heads.' },
+          { value: 'kinetic', label: 'Kinetic', description: 'Fast cuts, energetic motion graphics.' },
+        ],
+      },
+      { id: 'audience', label: 'Who is this for?', placeholder: 'Audience segment', kind: 'text' },
+      { id: 'keyMessage', label: 'What is the key takeaway?', placeholder: 'What should viewers remember?', rows: 3, kind: 'textarea' },
+      { id: 'cta', label: 'What action should viewers take?', placeholder: 'Subscribe, book, learn more, etc.', kind: 'text' },
+    ],
+  },
+  reel: {
+    title: 'Reel',
+    contentType: 'reel',
+    intro: 'AI produces a complete 15–90s reel treatment — pattern-interrupt hook, scene beats with audio cues, CTA — so your team can shoot and edit directly from the brief.',
+    subtypeLabel: 'What kind of reel are you producing?',
+    subtypeOptions: [
+      { value: 'pov-hook', label: 'POV hook', description: 'First-person framing with a contrarian or curiosity hook.' },
+      { value: 'tutorial-snippet', label: 'Tutorial snippet', description: 'Tight 3-step how-to with on-screen captions.' },
+      { value: 'trend-remix', label: 'Trend remix', description: 'Plug your message into a trending audio or format.' },
+    ],
+    primaryPlatforms: ['instagram', 'facebook', 'youtube'],
+    fields: [
+      { id: 'topic', label: 'What is the reel about?', placeholder: 'Hook idea, story, or topic', kind: 'text' },
+      {
+        id: 'objective',
+        label: 'What should the reel achieve?',
+        kind: 'single-select',
+        options: [
+          { value: 'reach', label: 'Reach', description: 'Maximum scroll-stop and shares.' },
+          { value: 'education', label: 'Education', description: 'Quick value-driven takeaway.' },
+          { value: 'conversion', label: 'Conversion', description: 'Drive a click, follow, or signup.' },
+        ],
+      },
+      { id: 'audience', label: 'Who is this for?', placeholder: 'Audience segment', kind: 'text' },
+      { id: 'keyMessage', label: 'What is the one-line idea?', placeholder: 'The single point this reel makes', rows: 2, kind: 'textarea' },
+      { id: 'cta', label: 'What action should viewers take?', placeholder: 'Save, follow, link in bio, etc.', kind: 'text' },
+    ],
+  },
+  short: {
+    title: 'Short',
+    contentType: 'short',
+    intro: 'AI produces a YouTube Short / TikTok treatment — 60s scene-by-scene direction with pacing, audio, and on-screen text — ready for your team to shoot.',
+    subtypeLabel: 'What kind of short are you producing?',
+    subtypeOptions: [
+      { value: 'tip-stack', label: 'Tip stack', description: 'Rapid sequence of 3–5 punchy tips.' },
+      { value: 'myth-buster', label: 'Myth buster', description: 'Common belief vs. real answer.' },
+      { value: 'before-after', label: 'Before / After', description: 'Visible transformation with payoff reveal.' },
+    ],
+    primaryPlatforms: ['youtube', 'instagram', 'tiktok'],
+    fields: [
+      { id: 'topic', label: 'What is the short about?', placeholder: 'Hook idea or topic', kind: 'text' },
+      {
+        id: 'objective',
+        label: 'What should the short achieve?',
+        kind: 'single-select',
+        options: [
+          { value: 'reach', label: 'Reach', description: 'Algorithmic scroll-stop and shares.' },
+          { value: 'authority', label: 'Authority', description: 'Quickly demonstrate expertise.' },
+          { value: 'conversion', label: 'Conversion', description: 'Drive a follow or click-through.' },
+        ],
+      },
+      { id: 'audience', label: 'Who is this for?', placeholder: 'Audience segment', kind: 'text' },
+      { id: 'keyMessage', label: 'What is the core takeaway?', placeholder: 'The one thing viewers should leave with', rows: 2, kind: 'textarea' },
+      { id: 'cta', label: 'What action should viewers take?', placeholder: 'Subscribe, link in bio, etc.', kind: 'text' },
+    ],
+  },
+  podcast: {
+    title: 'Podcast',
+    contentType: 'podcast',
+    intro: 'AI produces an audio-first episode treatment — hook beat, chapter-by-chapter direction, sonic palette, and CTA — ready for recording.',
+    subtypeLabel: 'What kind of episode are you producing?',
+    subtypeOptions: [
+      { value: 'solo-monologue', label: 'Solo monologue', description: 'Single-host POV episode.' },
+      { value: 'interview', label: 'Interview', description: 'Conversation with a guest.' },
+      { value: 'narrative', label: 'Narrative', description: 'Story-driven episode with mixed sources.' },
+    ],
+    primaryPlatforms: ['youtube', 'linkedin'],
+    fields: [
+      { id: 'topic', label: 'What is the episode about?', placeholder: 'Theme, thesis, or guest angle', kind: 'text' },
+      {
+        id: 'objective',
+        label: 'What should the episode achieve?',
+        kind: 'single-select',
+        options: [
+          { value: 'authority', label: 'Authority', description: 'Establish a clear point of view.' },
+          { value: 'education', label: 'Education', description: 'Teach the listener something concrete.' },
+          { value: 'community', label: 'Community', description: 'Build listener loyalty and recurrence.' },
+        ],
+      },
+      { id: 'audience', label: 'Who is this for?', placeholder: 'Listener segment', kind: 'text' },
+      { id: 'keyMessage', label: 'What is the episode thesis?', placeholder: 'The core argument or story', rows: 3, kind: 'textarea' },
+      { id: 'cta', label: 'What action should listeners take?', placeholder: 'Subscribe, share, etc.', kind: 'text' },
+    ],
+  },
+  story: {
+    title: 'Story',
+    contentType: 'story',
+    intro: 'Generate a 9:16 ephemeral story frame — single visual + overlay text — ready to post to Instagram, Facebook, or LinkedIn stories.',
+    subtypeLabel: 'What kind of story are you posting?',
+    subtypeOptions: [
+      { value: 'announcement-story', label: 'Announcement', description: 'Launch, drop, or news flash.' },
+      { value: 'behind-scenes', label: 'Behind the scenes', description: 'Process, team, or in-the-moment glimpse.' },
+      { value: 'quick-tip', label: 'Quick tip', description: 'One useful insight in a single frame.' },
+    ],
+    primaryPlatforms: ['instagram', 'facebook', 'linkedin'],
+    fields: [
+      { id: 'topic', label: 'What is the story about?', placeholder: 'Topic, announcement, or moment', kind: 'text' },
+      {
+        id: 'objective',
+        label: 'What should the story achieve?',
+        kind: 'single-select',
+        options: [
+          { value: 'awareness', label: 'Awareness', description: 'Top-of-feed visibility for 24h.' },
+          { value: 'engagement', label: 'Engagement', description: 'Drive replies, polls, taps.' },
+          { value: 'conversion', label: 'Conversion', description: 'Drive a swipe-up / link tap.' },
+        ],
+      },
+      { id: 'audience', label: 'Who is this for?', placeholder: 'Audience segment', kind: 'text' },
+      { id: 'keyMessage', label: 'What is the headline message?', placeholder: 'Punchy one-line for the overlay', rows: 2, kind: 'textarea' },
+      { id: 'cta', label: 'What action should viewers take?', placeholder: 'Tap link, DM, vote, etc.', kind: 'text' },
+    ],
+  },
 };
 
 type CreatorResult = {
@@ -478,6 +648,13 @@ type CreatorResult = {
             flags?: string[];
             preset?: string;
           };
+          creator_quality_score?: {
+            cleanliness?: number;
+            readability?: number;
+            clutterRisk?: number;
+            warnings?: string[];
+          };
+          visual_governance_warnings?: string[];
         };
       };
       slides?: Array<Record<string, unknown>>;
@@ -523,8 +700,10 @@ type SavedCreatorAsset = {
    */
   creator_metadata?: {
     asset_type?:             string | null;
-    image_mode?:             'composition' | 'text_embedded' | null;
-    recommended_image_mode?: 'composition' | 'text_embedded' | null;
+    attachment_mode?:        AttachmentMode | null;
+    asset_composition_intent?: Record<string, unknown> | null;
+    copy_policy?: Record<string, unknown> | null;
+    source_text_transform?: string | null;
     overlay_text?: {
       hook?:           string;
       headline?:       string;
@@ -655,39 +834,29 @@ function setIfFieldExists(
   answers[id] = value;
 }
 
-function splitWriterSourcePoints(source: WriterCreatorSourcePayload, overlay: WriterOverlayText): string[] {
-  const threadPoints = Array.isArray(source.threadSegments)
-    ? source.threadSegments.map((segment) => segment.replace(/\s+/g, ' ').trim()).filter(Boolean)
-    : [];
-  if (threadPoints.length > 0) return threadPoints.slice(0, 7);
+function splitWriterSourcePoints(source: WriterCreatorSourcePayload): string[] {
   const bodyPoints = String(source.body || '')
     .replace(/https?:\/\/\S+/gi, '')
     .split(/\n{2,}|\n(?=[-*\d])|(?<=[.!?])\s+/)
     .map((segment) => segment.replace(/^[-*\d.)\s]+/, '').replace(/\s+/g, ' ').trim())
     .filter((segment) => segment.length >= 18)
     .slice(0, 5);
-  return [
-    overlay.hook,
-    ...bodyPoints,
-    overlay.keyInsight,
-    overlay.supportingText,
-    overlay.cta,
-  ].filter(Boolean).slice(0, 7);
+  return bodyPoints.slice(0, 7);
 }
 
 function buildWriterStructureGuidance(
   source: WriterCreatorSourcePayload,
   creatorType: CreatorTypeId,
-  overlay: WriterOverlayText,
 ): string {
-  const points = splitWriterSourcePoints(source, overlay);
+  const points = splitWriterSourcePoints(source);
+  const transform = source.compositionIntent.copyPolicy?.sourceTextTransform ?? 'none';
   const isDeck = creatorType === 'carousel' || creatorType === 'slider';
   const opener = source.sourceType === 'thread'
-    ? 'Use the imported thread sequence as the narrative spine.'
-    : 'Split the imported post into a hook, two to four key points, proof/context, and a CTA close.';
+    ? `Transform the imported thread with the ${transform} policy before creating visual structure; do not map raw thread posts directly to slides.`
+    : `Transform the imported post with the ${transform} policy before creating visual structure; keep source text outside provider image generation.`;
   const labels = isDeck
-    ? ['Hook slide', 'Insight slide', 'Proof slide', 'Action slide', 'CTA slide']
-    : ['Title page', 'Context section', 'Insight section', 'Proof section', 'CTA/footer'];
+    ? ['Hook slide', 'Insight slide', 'Proof slide', 'Action slide', 'Closing slide']
+    : ['Title section', 'Context section', 'Insight section', 'Proof section', 'Footer'];
   return [
     opener,
     ...points.map((point, index) => `${labels[index] || `Section ${index + 1}`}: ${point}`),
@@ -695,7 +864,7 @@ function buildWriterStructureGuidance(
       ? 'Render as a downloadable branded insight document, not a raw text dump.'
       : creatorType === 'slider'
         ? 'Render as a lightweight presentation deck with a title slide, section slides, and CTA ending.'
-        : 'Render with consistent slide visual language and hook -> insight -> proof -> CTA progression.',
+        : 'Render with consistent visual language and transformed source continuity.',
   ].join('\n');
 }
 
@@ -707,43 +876,36 @@ function buildCreatorAnswersFromWriterSource(
   const answers: Record<string, string> = {};
   const fieldById = new Map(config.fields.map((field) => [field.id, field]));
   const sourceLabel = source.sourceType === 'thread' ? 'Thread' : 'Post';
-  const overlay = source.overlayText || extractWriterOverlayCandidates(source);
-  const socialCreativeSummary = [
-    overlay.hook,
-    overlay.headline,
-    overlay.keyInsight,
-    overlay.supportingText,
-  ].filter(Boolean).join('\n');
+  const attachmentMode = source.compositionIntent.attachmentMode;
+  const transform = source.compositionIntent.copyPolicy?.sourceTextTransform ?? 'none';
   const snippet = isSocialCreativeType(creatorType)
-    ? socialCreativeSummary || source.body.slice(0, 360)
+    ? source.body.slice(0, 360)
     : source.body.slice(0, 700);
   const platform = source.platform || config.primaryPlatforms[0] || 'linkedin';
   const visualPersonality = source.tone || (source.sourceType === 'thread' ? 'editorial' : 'premium');
-  const cta = source.cta || 'Drive the next useful action';
-  const structureGuidance = buildWriterStructureGuidance(source, creatorType, overlay);
+  const structureGuidance = buildWriterStructureGuidance(source, creatorType);
 
   setIfFieldExists(config, answers, 'topic', source.title);
   setIfFieldExists(config, answers, 'audience', source.audience || 'Audience from the source content');
-  setIfFieldExists(config, answers, 'cta', cta);
   setIfFieldExists(config, answers, 'keyMessage', snippet);
   setIfFieldExists(config, answers, 'headline', source.title);
-  setIfFieldExists(config, answers, 'dataPoints', source.threadSegments?.length
-    ? source.threadSegments.map((segment, index) => `${index + 1}. ${segment}`).join('\n')
-    : snippet);
+  setIfFieldExists(config, answers, 'dataPoints', transform === 'none' ? '' : snippet);
   setIfFieldExists(config, answers, 'slideDirection', structureGuidance);
   setIfFieldExists(config, answers, 'sectionDirection', structureGuidance);
   setIfFieldExists(config, answers, 'refinement', [
     `Imported from ${sourceLabel}.`,
     `Platform-aware direction: optimize for ${platform}.`,
-    `CTA emphasis: ${cta}.`,
-    `Visual prompt suggestion: turn the source message into a clear ${creatorType} asset with deterministic typography, strong hierarchy, and source-content continuity.`,
+    `Attachment mode: ${attachmentMode}.`,
+    `Source transform: ${transform}.`,
+    attachmentMode === 'supporting_visual'
+      ? 'Visual must complement the source without visible text, CTA, paragraph overlays, or thread restatement.'
+      : 'Creator layer owns deterministic typography and any embedded copy.',
     structureGuidance,
     source.hashtags?.length ? `Hashtag context: ${source.hashtags.join(' ')}` : '',
   ].filter(Boolean).join('\n'));
 
   const objective = pickOptionValue(fieldById.get('objective'), [
     source.sourceType === 'thread' ? 'education' : 'attention',
-    cta.toLowerCase().includes('book') || cta.toLowerCase().includes('demo') ? 'conversion' : '',
     'clarity',
   ]);
   if (objective) answers.objective = objective;
@@ -756,7 +918,6 @@ function buildCreatorAnswersFromWriterSource(
   if (styleDirection) answers.styleDirection = styleDirection;
 
   const hierarchy = pickOptionValue(fieldById.get('hierarchy'), [
-    cta.toLowerCase().includes('book') || cta.toLowerCase().includes('demo') ? 'cta' : 'headline',
     'headline',
   ]);
   if (hierarchy) answers.hierarchy = hierarchy;
@@ -804,18 +965,11 @@ function getSavedAssetCreatorType(asset: SavedCreatorAsset): string {
   return humanizeValue(asset.format_type || 'creator asset');
 }
 
-/**
- * Compact human-readable label for an asset's image-mode identity.
- * Returns null when the asset is not an image OR has no recorded mode
- * (legacy save / non-image type) so callers can skip rendering the
- * separator dot. Mirrors the attached-asset chip labels rendered in
- * the Post + Thread Writer surfaces.
- */
-function getSavedAssetModeLabel(asset: SavedCreatorAsset): string | null {
+function getSavedAssetAttachmentLabel(asset: SavedCreatorAsset): string | null {
   const metadata = asset.creator_metadata;
   if (!metadata || metadata.asset_type !== 'image') return null;
-  if (metadata.image_mode === IMAGE_MODE.TEXT_EMBEDDED) return 'Text Inside Image';
-  if (metadata.image_mode === IMAGE_MODE.COMPOSITION)   return 'Post + Image';
+  if (metadata.attachment_mode === 'embedded_copy') return 'Text Inside Image';
+  if (metadata.attachment_mode === 'supporting_visual') return 'Post + Image';
   return null;
 }
 
@@ -1060,22 +1214,24 @@ export default function CreatorTypeWorkflowPage() {
   const [isLoadingBrandProfile, setIsLoadingBrandProfile] = React.useState(false);
   const [actionInProgress, setActionInProgress] = React.useState<string | null>(null);
   const [writerSource, setWriterSource] = React.useState<WriterCreatorSourcePayload | null>(null);
-  // Dual-mode image control. Only meaningful when type === 'image'. Default
-  // is Writer-driven; user toggles in the selector override it during the
-  // session and persist into the draft / asset metadata.
-  const [imageMode, setImageMode] = React.useState<ImageMode>(DEFAULT_WRITER_IMAGE_MODE);
-  const [recommendedImageMode, setRecommendedImageMode] = React.useState<ImageMode | null>(null);
+  const [standaloneAttachmentMode, setStandaloneAttachmentMode] = React.useState<AttachmentMode>('supporting_visual');
+  const [recommendedAttachmentMode, setRecommendedAttachmentMode] = React.useState<AttachmentMode | null>(null);
   const [selectedPlatform, setSelectedPlatform] = React.useState('linkedin');
   const [overlayText, setOverlayText] = React.useState<WriterOverlayText>(EMPTY_OVERLAY_TEXT);
   const generationInFlightRef = React.useRef(false);
   const saveInFlightRef = React.useRef(false);
   const processedWriterPrefillRef = React.useRef('');
+  const writerCompositionIntent = writerSource?.compositionIntent ?? null;
+  const writerAttachmentMode: AttachmentMode | null = writerCompositionIntent?.attachmentMode ?? null;
+  const writerAssetType: WriterCreatorAssetType | null = writerCompositionIntent?.assetType ?? null;
+  const writerSupportingVisual = writerAttachmentMode === 'supporting_visual';
+  const writerEmbeddedCopy = writerAttachmentMode === 'embedded_copy';
 
   React.useEffect(() => {
-    if (authChecked && !user?.userId) {
+    if (authChecked && !isLoading && !user?.userId) {
       router.replace('/login');
     }
-  }, [authChecked, user?.userId, router]);
+  }, [authChecked, isLoading, user?.userId, router]);
 
   React.useEffect(() => {
     const defaults = config ? buildDefaultAnswers(config) : {};
@@ -1106,7 +1262,11 @@ export default function CreatorTypeWorkflowPage() {
     setSelectedSuggestionId(typeof restored?.selectedSuggestionId === 'string' ? restored.selectedSuggestionId : 'safe-fit');
     setRefinePrompt('');
     setRefinedSuggestion(null);
-    setWriterSource(null);
+    const hasPendingWriterPrefill =
+      router.query.source === 'writer' && typeof router.query.prefill === 'string';
+    if (!hasPendingWriterPrefill) {
+      setWriterSource(null);
+    }
     setSelectedPlatform(
       typeof restored?.selectedPlatform === 'string' && config?.primaryPlatforms.includes(restored.selectedPlatform)
         ? restored.selectedPlatform
@@ -1117,15 +1277,14 @@ export default function CreatorTypeWorkflowPage() {
         ? { ...EMPTY_OVERLAY_TEXT, ...(restored.overlayText as Partial<WriterOverlayText>) }
         : EMPTY_OVERLAY_TEXT,
     );
-    // Draft restore preserves image_mode if it was persisted previously.
-    setImageMode(
-      restored?.imageMode === IMAGE_MODE.TEXT_EMBEDDED || restored?.imageMode === IMAGE_MODE.COMPOSITION
-        ? (restored.imageMode as ImageMode)
-        : DEFAULT_WRITER_IMAGE_MODE,
+    setStandaloneAttachmentMode(
+      restored?.standaloneAttachmentMode === 'embedded_copy' || restored?.standaloneAttachmentMode === 'supporting_visual'
+        ? (restored.standaloneAttachmentMode as AttachmentMode)
+        : 'supporting_visual',
     );
-    setRecommendedImageMode(
-      restored?.recommendedImageMode === IMAGE_MODE.TEXT_EMBEDDED || restored?.recommendedImageMode === IMAGE_MODE.COMPOSITION
-        ? (restored.recommendedImageMode as ImageMode)
+    setRecommendedAttachmentMode(
+      restored?.recommendedAttachmentMode === 'embedded_copy' || restored?.recommendedAttachmentMode === 'supporting_visual'
+        ? (restored.recommendedAttachmentMode as AttachmentMode)
         : null,
     );
     setBrandPanelOpen(false);
@@ -1142,7 +1301,7 @@ export default function CreatorTypeWorkflowPage() {
       setBrandOverrides(restored.brandOverrides as Record<string, string>);
     }
     setSelectedAssetId(typeof restored?.selectedAssetId === 'string' ? restored.selectedAssetId : null);
-  }, [config, type]);
+  }, [config, router.query.prefill, router.query.source, type]);
 
   React.useEffect(() => {
     if (!router.isReady || !config || !type || typeof window === 'undefined') return;
@@ -1157,61 +1316,54 @@ export default function CreatorTypeWorkflowPage() {
       if (parsed.sourceType !== 'post' && parsed.sourceType !== 'thread') return;
 
       processedWriterPrefillRef.current = prefillToken;
-      setWriterSource(parsed);
+      const assetType = normalizeWriterCreatorAssetType(parsed.compositionIntent?.assetType ?? router.query.asset_type);
+      const attachmentMode = normalizeAttachmentMode(parsed.compositionIntent?.attachmentMode ?? router.query.attachment_mode);
+      const sourceTextTransform = normalizeSourceTextTransform(
+        parsed.compositionIntent?.copyPolicy?.sourceTextTransform ?? router.query.source_text_transform,
+      );
+      const compositionIntent: AssetCompositionIntent = parsed.compositionIntent ?? buildAssetCompositionIntent({
+        assetType,
+        attachmentMode,
+        sourceTextTransform,
+      });
+      const normalizedSource: WriterCreatorSourcePayload = {
+        ...parsed,
+        compositionIntent,
+      };
+      setWriterSource(normalizedSource);
       const importedPlatform =
         (parsed.platform && config.primaryPlatforms.includes(parsed.platform) ? parsed.platform : null) ||
         (typeof router.query.platform === 'string' && config.primaryPlatforms.includes(router.query.platform) ? router.query.platform : null) ||
         config.primaryPlatforms[0] ||
         'linkedin';
       setSelectedPlatform(importedPlatform);
-      setOverlayText({
-        ...EMPTY_OVERLAY_TEXT,
-        ...(parsed.overlayText || extractWriterOverlayCandidates(parsed)),
-      });
-      // Resolve image_mode with the documented precedence:
-      //   1. ?image_mode=<x> URL query (a deep link / soft override),
-      //   2. payload.imageMode (the Writer launcher's stamped default),
-      //   3. DEFAULT_WRITER_IMAGE_MODE (compositional, audit-driven).
-      if (type === 'image') {
-        const queryMode = typeof router.query.image_mode === 'string' ? router.query.image_mode : '';
-        const resolvedMode: ImageMode =
-          queryMode === IMAGE_MODE.TEXT_EMBEDDED || queryMode === IMAGE_MODE.COMPOSITION
-            ? (queryMode as ImageMode)
-            : (parsed.imageMode === IMAGE_MODE.TEXT_EMBEDDED || parsed.imageMode === IMAGE_MODE.COMPOSITION
-                ? (parsed.imageMode as ImageMode)
-                : DEFAULT_WRITER_IMAGE_MODE);
-        setImageMode(resolvedMode);
-        setRecommendedImageMode(
-          parsed.recommendedImageMode === IMAGE_MODE.TEXT_EMBEDDED || parsed.recommendedImageMode === IMAGE_MODE.COMPOSITION
-            ? (parsed.recommendedImageMode as ImageMode)
-            : null,
-        );
-      }
+      setOverlayText(EMPTY_OVERLAY_TEXT);
+      if (type === 'image') setRecommendedAttachmentMode(null);
       setAnswers((current) => ({
         ...current,
-        ...buildCreatorAnswersFromWriterSource(config, type, parsed),
+        ...buildCreatorAnswersFromWriterSource(config, type, normalizedSource),
       }));
-      setBrandMode(parsed.companyName || parsed.brandContext ? 'brand-aware' : 'independent');
-      if (parsed.companyName || parsed.brandContext) {
+      setBrandMode(normalizedSource.companyName || normalizedSource.brandContext ? 'brand-aware' : 'independent');
+      if (normalizedSource.companyName || normalizedSource.brandContext) {
         setBrandPanelOpen(true);
         setBrandOverrides((current) => ({
           ...current,
-          companyName: current.companyName || parsed.companyName || '',
-          audience: current.audience || parsed.audience || '',
-          brandTone: current.brandTone || parsed.tone || '',
+          companyName: current.companyName || normalizedSource.companyName || '',
+          audience: current.audience || normalizedSource.audience || '',
+          brandTone: current.brandTone || normalizedSource.tone || '',
         }));
       }
-      setSelectedSuggestionId(type === 'carousel' && parsed.sourceType === 'thread' ? 'educator' : 'safe-fit');
+      setSelectedSuggestionId(type === 'carousel' && normalizedSource.sourceType === 'thread' ? 'educator' : 'safe-fit');
       setRefinedSuggestion(
-        type === 'carousel' && parsed.sourceType === 'thread'
-          ? 'Turn the imported thread into a carousel sequence: hook slide, progressive middle slides, and CTA close.'
-          : `Create a ${config.title.toLowerCase()} asset directly from the imported ${parsed.sourceType}.`,
+        type === 'carousel' && normalizedSource.sourceType === 'thread'
+          ? 'Transform the imported thread before slide generation; do not map raw thread posts directly to slides.'
+          : `Create a ${config.title.toLowerCase()} asset from the imported ${normalizedSource.sourceType} using the selected attachment mode.`,
       );
-      setNotice(`Imported ${parsed.sourceType} context into this ${config.title.toLowerCase()} flow.`);
+      setNotice(`Imported ${normalizedSource.sourceType} context into this ${config.title.toLowerCase()} flow.`);
     } catch {
       setError('Could not import the Writer context. You can still complete this Creator flow manually.');
     }
-  }, [config, router.isReady, router.query.platform, router.query.prefill, router.query.source, type]);
+  }, [config, router.isReady, router.query.asset_type, router.query.attachment_mode, router.query.platform, router.query.prefill, router.query.source, router.query.source_text_transform, type]);
 
   React.useEffect(() => {
     if (!type || typeof window === 'undefined') return;
@@ -1227,8 +1379,8 @@ export default function CreatorTypeWorkflowPage() {
           selectedAssetId,
           selectedPlatform,
           overlayText,
-          imageMode,
-          recommendedImageMode,
+          standaloneAttachmentMode,
+          recommendedAttachmentMode,
           saved_at: new Date().toISOString(),
         }));
       } catch {
@@ -1236,7 +1388,7 @@ export default function CreatorTypeWorkflowPage() {
       }
     }, 250);
     return () => window.clearTimeout(persistTimer);
-  }, [answers, brandMode, brandOverrides, brandPresence, brandSelections, overlayText, imageMode, recommendedImageMode, selectedAssetId, selectedPlatform, selectedSuggestionId, type]);
+  }, [answers, brandMode, brandOverrides, brandPresence, brandSelections, overlayText, standaloneAttachmentMode, recommendedAttachmentMode, selectedAssetId, selectedPlatform, selectedSuggestionId, type]);
 
   React.useEffect(() => {
     if (!selectedCompanyId) {
@@ -1316,6 +1468,25 @@ export default function CreatorTypeWorkflowPage() {
     }
   }, [isLoadingAssets, savedAssets, selectedAssetId]);
 
+  const repurposePaths = React.useMemo(
+    () => (type ? getRepurposePaths(type, answers.assetSubtype) : []),
+    [answers.assetSubtype, type],
+  );
+  const brandContextLines = React.useMemo(
+    () => buildBrandContextLines({
+      mode: brandMode,
+      presence: brandPresence,
+      selections: brandSelections,
+      profile: brandProfile,
+      overrides: brandOverrides,
+    }),
+    [brandMode, brandOverrides, brandPresence, brandProfile, brandSelections],
+  );
+  const suggestionOptions = React.useMemo(
+    () => (config ? buildSuggestionOptions(config, answers, { brandMode, brandPresence, brandProfile }) : []),
+    [answers, brandMode, brandPresence, brandProfile, config],
+  );
+
   if (!authChecked || isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100">
@@ -1341,20 +1512,6 @@ export default function CreatorTypeWorkflowPage() {
   };
 
   const selectedAsset = savedAssets.find((asset) => asset.id === selectedAssetId) || null;
-  const repurposePaths = React.useMemo(
-    () => (type ? getRepurposePaths(type, answers.assetSubtype) : []),
-    [answers.assetSubtype, type],
-  );
-  const brandContextLines = React.useMemo(
-    () => buildBrandContextLines({
-      mode: brandMode,
-      presence: brandPresence,
-      selections: brandSelections,
-      profile: brandProfile,
-      overrides: brandOverrides,
-    }),
-    [brandMode, brandOverrides, brandPresence, brandProfile, brandSelections],
-  );
   const hasBrandProfile = Boolean(
     brandProfile?.companyName ||
     brandProfile?.logoUrl ||
@@ -1363,10 +1520,6 @@ export default function CreatorTypeWorkflowPage() {
     brandProfile?.brandTone ||
     (brandProfile?.brandColors || []).length > 0 ||
     brandProfile?.audience,
-  );
-  const suggestionOptions = React.useMemo(
-    () => buildSuggestionOptions(config, answers, { brandMode, brandPresence, brandProfile }),
-    [answers, brandMode, brandPresence, brandProfile, config],
   );
   const selectedSuggestion =
     suggestionOptions.find((option) => option.id === selectedSuggestionId) || suggestionOptions[0];
@@ -1436,20 +1589,16 @@ export default function CreatorTypeWorkflowPage() {
     // and disagrees with the current Creator type (e.g. loading an
     // 'image' asset into a 'carousel' flow), we still copy compatible
     // fields (topic, refinement) but DO NOT restore type-specific state
-    // (overlay text, image mode, subtype, etc.). This prevents cross-
+    // (overlay text, attachment mode, subtype, etc.). This prevents cross-
     // type leakage that would corrupt the current flow.
     const savedAssetType = blob && typeof blob.asset_type === 'string' ? blob.asset_type : null;
     const typeMatch = !savedAssetType || savedAssetType === type;
 
     // Image-mode restore — only meaningful when current type is 'image'.
     if (type === 'image' && blob && typeMatch) {
-      const persistedMode = blob.image_mode;
-      if (persistedMode === IMAGE_MODE.TEXT_EMBEDDED || persistedMode === IMAGE_MODE.COMPOSITION) {
-        setImageMode(persistedMode as ImageMode);
-      }
-      const persistedRecommend = blob.recommended_image_mode;
-      if (persistedRecommend === IMAGE_MODE.TEXT_EMBEDDED || persistedRecommend === IMAGE_MODE.COMPOSITION) {
-        setRecommendedImageMode(persistedRecommend as ImageMode);
+      const persistedMode = blob.attachment_mode;
+      if (persistedMode === 'embedded_copy' || persistedMode === 'supporting_visual') {
+        setStandaloneAttachmentMode(persistedMode as AttachmentMode);
       }
     }
 
@@ -1507,7 +1656,7 @@ export default function CreatorTypeWorkflowPage() {
     // dashboards can pivot on restore_status (full / partial / legacy /
     // type-mismatch). Aggregates with the server-side `creator_event`
     // stream via the shared shape. Detail now includes the discriminators
-    // (image_mode, creator_type, subtype, platform) PLUS an explicit
+    // (attachment mode, creator_type, subtype, platform) PLUS an explicit
     // `restoreFlavor` so 'modern' (typed creator_continuity block) is
     // distinguishable from 'legacy_backfill' (synthesized from
     // description/tags by the server) and 'legacy_metadata' (older
@@ -1530,7 +1679,7 @@ export default function CreatorTypeWorkflowPage() {
         restoreFlavor,
         creatorType:  type,
         assetType:    savedAssetType ?? null,
-        imageMode:    blob && typeof blob.image_mode === 'string' ? blob.image_mode : null,
+        attachmentMode: blob && typeof blob.attachment_mode === 'string' ? blob.attachment_mode : null,
         subtype:      blob && typeof blob.subtype === 'string' ? blob.subtype : null,
         platform:     blob && typeof blob.platform === 'string' ? blob.platform : null,
         usedSource:   canonical ? 'creator_metadata' : (legacyA ? 'legacy_metadata' : (legacyB ? 'legacy_last_metadata' : 'none')),
@@ -1568,18 +1717,40 @@ export default function CreatorTypeWorkflowPage() {
     setResult(null);
 
     const writerStructureGuidance = writerSource && isDeterministicStructuredType(type)
-      ? buildWriterStructureGuidance(
-          writerSource,
-          type as CreatorTypeId,
-          overlayText.hook || overlayText.headline || overlayText.keyInsight
-            ? overlayText
-            : extractWriterOverlayCandidates(writerSource),
-        )
+      ? buildWriterStructureGuidance(writerSource, type as CreatorTypeId)
       : '';
+    const writerCopyPolicy = writerCompositionIntent?.copyPolicy ?? null;
+    const standaloneEmbeddedCopy = standaloneAttachmentMode === 'embedded_copy';
+    const overlayAllowed = !writerSource || writerEmbeddedCopy;
+    const overlayPayload = isSocialCreativeType(type) && overlayAllowed && (!writerSource ? !(type === 'image' && !standaloneEmbeddedCopy) : writerEmbeddedCopy)
+      ? {
+          hook: String(overlayText.hook || '').trim(),
+          headline: String(overlayText.headline || answers.headline || answers.topic || '').trim(),
+          keyInsight: String(overlayText.keyInsight || '').trim(),
+          cta: writerCopyPolicy?.allowCTA ? String(overlayText.cta || answers.cta || '').trim() : '',
+          supportingText: String(overlayText.supportingText || '').trim(),
+        }
+      : null;
+    if (writerSource && writerCompositionIntent) {
+      const validation = validateAttachmentPayload({
+        attachmentMode: writerCompositionIntent.attachmentMode,
+        assetType: writerCompositionIntent.assetType,
+        copyPolicy: writerCompositionIntent.copyPolicy,
+        overlayText: overlayPayload,
+        cta: overlayPayload?.cta,
+        sourceType: writerSource.sourceType,
+      });
+      if (!validation.ok) {
+        generationInFlightRef.current = false;
+        setIsGenerating(false);
+        setError(validation.errors.join('. '));
+        return;
+      }
+    }
 
     const constraintLines = [
       answers.subtype ? `Subtype: ${answers.subtype}` : '',
-      answers.cta ? `CTA: ${answers.cta}` : '',
+      !writerSource && answers.cta ? `CTA: ${answers.cta}` : '',
       answers.dataPoints ? `Data points: ${answers.dataPoints}` : '',
       answers.sectionDirection ? `Sections: ${answers.sectionDirection}` : '',
       answers.slideDirection ? `Slide direction: ${answers.slideDirection}` : '',
@@ -1602,15 +1773,21 @@ export default function CreatorTypeWorkflowPage() {
       // make sense when the renderer will composite them. We still pass
       // the imported Writer body so the LLM can shape visual direction
       // around the source content.
-      writerSource && isSocialCreativeType(type) && !(type === 'image' && imageMode === IMAGE_MODE.COMPOSITION)
+      writerSource && writerSupportingVisual
         ? [
             `Source content imported from ${writerSource.sourceType}: ${writerSource.title}`,
-            'Use only the structured overlay candidates for final creative text.',
-            `Hook: ${overlayText.hook}`,
-            `Headline: ${overlayText.headline}`,
-            `Key insight: ${overlayText.keyInsight}`,
-            `CTA: ${overlayText.cta}`,
-            `Supporting: ${overlayText.supportingText}`,
+            'Attachment mode: supporting_visual.',
+            'Provider image must contain no visible text, CTA, paragraph overlay, thread restatement, or slide duplication.',
+          ].join('\n')
+        : writerSource && isSocialCreativeType(type) && overlayPayload
+        ? [
+            `Source content imported from ${writerSource.sourceType}: ${writerSource.title}`,
+            'Creator layer owns deterministic typography for embedded copy.',
+            `Hook: ${overlayPayload.hook}`,
+            `Headline: ${overlayPayload.headline}`,
+            `Key insight: ${overlayPayload.keyInsight}`,
+            overlayPayload.cta ? `CTA: ${overlayPayload.cta}` : '',
+            `Supporting: ${overlayPayload.supportingText}`,
           ].filter(Boolean).join('\n')
         : writerSource
           ? `Source content imported from ${writerSource.sourceType}: ${writerSource.title}\n${writerSource.body.slice(0, 1200)}`
@@ -1618,11 +1795,11 @@ export default function CreatorTypeWorkflowPage() {
       writerStructureGuidance
         ? `Structured asset sequence:\n${writerStructureGuidance}`
         : '',
-      writerSource?.sourceType === 'thread' && writerSource.threadSegments?.length
-        ? `Thread-to-carousel sequence hints:\n${writerSource.threadSegments.map((segment, index) => `Slide ${index + 1}: ${segment}`).join('\n')}`
+      writerSource?.sourceType === 'thread' && type === 'carousel'
+        ? `Thread carousel safety: transform the source with ${writerCompositionIntent?.copyPolicy?.sourceTextTransform ?? 'none'} before slide generation; never directly map raw thread segments to slides.`
         : '',
-      isSocialCreativeType(type) && !(type === 'image' && imageMode === IMAGE_MODE.COMPOSITION)
-        ? `Overlay text:\nHook: ${overlayText.hook}\nHeadline: ${overlayText.headline}\nKey insight: ${overlayText.keyInsight}\nCTA: ${overlayText.cta}\nSupporting: ${overlayText.supportingText}`
+      overlayPayload
+        ? `Overlay text:\nHook: ${overlayPayload.hook}\nHeadline: ${overlayPayload.headline}\nKey insight: ${overlayPayload.keyInsight}\nCTA: ${overlayPayload.cta}\nSupporting: ${overlayPayload.supportingText}`
         : '',
       `Lightweight context:\n${serializeCreatorFlowContext(buildCurrentContext(selectedPlatform))}`,
       `Brand context:\n${brandContextLines.join('\n')}`,
@@ -1662,22 +1839,21 @@ export default function CreatorTypeWorkflowPage() {
             existing_asset_name: selectedAsset?.name || null,
             lightweight_context: buildCurrentContext(selectedPlatform),
             selected_platform: selectedPlatform,
-            // Image-mode contract: when type === 'image' AND mode is
-            // 'composition', the overlay editor is hidden and the renderer
+            // Attachment-mode contract: when type === 'image' AND mode is
+            // supporting_visual, the overlay editor is hidden and the renderer
             // skips the overlay composite — so we omit overlay_text from
             // the payload entirely (sending it would confuse a v1-shape
             // consumer). banner/infographic still always emit overlay_text
             // since they're text_embedded by definition.
-            image_mode: type === 'image' ? imageMode : null,
-            overlay_text: isSocialCreativeType(type) && !(type === 'image' && imageMode === IMAGE_MODE.COMPOSITION)
-              ? {
-                  hook: String(overlayText.hook || '').trim(),
-                  headline: String(overlayText.headline || answers.headline || answers.topic || '').trim(),
-                  keyInsight: String(overlayText.keyInsight || '').trim(),
-                  cta: String(overlayText.cta || answers.cta || '').trim(),
-                  supportingText: String(overlayText.supportingText || '').trim(),
-                }
-              : null,
+            ...(!writerSource && type === 'image' ? { attachment_mode: standaloneAttachmentMode } : {}),
+            writer_asset_type: writerAssetType,
+            creator_content_asset_type: type,
+            attachment_mode: writerAttachmentMode,
+            asset_composition_intent: writerCompositionIntent,
+            copy_policy: writerCopyPolicy,
+            source_text_transform: writerCopyPolicy?.sourceTextTransform ?? null,
+            infographic_layout: type === 'infographic' ? String(answers.structureMode || 'framework') : null,
+            overlay_text: overlayPayload,
             brand_generation_mode: brandMode,
             brand_presence: brandMode === 'brand-aware' ? brandPresence : 'none',
             brand_context: brandMode === 'brand-aware'
@@ -1737,18 +1913,14 @@ export default function CreatorTypeWorkflowPage() {
       }
       if (writerSource && type) {
         const mediaBundle = generatedMediaBundle;
-        // Read image_mode back from the renderer metadata first (canonical),
-        // falling back to the client-side state. The server metadata wins
-        // because the renderer is the authority on what was actually
-        // composited; the client state is the intent.
-        const renderedImageMode = type === 'image'
-          ? (generatedMetadata.image_mode === IMAGE_MODE.TEXT_EMBEDDED || generatedMetadata.image_mode === IMAGE_MODE.COMPOSITION
-              ? (generatedMetadata.image_mode as ImageMode)
-              : imageMode)
+        const renderedAttachmentMode = writerSource ? null : type === 'image'
+          ? (generatedMetadata.attachment_mode === 'embedded_copy' || generatedMetadata.attachment_mode === 'supporting_visual'
+              ? (generatedMetadata.attachment_mode as AttachmentMode)
+              : standaloneAttachmentMode)
           : null;
         // Continuity bundle (Part 2). Every attached-asset record now carries
         // the full restore set:
-        //   - imageMode    (composition vs text_embedded)
+        //   - attachmentMode (supporting_visual vs embedded_copy)
         //   - overlayText  (so reopening preserves the exact overlay copy)
         //   - subtype      (so promotional/quote/educational direction sticks)
         //   - platform     (so reopening keeps Writer-imported platform pin)
@@ -1766,18 +1938,14 @@ export default function CreatorTypeWorkflowPage() {
             // overlayText + brandMode without needing to parse them out of
             // the server response.
             subtype:    String(answers.subtype || '').trim() || undefined,
-            overlay_text: type === 'image' && renderedImageMode === IMAGE_MODE.COMPOSITION
-              ? undefined
-              : {
-                  hook:           overlayText.hook,
-                  headline:       overlayText.headline,
-                  keyInsight:     overlayText.keyInsight,
-                  cta:            overlayText.cta,
-                  supportingText: overlayText.supportingText,
-                },
+            attachment_mode: writerAttachmentMode,
+            asset_composition_intent: writerCompositionIntent,
+            copy_policy: writerCopyPolicy,
+            source_text_transform: writerCopyPolicy?.sourceTextTransform,
+            overlay_text: overlayPayload ?? undefined,
             brand_mode:     brandMode,
             brand_presence: brandMode === 'brand-aware' ? brandPresence : undefined,
-            recommended_image_mode: type === 'image' ? recommendedImageMode ?? undefined : undefined,
+            ...(!writerSource && type === 'image' ? { recommended_attachment_mode: recommendedAttachmentMode ?? undefined } : {}),
             platform: selectedPlatform,
           };
         void appendWriterAttachedAssetDurable({
@@ -1794,12 +1962,14 @@ export default function CreatorTypeWorkflowPage() {
           },
           asset: {
           id: `${writerSource.id}-${type}-${Date.now()}`,
-          creatorType: type as CreatorAssetLaunchType,
+          creatorType: (writerAssetType ?? normalizeWriterCreatorAssetType(type)) as CreatorAssetLaunchType,
           title: `${config.title} for ${writerSource.title}`,
           url: typeof mediaBundle.url === 'string' ? mediaBundle.url : undefined,
           files: filesFromBundle,
           previewKind: typeof mediaBundle.metadata?.preview_kind === 'string' ? mediaBundle.metadata.preview_kind : undefined,
-          imageMode: renderedImageMode,
+          attachmentMode: writerSource ? undefined : renderedAttachmentMode ?? undefined,
+          attachmentMode: writerAttachmentMode ?? undefined,
+          compositionIntent: writerCompositionIntent ?? undefined,
           platformContext: selectedPlatform,
           renderIdentityHash: typeof generatedMetadata.renderIdentityHash === 'string'
             ? generatedMetadata.renderIdentityHash
@@ -2003,9 +2173,15 @@ export default function CreatorTypeWorkflowPage() {
         : null;
       const continuityMetadata = {
         asset_type:             type,
-        image_mode:             type === 'image' ? imageMode : null,
-        recommended_image_mode: type === 'image' ? (recommendedImageMode ?? null) : null,
-        overlay_text:           isSocialCreativeType(type) && !(type === 'image' && imageMode === IMAGE_MODE.COMPOSITION)
+        attachment_mode:        writerAttachmentMode,
+        asset_composition_intent: writerCompositionIntent,
+        copy_policy:            writerCompositionIntent?.copyPolicy ?? null,
+        source_text_transform:  writerCompositionIntent?.copyPolicy?.sourceTextTransform ?? null,
+        ...(!writerSource && type === 'image' ? {
+          attachment_mode: standaloneAttachmentMode,
+          recommended_attachment_mode: recommendedAttachmentMode ?? null,
+        } : {}),
+        overlay_text:           isSocialCreativeType(type) && !writerSupportingVisual && (!writerSource ? !(type === 'image' && standaloneAttachmentMode === 'supporting_visual') : writerEmbeddedCopy)
           ? {
               hook:           overlayText.hook,
               headline:       overlayText.headline,
@@ -2187,6 +2363,25 @@ export default function CreatorTypeWorkflowPage() {
   const previewKind = previewMetadata.preview_kind || '';
   const isDirectionCardPreview = previewKind === 'direction_card';
   const isProviderImagePreview = previewKind === 'provider_image' || previewKind === 'social_creative';
+  const isThemeTreatment = previewKind === 'theme_treatment';
+  // Theme treatment payload exposed on asset_payload for guidance-only
+  // formats (video, reel, short, podcast). Pulled out here so the JSX block
+  // below stays readable.
+  const themeAssetPayload = (result?.output?.asset_payload || {}) as Record<string, unknown>;
+  const themeHookScene = (themeAssetPayload.hook_scene && typeof themeAssetPayload.hook_scene === 'object'
+    ? themeAssetPayload.hook_scene as Record<string, unknown>
+    : {}) as Record<string, unknown>;
+  const themeCtaScene = (themeAssetPayload.cta_scene && typeof themeAssetPayload.cta_scene === 'object'
+    ? themeAssetPayload.cta_scene as Record<string, unknown>
+    : {}) as Record<string, unknown>;
+  const themeScenes: Array<Record<string, unknown>> = Array.isArray(themeAssetPayload.scenes)
+    ? (themeAssetPayload.scenes as unknown[]).filter((s): s is Record<string, unknown> => Boolean(s && typeof s === 'object' && !Array.isArray(s)))
+    : [];
+  const themePlatformNotes = (themeAssetPayload.platform_notes && typeof themeAssetPayload.platform_notes === 'object'
+    ? themeAssetPayload.platform_notes as Record<string, unknown>
+    : {}) as Record<string, unknown>;
+  const themeDurationSeconds = Number(themeAssetPayload.duration_seconds ?? 0);
+  const themeAspectRatio = String(themeAssetPayload.aspect_ratio || themePlatformNotes.optimal_aspect_ratio || '9:16');
   const documentUrl = typeof previewMetadata.document_url === 'string' ? previewMetadata.document_url : '';
   const documentFallbackReason = typeof previewMetadata.document_fallback_reason === 'string'
     ? previewMetadata.document_fallback_reason
@@ -2212,6 +2407,12 @@ export default function CreatorTypeWorkflowPage() {
   const overlayQuality = previewMetadata.overlay_quality && typeof previewMetadata.overlay_quality === 'object'
     ? previewMetadata.overlay_quality as { score?: number; flags?: string[]; preset?: string }
     : null;
+  const creatorQuality = previewMetadata.creator_quality_score && typeof previewMetadata.creator_quality_score === 'object'
+    ? previewMetadata.creator_quality_score as { cleanliness?: number; readability?: number; clutterRisk?: number; warnings?: string[] }
+    : null;
+  const visualGovernanceWarnings = Array.isArray(previewMetadata.visual_governance_warnings)
+    ? previewMetadata.visual_governance_warnings.map(String).filter(Boolean)
+    : [];
   const slides = Array.isArray(result?.output.asset_payload.slides) ? result.output.asset_payload.slides : [];
   const selectedSubtype = config.subtypeOptions.find((option) => option.value === answers.subtype) || config.subtypeOptions[0];
   const proposalLine = [
@@ -2466,7 +2667,7 @@ export default function CreatorTypeWorkflowPage() {
                           <p className="text-sm font-semibold">{asset.name}</p>
                           <p className="mt-1 text-xs text-gray-500">
                             {(() => {
-                              const modeLabel = getSavedAssetModeLabel(asset);
+                              const modeLabel = getSavedAssetAttachmentLabel(asset);
                               const parts = [
                                 getSavedAssetCreatorType(asset),
                                 modeLabel,
@@ -2489,6 +2690,14 @@ export default function CreatorTypeWorkflowPage() {
                     Imported from {writerSource.sourceType === 'thread' ? 'Thread' : 'Post'}
                   </p>
                   <p className="mt-1 text-sm text-indigo-900">{writerSource.title}</p>
+                  <p className="mt-2 text-xs font-semibold text-indigo-900">
+                    {writerAttachmentMode === 'embedded_copy' ? 'Embedded copy' : 'Supporting visual'} · {writerCompositionIntent?.assetType ?? 'asset'}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-indigo-800">
+                    {writerSupportingVisual
+                      ? 'No overlay text, CTA, paragraph rendering, or thread restatement is allowed for this asset.'
+                      : `Copy policy: headline ${writerCompositionIntent?.copyPolicy?.allowHeadline ? 'allowed' : 'blocked'}, key insight ${writerCompositionIntent?.copyPolicy?.allowKeyInsight ? 'allowed' : 'blocked'}, CTA ${writerCompositionIntent?.copyPolicy?.allowCTA ? 'allowed' : 'blocked'}.`}
+                  </p>
                   <p className="mt-2 line-clamp-3 text-xs leading-5 text-indigo-800">
                     {writerSource.body}
                   </p>
@@ -2502,48 +2711,48 @@ export default function CreatorTypeWorkflowPage() {
                 the audit-default (text_embedded for strong threads + quote-
                 style posts); a click on the pill snaps to that mode.
               */}
-              {type === 'image' ? (
+              {type === 'image' && !writerSource ? (
                 <div className="rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700">Image Mode</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700">Attachment Mode</p>
                       <p className="mt-1 text-sm text-sky-900">
                         Choose how text and image relate. The renderer skips the deterministic overlay in <span className="font-semibold">Post + Image</span> mode.
                       </p>
                     </div>
-                    {recommendedImageMode && recommendedImageMode !== imageMode ? (
+                    {recommendedAttachmentMode && recommendedAttachmentMode !== standaloneAttachmentMode ? (
                       <button
                         type="button"
-                        onClick={() => setImageMode(recommendedImageMode)}
+                        onClick={() => setStandaloneAttachmentMode(recommendedAttachmentMode)}
                         className="rounded-full border border-sky-300 bg-white px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-100"
-                        title="Use the recommended mode for this Writer source"
+                        title="Use the recommended attachment mode"
                       >
                         Recommended:&nbsp;
-                        {recommendedImageMode === IMAGE_MODE.TEXT_EMBEDDED ? 'Text Inside Image' : 'Post + Image'}
+                        {recommendedAttachmentMode === 'embedded_copy' ? 'Text Inside Image' : 'Post + Image'}
                       </button>
                     ) : null}
                   </div>
                   <div className="mt-4 grid gap-3 md:grid-cols-2">
                     {[
                       {
-                        value: IMAGE_MODE.COMPOSITION as ImageMode,
+                        value: 'supporting_visual' as AttachmentMode,
                         label: 'Post + Image',
                         description: 'Post text stays outside the image. The image visually complements your content.',
                       },
                       {
-                        value: IMAGE_MODE.TEXT_EMBEDDED as ImageMode,
+                        value: 'embedded_copy' as AttachmentMode,
                         label: 'Text Inside Image',
                         description: 'Headline, hook, and CTA are embedded directly inside the image.',
                       },
                     ].map((option) => {
-                      const selected = imageMode === option.value;
+                      const selected = standaloneAttachmentMode === option.value;
                       return (
                         <button
                           key={option.value}
                           type="button"
-                          onClick={() => setImageMode(option.value)}
+                          onClick={() => setStandaloneAttachmentMode(option.value)}
                           aria-pressed={selected}
-                          data-image-mode={option.value}
+                          data-attachment-mode={option.value}
                           className={`rounded-2xl border px-4 py-3 text-left transition ${
                             selected
                               ? 'border-sky-500 bg-sky-100 text-sky-950 shadow-sm'
@@ -2559,7 +2768,7 @@ export default function CreatorTypeWorkflowPage() {
                 </div>
               ) : null}
 
-              {isSocialCreativeType(type) && !(type === 'image' && imageMode === IMAGE_MODE.COMPOSITION) ? (
+              {isSocialCreativeType(type) && !writerSupportingVisual && (!writerSource ? !(type === 'image' && standaloneAttachmentMode === 'supporting_visual') : writerEmbeddedCopy) ? (
                 <div className="rounded-2xl border border-emerald-100 bg-emerald-50/80 px-4 py-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -2835,6 +3044,119 @@ export default function CreatorTypeWorkflowPage() {
                     </div>
                   </div>
 
+                  {isThemeTreatment && (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500">Theme Treatment</p>
+                        <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-700">
+                          {String(config.contentType).toUpperCase()}
+                        </span>
+                        {themeDurationSeconds > 0 ? (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">
+                            {themeDurationSeconds}s target
+                          </span>
+                        ) : null}
+                        {themeAspectRatio ? (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">
+                            {themeAspectRatio}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <p className="rounded-2xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-xs leading-5 text-indigo-900">
+                        AI cannot produce the final {String(config.contentType)} file — that requires human production. The treatment below is your shot-by-shot brief: hand it to your editor / producer as-is.
+                      </p>
+
+                      {Object.keys(themeHookScene).length > 0 && (
+                        <div className="rounded-2xl border border-gray-200 bg-white px-4 py-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">Hook Scene</p>
+                          {themeHookScene.duration_seconds ? (
+                            <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-400">
+                              {String(themeHookScene.duration_seconds)}s
+                            </p>
+                          ) : null}
+                          {themeHookScene.visual ? (
+                            <p className="mt-2 text-sm leading-6 text-gray-800"><span className="font-semibold">Visual: </span>{String(themeHookScene.visual)}</p>
+                          ) : null}
+                          {themeHookScene.text ? (
+                            <p className="mt-1 text-sm leading-6 text-gray-800"><span className="font-semibold">On-screen / VO: </span>{String(themeHookScene.text)}</p>
+                          ) : themeHookScene.dialogue ? (
+                            <p className="mt-1 text-sm leading-6 text-gray-800"><span className="font-semibold">Dialogue: </span>{String(themeHookScene.dialogue)}</p>
+                          ) : null}
+                          {themeHookScene.audio ? (
+                            <p className="mt-1 text-sm leading-6 text-gray-800"><span className="font-semibold">Audio: </span>{String(themeHookScene.audio)}</p>
+                          ) : null}
+                          {themeHookScene.camera_direction ? (
+                            <p className="mt-1 text-sm leading-6 text-gray-800"><span className="font-semibold">Camera: </span>{String(themeHookScene.camera_direction)}</p>
+                          ) : null}
+                        </div>
+                      )}
+
+                      {themeScenes.length > 0 && (
+                        <div>
+                          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">Scenes</p>
+                          <div className="space-y-2">
+                            {themeScenes.map((scene, index) => (
+                              <div key={`scene-${index}`} className="rounded-2xl border border-gray-200 bg-white px-4 py-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-xs font-semibold text-gray-900">Scene {String(scene.scene_number ?? index + 1)}</span>
+                                  {scene.duration_seconds ? (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">{String(scene.duration_seconds)}s</span>
+                                  ) : null}
+                                  {scene.transition ? (
+                                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">→ {String(scene.transition)}</span>
+                                  ) : null}
+                                </div>
+                                {scene.visual ? (
+                                  <p className="mt-2 text-sm leading-6 text-gray-700"><span className="font-semibold">Visual: </span>{String(scene.visual)}</p>
+                                ) : null}
+                                {scene.dialogue ? (
+                                  <p className="mt-1 text-sm leading-6 text-gray-700"><span className="font-semibold">Dialogue / VO: </span>{String(scene.dialogue)}</p>
+                                ) : null}
+                                {scene.audio_cue ? (
+                                  <p className="mt-1 text-sm leading-6 text-gray-700"><span className="font-semibold">Audio cue: </span>{String(scene.audio_cue)}</p>
+                                ) : null}
+                                {scene.pacing_note ? (
+                                  <p className="mt-1 text-xs leading-5 text-gray-500"><span className="font-semibold">Pacing: </span>{String(scene.pacing_note)}</p>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {Object.keys(themeCtaScene).length > 0 && (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">CTA Scene</p>
+                          {themeCtaScene.visual ? (
+                            <p className="mt-2 text-sm leading-6 text-emerald-950"><span className="font-semibold">Visual: </span>{String(themeCtaScene.visual)}</p>
+                          ) : null}
+                          {themeCtaScene.text ? (
+                            <p className="mt-1 text-sm leading-6 text-emerald-950"><span className="font-semibold">On-screen / VO: </span>{String(themeCtaScene.text)}</p>
+                          ) : null}
+                          {themeCtaScene.audio ? (
+                            <p className="mt-1 text-sm leading-6 text-emerald-950"><span className="font-semibold">Audio: </span>{String(themeCtaScene.audio)}</p>
+                          ) : null}
+                          {themeCtaScene.platform_cta ? (
+                            <p className="mt-1 text-sm leading-6 text-emerald-950"><span className="font-semibold">Platform CTA: </span>{String(themeCtaScene.platform_cta)}</p>
+                          ) : null}
+                        </div>
+                      )}
+
+                      {Object.keys(themePlatformNotes).length > 0 && (
+                        <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-xs leading-5 text-gray-700">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">Platform Notes</p>
+                          {themePlatformNotes.optimal_aspect_ratio ? <p className="mt-1">Aspect ratio: {String(themePlatformNotes.optimal_aspect_ratio)}</p> : null}
+                          {Array.isArray(themePlatformNotes.recommended_platforms) && themePlatformNotes.recommended_platforms.length > 0 ? (
+                            <p className="mt-1">Recommended platforms: {(themePlatformNotes.recommended_platforms as unknown[]).map(String).join(', ')}</p>
+                          ) : null}
+                          {themePlatformNotes.trending_audio_style ? <p className="mt-1">Audio style: {String(themePlatformNotes.trending_audio_style)}</p> : null}
+                          {themePlatformNotes.target_retention_point ? <p className="mt-1">Retention target: {String(themePlatformNotes.target_retention_point)}</p> : null}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {mediaUrls.length > 0 && (
                     <div>
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -2848,6 +3170,11 @@ export default function CreatorTypeWorkflowPage() {
                           {overlayQuality ? (
                             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-700">
                               Quality {overlayQuality.score ?? 'n/a'}
+                            </span>
+                          ) : null}
+                          {creatorQuality ? (
+                            <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-[10px] font-semibold text-cyan-800">
+                              Clean {creatorQuality.cleanliness ?? 'n/a'} · Read {creatorQuality.readability ?? 'n/a'}
                             </span>
                           ) : null}
                           {isDirectionCardPreview ? (
@@ -2927,6 +3254,12 @@ export default function CreatorTypeWorkflowPage() {
                       {overlayQuality?.flags?.length ? (
                         <p className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-700">
                           Internal review flags: {overlayQuality.flags.join(', ')}.
+                        </p>
+                      ) : null}
+                      {visualGovernanceWarnings.length > 0 ? (
+                        <p className="mt-2 rounded-2xl border border-rose-100 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800">
+                          Visual governance warnings: {visualGovernanceWarnings.join(', ')}.
+                          {typeof creatorQuality?.clutterRisk === 'number' ? ` Density score: ${Math.max(0, 100 - creatorQuality.clutterRisk)}.` : ''}
                         </p>
                       ) : null}
                     </div>

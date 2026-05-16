@@ -26,14 +26,7 @@ export async function resolveAnalyticsReportInput(params: {
   });
 
   const googleAnalyticsReadiness = await getGoogleAnalyticsCapabilityReadiness(params.companyId);
-  const googleAnalyticsAvailable =
-    googleAnalyticsReadiness.connected ||
-    (
-      googleAnalyticsReadiness.provider_authenticated &&
-      googleAnalyticsReadiness.status !== 'property_required' &&
-      googleAnalyticsReadiness.status !== 'provider_not_connected' &&
-      googleAnalyticsReadiness.status !== 'missing_scope'
-    );
+  const googleAnalyticsAvailable = googleAnalyticsReadiness.connected && googleAnalyticsReadiness.capability_ready;
   if (googleAnalyticsAvailable) {
     resolved.integrations.google_analytics = {
       ...resolved.integrations.google_analytics,

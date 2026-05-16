@@ -131,6 +131,49 @@ export type CompanyProfile = {
         threshold_met?: boolean | null;
         detail_mode?: 'high_confidence' | 'expanded_context' | null;
       } | null;
+      unified_competitor_intelligence?: {
+        status: 'ready' | 'limited' | 'unavailable';
+        generated_at: string;
+        summary: string;
+        competitors: Array<{
+          name: string;
+          domain?: string | null;
+          sources: string[];
+          confidence: 'high' | 'medium' | 'low';
+          freshness: 'fresh' | 'aging' | 'stale' | 'unverified';
+          latest_evidence_at?: string | null;
+          scores: {
+            visibility_share: number;
+            authority_gap: number;
+            topic_dominance: number;
+            search_intent_competition: number;
+            commercial_overlap: number;
+            discoverability_threat: number;
+            growth_momentum: number;
+            strategic_priority: number;
+          };
+          evidence_refs: string[];
+          evidence: Record<string, unknown>;
+        }>;
+        opportunities: Array<{
+          id: string;
+          type: string;
+          title: string;
+          competitor_domain?: string | null;
+          priority_score: number;
+          confidence: 'high' | 'medium' | 'low';
+          recommendation: string;
+          evidence_refs: string[];
+          evidence: Record<string, unknown>;
+        }>;
+        quality: {
+          total_candidates: number;
+          suppressed_low_confidence: number;
+          stale_suppressed: number;
+          duplicate_domains_consolidated: number;
+          serp_evidence_rows: number;
+        };
+      } | null;
       market_alternatives?: Array<{
         name: string;
         domain?: string | null;
@@ -178,6 +221,199 @@ export type CompanyProfile = {
     } | null;
     user_guidance?: UserGuidedIntelligence | null;
   } | null;
+};
+
+export type IntelligenceReviewStatus =
+  | 'missing'
+  | 'unknown'
+  | 'inferred'
+  | 'user_confirmed'
+  | 'stale'
+  | 'conflicting'
+  | 'deprecated'
+  | 'system_generated'
+  | 'needs_review';
+
+export type IntelligenceEntityState =
+  | 'missing'
+  | 'unknown'
+  | 'inferred'
+  | 'user_confirmed'
+  | 'stale'
+  | 'conflicting'
+  | 'deprecated'
+  | 'system_generated'
+  | 'irrelevant'
+  | 'low_confidence';
+
+export type ConsistencyWarning = {
+  code: string;
+  severity: 'info' | 'warning' | 'critical';
+  message: string;
+  entity_type?: string;
+  entity_id?: string | null;
+};
+
+export type IntelligenceMetadata = {
+  confidence?: number | null;
+  source?: 'user' | 'ai_inferred' | 'integration' | 'import' | 'system' | 'unknown' | string | null;
+  user_confirmed?: boolean | null;
+  inferred_by?: string | null;
+  last_verified_at?: string | null;
+  stale_at?: string | null;
+  review_status?: IntelligenceReviewStatus | string | null;
+  entity_state?: IntelligenceEntityState | string | null;
+  field_states?: Record<string, IntelligenceEntityState> | null;
+  updated_by?: string | null;
+  update_source?: string | null;
+  inference_reason?: string | null;
+  source_signals?: Array<{ field: string; value: unknown; weight: number } | string> | null;
+  inference_strength?: 'weak' | 'strong' | 'conflicting' | string | null;
+  enrichment_provenance?: Record<string, unknown> | null;
+};
+
+export type CompanyRevenueSegment = IntelligenceMetadata & {
+  id?: string;
+  customer_industry?: string | null;
+  customer_industry_key?: string | null;
+  customer_segment?: string | null;
+  customer_segment_key?: string | null;
+  geography?: string | null;
+  geography_key?: string | null;
+  revenue_percentage?: number | string | null;
+  strategic_priority?: string | null;
+  strategic_priority_key?: string | null;
+  notes?: string | null;
+};
+
+export type CompanyGeographicExposure = IntelligenceMetadata & {
+  id?: string;
+  geography?: string | null;
+  geography_key?: string | null;
+  exposure_type: 'revenue' | 'operations' | 'workforce' | 'customers' | 'vendors';
+  exposure_type_key?: string | null;
+  exposure_percentage?: number | string | null;
+  criticality?: string | null;
+  criticality_key?: string | null;
+};
+
+export type CompanyDependency = IntelligenceMetadata & {
+  id?: string;
+  dependency_type:
+    | 'cloud'
+    | 'vendor'
+    | 'supplier'
+    | 'logistics'
+    | 'labor'
+    | 'platform'
+    | 'channel'
+    | 'regulatory'
+    | 'technology'
+    | 'other';
+  dependency_type_key?: string | null;
+  dependency_name?: string | null;
+  dependency_region?: string | null;
+  dependency_region_key?: string | null;
+  criticality?: string | null;
+  criticality_key?: string | null;
+  operational_sensitivity?: string | null;
+  operational_sensitivity_key?: string | null;
+  notes?: string | null;
+};
+
+export type CompanyRegulatoryExposure = IntelligenceMetadata & {
+  id?: string;
+  jurisdiction?: string | null;
+  jurisdiction_key?: string | null;
+  regulation_type?: string | null;
+  regulation_type_key?: string | null;
+  applicability?: string | null;
+  severity?: string | null;
+  severity_key?: string | null;
+  notes?: string | null;
+};
+
+export type CompanyWorkforceProfile = IntelligenceMetadata & {
+  workforce_model?: string | null;
+  workforce_model_key?: string | null;
+  hiring_markets?: string[] | string | null;
+  contractor_dependency_level?: string | null;
+  contractor_dependency_level_key?: string | null;
+  immigration_dependency_level?: string | null;
+  immigration_dependency_level_key?: string | null;
+  key_skill_dependencies?: string[] | string | null;
+  labor_sensitivity_level?: string | null;
+  labor_sensitivity_level_key?: string | null;
+  remote_dependency_level?: string | null;
+  remote_dependency_level_key?: string | null;
+};
+
+export type CompanyTechnologyDependency = IntelligenceMetadata & {
+  id?: string;
+  provider_name?: string | null;
+  provider_category?: string | null;
+  provider_category_key?: string | null;
+  criticality?: string | null;
+  criticality_key?: string | null;
+  spend_sensitivity?: string | null;
+  spend_sensitivity_key?: string | null;
+  operational_dependency?: string | null;
+  notes?: string | null;
+};
+
+export type CompanyContextIntelligence = {
+  revenue_segments: CompanyRevenueSegment[];
+  geographic_exposures: CompanyGeographicExposure[];
+  dependencies: CompanyDependency[];
+  regulatory_exposures: CompanyRegulatoryExposure[];
+  workforce_profile: CompanyWorkforceProfile | null;
+  technology_dependencies: CompanyTechnologyDependency[];
+  state?: Record<string, IntelligenceEntityState>;
+  validation_warnings?: ConsistencyWarning[];
+};
+
+export type IntelligenceReadiness = {
+  score: number;
+  section_scores: {
+    market_exposure: number;
+    dependency: number;
+    workforce: number;
+    regulatory: number;
+    geographic: number;
+    strategic_state: number;
+  };
+  missing_sections: string[];
+};
+
+export type CompanyContextQuality = {
+  intelligence_density_score: number;
+  context_reliability_score: number;
+  inference_coverage_score: number;
+  stale_context_score: number;
+  degraded_context: boolean;
+  degradation_reasons: string[];
+};
+
+export type CompanyContextEnrichmentSuggestion = {
+  id: string;
+  target_section:
+    | 'revenue_segments'
+    | 'geographic_exposures'
+    | 'dependencies'
+    | 'regulatory_exposures'
+    | 'workforce_profile'
+    | 'technology_dependencies';
+  target_entity_type: string;
+  suggestion_type: 'add_entity' | 'update_entity' | 'confirm_entity' | 'ask_user';
+  payload: Record<string, any>;
+  confidence: number;
+  inference_strength: 'weak' | 'strong' | 'conflicting';
+  inference_reason: string;
+  source_signals: Array<{ field: string; value: unknown; weight: number }>;
+  impact_score: number;
+  readiness_impact_estimate: number;
+  status?: 'pending' | 'accepted' | 'rejected' | 'modified' | 'snoozed' | 'expired';
+  created_at?: string;
 };
 
 export type UserGuidedIntelligence = {

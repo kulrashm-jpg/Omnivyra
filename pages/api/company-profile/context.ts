@@ -1,12 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getProfile } from '../../../backend/services/companyProfileService';
 import {
-  buildCompanyContext,
+  buildCompanyContextWithIntelligence,
   buildLimitedCompanyContext,
   buildForcedCompanyContext,
   computeCompanyContextCompletion,
   FORCED_CONTEXT_FIELD_LABELS,
 } from '../../../backend/services/companyContextService';
+import { calculateIntelligenceReadiness } from '../../../backend/services/companyContextIntelligenceService';
 import { resolveCompanyAccess } from '../../../backend/services/contentArchitectService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -22,7 +23,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const isCompanyAdminOnly = access.role === 'COMPANY_ADMIN';
   const companyContext = isCompanyAdminOnly
     ? buildLimitedCompanyContext(profile)
-    : buildCompanyContext(profile);
+    : await buildCompanyContextWithIntelligence(profile, companyId);
 
   const forcedContextFields = profile?.forced_context_fields ?? null;
   const { forced_context, forced_context_enabled_fields } = buildForcedCompanyContext(
@@ -41,6 +42,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   return res.status(200).json({
     company_context: companyContext,
     company_context_completion: isCompanyAdminOnly ? 0 : company_context_completion,
+    intelligence_context: isCompanyAdminOnly ? null : (companyContext.intelligence ?? null),
+    intelligence_readiness: isCompanyAdminOnly
+      ? null
+      : calculateIntelligenceReadiness({ intelligence: companyContext.intelligence ?? null, profile }),
     forced_context_enabled_fields: isCompanyAdminOnly ? [] : forced_context_enabled_fields,
     forced_context_active_labels,
     forced_context: isCompanyAdminOnly ? null : (Object.keys(forced_context).length > 0 ? forced_context : null),

@@ -10,6 +10,7 @@ import { recordConsent, revokeConsent, getActiveConsent } from './consentLedgerS
 import {
   publishCapabilityChangedEvent,
 } from '../events/listeningEvents';
+import { invalidateCapabilityAggregate } from './capabilityCacheService';
 
 export type EnableCapabilityInput = {
   organizationId: string;
@@ -110,6 +111,8 @@ export async function enableCapability(
     row = data as IntegrationCapabilityRecord;
   }
 
+  invalidateCapabilityAggregate(row.organization_id);
+
   await publishCapabilityChangedEvent({
     organization_id: row.organization_id,
     platform: row.platform,
@@ -160,6 +163,8 @@ export async function disableCapability(
   }
 
   const row = data as IntegrationCapabilityRecord;
+
+  invalidateCapabilityAggregate(row.organization_id);
 
   await publishCapabilityChangedEvent({
     organization_id: row.organization_id,

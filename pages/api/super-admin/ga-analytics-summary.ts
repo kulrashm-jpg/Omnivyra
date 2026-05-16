@@ -79,27 +79,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       eventRows,
       conversionRows,
     ] = await Promise.all([
-      getGoogleAnalyticsStatusPayload(companyId).catch(() => ({
+      getGoogleAnalyticsStatusPayload(companyId).catch((error) => ({
         connected: false,
         status: 'error',
-        message: 'Failed to load Google Analytics status',
+        message: error instanceof Error ? error.message : 'Failed to load Google Analytics status',
         property: null,
         last_sync: null,
         events_last_30_days: 0,
         properties: [],
         reconnect_required: false,
+        degraded: true,
+        status_error: error instanceof Error ? error.message : String(error),
       })),
       matchingDomainIds.length > 0
-        ? fetchAllRows<{ page_view_count: number | null; is_engaged: boolean | null; engagement_time_msec: number | null }>((from, to) =>
+        ? fetchAllRows<{
+            id: string;
+            external_session_id: string | null;
+            source: string | null;
+            source_medium: string | null;
+            session_count: number | null;
+            page_view_count: number | null;
+            is_engaged: boolean | null;
+            engagement_time_msec: number | null;
+          }>((from, to) =>
             supabase
               .from('canonical_sessions')
-              .select('page_view_count, is_engaged, engagement_time_msec')
+              .select('id, external_session_id, source, source_medium, session_count, page_view_count, is_engaged, engagement_time_msec')
               .eq('company_id', companyId)
               .in('domain_id', matchingDomainIds)
               .gte('started_at', windowStart)
               .range(from, to),
           )
-        : Promise.resolve([] as Array<{ page_view_count: number | null; is_engaged: boolean | null; engagement_time_msec: number | null }>),
+        : Promise.resolve([] as Array<{
+            id: string;
+            external_session_id: string | null;
+            source: string | null;
+            source_medium: string | null;
+            session_count: number | null;
+            page_view_count: number | null;
+            is_engaged: boolean | null;
+            engagement_time_msec: number | null;
+          }>),
       fetchAllRows<{ page_url: string | null; view_count: number | null }>((from, to) =>
         supabase
           .from('canonical_page_views')
@@ -130,8 +150,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const filteredEvents = eventRows.filter((row) => normalizeWebsiteDomain(row.page_url) === websiteHost);
     const filteredConversions = conversionRows.filter((row) => normalizeWebsiteDomain(row.page_url) === websiteHost);
 
+    const sessionCountFor = (row: { session_count: number | null }) =>
+      Math.max(1, Number(row.session_count ?? 1));
     const engagedSessions = sessionRows.reduce(
-      (sum, row) => sum + (row.is_engaged ? 1 : 0),
+      (sum, row) => sum + (row.is_engaged ? sessionCountFor(row) : 0),
       0,
     );
     const totalPageViews = filteredPageViews.reduce((sum, row) => sum + Math.max(0, Number(row.view_count ?? 0)), 0);
@@ -140,10 +162,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       0,
     );
     const eventsBySession = new Map<string, number>();
-    const trafficSourceAgg = new Map<string, { sessions: Set<string>; events: number; conversions: number }>();
+    const trafficSourceAgg = new Map<string, { sessionIds: Set<string>; sessions: number; events: number; conversions: number }>();
     const topPageAgg = new Map<string, { visits: number; events: number; conversions: number }>();
     const conversionAgg = new Map<string, number>();
     const conversionSessions = new Set<string>();
+
+    for (const row of sessionRows) {
+      const trafficSource = String(row.source ?? 'unknown').trim() || 'unknown';
+      const sourceMedium = String(row.source_medium ?? 'unknown').trim() || 'unknown';
+      const trafficKey = `${trafficSource}|${sourceMedium}`;
+      const trafficBucket = trafficSourceAgg.get(trafficKey) ?? {
+        sessionIds: new Set<string>(),
+        sessions: 0,
+        events: 0,
+        conversions: 0,
+      };
+      trafficBucket.sessionIds.add(String(row.external_session_id || row.id));
+      trafficBucket.sessions += sessionCountFor(row);
+      trafficSourceAgg.set(trafficKey, trafficBucket);
+    }
 
     for (const row of filteredEvents) {
       const count = aggregatedCount(row.metadata);
@@ -153,11 +190,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const sourceMedium = String(row.metadata?.source_medium ?? 'unknown').trim() || 'unknown';
       const trafficKey = `${trafficSource}|${sourceMedium}`;
       const trafficBucket = trafficSourceAgg.get(trafficKey) ?? {
-        sessions: new Set<string>(),
+        sessionIds: new Set<string>(),
+        sessions: 0,
         events: 0,
         conversions: 0,
       };
-      trafficBucket.sessions.add(row.session_id);
+      trafficBucket.sessionIds.add(row.session_id);
       trafficBucket.events += count;
       if (row.event_category === 'conversion') {
         trafficBucket.conversions += count;
@@ -196,7 +234,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return {
           traffic_source,
           source_medium,
-          sessions: value.sessions.size,
+          sessions: value.sessions > 0 ? value.sessions : value.sessionIds.size,
           events: value.events,
           conversions: value.conversions,
         };
@@ -215,7 +253,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const conversions = Array.from(conversionAgg.entries())
       .map(([conversion_name, count]) => ({ conversion_name, count }))
       .sort((a, b) => b.count - a.count);
-    const totalSessions = sessionRows.length;
+    const totalSessions = sessionRows.reduce((sum, row) => sum + sessionCountFor(row), 0);
     const totalConversions = conversions.reduce((sum, row) => sum + row.count, 0);
 
     return res.status(200).json({
@@ -231,6 +269,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         reconnect_required: gaStatus.reconnect_required,
         property: gaStatus.property,
         properties: gaStatus.properties || [],
+        degraded: Boolean((gaStatus as any).degraded) || gaStatus.status !== 'ready',
+        status_error: (gaStatus as any).status_error ?? null,
+        provider_readiness: (gaStatus as any).provider_readiness ?? null,
+        search_console: (gaStatus as any).search_console ?? null,
       },
       overview: {
         total_sessions: totalSessions,

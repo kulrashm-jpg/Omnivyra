@@ -488,8 +488,8 @@ function buildProfileForCompetitorDiscovery(
     geography_list: geographyUpdate.value,
     products_services_list: productsUpdate.value,
     target_audience_list: audienceUpdate.value,
-    competitors: null,
-    competitors_list: [],
+    competitors: workingProfile.competitors ?? null,
+    competitors_list: workingProfile.competitors_list ?? splitToList(workingProfile.competitors),
   };
 }
 
@@ -568,6 +568,8 @@ function profileDiscoverySignalText(profile: CompanyProfile, keywords: string[] 
     ...(profile.goals_list ?? []),
     ...(profile.content_themes_list ?? []),
     ...(profile.brand_voice_list ?? []),
+    ...(profile.competitors_list ?? []),
+    profile.competitors,
     ...keywords,
   ].filter(Boolean).join(' ').toLowerCase();
 }
@@ -1076,6 +1078,10 @@ async function discoverRefineCompetitorCandidates(
   profile: CompanyProfile,
 ): Promise<RefineCompetitorDiscovery> {
   const archetype = profile.report_settings?.entity_archetype ?? null;
+  const storedCompetitorCandidates = buildCandidatesFromNames(
+    storedCompetitorNames(profile),
+    'profile_ai',
+  );
   const archetypeSeeds = buildArchetypeNativeDiscoverySeeds(profile, archetype);
   const keywords = ensureMinimumDiscoveryKeywords(profile, [
     ...archetypeSeeds,
@@ -1118,10 +1124,12 @@ async function discoverRefineCompetitorCandidates(
     ? prioritizedFallbackCandidates
     : knownDatasetCompetitorCandidates(profile.geography ?? null);
   const candidates = applyUserGuidedCompetitorSteering(profile, dedupeCompetitorCandidates([
+    ...storedCompetitorCandidates,
     ...archetypeCandidates,
     ...(serpCandidates.length > 0 ? serpCandidates : fallbackCandidates),
   ]));
   const fallbackWithArchetype = applyUserGuidedCompetitorSteering(profile, dedupeCompetitorCandidates([
+    ...storedCompetitorCandidates,
     ...archetypeCandidates,
     ...fallbackCandidates,
   ]));
@@ -1129,6 +1137,7 @@ async function discoverRefineCompetitorCandidates(
   console.info('[refine][competitor-discovery]', {
     keywords_generated: keywords,
     archetype_keywords_generated: archetypeSeeds,
+    stored_competitors: storedCompetitorCandidates.map((candidate) => candidate.name),
     archetype_candidates_generated: archetypeCandidates.map((candidate) => candidate.name),
     user_guided_competitors: profile.report_settings?.user_guidance?.competitors?.length ?? 0,
     serp_domains_found: serpDomains.length,

@@ -19,8 +19,8 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { isPlatformSuperAdmin } from './rbacService';
-import { getSupabaseUserFromRequest } from './supabaseAuthService';
+import { SUPER_ADMIN_DASHBOARD_VIEW } from '../../shared/contracts/security';
+import { requireCapability } from '../security/requireCapability';
 
 export type SuperAdminGaPrincipal = {
   userId: string | null;
@@ -31,29 +31,17 @@ export async function requireSuperAdminGaAccess(
   req: NextApiRequest,
   res: NextApiResponse,
 ): Promise<SuperAdminGaPrincipal | null> {
-  if (req.cookies?.super_admin_session === '1') {
-    return { userId: null, via: 'cookie' };
-  }
-
-  const { user, error } = await getSupabaseUserFromRequest(req);
-  if (error || !user?.id) {
-    res.status(403).json({
-      status: 'error',
-      code: 'GA_NOT_AUTHENTICATED',
-      message: 'Super admin sign-in is required to manage Google Analytics.',
-    });
+  const guard = await requireCapability(req, res, {
+    capability: SUPER_ADMIN_DASHBOARD_VIEW,
+    reason: 'manage Omnivyra Google Analytics connection',
+    requireStepUp: false,
+  });
+  if (guard.ok !== true) {
     return null;
   }
 
-  const allowed = await isPlatformSuperAdmin(user.id);
-  if (!allowed) {
-    res.status(403).json({
-      status: 'error',
-      code: 'GA_FORBIDDEN_ROLE',
-      message: 'Your account is not a platform Super Admin and cannot manage Google Analytics.',
-    });
-    return null;
-  }
-
-  return { userId: user.id, via: 'supabase' };
+  return {
+    userId: guard.principal.legacyCookieSuperAdmin ? null : guard.principal.userId,
+    via: guard.principal.legacyCookieSuperAdmin ? 'cookie' : 'supabase',
+  };
 }
