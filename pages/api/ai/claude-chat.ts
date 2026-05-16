@@ -1,5 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
+
+const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
+const TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
+const CLAUDE_CHAT_LIMIT = {
+  keyPrefix: 'rl:ai:claude-chat',
+  limit: 20,
+  windowSecs: 60,
+};
+
+type CredentialMode = 'platform' | 'byok';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -11,15 +22,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { message, context, stream = true } = req.body;
+  const { message, context = 'general', stream = true, apiKey: requestApiKey, credentialMode: rawCredentialMode } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (rawCredentialMode !== 'platform' && rawCredentialMode !== 'byok') {
+    return res.status(400).json({
+      error: 'credentialMode must be either "platform" or "byok"',
+      code: 'INVALID_CREDENTIAL_MODE',
+    });
+  }
+  const credentialMode: CredentialMode = rawCredentialMode;
+
+  const rl = await checkRateLimit(rateLimitIdentifier(req, user), {
+    ...CLAUDE_CHAT_LIMIT,
+    keyPrefix: `${CLAUDE_CHAT_LIMIT.keyPrefix}:${credentialMode}`,
+  });
+  if (!rl.allowed) {
+    return res.status(429).json({ error: 'Too many Claude requests. Please try again later.' });
+  }
+
+  let apiKey: string | undefined;
+  if (credentialMode === 'platform') {
+    apiKey = process.env.ANTHROPIC_API_KEY;
+  } else {
+    apiKey = typeof requestApiKey === 'string' ? requestApiKey.trim() : '';
+  }
+
   if (!apiKey) {
-    return res.status(400).json({ error: 'Anthropic API key is required' });
+    return res.status(400).json({
+      error: credentialMode === 'platform'
+        ? 'Platform Anthropic API key is not configured'
+        : 'Anthropic API key is required for BYO-key mode',
+      code: credentialMode === 'platform' ? 'PLATFORM_KEY_MISSING' : 'BYOK_KEY_REQUIRED',
+    });
   }
 
   try {
@@ -34,44 +72,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       res.setHeader('X-Accel-Buffering', 'no'); // Disable buffering for nginx
     }
     
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': apiKey,
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        system: systemPrompt,
-        stream: stream,
-        messages: [
-          {
-            role: 'user',
-            content: message
-          }
-        ]
-      }),
+    const model = process.env.ANTHROPIC_MODEL || process.env.CLAUDE_MODEL || DEFAULT_CLAUDE_MODEL;
+    const response = await callAnthropicWithRetry({
+      apiKey,
+      model,
+      systemPrompt,
+      stream,
+      message,
     });
 
     if (!response.ok) {
-      let errorMessage = 'Anthropic API error';
-      try {
-        const errorData = await response.json();
-        console.error('Anthropic API Error:', errorData);
-        
-        if (errorData.error?.message) {
-          errorMessage = errorData.error.message.replace(/[^\x00-\x7F]/g, '');
-        } else if (errorData.error) {
-          errorMessage = JSON.stringify(errorData.error).replace(/[^\x00-\x7F]/g, '');
-        } else if (typeof errorData === 'string') {
-          errorMessage = errorData.replace(/[^\x00-\x7F]/g, '');
-        }
-      } catch (parseError) {
-        console.error('Error parsing API response:', parseError);
-        errorMessage = `API Error: ${response.status} ${response.statusText}`;
-      }
+      const errorMessage = await extractAnthropicError(response);
       
       if (stream) {
         res.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
@@ -123,7 +134,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch (streamError) {
-        console.error('Streaming error:', streamError);
+        logClaudeError('Streaming error', streamError);
         res.write(`data: ${JSON.stringify({ error: 'Streaming error occurred' })}\n\n`);
         res.end();
       }
@@ -140,17 +151,116 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
   } catch (error: any) {
-    console.error('Claude API Error:', error);
+    logClaudeError('Claude API Error', error);
+    const clientMessage = sanitizeClientError(error?.message || 'Failed to get response from Claude');
     if (stream) {
-      res.write(`data: ${JSON.stringify({ error: error.message || 'Failed to get response from Claude' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: clientMessage })}\n\n`);
       res.end();
     } else {
       res.status(500).json({ 
-        error: error.message || 'Failed to get response from Claude',
-        details: error.message
+        error: clientMessage,
+        details: clientMessage
       });
     }
   }
+}
+
+function rateLimitIdentifier(req: NextApiRequest, user: { id?: string; email?: string | null }): string {
+  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
+    .split(',')[0]
+    .trim();
+  return `${user.id ?? user.email ?? 'unknown'}:${ip}`;
+}
+
+function logClaudeError(label: string, error: unknown): void {
+  const record = error && typeof error === 'object' ? error as { name?: unknown; message?: unknown; status?: unknown; code?: unknown } : {};
+  console.error(label, {
+    name: typeof record.name === 'string' ? record.name : undefined,
+    status: typeof record.status === 'number' ? record.status : undefined,
+    code: typeof record.code === 'string' ? record.code : undefined,
+    message: sanitizeLogMessage(typeof record.message === 'string' ? record.message : String(error ?? 'unknown')),
+  });
+}
+
+function sanitizeLogMessage(message: string): string {
+  return message
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, '[redacted-anthropic-key]')
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, '[redacted-key]')
+    .slice(0, 500);
+}
+
+function sanitizeClientError(message: string): string {
+  return sanitizeLogMessage(message) || 'Failed to get response from Claude';
+}
+
+async function callAnthropicWithRetry(input: {
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  stream: boolean;
+  message: string;
+}): Promise<Response> {
+  let lastResponse: Response | null = null;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': input.apiKey,
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: input.model,
+        max_tokens: 1000,
+        system: input.systemPrompt,
+        stream: input.stream,
+        messages: [
+          {
+            role: 'user',
+            content: input.message,
+          },
+        ],
+      }),
+    });
+
+    lastResponse = response;
+    if (!TRANSIENT_STATUS_CODES.has(response.status) || attempt === 3) return response;
+
+    // Drain the failed response before retrying so the connection can be reused.
+    await response.text().catch(() => '');
+    await new Promise((resolve) => setTimeout(resolve, attempt * 750));
+  }
+
+  return lastResponse!;
+}
+
+async function extractAnthropicError(response: Response): Promise<string> {
+  const fallback = TRANSIENT_STATUS_CODES.has(response.status)
+    ? 'Claude is temporarily unavailable. Please try again in a moment.'
+    : `API Error: ${response.status} ${response.statusText}`;
+  try {
+    const errorData = await response.json();
+    console.error('Anthropic API Error:', {
+      status: response.status,
+      type: errorData?.error?.type,
+      message: sanitizeLogMessage(String(errorData?.error?.message ?? '')),
+    });
+
+    if (TRANSIENT_STATUS_CODES.has(response.status)) return fallback;
+    if (errorData.error?.message) {
+      return errorData.error.message.replace(/[^\x00-\x7F]/g, '');
+    }
+    if (errorData.error) {
+      return JSON.stringify(errorData.error).replace(/[^\x00-\x7F]/g, '');
+    }
+    if (typeof errorData === 'string') {
+      return errorData.replace(/[^\x00-\x7F]/g, '');
+    }
+  } catch (parseError) {
+    logClaudeError('Error parsing API response', parseError);
+  }
+  return fallback;
 }
 
 function getSystemPrompt(context: string): string {

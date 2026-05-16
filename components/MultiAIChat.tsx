@@ -69,6 +69,27 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    return () => {
+      setApiKeys({ openai: '', anthropic: '' });
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setApiKeys({ openai: '', anthropic: '' });
+    }
+  }, [isOpen]);
+
+  const clearSensitiveKeys = () => {
+    setApiKeys({ openai: '', anthropic: '' });
+  };
+
+  const handleClose = () => {
+    clearSensitiveKeys();
+    onClose();
+  };
+
   const sendMessage = async () => {
     if (!newMessage.trim() && attachments.length === 0) return;
 
@@ -223,22 +244,23 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
               const data = line.slice(6);
               if (data.trim() === '' || data === '[DONE]') continue;
 
+              let parsed: any;
               try {
-                const parsed = JSON.parse(data);
-                if (parsed.error) {
-                  throw new Error(parsed.error);
+                parsed = JSON.parse(data);
+              } catch {
+                continue;
+              }
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+              if (parsed.content) {
+                fullResponse += parsed.content;
+                if (onChunk) {
+                  onChunk(parsed.content);
                 }
-                if (parsed.content) {
-                  fullResponse += parsed.content;
-                  if (onChunk) {
-                    onChunk(parsed.content);
-                  }
-                }
-                if (parsed.done) {
-                  return fullResponse;
-                }
-              } catch (e) {
-                // Skip invalid JSON
+              }
+              if (parsed.done) {
+                return fullResponse;
               }
             }
           }
@@ -268,6 +290,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
         message,
         context,
         apiKey: apiKeys.anthropic,
+        credentialMode: apiKeys.anthropic.trim() ? 'byok' : 'platform',
         stream: true
       }),
     });
@@ -298,22 +321,23 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
               const data = line.slice(6);
               if (data.trim() === '' || data === '[DONE]') continue;
 
+              let parsed: any;
               try {
-                const parsed = JSON.parse(data);
-                if (parsed.error) {
-                  throw new Error(parsed.error);
+                parsed = JSON.parse(data);
+              } catch {
+                continue;
+              }
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+              if (parsed.content) {
+                fullResponse += parsed.content;
+                if (onChunk) {
+                  onChunk(parsed.content);
                 }
-                if (parsed.content) {
-                  fullResponse += parsed.content;
-                  if (onChunk) {
-                    onChunk(parsed.content);
-                  }
-                }
-                if (parsed.done) {
-                  return fullResponse;
-                }
-              } catch (e) {
-                // Skip invalid JSON
+              }
+              if (parsed.done) {
+                return fullResponse;
               }
             }
           }
@@ -440,7 +464,7 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
               <Minimize2 className="h-4 w-4" />
             </button>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
             >
               <X className="h-4 w-4" />
@@ -496,16 +520,21 @@ export default function AIChat({ isOpen, onClose, onMinimize, context = "general
                     </div>
                   )}
                   {selectedProvider === 'claude' && (
-                    <div className="flex items-center gap-2">
-                      <Key className="h-4 w-4 text-gray-500" />
-                      <input
-                        type="password"
-                        placeholder="Enter your Anthropic API Key"
-                        value={apiKeys.anthropic}
-                        onChange={(e) => setApiKeys(prev => ({ ...prev, anthropic: e.target.value }))}
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      />
-                    </div>
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Key className="h-4 w-4 text-gray-500" />
+                        <input
+                          type="password"
+                          placeholder="Optional Anthropic API Key"
+                          value={apiKeys.anthropic}
+                          onChange={(e) => setApiKeys(prev => ({ ...prev, anthropic: e.target.value }))}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                        />
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        BYO keys are sent to the Omnivyra server to call Anthropic and are not intentionally persisted.
+                      </p>
+                    </>
                   )}
                 </div>
               )}

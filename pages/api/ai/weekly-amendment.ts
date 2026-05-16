@@ -41,6 +41,7 @@ Please provide a detailed amendment that includes:
 
 Format your response as a structured amendment that can be applied to the week.`,
         context: 'weekly-amendment',
+        credentialMode: 'platform',
         campaignData: campaignData,
         campaignLearnings: []
       })
