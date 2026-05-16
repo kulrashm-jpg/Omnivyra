@@ -1967,7 +1967,6 @@ export default function CreatorTypeWorkflowPage() {
           url: typeof mediaBundle.url === 'string' ? mediaBundle.url : undefined,
           files: filesFromBundle,
           previewKind: typeof mediaBundle.metadata?.preview_kind === 'string' ? mediaBundle.metadata.preview_kind : undefined,
-          attachmentMode: writerSource ? undefined : renderedAttachmentMode ?? undefined,
           attachmentMode: writerAttachmentMode ?? undefined,
           compositionIntent: writerCompositionIntent ?? undefined,
           platformContext: selectedPlatform,

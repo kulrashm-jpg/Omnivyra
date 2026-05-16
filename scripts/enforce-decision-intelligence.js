@@ -52,6 +52,7 @@ const tenantGuardPatterns = [
   'requireCompanyContext(',
   'enforceCompanyAccess(',
   'requireCampaignAccess(',
+  'assertOrgAccess(',
 ];
 
 const tenantEnforcedApiPrefixes = [
