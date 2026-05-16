@@ -1,8 +1,16 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { checkRateLimit } from '../../../lib/auth/rateLimit';
 
 const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
 const TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 504, 529]);
+const CLAUDE_CHAT_LIMIT = {
+  keyPrefix: 'rl:ai:claude-chat',
+  limit: 20,
+  windowSecs: 60,
+};
+
+type CredentialMode = 'platform' | 'byok';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -14,17 +22,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { message, context = 'general', stream = true, apiKey: requestApiKey } = req.body;
+  const { message, context = 'general', stream = true, apiKey: requestApiKey, credentialMode: rawCredentialMode } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: 'Message is required' });
   }
 
-  const apiKey = typeof requestApiKey === 'string' && requestApiKey.trim()
-    ? requestApiKey.trim()
-    : process.env.ANTHROPIC_API_KEY;
+  if (rawCredentialMode !== 'platform' && rawCredentialMode !== 'byok') {
+    return res.status(400).json({
+      error: 'credentialMode must be either "platform" or "byok"',
+      code: 'INVALID_CREDENTIAL_MODE',
+    });
+  }
+  const credentialMode: CredentialMode = rawCredentialMode;
+
+  const rl = await checkRateLimit(rateLimitIdentifier(req, user), {
+    ...CLAUDE_CHAT_LIMIT,
+    keyPrefix: `${CLAUDE_CHAT_LIMIT.keyPrefix}:${credentialMode}`,
+  });
+  if (!rl.allowed) {
+    return res.status(429).json({ error: 'Too many Claude requests. Please try again later.' });
+  }
+
+  let apiKey: string | undefined;
+  if (credentialMode === 'platform') {
+    apiKey = process.env.ANTHROPIC_API_KEY;
+  } else {
+    apiKey = typeof requestApiKey === 'string' ? requestApiKey.trim() : '';
+  }
+
   if (!apiKey) {
-    return res.status(400).json({ error: 'Anthropic API key is required' });
+    return res.status(400).json({
+      error: credentialMode === 'platform'
+        ? 'Platform Anthropic API key is not configured'
+        : 'Anthropic API key is required for BYO-key mode',
+      code: credentialMode === 'platform' ? 'PLATFORM_KEY_MISSING' : 'BYOK_KEY_REQUIRED',
+    });
   }
 
   try {
@@ -101,7 +134,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch (streamError) {
-        console.error('Streaming error:', streamError);
+        logClaudeError('Streaming error', streamError);
         res.write(`data: ${JSON.stringify({ error: 'Streaming error occurred' })}\n\n`);
         res.end();
       }
@@ -118,17 +151,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
   } catch (error: any) {
-    console.error('Claude API Error:', error);
+    logClaudeError('Claude API Error', error);
+    const clientMessage = sanitizeClientError(error?.message || 'Failed to get response from Claude');
     if (stream) {
-      res.write(`data: ${JSON.stringify({ error: error.message || 'Failed to get response from Claude' })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: clientMessage })}\n\n`);
       res.end();
     } else {
       res.status(500).json({ 
-        error: error.message || 'Failed to get response from Claude',
-        details: error.message
+        error: clientMessage,
+        details: clientMessage
       });
     }
   }
+}
+
+function rateLimitIdentifier(req: NextApiRequest, user: { id?: string; email?: string | null }): string {
+  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown')
+    .split(',')[0]
+    .trim();
+  return `${user.id ?? user.email ?? 'unknown'}:${ip}`;
+}
+
+function logClaudeError(label: string, error: unknown): void {
+  const record = error && typeof error === 'object' ? error as { name?: unknown; message?: unknown; status?: unknown; code?: unknown } : {};
+  console.error(label, {
+    name: typeof record.name === 'string' ? record.name : undefined,
+    status: typeof record.status === 'number' ? record.status : undefined,
+    code: typeof record.code === 'string' ? record.code : undefined,
+    message: sanitizeLogMessage(typeof record.message === 'string' ? record.message : String(error ?? 'unknown')),
+  });
+}
+
+function sanitizeLogMessage(message: string): string {
+  return message
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, '[redacted-anthropic-key]')
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, '[redacted-key]')
+    .slice(0, 500);
+}
+
+function sanitizeClientError(message: string): string {
+  return sanitizeLogMessage(message) || 'Failed to get response from Claude';
 }
 
 async function callAnthropicWithRetry(input: {
@@ -182,7 +244,7 @@ async function extractAnthropicError(response: Response): Promise<string> {
     console.error('Anthropic API Error:', {
       status: response.status,
       type: errorData?.error?.type,
-      message: errorData?.error?.message,
+      message: sanitizeLogMessage(String(errorData?.error?.message ?? '')),
     });
 
     if (TRANSIENT_STATUS_CODES.has(response.status)) return fallback;
@@ -196,7 +258,7 @@ async function extractAnthropicError(response: Response): Promise<string> {
       return errorData.replace(/[^\x00-\x7F]/g, '');
     }
   } catch (parseError) {
-    console.error('Error parsing API response:', parseError);
+    logClaudeError('Error parsing API response', parseError);
   }
   return fallback;
 }
