@@ -34,7 +34,6 @@ import { normalizeTrends } from '../trendNormalizationService';
 import { deriveDisqualifiedSignals } from '../companyMissionContext';
 import { buildCompanyContext } from '../companyContextService';
 import { polishRecommendations } from '../recommendationPolishService';
-import { enrichRecommendationIntelligence } from '../recommendationIntelligenceService';
 import { buildCompanyStrategyDNA } from '../companyStrategyDNAService';
 import { analyzeStrategySignals } from '../recommendationStrategyFeedbackService';
 import { sequenceRecommendations } from '../recommendationSequencingService';

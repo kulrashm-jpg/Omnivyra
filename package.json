@@ -72,7 +72,7 @@
     "guard:cost-tracking": "npm run audit:legacy-ledger-reads && npm run check:frozen-schemas",
     "lint": "eslint . --max-warnings 200",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.backend.json --noEmit && tsc -p tsconfig.scripts.json --noEmit",
+    "typecheck": "node scripts/typecheck-all.js",
     "check:file-lengths": "node scripts/check-file-lengths.js",
     "audit:architecture-risk": "node architecture-migration/tools/ownership-risk-audit.mjs",
     "audit:semantic-enforcement": "node architecture-migration/tools/semantic-enforcement-engine.mjs",
