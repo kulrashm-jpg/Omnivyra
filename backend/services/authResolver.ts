@@ -90,11 +90,165 @@ function scheduleAuthSubsystemBoot(): void {
 
 // ── Token extraction ──────────────────────────────────────────────────────────
 
-const COOKIE_TOKEN_PATTERNS: ReadonlyArray<RegExp> = [
-  /sb-[a-z0-9]+-auth-token=([^;]+)/i,
-  /auth-token=([^;]+)/i,
-  /supabase-auth=([^;]+)/i,
+/**
+ * Full-name patterns for the Supabase auth cookie (chunk suffix `.<n>`
+ * stripped before matching). Priority order: project-scoped cookie first,
+ * then the two legacy names. Preserves the exact set the old regex list
+ * recognised — only the matching strategy changed (name-based, so chunked
+ * `@supabase/ssr` cookies are now supported).
+ */
+const COOKIE_BASE_PATTERNS: ReadonlyArray<RegExp> = [
+  /^sb-[a-z0-9]+-auth-token$/i,
+  /^auth-token$/i,
+  /^supabase-auth$/i,
 ];
+
+// Defensive upper bound — @supabase/ssr realistically emits ≤5 chunks; an
+// envelope claiming more is treated as malformed rather than concatenated.
+const MAX_AUTH_COOKIE_CHUNKS = 32;
+
+// One-time success breadcrumb so the "chunk reconstruction works" signal is
+// observable without logging on every authenticated request (spam guard).
+let loggedChunkSuccessOnce = false;
+
+interface ParsedCookie { name: string; value: string; }
+
+/** Parse a raw `Cookie:` header into ordered name/value pairs. */
+function parseCookieHeader(header: string): ParsedCookie[] {
+  const out: ParsedCookie[] = [];
+  for (const segment of header.split(';')) {
+    const part = segment.trim();
+    if (!part) continue;
+    const eq = part.indexOf('=');
+    if (eq <= 0) continue;
+    const name = part.slice(0, eq).trim();
+    const value = part.slice(eq + 1).trim();
+    if (name) out.push({ name, value });
+  }
+  return out;
+}
+
+/** Return the numeric chunk index if `name` is `base.<digits>`, else null. */
+function chunkIndexOf(name: string, base: string): number | null {
+  if (!name.startsWith(base + '.')) return null;
+  const suffix = name.slice(base.length + 1);
+  if (!/^\d+$/.test(suffix)) return null;
+  return Number(suffix);
+}
+
+/** decodeURIComponent that never throws (malformed %xx → raw value). */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Build the ordered list of candidate envelope strings for one base cookie
+ * name. Unchunked single cookie is tried FIRST (zero behaviour change for
+ * existing deployments); a validated, contiguous chunk set is tried next.
+ * Corrupt chunk sets (gaps, conflicting duplicates, over-limit) are dropped
+ * with a structured diagnostic — never concatenated blindly.
+ */
+function reconstructEnvelopes(cookies: ParsedCookie[], base: string): string[] {
+  const candidates: string[] = [];
+
+  const single = cookies.find((c) => c.name === base);
+  if (single) candidates.push(safeDecode(single.value));
+
+  // index → distinct decoded values seen (duplicate-detection).
+  const chunkMap = new Map<number, Set<string>>();
+  for (const c of cookies) {
+    const idx = chunkIndexOf(c.name, base);
+    if (idx === null) continue;
+    const set = chunkMap.get(idx) ?? new Set<string>();
+    set.add(safeDecode(c.value));
+    chunkMap.set(idx, set);
+  }
+
+  if (chunkMap.size === 0) return candidates;
+
+  const indices = Array.from(chunkMap.keys()).sort((a, b) => a - b);
+  let usable = true;
+
+  if (indices.length > MAX_AUTH_COOKIE_CHUNKS) {
+    logger.warn('auth_resolver_cookie_chunk_overflow', { base, count: indices.length });
+    usable = false;
+  }
+
+  // Conflicting duplicate index (same .n present twice with different values).
+  if (usable) {
+    for (const [idx, values] of chunkMap) {
+      if (values.size > 1) {
+        logger.warn('auth_resolver_cookie_chunk_duplicate', { base, idx });
+        usable = false;
+        break;
+      }
+    }
+  }
+
+  // Must be exactly contiguous 0..n-1 — any gap means a lost chunk.
+  if (usable) {
+    for (let i = 0; i < indices.length; i++) {
+      if (indices[i] !== i) {
+        logger.warn('auth_resolver_cookie_chunk_gap', {
+          base, expectedIndex: i, gotIndex: indices[i], total: indices.length,
+        });
+        usable = false;
+        break;
+      }
+    }
+  }
+
+  if (usable) {
+    const reconstructed = indices
+      .map((i) => Array.from(chunkMap.get(i) as Set<string>)[0])
+      .join('');
+    if (!loggedChunkSuccessOnce) {
+      loggedChunkSuccessOnce = true;
+      logger.info('auth_resolver_cookie_chunk_reconstructed', { base, chunks: indices.length });
+    }
+    candidates.push(reconstructed);
+  }
+
+  return candidates;
+}
+
+/** Decode one envelope string → access_token. Mirrors the legacy pipeline. */
+function envelopeToAccessToken(envelopeRaw: string): string | null {
+  let value = envelopeRaw;
+  if (value.startsWith('base64-')) value = value.slice(7);
+
+  if (value.startsWith('eyJ')) {
+    try {
+      value = Buffer.from(value, 'base64').toString('utf-8');
+    } catch (error) {
+      logger.warn('auth_resolver_cookie_base64_decode_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (
+      parsed && typeof parsed === 'object' &&
+      typeof (parsed as { access_token?: unknown }).access_token === 'string' &&
+      (parsed as { access_token: string }).access_token
+    ) {
+      return (parsed as { access_token: string }).access_token;
+    }
+    return null;
+  } catch (error) {
+    logger.warn('auth_resolver_cookie_parse_failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
 
 /** Read `Authorization: Bearer <token>` if present. */
 export function extractBearerToken(req: NextApiRequest): string | null {
@@ -108,36 +262,38 @@ export function extractBearerToken(req: NextApiRequest): string | null {
 
 /** Read the Supabase auth-session cookie envelope and unwrap the access_token. */
 export function extractCookieToken(req: NextApiRequest): string | null {
-  const cookies = req.headers.cookie || '';
-  for (const pattern of COOKIE_TOKEN_PATTERNS) {
-    const match = cookies.match(pattern);
-    if (!match?.[1]) continue;
+  const header = req.headers.cookie || '';
+  if (!header) return null;
 
-    try {
-      let cookieValue = decodeURIComponent(match[1]);
-      if (cookieValue.startsWith('base64-')) {
-        cookieValue = cookieValue.slice(7);
-      }
+  const cookies = parseCookieHeader(header);
+  if (cookies.length === 0) return null;
 
-      if (cookieValue.startsWith('eyJ')) {
-        try {
-          cookieValue = Buffer.from(cookieValue, 'base64').toString('utf-8');
-        } catch (error) {
-          logger.warn('auth_resolver_cookie_base64_decode_failed', {
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
+  let sawAuthCookie = false;
 
-      const parsed = JSON.parse(cookieValue);
-      if (parsed?.access_token) {
-        return parsed.access_token as string;
-      }
-    } catch (error) {
-      logger.warn('auth_resolver_cookie_parse_failed', {
-        message: error instanceof Error ? error.message : String(error),
-      });
+  for (const basePattern of COOKIE_BASE_PATTERNS) {
+    // Distinct base names matching this pattern (chunk suffix stripped).
+    const bases = new Set<string>();
+    for (const c of cookies) {
+      const baseName = c.name.replace(/\.\d+$/, '');
+      if (basePattern.test(baseName)) bases.add(baseName);
     }
+
+    for (const base of bases) {
+      sawAuthCookie = true;
+      const candidates = reconstructEnvelopes(cookies, base);
+      for (const envelope of candidates) {
+        const token = envelopeToAccessToken(envelope);
+        if (token) return token;
+      }
+    }
+  }
+
+  // Only diagnose when an auth cookie WAS present but yielded no token —
+  // never log for ordinary anonymous requests (no auth cookie at all).
+  if (sawAuthCookie) {
+    logger.warn('auth_resolver_cookie_token_unresolved', {
+      reason: 'auth_cookie_present_but_no_access_token',
+    });
   }
   return null;
 }
