@@ -7,6 +7,7 @@ These tests protect critical platform contracts without mutating data, changing 
 Protected contracts:
 
 - Auth login remains a server precheck followed by Supabase password sign-in.
+- Password capability is sourced from Supabase Auth via `auth_user_has_password`; `public.users.has_password` is only a compatibility hint.
 - Invalid login stays generic and predictable.
 - Supabase session fields consumed by the login page remain present.
 - `sync-supabase-user` keeps public user, Supabase UID, MFA, and session projection contracts stable.

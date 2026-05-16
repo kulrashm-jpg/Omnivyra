@@ -7,6 +7,7 @@ import {
   collectOperatorSafetyFindings,
   collectRuntimeIntegrityFindings,
 } from '../../config/integrity/runtimeIntegrity';
+import { collectAuthDiagnostics } from '../auth/authDiagnostics';
 import {
   buildReport,
   fileExists,
@@ -57,8 +58,24 @@ export function collectPlatformHealthDiagnostics(): DiagnosticCheck[] {
     summarizeFindings('platform.vercel_visibility', collectVercelVisibilityFindings()),
     summarizeFindings('platform.ci_integrity', collectCiIntegrityFindings()),
     summarizeFindings('platform.operator_safety', collectOperatorSafetyFindings()),
+    summarizeAuthDiagnostics(),
     collectStabilityAvailability(),
   ];
+}
+
+function summarizeAuthDiagnostics(): DiagnosticCheck {
+  const checks = collectAuthDiagnostics();
+  const warnings = checks.filter((check) => check.severity === 'warning');
+  const infos = checks.filter((check) => check.severity === 'info');
+  return {
+    name: 'platform.auth_contracts',
+    severity: warnings.length > 0 ? 'warning' : infos.length > 0 ? 'info' : 'ok',
+    summary: `${warnings.length} warning check(s), ${infos.length} info check(s).`,
+    details: checks
+      .filter((check) => check.severity !== 'ok')
+      .slice(0, 20)
+      .map((check) => `${check.severity.toUpperCase()} ${check.name}: ${check.summary}`),
+  };
 }
 
 export function runPlatformHealthDiagnostics(): void {

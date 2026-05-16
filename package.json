@@ -64,6 +64,7 @@
     "diagnose:environment": "tsx observability/environment/environmentDiagnostics.ts",
     "diagnose:startup": "tsx observability/runtime/startupDiagnostics.ts",
     "diagnose:operator-safety": "tsx observability/operator/operatorDiagnostics.ts",
+    "diagnose:auth-login-contract": "tsx observability/auth/authDiagnostics.ts",
     "diagnose:platform-health": "tsx observability/runtime/platformHealth.ts",
     "lint:lead-signal-boundary": "node scripts/check_lead_signal_write_boundaries.js",
     "audit:legacy-ledger-reads": "tsx scripts/audit-legacy-ledger-reads.ts",

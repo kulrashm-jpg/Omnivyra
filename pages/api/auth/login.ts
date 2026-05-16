@@ -43,7 +43,7 @@ export default async function handler(
   // ── 1. Check user exists in public.users ──────────────────────────────────
   const { data: userRow } = await supabase
     .from('users')
-    .select('id, is_deleted, has_password')
+    .select('id, is_deleted, has_password, supabase_uid')
     .eq('email', normalizedEmail)
     .maybeSingle();
 
@@ -65,7 +65,21 @@ export default async function handler(
     return res.status(400).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
   }
 
-  if (!(userRow as any).has_password) {
+  const publicHasPassword = (userRow as any).has_password === true;
+  let authHasPassword: boolean | null = null;
+  const supabaseUid = (userRow as any).supabase_uid;
+  if (typeof supabaseUid === 'string' && supabaseUid.trim()) {
+    try {
+      const { data, error } = await supabase.rpc('auth_user_has_password', {
+        p_user_id: supabaseUid,
+      });
+      if (!error) authHasPassword = data === true;
+    } catch {
+      // Fail soft: public.users.has_password remains the compatibility fallback.
+    }
+  }
+
+  if (authHasPassword === false || (!publicHasPassword && authHasPassword !== true)) {
     return res.status(400).json({
       error: 'No password set for this account. Please use magic link to sign in.',
       code: 'NO_PASSWORD',
