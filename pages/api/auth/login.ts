@@ -66,20 +66,40 @@ export default async function handler(
   }
 
   const publicHasPassword = (userRow as any).has_password === true;
-  let authHasPassword: boolean | null = null;
   const supabaseUid = (userRow as any).supabase_uid;
-  if (typeof supabaseUid === 'string' && supabaseUid.trim()) {
+  const hasSupabaseUid =
+    typeof supabaseUid === 'string' && supabaseUid.trim().length > 0;
+
+  // For Supabase-linked accounts the auth identity is the single source of
+  // truth. public.users.has_password can drift `true` while the auth user has
+  // NO email/password identity (legacy / admin-created / migrated rows). The
+  // old logic fell back to that stale flag when the RPC was unavailable, which
+  // pushed such users into signInWithPassword → generic invalid_credentials
+  // instead of the recoverable NO_PASSWORD → magic-link path.
+  let authHasPassword: boolean | null = null;
+  if (hasSupabaseUid) {
     try {
       const { data, error } = await supabase.rpc('auth_user_has_password', {
         p_user_id: supabaseUid,
       });
       if (!error) authHasPassword = data === true;
     } catch {
-      // Fail soft: public.users.has_password remains the compatibility fallback.
+      // RPC unavailable — handled by the fail-safe below.
     }
   }
 
-  if (authHasPassword === false || (!publicHasPassword && authHasPassword !== true)) {
+  // Decision:
+  //  - Supabase-linked account: the RPC is AUTHORITATIVE. If it returned false
+  //    OR could not be resolved (null), FAIL SAFE to NO_PASSWORD so the user
+  //    is guided to the recoverable magic-link/reset path. Never fall back to
+  //    the stale public.users.has_password flag here.
+  //  - Non-linked row (no supabase_uid): preserve prior behavior — use
+  //    public.users.has_password as the compatibility signal.
+  const noPassword = hasSupabaseUid
+    ? authHasPassword !== true
+    : !publicHasPassword;
+
+  if (noPassword) {
     return res.status(400).json({
       error: 'No password set for this account. Please use magic link to sign in.',
       code: 'NO_PASSWORD',
