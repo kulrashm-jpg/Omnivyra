@@ -34,6 +34,17 @@ const ALLOWED_DIRECT_ENV_ACCESS = new Set([
 ]);
 
 /**
+ * Runtime/Node-internal env vars read by Node core itself (console color
+ * detection via util.inspect, TTY, etc.) — not application config. These are
+ * accessed indirectly whenever code calls console.error(err) and must never
+ * trigger the "use @/config" warning regardless of caller.
+ */
+const RUNTIME_INTERNAL_ENV = new Set([
+  'FORCE_COLOR', 'NO_COLOR', 'NODE_DISABLE_COLORS', 'COLORTERM',
+  'TERM', 'TERM_PROGRAM', 'CI', 'DEBUG_COLORS', 'TMUX',
+]);
+
+/**
  * Module access log (for audit trail)
  */
 interface AccessRecord {
@@ -124,7 +135,7 @@ export function initEnforcer() {
 
           logAccess([prop], allowed);
 
-          if (!allowed) {
+          if (!allowed && !RUNTIME_INTERNAL_ENV.has(prop)) {
             console.warn(`[WARN] Direct process.env.${prop} access from ${caller} (should use @/config)`, {
               caller,
               varName: prop,

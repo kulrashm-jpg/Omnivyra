@@ -40,7 +40,17 @@ export function isDurableCreatorRenderQueueConfigured(): boolean {
 function connection(): IORedis {
   const url = redisUrl();
   if (!url) throw new Error('CREATOR_RENDER_REDIS_UNCONFIGURED');
-  return new IORedis(url, { maxRetriesPerRequest: null });
+  // Mirror backend/queue/redis.ts: Upstash (and rediss://) require TLS, else
+  // the connection is reset endlessly ([creator-render-worker] read ECONNRESET).
+  let needsTls = false;
+  try {
+    const u = new URL(url);
+    needsTls = u.hostname.includes('upstash.io') || u.protocol === 'rediss:';
+  } catch { /* malformed URL — fall back to no TLS */ }
+  return new IORedis(url, {
+    maxRetriesPerRequest: null,
+    ...(needsTls ? { tls: {} } : {}),
+  });
 }
 
 export function getCreatorRenderQueue(): Queue<CreatorDurableRenderJobData> {
