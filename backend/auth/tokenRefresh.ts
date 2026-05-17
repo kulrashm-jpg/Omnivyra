@@ -160,14 +160,74 @@ async function recordTwitterRefreshOutcome(
   status: 'success' | 'failed' | 'requires_reconnect',
   error: string | null,
 ): Promise<void> {
+  // ── Deterministic token-lifecycle state machine (PHASE EX3/EX5) ───────────
+  // Lifecycle columns added in supabase/migrations/20260517_x_token_lifecycle
+  // _columns.sql. Writes are serialized per-account by the surrounding
+  // refreshLock, so the retry-count read-modify-write below is race-free.
+  // Mapping is fully deterministic — no derived-state heuristics:
+  //
+  //   success                       -> CONNECTED                (retry_count=0)
+  //   requires_reconnect            -> PROVIDER_REAUTH_REQUIRED  (terminal)
+  //   failed + invalid_grant        -> PROVIDER_REAUTH_REQUIRED  (fatal: reauth)
+  //   failed + invalid_client       -> REFRESH_FAILED_FATAL      (fatal: config)
+  //   failed + other (net/5xx/...)  -> REFRESH_FAILED_RETRYABLE  (++retry_count)
+  //   retryable & retry_count>=CEIL -> PROVIDER_REAUTH_REQUIRED  (bounded retries)
+  //
+  // connection_state (existing enum: CONNECTED|TOKEN_EXPIRED|PROVIDER_REAUTH_
+  // REQUIRED) is mirrored so oauthLifecycleScheduler / admin UI stay correct.
+  const RETRY_CEILING = 4; // mirrors REFRESH_FAILURE_CEILING in connectionState.ts
+  const errText = (error ?? '').toLowerCase();
+  const nowIso = new Date().toISOString();
+
   try {
-    await ownedDbTable('social_accounts')
-      .update({
-        refresh_status: status,
-        last_refresh_attempt_at: new Date().toISOString(),
-        last_refresh_error: status === 'success' ? null : error,
-      })
-      .eq('id', accountId);
+    let refreshStatus:
+      | 'CONNECTED' | 'PROVIDER_REAUTH_REQUIRED'
+      | 'REFRESH_FAILED_FATAL' | 'REFRESH_FAILED_RETRYABLE';
+    let connectionState: 'CONNECTED' | 'TOKEN_EXPIRED' | 'PROVIDER_REAUTH_REQUIRED';
+    let nextRetryCount = 0;
+    let successAt: string | null = null;
+
+    if (status === 'success') {
+      refreshStatus = 'CONNECTED';
+      connectionState = 'CONNECTED';
+      nextRetryCount = 0;
+      successAt = nowIso;
+    } else if (status === 'requires_reconnect' || errText.includes('invalid_grant')) {
+      refreshStatus = 'PROVIDER_REAUTH_REQUIRED';
+      connectionState = 'PROVIDER_REAUTH_REQUIRED';
+    } else if (errText.includes('invalid_client')) {
+      refreshStatus = 'REFRESH_FAILED_FATAL';   // app credentials wrong — operator alert
+      connectionState = 'TOKEN_EXPIRED';
+    } else {
+      // Transient (network / 5xx / unknown) — bounded retry.
+      const { data: cur } = await ownedDbTable('social_accounts')
+        .select('refresh_retry_count')
+        .eq('id', accountId)
+        .maybeSingle();
+      const prior = Number((cur as any)?.refresh_retry_count ?? 0);
+      nextRetryCount = prior + 1;
+      if (nextRetryCount >= RETRY_CEILING) {
+        refreshStatus = 'PROVIDER_REAUTH_REQUIRED';   // retries exhausted
+        connectionState = 'PROVIDER_REAUTH_REQUIRED';
+      } else {
+        refreshStatus = 'REFRESH_FAILED_RETRYABLE';
+        connectionState = 'TOKEN_EXPIRED';
+      }
+    }
+
+    const patch: Record<string, unknown> = {
+      refresh_status:         refreshStatus,
+      last_refresh_attempt_at: nowIso,
+      last_refresh_error:     status === 'success' ? null : error,
+      refresh_retry_count:    nextRetryCount,
+      connection_state:       connectionState,
+      last_live_check_at:     nowIso,
+      last_live_check_status: status,
+      last_provider_error:    status === 'success' ? null : error,
+    };
+    if (successAt) patch.last_successful_refresh_at = successAt;
+
+    await ownedDbTable('social_accounts').update(patch).eq('id', accountId);
   } catch (err: any) {
     // Non-fatal — telemetry write failure must not bubble up over the actual refresh result.
     console.warn('[tokenRefresh] failed to record refresh outcome:', err?.message);

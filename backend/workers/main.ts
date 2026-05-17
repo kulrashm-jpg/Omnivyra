@@ -44,6 +44,7 @@ import { getMetricsSnapshot }        from '../services/metricsCollector';
 import { createCreatorRenderWorker, recoverOrphanedCreatorRenderJobs } from '../services/creatorRenderDurableQueue';
 import { processCreatorRenderJob } from '../services/creatorRenderWorkerProcessor';
 import type { CampaignPlanningJobPayload } from '../queue/jobProcessors/campaignPlanningProcessor';
+import { startCron } from '../scheduler/cron';
 
 // ── Worker instances ──────────────────────────────────────────────────────────
 
@@ -133,6 +134,14 @@ async function main(): Promise<void> {
   // Pre-warm template cache (zero GPT cost, improves first-job latency)
   await runCacheWarmup().catch((err) =>
     console.warn('[main] cache warmup failed (non-fatal):', err?.message));
+
+  // Scheduler — runs the 10-min social-account token refresh (X tokens
+  // expire in 2h) plus all other cron cycles. Co-located in the worker
+  // process so a single Railway service (Dockerfile.worker CMD = main.js)
+  // covers both queues AND scheduled refresh. Non-fatal: a scheduler
+  // failure must not stop queue workers from running.
+  startCron().catch((err) =>
+    console.error('[main] startCron failed (non-fatal — token refresh/crons will NOT run):', err?.message));
 
   // Autoscaling monitor — fires signal when queue depth > 500 or latency > 10s
   let _cachedLatency = 0;
