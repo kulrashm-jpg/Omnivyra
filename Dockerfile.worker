@@ -16,7 +16,7 @@ RUN npm install --legacy-peer-deps
 
 # Copy source and compile
 COPY . .
-RUN npx tsc -p tsconfig.worker.json
+RUN npx tsc -p tsconfig.worker.json && node scripts/fix-worker-aliases.js
 
 # ── Stage 2: production ───────────────────────────────────────────────────────
 FROM node:20-alpine AS production
