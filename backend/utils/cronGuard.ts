@@ -37,11 +37,16 @@ export class CronGuard {
   constructor() {
     const url = config.REDIS_URL;
     try {
+      // Upstash requires TLS even on the redis:// scheme. Without this the
+      // client never connects → available stays false → save/load/lock
+      // silently no-op (heartbeat never persists). Mirrors start-all.js.
+      const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
       const raw = new IORedis(url, {
         enableReadyCheck: false,
         maxRetriesPerRequest: 1,
         retryStrategy: () => null,
         lazyConnect: true,
+        tls: host.includes('upstash.io') ? {} : undefined,
       });
       raw.on('connect', () => { this.available = true; });
       raw.on('error', () => { this.available = false; });
