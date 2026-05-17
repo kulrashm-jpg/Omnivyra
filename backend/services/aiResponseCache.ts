@@ -87,12 +87,24 @@ let _available = false;
 function getClient(): IORedis | null {
   if (_client) return _client;
   const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
   try {
     const raw = new IORedis(url, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 1,
       retryStrategy: () => null,
       lazyConnect: true,
+      // Upstash requires TLS; a plain redis:// connection TCP-connects but
+      // never answers RESP commands, so client.get() hangs forever. Mirrors
+      // the cronGuard Upstash-TLS fix (commit 79a53031).
+      tls: host.includes('upstash.io') ? {} : undefined,
+      // The response cache is a non-critical optimization. It must NEVER
+      // block the LLM critical path: if Redis is slow/unreachable/misconfigured,
+      // commands fail fast and getCachedCompletion's catch returns null
+      // (cache miss / fail-open) instead of stalling generateCampaignPlan
+      // until the caller's 120s timeout — which is what stuck BOLT on
+      // "Creating week plan".
+      commandTimeout: 2000,
     });
     raw.on('connect', () => { _available = true; });
     raw.on('error', () => { _available = false; });

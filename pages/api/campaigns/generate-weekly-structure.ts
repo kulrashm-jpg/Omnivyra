@@ -87,6 +87,43 @@ import {
   applyCreatorPlanningFlow,
 } from "../../../backend/services/creator/intelligence/planning/applyCreatorPlanningFlow";
 
+/**
+ * Exact TS mirror of the DB CHECK `is_valid_creator_platform_asset_combo`
+ * (supabase/migrations/20260516_creator_capability_function_complete.sql).
+ * The DB constraint is the final authority — this MUST stay byte-for-byte
+ * equivalent to that function's platform/asset table.
+ *
+ * Why this exists: a daily_content_plans row is only allowed to be tagged
+ * intent_type='creator' when the (platform, asset_type) pair is renderable
+ * for that platform. Previously the row was tagged 'creator' purely from
+ * the content type, so unrenderable combos (e.g. youtube+carousel,
+ * instagram+story→null asset_type) violated the constraint and rolled
+ * back the ENTIRE daily-plans batch ("Failed to save daily plans"). When
+ * the combo is NOT valid we fall the row back to the 'text' lane, which
+ * always passes the constraint and follows the standard BOLT-text content
+ * queue — content still gets created, just via the writer path.
+ */
+function isValidCreatorPlatformAssetCombo(
+  platform: string | null | undefined,
+  assetType: string | null | undefined,
+): boolean {
+  const a = String(assetType ?? '').trim();
+  if (!a) return false;
+  let p = String(platform ?? '').toLowerCase().trim();
+  if (p === 'twitter') p = 'x';
+  switch (p) {
+    case 'linkedin':  return ['image', 'carousel', 'video', 'post_with_asset'].includes(a);
+    case 'instagram': return ['image', 'carousel', 'video', 'post_with_asset'].includes(a);
+    case 'facebook':  return ['image', 'carousel', 'video', 'post_with_asset'].includes(a);
+    case 'threads':   return ['image', 'video', 'post_with_asset'].includes(a);
+    case 'x':         return ['image', 'video', 'thread_with_asset', 'post_with_asset'].includes(a);
+    case 'tiktok':    return a === 'video';
+    case 'pinterest': return ['image', 'carousel', 'post_with_asset'].includes(a);
+    case 'youtube':   return ['video', 'post_with_asset'].includes(a);
+    default:          return false;
+  }
+}
+
 
 export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput): Promise<{
   success: boolean;
@@ -955,13 +992,41 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
             derivedAssetType = null;
           }
         }
-        const rowAssetType: string | null = requiresMediaIntent
+        let rowAssetType: string | null = requiresMediaIntent
           ? (
               typeof creatorCardForRow?.asset_type === 'string' && creatorCardForRow.asset_type.trim()
                 ? creatorCardForRow.asset_type.trim()
                 : derivedAssetType
             )
           : null;
+        // Asset-type resolution for visual formats (image / banner /
+        // carousel / infographic / story / pdf / slider — note video /
+        // reel / short are NOT requiresMediaIntent, so they already take
+        // the text lane, which is the accepted behavior for video).
+        //
+        // 1. If the requested visual is renderable on this platform
+        //    (e.g. instagram + image|carousel|video) → keep it: we create
+        //    that exact content type.
+        // 2. If it is NOT renderable as a standalone visual on this
+        //    platform (e.g. youtube + carousel/image, or a null/unknown
+        //    derived type) → DON'T drop to plain text. Combine text with
+        //    the asset via `post_with_asset` — the same model as BOLT
+        //    Text "add asset" — as long as the platform supports it
+        //    (the DB capability table allows post_with_asset on every
+        //    creator platform). The caption_blueprint payload stub for
+        //    post_with_asset is built by the per-asset_type switch below,
+        //    so the row still passes both creator CHECK constraints.
+        // 3. Only fall back to the pure 'text' lane if the platform
+        //    supports neither the visual nor post_with_asset (unknown
+        //    platform) — keeps the daily-plans batch from rolling back.
+        if (
+          requiresMediaIntent &&
+          !isValidCreatorPlatformAssetCombo(platform, rowAssetType) &&
+          isValidCreatorPlatformAssetCombo(platform, 'post_with_asset')
+        ) {
+          rowAssetType = 'post_with_asset';
+        }
+        const creatorComboValid = requiresMediaIntent && isValidCreatorPlatformAssetCombo(platform, rowAssetType);
         // Satisfy `daily_content_plans_creator_payload_check`. The deployed
         // function is significantly stricter than its initial migration
         // header suggested — it requires:
@@ -979,7 +1044,7 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // structure so the row passes the CHECK at insert time. We only
         // OVERWRITE keys that aren't already populated — if a real value
         // is already present, it wins.
-        if (requiresMediaIntent) {
+        if (creatorComboValid) {
           const e = enriched as Record<string, unknown>;
           e.intent_type = 'creator';
           if (rowAssetType) e.asset_type = rowAssetType;
@@ -1171,9 +1236,9 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
           priority: 'medium',
           ai_generated: aiGenerated,
           target_audience: item.whoAreWeWritingFor,
-          intent_type: requiresMediaIntent ? 'creator' : 'text',
-          asset_type: rowAssetType,
-          template_id: requiresMediaIntent
+          intent_type: creatorComboValid ? 'creator' : 'text',
+          asset_type: creatorComboValid ? rowAssetType : null,
+          template_id: creatorComboValid
             ? (
                 typeof creatorCardForRow?.template_id === 'string' && creatorCardForRow.template_id.trim()
                   ? creatorCardForRow.template_id.trim()

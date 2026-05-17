@@ -1135,6 +1135,10 @@ export function useBoltStrategy() {
     if (!topic.trim()) return;
     setGenerating(true);
     setGenError(null);
+    // Starting fresh — clear any stale BOLT launch/run error from a prior
+    // attempt so "regenerate/generate strategy cards" doesn't surface an
+    // error banner for a run that's no longer relevant.
+    setExecError(null);
     setSelectedIds([]);
     try {
       const res = await fetch('/api/bolt/strategy-cards', {

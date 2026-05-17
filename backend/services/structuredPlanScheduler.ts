@@ -73,6 +73,24 @@ function toLegacyPlatformKey(dbPlatform: string): string {
   return dbPlatform === 'x' ? 'twitter' : dbPlatform;
 }
 
+/**
+ * Hard, unbypassable scheduling floor. RULE: no activity may ever be
+ * scheduled/posted in the past, and every item must be at least 1 hour
+ * ahead of "now". Applied to the output of EVERY scheduled_for builder
+ * below so there is no code path — stale start_date, bad slot math,
+ * explicit ISO time, daily-plan date — that can produce past or
+ * <1h-ahead activity. Earlier-intended items keep landing earlier
+ * (we only lift up to the floor, never reorder).
+ */
+const SCHEDULE_MIN_LEAD_MS = 60 * 60 * 1000; // 1 hour
+function enforceScheduleFloor(d: Date): Date {
+  const floor = Date.now() + SCHEDULE_MIN_LEAD_MS;
+  if (Number.isNaN(d.getTime()) || d.getTime() < floor) {
+    return new Date(floor);
+  }
+  return d;
+}
+
 const buildScheduledFor = (campaignStart: string, week: number, dayIndex: number, slotInDay = 0): Date => {
   const startDate = new Date(campaignStart);
   const startUTC = new Date(
@@ -88,7 +106,7 @@ const buildScheduledFor = (campaignStart: string, week: number, dayIndex: number
   const weekOffset = (week - 1) * 7;
   const scheduled = new Date(startUTC);
   scheduled.setUTCDate(startUTC.getUTCDate() + weekOffset + dayIndex);
-  return scheduled;
+  return enforceScheduleFloor(scheduled);
 };
 
 /** CTA text by type for inclusion in post content */
@@ -425,15 +443,15 @@ function buildScheduledForFromDailyPlan(dateStr: string, timeStr: string | undef
   const hours = hhmm ? Math.min(23, Math.max(0, Number(hhmm[1]))) : 9;
   const minutes = hhmm ? Math.min(59, Math.max(0, Number(hhmm[2]))) : 0;
   const datePart = String(dateStr ?? '').slice(0, 10);
-  if (!datePart) return new Date();
-  return new Date(Date.UTC(
+  if (!datePart) return enforceScheduleFloor(new Date(0));
+  return enforceScheduleFloor(new Date(Date.UTC(
     parseInt(datePart.slice(0, 4), 10),
     parseInt(datePart.slice(5, 7), 10) - 1,
     parseInt(datePart.slice(8, 10), 10),
     hours,
     minutes,
     0
-  ));
+  )));
 }
 
 /**
@@ -540,7 +558,7 @@ function buildScheduledForFromJob(campaignStart: string, scheduledTime: string |
   if (scheduledTime) {
     const isoLike = new Date(scheduledTime);
     if (!Number.isNaN(isoLike.getTime()) && scheduledTime.includes('T')) {
-      return isoLike;
+      return enforceScheduleFloor(isoLike);
     }
     const hhmm = scheduledTime.match(/^(\d{1,2}):(\d{2})$/);
     if (hhmm) {
@@ -557,7 +575,7 @@ function buildScheduledForFromJob(campaignStart: string, scheduledTime: string |
           0
         )
       );
-      return withTime;
+      return enforceScheduleFloor(withTime);
     }
   }
   return buildScheduledFor(campaignStart, 1, index % 7, Math.floor(index / 7) % 3);
@@ -947,7 +965,7 @@ async function queueBoltContentJobs(
       bolt_job_id:   boltJobId,
       platform:      String(r.platform || '').toLowerCase(),
       content_type:  String(r.content_type || 'post').toLowerCase(),
-      scheduled_for: r.date ? new Date(`${String(r.date).slice(0, 10)}T09:00:00Z`).toISOString() : null,
+      scheduled_for: r.date ? enforceScheduleFloor(new Date(`${String(r.date).slice(0, 10)}T09:00:00Z`)).toISOString() : null,
       status:        'empty',
     }));
 
@@ -1763,17 +1781,23 @@ async function scheduleStructuredPlanRuntime(
   if (!campaign.start_date) {
     throw new Error('Campaign start date is required for scheduling');
   }
-  // Reject scheduling for campaigns whose start_date is in the past.
-  // Compare on date-only basis (YYYY-MM-DD) so "today" is always valid,
-  // regardless of current UTC hour vs campaign midnight-UTC parsing.
+  // RULE: never schedule activity in a past date. Instead of failing the
+  // whole run when start_date is stale (e.g. a config carried over from a
+  // previous day), auto-shift the effective start forward to today. Every
+  // per-post time is independently clamped to >= now + 1h by
+  // enforceScheduleFloor, so this only re-bases the day math — it cannot
+  // produce past activity. Compared date-only (YYYY-MM-DD) so "today" is
+  // always valid regardless of UTC hour vs campaign midnight parsing.
   {
     const startDateStr = String(campaign.start_date).slice(0, 10);
     const todayStr = new Date().toISOString().slice(0, 10);
     if (startDateStr && startDateStr < todayStr) {
-      throw new Error(
-        `Campaign start date (${startDateStr}) is in the past. ` +
-        `Scheduling only supports dates from today onwards — update the campaign start date before rescheduling.`
-      );
+      console.warn('[scheduleStructuredPlan] start_date in the past; auto-shifting forward', {
+        campaignId,
+        original_start_date: startDateStr,
+        shifted_to: todayStr,
+      });
+      campaign.start_date = todayStr;
     }
   }
 

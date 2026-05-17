@@ -37,6 +37,19 @@ const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: str
 
 const BOLT_STATE_KEY = 'bolt-creator-strategy-state';
 
+/**
+ * RULE: the campaign start date can never be a previous day. A stale value
+ * (restored draft / config carried over from an earlier session) is clamped
+ * forward to today. The backend scheduler independently enforces a
+ * >= now + 1h floor on every post; this keeps the UI and the submitted
+ * payload consistent so the user never sees or sends a past start date.
+ */
+function clampStartDateToToday(value: string | null | undefined): string {
+  const today = new Date().toISOString().split('T')[0];
+  const v = String(value ?? '').slice(0, 10);
+  return v && v >= today ? v : today;
+}
+
 // Round-7 Phase 2: cross-platform-sharing eligibility moved to
 // `lib/shared/bolt/crossPlatformSharing.ts` — see that module for the
 // (non-capability) rationale.
@@ -495,7 +508,7 @@ export function useBoltCreator() {
       if (s.cards)             setCards(s.cards);
       if (s.hasGenerated)      setHasGenerated(s.hasGenerated);
       if (s.outcomeView)       setOutcomeView(s.outcomeView);
-      if (s.campaignStartDate) setCampaignStartDate(s.campaignStartDate);
+      if (s.campaignStartDate) setCampaignStartDate(clampStartDateToToday(s.campaignStartDate));
       if (s.selectedPlatforms) setSelectedPlatforms(s.selectedPlatforms);
 
       // Campaign Memory restore — same shape BOLT Text uses. Fails soft
@@ -700,7 +713,7 @@ export function useBoltCreator() {
       frequency_per_week: totalFrequency,
       format_frequency: Object.fromEntries(contentFormats.map((f) => [f, formatFrequency[f] ?? 3])),
       campaign_duration: campaignDuration,
-      tentative_start: campaignStartDate || new Date().toISOString().split('T')[0],
+      tentative_start: clampStartDateToToday(campaignStartDate),
       campaign_goal: combinedGoal,
       campaign_goals: goals,
       campaign_mode: 'creator',
@@ -808,6 +821,10 @@ export function useBoltCreator() {
     if (!topic.trim()) return;
     setGenerating(true);
     setGenError(null);
+    // Starting fresh — clear any stale BOLT launch/run error from a prior
+    // attempt so regenerating/generating creator cards doesn't surface an
+    // error banner for a run that's no longer relevant.
+    setExecError(null);
     setSelectedIds([]);
     try {
       const res = await fetch('/api/bolt/strategy-cards', {
