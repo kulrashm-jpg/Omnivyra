@@ -90,7 +90,7 @@ export async function traceBillingOperation(args: {
   if (correlationIds.size > 0 || idemKeys.size > 0) {
     const idemKeyArr = Array.from(idemKeys);
     const corrArr = Array.from(correlationIds);
-    const queries: Array<Promise<Array<Record<string, unknown>>>> = [];
+    const queries: Array<PromiseLike<Array<Record<string, unknown>>>> = [];
     if (corrArr.length > 0) {
       queries.push(supabase
         .from('admin_financial_audit_events')

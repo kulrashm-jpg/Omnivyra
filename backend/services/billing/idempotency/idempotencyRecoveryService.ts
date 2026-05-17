@@ -239,7 +239,7 @@ export async function recoverOperation(args: RecoveryArgs): Promise<RecoveryResu
   // ── Apply transition ─────────────────────────────────────────────────
   const updated = await applyStatusUpdate(args.surface, args.id, toStatus, args.reason);
   if (!updated.ok) {
-    return { ok: false, surface: args.surface, id: args.id, error: updated.error, driftCheck };
+    return { ok: false, surface: args.surface, id: args.id, error: 'error' in updated ? updated.error : 'update failed', driftCheck };
   }
 
   // ── Audit + metrics ─────────────────────────────────────────────────
@@ -424,7 +424,7 @@ export async function safeRetryOperation(args: SafeRetryArgs): Promise<SafeRetry
     `safe-retry supersede: ${args.reason}`,
   );
   if (!updated.ok) {
-    return { ok: false, code: 'FAILED', message: updated.error ?? 'failed to finalize stuck row' };
+    return { ok: false, code: 'FAILED', message: ('error' in updated ? updated.error : undefined) ?? 'failed to finalize stuck row' };
   }
 
   // Lineage + audit.

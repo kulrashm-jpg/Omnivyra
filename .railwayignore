@@ -1,0 +1,24 @@
+# Keep `railway up` uploads small & deploys stable.
+# Mirrors .dockerignore — Dockerfile.worker reinstalls deps and recompiles.
+node_modules
+dist
+.next
+out
+.git
+.github
+.vercel
+.turbo
+.env
+.env.*
+!.env.example
+logs
+coverage
+*.log
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.tmp
+*.tmp.ts
+_inspect-*.ts
+tmp

@@ -169,5 +169,5 @@ export function validateRenderProjection(spec: unknown): RenderSpec {
   // Defense-in-depth: no forbidden key anywhere in the final structure.
   assertNoForbidden(s);
 
-  return spec as RenderSpec;
+  return spec as unknown as RenderSpec;
 }

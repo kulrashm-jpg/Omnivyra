@@ -1,0 +1,34 @@
+# Build artifacts & deps — Dockerfile.worker reinstalls and recompiles
+node_modules
+dist
+.next
+out
+
+# VCS & CI
+.git
+.github
+.vercel
+.turbo
+
+# Secrets — Dockerfile also rm's these; keep them out of build context entirely
+.env
+.env.*
+!.env.example
+
+# Logs & coverage
+logs
+coverage
+*.log
+npm-debug.log*
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Misc temp
+*.tmp
+*.tmp.ts
+_inspect-*.ts
+tmp
