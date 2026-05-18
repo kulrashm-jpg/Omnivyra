@@ -35,7 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!roleGate) return;
 
-    const { type, name, config } = req.body || {};
+    const { type, name, config, website_id } = req.body || {};
     if (!type || !ALLOWED_TYPES.includes(type)) {
       return res.status(400).json({ error: `type must be one of: ${ALLOWED_TYPES.join(', ')}` });
     }
@@ -47,7 +47,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
-      const integration = await createIntegration(companyId, roleGate.userId, type, name.trim(), config);
+      const integration = await createIntegration(companyId, roleGate.userId, type, name.trim(), config, {
+        websiteId: typeof website_id === 'string' && website_id.trim() ? website_id.trim() : null,
+      });
       return res.status(201).json({ integration });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to create integration' });

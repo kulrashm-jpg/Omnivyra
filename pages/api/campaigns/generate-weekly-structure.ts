@@ -1,4 +1,8 @@
 import { getExecutionCategoryForContentType, executionCategoryToAiGenerated } from '../../../backend/services/plannerActivityCardService';
+// Phase-2 Step-2: centralized routing authority. requiresMediaIntent no
+// longer hard-codes a format list — it defers to the ONE routing engine
+// (behaviour-preserving shim; video stays in the human-production lane).
+import { routeRequiresMediaIntent } from '../../../backend/services/orchestration/routing';
 import { deriveCreatorAssetTypeFromIntent } from '../../../backend/services/creatorTemplateRegistryService';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
@@ -952,7 +956,11 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
         // formats (video/reel/short/podcast) must NOT be tagged creator — they live in the
         // daily-plan / human-production lane. Renderable image/carousel-family formats
         // are the ones that can pass the constraint.
-        const requiresMediaIntent = ['carousel', 'image', 'story', 'banner', 'infographic', 'pdf', 'slider'].includes(normalizedContentType);
+        // Centralized routing decision (Phase-2 Step-2). Byte-equivalent to
+        // the former hard-coded ['carousel','image','story','banner',
+        // 'infographic','pdf','slider'] list — video/reel/short remain
+        // excluded (human-production lane), preserving the constraint design.
+        const requiresMediaIntent = routeRequiresMediaIntent(normalizedContentType);
         const execCategory = getExecutionCategoryForContentType(contentType);
         const aiGenerated = executionCategoryToAiGenerated(execCategory);
 
@@ -1563,8 +1571,18 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
 
   if (allRowsToInsert.length > 0) {
     const { saveWeekPlans } = await import('../../../backend/services/executionPlannerService');
-    const byWeek = new Map<number, typeof allRowsToInsert>();
-    for (const row of allRowsToInsert) {
+    // Phase-2 Step-11: FIRST real generator cutover. Mode-gated source
+    // selection — SHADOW (default) returns legacy rows unchanged + diffs;
+    // AUTHORITATIVE returns the authoritative weekly rows when the rollback
+    // guard passes, else falls back to legacy. Never throws.
+    let persistRows: typeof allRowsToInsert = allRowsToInsert;
+    try {
+      const { resolveWeeklyRowsForPersistence } = await import('../../../backend/services/orchestration');
+      persistRows = await resolveWeeklyRowsForPersistence(campaignId, allRowsToInsert) as typeof allRowsToInsert;
+      if (!Array.isArray(persistRows) || persistRows.length === 0) persistRows = allRowsToInsert;
+    } catch { persistRows = allRowsToInsert; }
+    const byWeek = new Map<number, typeof persistRows>();
+    for (const row of persistRows) {
       const wn = Number((row as { week_number?: number })?.week_number) || 1;
       if (!byWeek.has(wn)) byWeek.set(wn, []);
       byWeek.get(wn)!.push(row);
@@ -1573,8 +1591,19 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       await saveWeekPlans(campaignId, wn, rows as any, 'blueprint');
     }
     if (process.env.NODE_ENV !== 'test') {
-      console.log('[EXECUTION_ENGINE] source=blueprint saveWeekPlans completed', { campaignId, weeks: [...byWeek.keys()], totalRows: allRowsToInsert.length });
+      console.log('[EXECUTION_ENGINE] source=blueprint saveWeekPlans completed', { campaignId, weeks: [...byWeek.keys()], totalRows: persistRows.length });
     }
+    // Phase-2 Step-3: non-destructive canonical reconcile + invariant pass
+    // AFTER persistence (does NOT replace these inserts — compatibility-first).
+    try {
+      const orch = await import('../../../backend/services/orchestration');
+      void orch.reconcileExecution(campaignId, 'generate-weekly-structure').catch(() => {});
+      // Phase-2 Step-10: authoritative activation gate (shadow + decision +
+      // output diff + rollback). Default SHADOW ⇒ decision is non-binding,
+      // behaviour unchanged; AUTHORITATIVE (env opt-in) records the binding
+      // decision + rolls back to legacy on incomplete context.
+      void orch.runAuthoritativeGenerationGate(campaignId, 'generate-weekly-structure').catch(() => {});
+    } catch { /* observability only — never blocks generation */ }
   }
 
   return {

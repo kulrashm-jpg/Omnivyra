@@ -15,6 +15,9 @@ import { recordCreatorExecutionMetric, upsertCreatorExecutionSummary, writeCreat
 import { getContentQueue } from '../queue/contentGenerationQueues';
 import type { BoltContentJobData } from '../queue/jobProcessors/boltContentJobProcessor';
 import { enqueueScheduledPostAt } from '../scheduler/schedulerService';
+import { isQueueOperational } from './queueHealth';
+import { logPipelineEvent } from '../../lib/shared/observability';
+import { PipelineErrorCode } from '../../lib/shared/pipelineErrorCodes';
 import type { CanonicalCreatorOutput, CreatorScheduleResult } from './executionEngines/types';
 import { ownedDbTable } from '../db/writeOwner';
 import {
@@ -1962,33 +1965,62 @@ async function scheduleStructuredPlanRuntime(
     // Required for large campaigns (10+ platforms × 5+ content types × 3+/week)
     // where in-process generation would exceed HTTP timeout limits.
     if (options?.run_id) {
-      try {
-        options?.onProgress?.('schedule-queuing-jobs');
-        const jobCount = await queueBoltContentJobs(
-          options.run_id,
-          campaignId,
-          dailyPlans as DailyPlanRow[],
-          { ...campaign, company_id: companyId },
-          accountMap,
-          typeMapByPlatform,
-          normalize,
-        );
-        console.log('[schedule] Queued bolt content jobs', { run_id: options.run_id, jobCount });
-        if (jobCount > 0) {
-          options?.onProgress?.('schedule-writing-posts');
-          return {
-            scheduled_count:         0,    // jobs run async — count comes from workers
-            skipped_count:           0,
-            skipped_platforms:       [],
-            already_scheduled_count: 0,
-            queued_job_count:        jobCount,
-          } as any;
+      // NO-SILENT-FAILURE (Round-2 item 3): only take the async queue path
+      // when the queue is actually operational (Redis up + a bolt worker
+      // alive). If not, we do NOT queue-and-return-0 (which previously let
+      // the run report `completed` with zero scheduled posts) — we fall
+      // through to the SYNCHRONOUS inline block processor instead, which
+      // produces real scheduled_posts or a real error.
+      const queueOk = await isQueueOperational();
+      if (!queueOk) {
+        logPipelineEvent('scheduling.degraded', 'warn', {
+          run_id: options.run_id,
+          campaign_id: campaignId,
+          code: PipelineErrorCode.QUEUE_UNAVAILABLE,
+          action: 'fallback_inline_synchronous',
+          reason: 'queue_not_operational',
+        }, { dedupeKey: campaignId });
+      } else {
+        try {
+          options?.onProgress?.('schedule-queuing-jobs');
+          const jobCount = await queueBoltContentJobs(
+            options.run_id,
+            campaignId,
+            dailyPlans as DailyPlanRow[],
+            { ...campaign, company_id: companyId },
+            accountMap,
+            typeMapByPlatform,
+            normalize,
+          );
+          if (jobCount > 0) {
+            options?.onProgress?.('schedule-writing-posts');
+            logPipelineEvent('scheduling.queue_path', 'info', {
+              run_id: options.run_id, campaign_id: campaignId, queued_job_count: jobCount,
+            }, { dedupeKey: campaignId, throttleMs: 0 });
+            return {
+              scheduled_count:         0,    // jobs run async — count comes from workers
+              skipped_count:           0,
+              skipped_platforms:       [],
+              already_scheduled_count: 0,
+              queued_job_count:        jobCount,
+              degraded:                false,
+            } as any;
+          }
+          // jobCount === 0 means all inserts failed — fall through to inline.
+          logPipelineEvent('scheduling.zero_scheduled', 'warn', {
+            run_id: options.run_id, campaign_id: campaignId,
+            code: PipelineErrorCode.SCHEDULING_PRODUCED_ZERO,
+            action: 'fallback_inline_synchronous',
+          }, { dedupeKey: campaignId });
+        } catch (err) {
+          logPipelineEvent('scheduling.degraded', 'warn', {
+            run_id: options.run_id, campaign_id: campaignId,
+            code: PipelineErrorCode.SCHEDULING_DEGRADED,
+            action: 'fallback_inline_synchronous',
+            err: (err as Error)?.message,
+          }, { dedupeKey: campaignId });
+          // Fall through to inline block processor
         }
-        // jobCount === 0 means all inserts failed — fall through to inline block processor
-        console.warn('[schedule] Queue path produced 0 jobs, falling back to inline block processor');
-      } catch (err) {
-        console.warn('[schedule] Queue path failed, falling back to inline block processor:', (err as Error)?.message);
-        // Fall through to inline block processor
       }
     }
 

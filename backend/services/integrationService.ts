@@ -3,7 +3,13 @@ import { ownedDbTable } from '../db/writeOwner';
  * Integration Service — company_integrations table
  * Supports: lead_webhook | wordpress | custom_blog_api
  */
-import { supabase } from '../db/supabaseClient';
+import { createWebsiteConnection, resolveWebsiteForCompany } from './websiteService';
+import {
+  mergeConnectionConfig,
+  splitSecretConfig,
+  upsertConnectionCredentials,
+} from './integrationCredentialService';
+import { getCmsAdapter, isCmsProvider } from './cms/registry';
 
 export type IntegrationType = 'lead_webhook' | 'wordpress' | 'custom_blog_api';
 export type IntegrationStatus = 'connected' | 'failed' | 'pending';
@@ -12,10 +18,14 @@ export interface Integration {
   id: string;
   company_id: string;
   created_by: string;
+  website_id?: string | null;
+  website_connection_id?: string | null;
   type: IntegrationType;
   name: string;
   status: IntegrationStatus;
   config: Record<string, string>;
+  non_secret_config?: Record<string, string>;
+  credential_migration_status?: string | null;
   last_tested_at: string | null;
   last_error: string | null;
   created_at: string;
@@ -44,21 +54,37 @@ export async function createIntegration(
   userId: string,
   type: IntegrationType,
   name: string,
-  config: Record<string, string>
+  config: Record<string, string>,
+  options: { websiteId?: string | null; authType?: string } = {},
 ): Promise<Integration> {
+  const { nonSecretConfig, credentials } = splitSecretConfig(config);
+  const website = await resolveWebsiteForCompany(companyId, options.websiteId ?? null, userId);
+  const connection = await createWebsiteConnection({
+    websiteId: website.id,
+    provider: type,
+    authType: options.authType ?? (type === 'wordpress' ? 'basic' : 'api_key'),
+    nonSecretConfig,
+    status: 'pending',
+  });
+  await upsertConnectionCredentials(connection.id, credentials);
+
   const { data, error } = await ownedDbTable('company_integrations')
     .insert({
       company_id: companyId,
       created_by: userId,
+      website_id: website.id,
+      website_connection_id: connection.id,
       type,
       name,
-      config,
+      config: nonSecretConfig,
+      non_secret_config: nonSecretConfig,
+      credential_migration_status: 'encrypted',
       status: 'pending',
     })
     .select('*')
     .single();
   if (error) throw new Error(error.message);
-  return data as Integration;
+  return hydrateIntegration(data as Integration);
 }
 
 export async function updateIntegration(
@@ -66,14 +92,29 @@ export async function updateIntegration(
   companyId: string,
   updates: { name?: string; config?: Record<string, string> }
 ): Promise<Integration> {
+  const existing = await getIntegration(id, companyId);
+  if (!existing) throw new Error('Integration not found');
+
+  const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (updates.name) payload.name = updates.name;
+  if (updates.config) {
+    const { nonSecretConfig, credentials } = splitSecretConfig(updates.config);
+    if (existing.website_connection_id) {
+      await upsertConnectionCredentials(existing.website_connection_id, credentials);
+    }
+    payload.config = nonSecretConfig;
+    payload.non_secret_config = nonSecretConfig;
+    payload.credential_migration_status = existing.website_connection_id ? 'encrypted' : 'legacy_missing_connection';
+  }
+
   const { data, error } = await ownedDbTable('company_integrations')
-    .update({ ...updates, updated_at: new Date().toISOString() })
+    .update(payload)
     .eq('id', id)
     .eq('company_id', companyId)
     .select('*')
     .single();
   if (error) throw new Error(error.message);
-  return data as Integration;
+  return hydrateIntegration(data as Integration);
 }
 
 export async function deleteIntegration(id: string, companyId: string): Promise<void> {
@@ -91,7 +132,7 @@ export async function getIntegration(id: string, companyId: string): Promise<Int
     .eq('company_id', companyId)
     .single();
   if (error) return null;
-  return data as Integration;
+  return hydrateIntegration(data as Integration);
 }
 
 export async function getIntegrations(companyId: string, type?: IntegrationType): Promise<Integration[]> {
@@ -102,7 +143,7 @@ export async function getIntegrations(companyId: string, type?: IntegrationType)
   if (type) query = query.eq('type', type);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
-  return (data || []) as Integration[];
+  return Promise.all(((data || []) as Integration[]).map(hydrateIntegration));
 }
 
 // Reusable by other modules: get first active integration of a type
@@ -119,7 +160,17 @@ export async function getActiveIntegration(
     .limit(1)
     .single();
   if (error) return null;
-  return data as Integration;
+  return hydrateIntegration(data as Integration);
+}
+
+async function hydrateIntegration(row: Integration): Promise<Integration> {
+  const nonSecretConfig = (row.non_secret_config ?? row.config ?? {}) as Record<string, string>;
+  const config = await mergeConnectionConfig(row.website_connection_id, nonSecretConfig, row.config);
+  return {
+    ...row,
+    non_secret_config: nonSecretConfig,
+    config,
+  };
 }
 
 // ─── TEST CONNECTION ─────────────────────────────────────────────────────────
@@ -175,48 +226,27 @@ async function testConnection(integration: Integration): Promise<TestResult> {
   }
 
   if (type === 'wordpress') {
-    if (!config.site_url || !config.username || !config.app_password) {
-      return { success: false, message: 'site_url, username, and app_password are required.' };
-    }
-    const siteUrl = config.site_url.replace(/\/$/, '');
-    const credentials = Buffer.from(`${config.username}:${config.app_password}`).toString('base64');
-    const res = await fetchWithTimeout(`${siteUrl}/wp-json/wp/v2/users/me`, {
-      method: 'GET',
-      headers: { Authorization: `Basic ${credentials}` },
-    }, timeout);
-    if (res.ok) {
-      const user = await res.json().catch(() => null);
-      const displayName = user?.name || 'unknown';
-      return { success: true, message: `Connected as "${displayName}".` };
-    }
-    if (res.status === 401 || res.status === 403) {
-      return { success: false, message: 'Authentication failed. Check username and application password.' };
-    }
-    return { success: false, message: `WordPress site returned status ${res.status}.` };
+    const health = await getCmsAdapter(type).validateConnection({
+      provider: type,
+      companyId: integration.company_id,
+      connectionId: integration.website_connection_id,
+      websiteId: integration.website_id,
+      config,
+      timeoutMs: timeout,
+    });
+    return { success: health.healthy, message: health.message };
   }
 
-  if (type === 'custom_blog_api') {
-    if (!config.endpoint_url || !config.api_key) {
-      return { success: false, message: 'endpoint_url and api_key are required.' };
-    }
-    const authHeader = config.auth_header || 'Authorization';
-    const testPayload: BlogPayload = { title: 'Test Post', content: 'Integration test', author: 'system' };
-    const res = await fetchWithTimeout(config.endpoint_url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        [authHeader]: `Bearer ${config.api_key}`,
-        'X-Integration-Test': 'true',
-      },
-      body: JSON.stringify(testPayload),
-    }, timeout);
-    if (res.ok || res.status === 200 || res.status === 201 || res.status === 204) {
-      return { success: true, message: `API responded with ${res.status}.` };
-    }
-    if (res.status === 401 || res.status === 403) {
-      return { success: false, message: 'API rejected the key. Check api_key.' };
-    }
-    return { success: false, message: `API returned status ${res.status}.` };
+  if (isCmsProvider(type)) {
+    const health = await getCmsAdapter(type).validateConnection({
+      provider: type,
+      companyId: integration.company_id,
+      connectionId: integration.website_connection_id,
+      websiteId: integration.website_id,
+      config,
+      timeoutMs: timeout,
+    });
+    return { success: health.healthy, message: health.message };
   }
 
   return { success: false, message: `Unknown integration type: ${type}` };
@@ -252,37 +282,40 @@ export async function publishBlog(
   const type = preferType || 'wordpress';
   const integration = await getActiveIntegration(companyId, type);
   if (!integration) return { success: false, message: `No active ${type} integration found.` };
-
-  if (type === 'wordpress') {
-    const siteUrl = integration.config.site_url.replace(/\/$/, '');
-    const credentials = Buffer.from(
-      `${integration.config.username}:${integration.config.app_password}`
-    ).toString('base64');
-    const res = await fetch(`${siteUrl}/wp-json/wp/v2/posts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Basic ${credentials}`,
-      },
-      body: JSON.stringify({ title: payload.title, content: payload.content, status: 'publish' }),
-    });
-    if (res.ok) return { success: true, message: 'Post published to WordPress.' };
-    return { success: false, message: `WordPress returned ${res.status}.` };
-  }
-
-  if (type === 'custom_blog_api') {
-    const authHeader = integration.config.auth_header || 'Authorization';
-    const res = await fetch(integration.config.endpoint_url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        [authHeader]: `Bearer ${integration.config.api_key}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) return { success: true, message: 'Post published to custom API.' };
-    return { success: false, message: `API returned ${res.status}.` };
-  }
-
-  return { success: false, message: 'Unsupported integration type.' };
+  const adapter = getCmsAdapter(type);
+  const result = await adapter.publishPost({
+    provider: type,
+    companyId,
+    connectionId: integration.website_connection_id,
+    websiteId: integration.website_id,
+    config: integration.config,
+  }, {
+    blog: {
+      id: 'direct-publish',
+      company_id: companyId,
+      created_by: '',
+      title: payload.title,
+      content: payload.content,
+      slug: null,
+      excerpt: null,
+      content_blocks: null,
+      featured_image_url: null,
+      category: null,
+      tags: [],
+      seo_meta_title: null,
+      seo_meta_description: null,
+      is_featured: false,
+      views_count: 0,
+      status: 'draft',
+      integration_id: integration.id,
+      external_id: null,
+      published_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      angle_type: null,
+      hook_strength: null,
+    },
+    htmlContent: payload.content,
+  });
+  return { success: result.success, message: result.message };
 }

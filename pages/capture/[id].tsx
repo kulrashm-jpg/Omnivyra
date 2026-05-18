@@ -46,15 +46,45 @@ export default function CapturePage({ form }: Props) {
     setValues(prev => ({ ...prev, [name]: value }));
   }
 
+  function getAttribution() {
+    if (typeof window === 'undefined') return {};
+    const params = new URLSearchParams(window.location.search);
+    const getOrCreate = (storage: Storage, key: string) => {
+      const existing = storage.getItem(key);
+      if (existing) return existing;
+      const next = window.crypto?.randomUUID?.() || `ov_${Math.random().toString(36).slice(2)}`;
+      storage.setItem(key, next);
+      return next;
+    };
+    const landing = sessionStorage.getItem('omnivera_landing_page') || window.location.href;
+    sessionStorage.setItem('omnivera_landing_page', landing);
+    return {
+      website_id: form.website_id ?? null,
+      anonymous_id: getOrCreate(localStorage, 'omnivera_anonymous_id'),
+      session_id: getOrCreate(sessionStorage, 'omnivera_session_id'),
+      utm_source: params.get('utm_source'),
+      utm_medium: params.get('utm_medium'),
+      utm_campaign: params.get('utm_campaign'),
+      utm_content: params.get('utm_content'),
+      utm_term: params.get('utm_term'),
+      referrer: document.referrer || '',
+      landing_page: landing,
+      current_page: window.location.href,
+      consent_state: localStorage.getItem('omnivera_consent') || 'unknown',
+    };
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
     setError('');
     try {
-      const body: Record<string, string> = {
+      const body: Record<string, unknown> = {
         form_id: form.id,
         company_id: form.company_id,
+        website_id: form.website_id ?? '',
         source: 'form_embed',
+        attribution: getAttribution() as any,
         ...values,
       };
       const r = await fetch('/api/leads', {

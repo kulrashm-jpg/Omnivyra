@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { getForm, updateForm, deleteForm, FormField } from '../../../backend/services/leadService';
+import { assertWebsiteCompanyAccess } from '../../../backend/services/websiteService';
 
 const VALID_FIELD_TYPES = ['text', 'email', 'phone'];
 
@@ -43,8 +44,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!roleGate) return;
 
   if (req.method === 'PUT' || req.method === 'PATCH') {
-    const { name, fields, integration_id, brand } = req.body || {};
-    const updates: { name?: string; fields?: FormField[]; brand?: object; integration_id?: string | null } = {};
+    const { name, fields, integration_id, brand, website_id, allowed_domains } = req.body || {};
+    const updates: {
+      name?: string;
+      fields?: FormField[];
+      brand?: object;
+      integration_id?: string | null;
+      website_id?: string | null;
+      allowed_domains?: string[] | null;
+    } = {};
 
     if (name && typeof name === 'string') updates.name = name.trim();
     if (fields !== undefined) {
@@ -58,6 +66,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     if (integration_id !== undefined) {
       updates.integration_id = integration_id && typeof integration_id === 'string' ? integration_id : null;
+    }
+    if (website_id !== undefined) {
+      const websiteId = website_id && typeof website_id === 'string' ? website_id : null;
+      if (websiteId) await assertWebsiteCompanyAccess(companyId, websiteId);
+      updates.website_id = websiteId;
+    }
+    if (allowed_domains !== undefined) {
+      updates.allowed_domains = Array.isArray(allowed_domains)
+        ? allowed_domains.filter((domain): domain is string => typeof domain === 'string' && domain.trim().length > 0)
+        : null;
     }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'Nothing to update' });

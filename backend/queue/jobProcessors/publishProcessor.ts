@@ -24,6 +24,9 @@ import {
   updateScheduledPostOnFailure,
 } from '../../db/queries';
 import { publishToPlatform } from '../../adapters/platformAdapter';
+import { validatePublishReadiness } from '../../services/publishReadinessValidator';
+import { refreshDurableMediaBeforePublish } from '../../services/mediaReferenceResolver';
+import { logPipelineEvent } from '../../../lib/shared/observability';
 import { categorizeError } from '../../services/errorRecoveryService';
 import { recordPostAnalytics } from '../../services/analyticsService';
 import { schedulePostPolls } from '../../services/analyticsNormalizationService';
@@ -247,6 +250,45 @@ async function processPublishJobInner(params: {
     // Step 4: Update job status to 'processing'
     await updateQueueJobStatus(jobId as string, 'processing');
     await createQueueJobLog(jobId as string, 'info', `Started processing scheduled_post ${scheduled_post_id}`);
+
+    // Step 4b: Centralized publish-readiness gate (Round-4 item 1) — the
+    // SAME validator the manual path uses (scheduled↔manual parity, no
+    // duplicate logic). Runs AFTER the idempotency short-circuits (job
+    // completed / platform_post_id present) so retries of an
+    // already-published post are unaffected. Mode-gated (PUBLISH_GUARD_MODE).
+    const pubReadiness = validatePublishReadiness({
+      platform: String(scheduledPost.platform || ''),
+      contentSignals: { contentType: String(scheduledPost.content_type || '') },
+      hasText: !!(scheduledPost.content && String(scheduledPost.content).trim().length > 0),
+      mediaUrls: scheduledPost.media_urls ?? [],
+      skipSchedulingReadiness: true,
+    });
+    if (pubReadiness.ok === false) {
+      logPipelineEvent('publish.scheduled_validation', 'warn', {
+        scheduled_post_id, platform: scheduledPost.platform, code: pubReadiness.code,
+      }, { dedupeKey: `${scheduledPost.platform}|${pubReadiness.code}` });
+      await updateQueueJobStatus(jobId as string, 'failed', {
+        error_message: pubReadiness.message,
+        error_code: pubReadiness.code,
+      });
+      await updateScheduledPostOnFailure(scheduled_post_id, pubReadiness.message).catch(() => {});
+      await createQueueJobLog(jobId as string, 'warn', 'Publish blocked: readiness validation failed', {
+        code: pubReadiness.code, platform: scheduledPost.platform,
+      });
+      const blockedError: any = new Error(pubReadiness.code);
+      blockedError.skipQueueStatusUpdate = true; // already persisted 'failed'; no BullMQ double-retry
+      throw blockedError;
+    }
+    if (pubReadiness.warnings.length > 0) {
+      logPipelineEvent('publish.scheduled_validation', 'info', {
+        scheduled_post_id, platform: scheduledPost.platform,
+        warnings: pubReadiness.warnings.map((w) => w.code),
+      }, { dedupeKey: `${scheduledPost.platform}|warn` });
+    }
+
+    // Step 4c: Durable media refresh (Round-5 item 3) — parity with the
+    // manual path. No-op unless DURABLE_MEDIA_REFS; fail-open.
+    await refreshDurableMediaBeforePublish(scheduled_post_id);
 
     // Step 5: Publish to platform
     console.log(`🚀 Publishing to platform via adapter...`);

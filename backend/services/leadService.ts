@@ -5,6 +5,7 @@ import { ownedDbTable } from '../db/writeOwner';
  */
 import { supabase } from '../db/supabaseClient';
 import { ensureUnifiedPerson } from '../../lib/identity/identityGateway';
+import { mergeConnectionConfig } from './integrationCredentialService';
 
 export type FieldType = 'text' | 'email' | 'phone';
 
@@ -27,10 +28,12 @@ export interface FormBrand {
 export interface CaptureForm {
   id: string;
   company_id: string;
+  website_id?: string | null;
   created_by: string;
   name: string;
   fields: FormField[];
   brand: FormBrand;
+  allowed_domains?: string[] | null;
   integration_id: string | null;
   created_at: string;
   updated_at: string;
@@ -39,6 +42,7 @@ export interface CaptureForm {
 export interface Lead {
   id: string;
   company_id: string;
+  website_id?: string | null;
   created_by: string | null;
   name: string;
   email: string;
@@ -47,6 +51,9 @@ export interface Lead {
   integration_id: string | null;
   form_id: string | null;
   metadata: Record<string, unknown>;
+  attribution?: Record<string, unknown>;
+  visitor_session_id?: string | null;
+  consent_state?: string | null;
   is_test: boolean;
   created_at: string;
   unified_person_id: string | null;
@@ -61,9 +68,10 @@ export async function createForm(
   fields: FormField[],
   integrationId?: string | null,
   brand?: FormBrand,
+  websiteId?: string | null,
 ): Promise<CaptureForm> {
   const { data, error } = await ownedDbTable('forms')
-    .insert({ company_id: companyId, created_by: userId, name, fields, brand: brand ?? {}, integration_id: integrationId ?? null })
+    .insert({ company_id: companyId, website_id: websiteId ?? null, created_by: userId, name, fields, brand: brand ?? {}, integration_id: integrationId ?? null })
     .select('*')
     .single();
   if (error) throw new Error(error.message);
@@ -90,7 +98,14 @@ export async function getForms(companyId: string): Promise<CaptureForm[]> {
 export async function updateForm(
   id: string,
   companyId: string,
-  updates: { name?: string; fields?: FormField[]; brand?: FormBrand; integration_id?: string | null },
+  updates: {
+    name?: string;
+    fields?: FormField[];
+    brand?: FormBrand;
+    integration_id?: string | null;
+    website_id?: string | null;
+    allowed_domains?: string[] | null;
+  },
 ): Promise<CaptureForm> {
   const { data, error } = await ownedDbTable('forms')
     .update({ ...updates, updated_at: new Date().toISOString() })
@@ -119,6 +134,10 @@ export interface CreateLeadInput {
   created_by?: string | null;
   metadata?: Record<string, unknown>;
   is_test?: boolean;
+  website_id?: string | null;
+  visitor_session_id?: string | null;
+  attribution?: Record<string, unknown>;
+  consent_state?: string | null;
 }
 
 export async function createLead(companyId: string, input: CreateLeadInput): Promise<Lead> {
@@ -135,6 +154,7 @@ export async function createLead(companyId: string, input: CreateLeadInput): Pro
   const { data, error } = await ownedDbTable('leads')
     .insert({
       company_id: companyId,
+      website_id: input.website_id ?? null,
       created_by: input.created_by ?? null,
       name: input.name,
       email: input.email,
@@ -143,6 +163,9 @@ export async function createLead(companyId: string, input: CreateLeadInput): Pro
       form_id: input.form_id ?? null,
       integration_id: input.integration_id ?? null,
       metadata: input.metadata ?? {},
+      attribution: input.attribution ?? {},
+      visitor_session_id: input.visitor_session_id ?? null,
+      consent_state: input.consent_state ?? null,
       is_test: input.is_test ?? false,
       unified_person_id: unifiedPersonId,
     })
@@ -199,14 +222,22 @@ export async function deleteLead(id: string, companyId: string): Promise<void> {
 export async function validateWebhookAuth(
   integrationId: string,
   webhookSecret: string,
-): Promise<string | null> {
+): Promise<{ company_id: string; website_id?: string | null; integration_id: string } | null> {
   const { data, error } = await ownedDbTable('company_integrations')
-    .select('company_id, config, type')
+    .select('id, company_id, website_id, website_connection_id, config, non_secret_config, type')
     .eq('id', integrationId)
     .single();
   if (error || !data) return null;
   if (data.type !== 'lead_webhook') return null;
-  const cfg = data.config as Record<string, string>;
+  const cfg = await mergeConnectionConfig(
+    (data as any).website_connection_id,
+    ((data as any).non_secret_config ?? data.config) as Record<string, string>,
+    data.config as Record<string, string>,
+  );
   if (!cfg?.secret || cfg.secret !== webhookSecret) return null;
-  return data.company_id as string;
+  return {
+    company_id: data.company_id as string,
+    website_id: (data as any).website_id ?? null,
+    integration_id: data.id as string,
+  };
 }

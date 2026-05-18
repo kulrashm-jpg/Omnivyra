@@ -28,6 +28,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import { ownedDbTable } from '@/backend/db/writeOwner';
+// Phase-2 Step-3: creator-lifecycle persistence reconciles through the ONE
+// canonical write engine (preserves non-creator enrichments / prevents
+// blank-stale overwrite) while keeping the intent_type='creator' DB guard.
+import { reconcileContentWrite } from '@/backend/services/orchestration';
 import {
   isCreatorWorkspaceLifecycleEnabled,
   loadCreatorWorkspace,
@@ -173,13 +177,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
+  // Reconcile the lifecycle projection against the persisted blob so this
+  // creator write can never blank/stale-overwrite other systems'
+  // enrichments (writer_content_brief / platform_variants / etc.).
+  let existingContent: Record<string, unknown> = {};
+  try {
+    existingContent = typeof row.content === 'string'
+      ? (JSON.parse(row.content) || {})
+      : ((row.content as Record<string, unknown>) ?? {});
+  } catch { existingContent = {}; }
+  let projected: Record<string, unknown> = {};
+  try { projected = JSON.parse(updatePayload.content) || {}; } catch { projected = {}; }
+  const rec = reconcileContentWrite(existingContent, projected, {
+    source_writer: 'creator-lifecycle',
+    campaign_id: row.campaign_id,
+    execution_id: row.execution_id ?? id,
+  });
+  // eslint-disable-next-line no-console
+  console.log('[WRITE_RECONCILE]', JSON.stringify({
+    campaign_id: row.campaign_id, execution_id: row.execution_id ?? id,
+    source_writer: 'creator-lifecycle', write_target: 'daily_content_plans',
+    reconciliation_strategy: 'enrichment_priority_merge',
+    changed_fields: rec.changed_fields, preserved_fields: rec.preserved_fields,
+  }));
+  if (rec.prevented.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log('[STALE_OVERWRITE_PREVENTED]', JSON.stringify({ campaign_id: row.campaign_id, execution_id: row.execution_id ?? id, source_writer: 'creator-lifecycle', prevented: rec.prevented }));
+  }
+  if (rec.invariant_violations.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log('[WRITE_CONFLICT]', JSON.stringify({ campaign_id: row.campaign_id, execution_id: row.execution_id ?? id, source_writer: 'creator-lifecycle', invariant_violations: rec.invariant_violations }));
+  }
+
+  // Keep the belt-and-braces intent_type='creator' DB guard (never touch a
+  // non-creator row) — canonical reconciliation decided WHAT to write.
   const { error: updateError } = await ownedDbTable('daily_content_plans')
-    .update({ content: updatePayload.content, updated_at: nowIso })
+    .update({ content: JSON.stringify(rec.merged), updated_at: nowIso })
     .eq('id', id)
-    .eq('intent_type', 'creator'); // belt-and-braces: never touch a non-creator row
+    .eq('intent_type', 'creator');
+  // eslint-disable-next-line no-console
+  console.log('[ORCHESTRATION_WRITE]', JSON.stringify({
+    campaign_id: row.campaign_id, execution_id: row.execution_id ?? id,
+    source_writer: 'creator-lifecycle', write_target: 'daily_content_plans',
+    resolution_strategy: updateError ? 'write_failed' : 'reconciled_merge',
+  }));
   if (updateError) {
+    // eslint-disable-next-line no-console
+    console.log('[EXECUTION_WRITE_FAILED]', JSON.stringify({ campaign_id: row.campaign_id, execution_id: row.execution_id ?? id, source_writer: 'creator-lifecycle', reason: updateError.message }));
     return res.status(500).json({ error: 'Failed to persist workspace update.' });
   }
+  // eslint-disable-next-line no-console
+  console.log('[WRITE_TARGET_SYNC]', JSON.stringify({ campaign_id: row.campaign_id, execution_id: row.execution_id ?? id, source_writer: 'creator-lifecycle', write_target: 'daily_content_plans', synced: true }));
+  // Phase-2 Step-4: propagate canonical state upstream (fire-and-forget).
+  void import('@/backend/services/orchestration')
+    .then((m) => m.synchronizeExecutionState(row.campaign_id, String(row.execution_id ?? id), 'creator-lifecycle'))
+    .catch(() => {});
 
   return res.status(200).json({ creator_workspace: nextTask, persisted: true });
 }

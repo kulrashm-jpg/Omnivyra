@@ -728,6 +728,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.warn('[PLANNER][CONTEXT][WARN] Context snapshot save failed (non-fatal):', err?.message ?? err);
     });
 
+    // Phase-2 Step-3: non-destructive canonical reconcile + invariant pass
+    // AFTER finalize persistence. Does NOT replace the blueprint/row inserts
+    // above (compatibility-first, incremental) — it observes drift and emits
+    // reconciliation diagnostics so divergence is visible, not silent.
+    try {
+      const orch = await import('../../../backend/services/orchestration');
+      void orch.reconcileExecution(campaignId!, 'planner-finalize').catch(() => {});
+      // Phase-2 Step-10: authoritative activation gate (shadow + decision +
+      // output diff + rollback) at the strategy-first/skeleton-first
+      // convergence. Default SHADOW ⇒ non-binding, behaviour unchanged.
+      void orch.runAuthoritativeGenerationGate(campaignId!, 'planner-finalize').catch(() => {});
+    } catch { /* observability only — never blocks the finalize response */ }
+
+    // Phase-2 Step-5: progressively persist the canonical server-side
+    // strategy from the planner handoff (additive, fire-and-forget — local/
+    // session planner state is untouched and keeps working).
+    try {
+      const { getOrCreateCampaignStrategy } = await import('../../../backend/services/strategy');
+      const handoffObj = handoff as Record<string, unknown>;
+      void getOrCreateCampaignStrategy({
+        campaignId: campaignId!,
+        source: 'planner-finalize',
+        inputs: {
+          idea_spine: (idea_spine as Record<string, unknown>) ?? null,
+          strategy_context: (handoffObj.strategy_context as Record<string, unknown>) ?? (strategy_context as Record<string, unknown>) ?? null,
+          strategic_themes: Array.isArray(handoffObj.strategic_themes) ? (handoffObj.strategic_themes as Array<Record<string, unknown>>) : null,
+          strategic_card: (handoffObj.strategic_card as Record<string, unknown>) ?? null,
+        },
+      }).catch(() => {});
+    } catch { /* additive enrichment only — never blocks the finalize response */ }
+
     return res.status(200).json({ campaign_id: campaignId });
   } catch (err) {
     console.error('Planner finalize error:', err);

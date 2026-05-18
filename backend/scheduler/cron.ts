@@ -72,6 +72,8 @@ import { runEngagementSignalScheduler } from '../jobs/engagementSignalScheduler'
 import { archiveOldSignals } from '../jobs/engagementSignalArchiveJob';
 import { runEngagementOpportunityScanner } from '../jobs/engagementOpportunityScanner';
 import { runDailyIntelligence } from '../schedulers/intelligenceScheduler';
+import { sweepStaleExecutions } from '../services/queueHealth';
+import { runReconciliationPass } from '../services/operationalReconciler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
@@ -111,6 +113,15 @@ const BUYER_INTENT_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const OPPORTUNITY_SLOTS_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const GOVERNANCE_AUDIT_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const AUTO_OPTIMIZATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+// Reclaim BOLT runs abandoned by a worker crash / queue interruption.
+// CronGuard already guarantees single-instance execution → no duplicate
+// recovery. Sweep itself is idempotent (only flips started/running→failed).
+const STALE_EXECUTION_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
+let lastStaleExecutionSweepRun = 0;
+// Lightweight detect-first reconciliation (orphan pending / expired media /
+// unresolved deps). Single-instance via CronGuard; no destructive auto-fix.
+const RECONCILIATION_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
+let lastReconciliationRun = 0;
 const ENGAGEMENT_POLLING_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
 const INTELLIGENCE_POLLING_INTERVAL_MS = 2 * 60 * 60 * 1000; // every 2 hours
 const SIGNAL_CLUSTERING_INTERVAL_MS = 30 * 60 * 1000; // every 30 minutes
@@ -805,6 +816,30 @@ async function runSchedulerCycle() {
       }
     } catch (err: unknown) {
       console.warn('[leadThreadRecompute] cleanup error', formatCaughtError(err));
+    }
+  }
+
+  // Reclaim stale/abandoned BOLT executions every 5 minutes (Round-3 item 5).
+  // Single-instance via CronGuard; idempotent + schema-desync tolerant;
+  // structured-logged inside the sweep. Never throws.
+  if (shouldRunCronJob("staleExecutionSweep", STALE_EXECUTION_SWEEP_INTERVAL_MS, lastStaleExecutionSweepRun)) {
+    lastStaleExecutionSweepRun = Date.now();
+    try {
+      await sweepStaleExecutions();
+    } catch (error: unknown) {
+      console.error('❌ Stale execution sweep error:', formatCaughtError(error));
+    }
+  }
+
+  // Lightweight reconciliation every 30 minutes (Round-5 item 4).
+  // Detection-first; only safe deterministic auto-fix is the flag-gated
+  // durable-media refresh. Single-instance via CronGuard; never throws.
+  if (shouldRunCronJob("operationalReconciliation", RECONCILIATION_INTERVAL_MS, lastReconciliationRun)) {
+    lastReconciliationRun = Date.now();
+    try {
+      await runReconciliationPass();
+    } catch (error: unknown) {
+      console.error('❌ Operational reconciliation error:', formatCaughtError(error));
     }
   }
 

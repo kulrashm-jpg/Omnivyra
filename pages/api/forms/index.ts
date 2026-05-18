@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { createForm, getForms, FormField } from '../../../backend/services/leadService';
+import { assertWebsiteCompanyAccess } from '../../../backend/services/websiteService';
 
 const VALID_FIELD_TYPES = ['text', 'email', 'phone'];
 
@@ -44,7 +45,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     if (!roleGate) return;
 
-    const { name, fields, integration_id, brand } = req.body || {};
+    const { name, fields, integration_id, brand, website_id } = req.body || {};
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'name is required' });
     }
@@ -56,6 +57,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
+      const websiteId = typeof website_id === 'string' && website_id.trim() ? website_id.trim() : null;
+      if (websiteId) await assertWebsiteCompanyAccess(companyId, websiteId);
       const form = await createForm(
         companyId,
         roleGate.userId,
@@ -63,6 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fields,
         integration_id && typeof integration_id === 'string' ? integration_id : null,
         typeof brand === 'object' && brand !== null ? brand : {},
+        websiteId,
       );
       return res.status(201).json({ form });
     } catch (err) {

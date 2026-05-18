@@ -21,6 +21,9 @@ import { recordPostAnalytics } from './analyticsService';
 import { logActivity } from './activityLogger';
 import { checkAndCompleteCampaignIfEligible } from './CampaignCompletionService';
 import { validatePlatformContentCompatibility } from './platformContentValidator';
+import { validatePublishReadiness } from './publishReadinessValidator';
+import { refreshDurableMediaBeforePublish } from './mediaReferenceResolver';
+import { logPipelineEvent } from '../../lib/shared/observability';
 import { logger } from './logger';
 import { CAPABILITY_LOG_EVENTS, type CapabilityLogPayload } from '../../lib/shared/social/capabilityEvents';
 import {
@@ -336,6 +339,42 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     };
   }
 
+  // Centralized publish-readiness gate (Round-4 item 1) — IDENTICAL
+  // validator to the manual /api/social/publish path (reuse, not
+  // duplicate logic). Mode-gated via PUBLISH_GUARD_MODE. Runs after the
+  // attachment-media revalidation, before the adapter. Idempotency
+  // unaffected (publishNow's platform_post_id short-circuit already ran).
+  const schedReadiness = validatePublishReadiness({
+    platform: String(scheduledPost.platform || ''),
+    contentSignals: { contentType: String(scheduledPost.content_type || '') },
+    hasText: !!(scheduledPost.content && String(scheduledPost.content).trim().length > 0),
+    mediaUrls: scheduledPost.media_urls ?? [],
+    skipSchedulingReadiness: true,
+  });
+  if (schedReadiness.ok === false) {
+    logPipelineEvent('publish.scheduled_validation', 'warn', {
+      scheduled_post_id, platform: scheduledPost.platform,
+      code: schedReadiness.code, surface: input.publish_source ?? 'scheduled',
+    }, { dedupeKey: `${scheduledPost.platform}|${schedReadiness.code}` });
+    void recordPublishFailure({
+      scheduledPostId: scheduled_post_id,
+      errorCode: schedReadiness.code,
+      errorMessage: schedReadiness.message,
+      attemptCount: 1,
+    });
+    await updateScheduledPostOnFailure(scheduled_post_id, schedReadiness.message);
+    await ownedDbTable('scheduled_posts')
+      .update({ error_code: schedReadiness.code, error_message: schedReadiness.message })
+      .eq('id', scheduled_post_id);
+    return { status: 'FAILED', message: schedReadiness.message, timestamp };
+  }
+  if (schedReadiness.warnings.length > 0) {
+    logPipelineEvent('publish.scheduled_validation', 'info', {
+      scheduled_post_id, platform: scheduledPost.platform,
+      warnings: schedReadiness.warnings.map((w) => w.code),
+    }, { dedupeKey: `${scheduledPost.platform}|warn` });
+  }
+
   emitCreatorEvent({
     event: CREATOR_EVENTS.PUBLISH_VALIDATION_PASSED,
     scheduledPostId: scheduled_post_id,
@@ -343,6 +382,12 @@ export async function publishNow(input: PublishNowInput): Promise<PublishNowResu
     creatorFormat: String(scheduledPost.content_type ?? ''),
     metadata: { source: input.publish_source ?? 'unknown' },
   });
+
+  // Durable media refresh (Round-5 item 3). No-op unless DURABLE_MEDIA_REFS
+  // is on AND the row has media_storage_refs; fail-open (never regresses
+  // legacy media_urls). Mints fresh signed URLs in place so the adapter
+  // publishes non-expired media without any adapter change.
+  await refreshDurableMediaBeforePublish(scheduled_post_id);
 
   const result = await publishToPlatform(scheduled_post_id, social_account_id);
 

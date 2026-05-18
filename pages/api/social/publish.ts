@@ -7,7 +7,10 @@ import { publishNow } from '../../../backend/services/publishNowService';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { resolveEngagementCapability } from '../../../backend/services/engagementCapabilityMap';
 import { logAuditEvent } from '../../../backend/services/auditLoggingService';
-import { validatePlatformContentCompatibility } from '../../../backend/services/platformContentValidator';
+import {
+  validatePublishReadiness,
+  assertMediaAccessible,
+} from '../../../backend/services/publishReadinessValidator';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -57,36 +60,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Hard validation: platform × content-capability compatibility. Runs
     // before account resolution so we never trigger a refresh / DB write on
     // a publish that will be rejected (e.g. Instagram + text-only post).
-    const compatibility = validatePlatformContentCompatibility({
+    // Centralized publish-readiness gate (Round-3 item 1+7). Composes the
+    // registry validator + adapter-reality enforcement (LinkedIn/X media
+    // strip, Threads no-path, TikTok finalize guard) + canonical state —
+    // no duplicate validation logic. Mode-gated via PUBLISH_GUARD_MODE.
+    // skipSchedulingReadiness: this is a manual publish-now, so we gate on
+    // capability/adapter-reality/media, not on canonical scheduling state.
+    const readiness = validatePublishReadiness({
       platform: post.platform,
       contentSignals: { contentType: post.content_type },
-      payload: {
-        hasText: !!(post.content && post.content.trim().length > 0),
-        mediaUrls: post.media_urls ?? [],
-      },
+      hasText: !!(post.content && post.content.trim().length > 0),
+      mediaUrls: post.media_urls ?? [],
+      skipSchedulingReadiness: true,
     });
-    if (compatibility.ok === false) {
-      const failure = compatibility;
+    if (readiness.ok === false) {
       void logAuditEvent({
         operation: 'INSERT',
         table: 'social_publish_rejected',
         companyId: post.user_id ?? 'unknown',
         userId: user.id,
         success: false,
-        errorMessage: failure.message,
+        errorMessage: readiness.message,
         metadata: {
-          platform: failure.platform ?? post.platform,
-          capability: failure.capability,
-          code: failure.code,
+          platform: (readiness.context?.platform as string) ?? post.platform,
+          code: readiness.code,
           post_id,
         },
       }).catch(() => {});
+      // Preserve the existing 400 response shape (error/code/platform);
+      // `capability` retained for back-compat when present in context.
       return res.status(400).json({
-        error: failure.message,
-        code: failure.code,
-        platform: failure.platform ?? post.platform,
-        capability: failure.capability,
+        error: readiness.message,
+        code: readiness.code,
+        platform: (readiness.context?.platform as string) ?? post.platform,
+        capability: (readiness.context?.capability as string) ?? null,
       });
+    }
+    // Non-fatal warnings (e.g. TIKTOK_FINALIZE_UNCONFIRMED) surfaced
+    // separately — already throttle-logged inside the validator.
+    const publishWarnings = readiness.warnings.map((w) => ({ code: w.code, message: w.message }));
+
+    // Asset accessibility — catch expired signed URLs before the adapter
+    // (flag-gated; default on). Best-effort; only a confirmed dead asset blocks.
+    if (
+      String(process.env.PUBLISH_MEDIA_ACCESSIBILITY_CHECK ?? '1') !== '0' &&
+      Array.isArray(post.media_urls) && post.media_urls.length > 0
+    ) {
+      const dead = await assertMediaAccessible(post.media_urls);
+      if (dead) {
+        void logAuditEvent({
+          operation: 'INSERT', table: 'social_publish_rejected',
+          companyId: post.user_id ?? 'unknown', userId: user.id, success: false,
+          errorMessage: dead.message,
+          metadata: { code: dead.code, post_id, platform: post.platform },
+        }).catch(() => {});
+        return res.status(400).json({ error: dead.message, code: dead.code, platform: post.platform });
+      }
     }
 
     // Allow: post owner OR super-admin
@@ -158,6 +187,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       post_url: result.post_url,
       message: result.message,
       timestamp: result.timestamp,
+      // additive — non-fatal publish-readiness warnings (back-compat safe)
+      ...(publishWarnings.length > 0 ? { warnings: publishWarnings } : {}),
     });
   } catch (error: any) {
     console.error('[publish] error:', error);

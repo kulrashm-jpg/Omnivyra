@@ -8,6 +8,11 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import {
+  resolveCanonicalState,
+  CANONICAL_BADGE,
+  CanonicalContentState,
+} from '../../../lib/shared/contentLifecycle';
 
 function extractTitleFromContent(content: string | null | undefined): string {
   if (!content || typeof content !== 'string') return 'Scheduled post';
@@ -144,6 +149,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         (row.title && String(row.title).trim()) ||
         extractTitleFromContent(row.content);
       const status = String(row.status || 'scheduled');
+      // Canonical state (additive — legacy `status` preserved unchanged).
+      const canonical = resolveCanonicalState({
+        scheduled_post_status: status,
+        scheduled_post_id: row.id,
+      });
+      const badge = CANONICAL_BADGE[canonical];
       return {
         date: dateStr,
         platform: normalizePlatform(row.platform),
@@ -155,6 +166,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         scheduled_post_id: row.id,
         execution_id: row.repurpose_parent_execution_id || null,
         status,
+        // ── additive canonical fields ──
+        canonical_state: canonical,
+        canonical_badge: badge.short,
+        canonical_label: badge.label,
+        canonical_group: badge.group,
+        pending: false,
         scheduled_for: row.scheduled_for || null,
         is_overdue: status === 'scheduled' && row.scheduled_for && row.scheduled_for < now,
         content: String(row.content || '').trim() || null,
@@ -166,6 +183,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           : [],
       };
     });
+
+    // ── PENDING CREATOR VISIBILITY (Round-2 item 2) ────────────────────────
+    // Surface daily_content_plans that have NO scheduled_posts row yet, so
+    // pending creator work is visible on the calendar BEFORE upload. Dedup
+    // is structural: only rows with scheduled_post_id IS NULL are emitted
+    // (rows that DO have one are already represented by the feed above).
+    // Additive only — existing scheduled events are untouched. Disable with
+    // CALENDAR_PENDING_VISIBILITY=0.
+    if (
+      String(process.env.CALENDAR_PENDING_VISIBILITY ?? '1') !== '0' &&
+      campaignIds.length > 0
+    ) {
+      try {
+        let pq = supabase
+          .from('daily_content_plans')
+          .select('id, campaign_id, platform, content_type, content_status, content, scheduled_post_id, title, topic, date')
+          .in('campaign_id', campaignIdFilter && campaignIds.includes(campaignIdFilter) ? [campaignIdFilter] : campaignIds)
+          .is('scheduled_post_id', null);
+        if (!stageFilter) {
+          pq = pq.gte('date', start).lte('date', end);
+        }
+        const { data: pendingRows } = await pq.limit(2000);
+        const PENDING_GROUPS = new Set<CanonicalContentState>([
+          CanonicalContentState.PENDING_CREATOR,
+          CanonicalContentState.READY_FOR_REVIEW,
+          CanonicalContentState.READY_FOR_SCHEDULE,
+        ]);
+        for (const r of pendingRows || []) {
+          const dateStr = typeof r.date === 'string' ? r.date.slice(0, 10) : '';
+          if (!dateStr) continue;
+          const canonical = resolveCanonicalState({
+            content_status: r.content_status,
+            content: r.content,
+            scheduled_post_id: null,
+          });
+          if (!PENDING_GROUPS.has(canonical)) continue; // skip planned/generating/terminal noise
+          const badge = CANONICAL_BADGE[canonical];
+          events.push({
+            date: dateStr,
+            platform: normalizePlatform(r.platform || ''),
+            title: String(r.title || r.topic || 'Pending creator asset').trim(),
+            repurpose_index: 1,
+            repurpose_total: 1,
+            campaign_id: r.campaign_id || '',
+            content_type: String(r.content_type || 'post').trim(),
+            scheduled_post_id: null as any,
+            execution_id: null,
+            status: 'pending',
+            canonical_state: canonical,
+            canonical_badge: badge.short, // 'P' for PENDING_CREATOR
+            canonical_label: badge.label, // 'Pending creator asset'
+            canonical_group: badge.group, // 'pending'
+            pending: true,
+            scheduled_for: null,
+            is_overdue: false,
+            content: null,
+            media_urls: [],
+            media_types: [],
+          } as any);
+        }
+      } catch (pendErr: any) {
+        // Never let pending-visibility break the existing calendar.
+        console.warn('[calendar/activity-events] pending visibility skipped:', pendErr?.message);
+      }
+    }
 
     return res.status(200).json(events);
   } catch (err: any) {

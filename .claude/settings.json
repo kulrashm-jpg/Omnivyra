@@ -26,7 +26,12 @@
       "PowerShell($procs = Get-CimInstance Win32_Process -Filter \"name='node.exe'\" | Where-Object { $_.CommandLine -match 'start-all|next dev|startWorkers|scheduler/cron|start-server|dev:full' }; foreach \\($p in $procs\\) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 800; \"stopped\")",
       "Bash(git worktree *)",
       "Bash(git -C c:/tmp/omnivyra-deploy log -1 --pretty=format:'%H %s')",
-      "Bash(git -C c:/tmp/omnivyra-deploy status --porcelain)"
+      "Bash(git -C c:/tmp/omnivyra-deploy status --porcelain)",
+      "Bash(git -C c:/tmp/omnivyra-deploy checkout -f acbf6397)",
+      "Bash(git -C c:/tmp/omnivyra-deploy log -1 --pretty=format:'%h %s')",
+      "Bash(echo \"EXIT_LIB:$?\")",
+      "Bash(echo \"TYPECHECK_EXIT:$?\")",
+      "Bash(echo \"BUILD_TSC_EXIT:$?\")"
     ],
     "additionalDirectories": [
       "C:\\virality\\pages\\api\\activity-workspace\\[id]",

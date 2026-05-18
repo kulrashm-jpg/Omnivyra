@@ -4,15 +4,17 @@ import { ownedDbTable } from '../db/writeOwner';
  * Publish to WordPress, custom blog API, or host internally as fallback.
  * Supports full content_blocks + SEO + category/tag metadata.
  */
-import { supabase } from '../db/supabaseClient';
-import { getIntegration, getActiveIntegration, Integration } from './integrationService';
+import { getIntegration, getActiveIntegration, type Integration } from './integrationService';
 import { extractBlogContext } from '../../lib/blog/blockExtractor';
+import { createPublishingJob } from './publishingJobService';
+import { isCmsProvider } from './cms/registry';
 
 export type BlogStatus = 'draft' | 'scheduled' | 'published' | 'failed';
 
 export interface Blog {
   id:                   string;
   company_id:           string;
+  website_id?:          string | null;
   created_by:           string;
   title:                string;
   content:              string;
@@ -34,6 +36,7 @@ export interface Blog {
   updated_at:           string;
   angle_type:           string | null;
   hook_strength:        string | null;
+  scheduled_publish_at?: string | null;
 }
 
 export interface CreateBlogInput {
@@ -48,6 +51,8 @@ export interface CreateBlogInput {
   seo_meta_title?:      string | null;
   seo_meta_description?: string | null;
   is_featured?:         boolean;
+  website_id?:          string | null;
+  scheduled_publish_at?: string | null;
   angle_type?:          string | null;
   hook_strength?:       string | null;
 }
@@ -64,6 +69,8 @@ export interface UpdateBlogInput {
   seo_meta_title?:      string | null;
   seo_meta_description?: string | null;
   is_featured?:         boolean;
+  website_id?:          string | null;
+  scheduled_publish_at?: string | null;
   status?:              BlogStatus;
   angle_type?:          string | null;
   hook_strength?:       string | null;
@@ -179,6 +186,7 @@ export async function createBlog(
   const { data, error } = await ownedDbTable('blogs')
     .insert({
       company_id:           companyId,
+      website_id:           input.website_id           ?? null,
       created_by:           userId,
       title:                input.title,
       content:              input.content              ?? '',
@@ -191,6 +199,7 @@ export async function createBlog(
       seo_meta_title:       input.seo_meta_title       ?? null,
       seo_meta_description: input.seo_meta_description ?? null,
       is_featured:          input.is_featured          ?? false,
+      scheduled_publish_at: input.scheduled_publish_at ?? null,
       angle_type:           input.angle_type           ?? null,
       hook_strength:        input.hook_strength        ?? null,
       status:               'draft',
@@ -302,7 +311,33 @@ export async function publishBlogPost(
       };
     } else {
       usedIntegrationId = integration.id;
-      result = await publishToExternal(integration, blog, htmlContent);
+      if (!isCmsProvider(integration.type)) {
+        result = { success: false, message: `Unsupported integration type: ${integration.type}` };
+      } else {
+        const job = await createPublishingJob({
+          companyId,
+          websiteId: blog.website_id ?? integration.website_id ?? null,
+          connectionId: integration.website_connection_id ?? null,
+          blogId: blog.id,
+          provider: integration.type,
+          jobType: blog.scheduled_publish_at ? 'schedule_post' : 'publish_post',
+          idempotencyKey: `blog:${blog.id}:publish:${integration.id}`,
+          scheduledFor: blog.scheduled_publish_at ?? null,
+          requestPayload: {
+            html_content: htmlContent,
+            title: blog.title,
+            slug: blog.slug,
+          },
+          createdBy: blog.created_by,
+        });
+        result = {
+          success: true,
+          message: job.scheduled_for
+            ? 'Publishing job scheduled. The worker will publish it at the scheduled time.'
+            : 'Publishing job queued. The worker will publish it shortly.',
+          external_id: undefined,
+        };
+      }
     }
   } else {
     result = {
@@ -313,8 +348,8 @@ export async function publishBlogPost(
   }
 
   await ownedDbTable('blogs').update({
-    status:         result.success ? 'published' : 'failed',
-    published_at:   result.success ? new Date().toISOString() : null,
+    status:         result.success ? (blog.scheduled_publish_at ? 'scheduled' : 'draft') : 'failed',
+    published_at:   null,
     external_id:    result.external_id ?? null,
     integration_id: usedIntegrationId,
     updated_at:     new Date().toISOString(),
@@ -325,104 +360,3 @@ export async function publishBlogPost(
 
 // ─── Internal: publish to external platform ──────────────────────────────────
 
-async function publishToExternal(
-  integration:  Integration,
-  blog:         Blog,
-  htmlContent:  string,
-): Promise<PublishResult> {
-  const { type, config } = integration;
-  const timeout = 15_000;
-
-  if (type === 'wordpress') {
-    if (!config.site_url || !config.username || !config.app_password) {
-      return { success: false, message: 'WordPress integration is missing credentials.' };
-    }
-    const siteUrl     = config.site_url.replace(/\/$/, '');
-    const credentials = Buffer.from(`${config.username}:${config.app_password}`).toString('base64');
-
-    // Build rich payload
-    const payload: Record<string, unknown> = {
-      title:   blog.title,
-      content: htmlContent,
-      status:  'publish',
-    };
-    if (blog.excerpt)      payload['excerpt']   = blog.excerpt;
-    if (blog.seo_meta_title) payload['title']   = blog.seo_meta_title; // WP uses title for SEO too
-    if (blog.tags && blog.tags.length > 0) payload['tags'] = blog.tags;
-    if (blog.category)     payload['categories'] = [blog.category];
-    if (blog.featured_image_url) payload['featured_media_url'] = blog.featured_image_url;
-
-    try {
-      const res = await fetchWithTimeout(`${siteUrl}/wp-json/wp/v2/posts`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Basic ${credentials}` },
-        body:    JSON.stringify(payload),
-      }, timeout);
-
-      if (res.ok) {
-        const data = await res.json().catch(() => null);
-        return {
-          success:     true,
-          message:     `Published to WordPress${data?.link ? ': ' + data.link : '.'}`,
-          external_id: data?.id ? String(data.id) : undefined,
-        };
-      }
-      if (res.status === 401 || res.status === 403) {
-        return { success: false, message: 'WordPress authentication failed. Check your credentials.' };
-      }
-      return { success: false, message: `WordPress returned status ${res.status}.` };
-    } catch (err) {
-      return { success: false, message: err instanceof Error ? err.message : 'WordPress request failed.' };
-    }
-  }
-
-  if (type === 'custom_blog_api') {
-    if (!config.endpoint_url || !config.api_key) {
-      return { success: false, message: 'Custom blog API integration is missing credentials.' };
-    }
-    const authHeader = config.auth_header || 'Authorization';
-
-    const payload: Record<string, unknown> = {
-      title:   blog.title,
-      content: htmlContent,
-    };
-    if (blog.slug)                payload['slug']                = blog.slug;
-    if (blog.excerpt)             payload['excerpt']             = blog.excerpt;
-    if (blog.featured_image_url)  payload['featured_image_url']  = blog.featured_image_url;
-    if (blog.category)            payload['category']            = blog.category;
-    if (blog.tags?.length)        payload['tags']                = blog.tags;
-    if (blog.seo_meta_title)      payload['seo_meta_title']      = blog.seo_meta_title;
-    if (blog.seo_meta_description)payload['seo_meta_description']= blog.seo_meta_description;
-
-    try {
-      const res = await fetchWithTimeout(config.endpoint_url, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', [authHeader]: `Bearer ${config.api_key}` },
-        body:    JSON.stringify(payload),
-      }, timeout);
-
-      if (res.ok) {
-        const data = await res.json().catch(() => null);
-        return {
-          success:     true,
-          message:     'Published to your blog API.',
-          external_id: data?.id ? String(data.id) : undefined,
-        };
-      }
-      if (res.status === 401 || res.status === 403) {
-        return { success: false, message: 'API rejected the key. Check your api_key in Integrations.' };
-      }
-      return { success: false, message: `Blog API returned status ${res.status}.` };
-    } catch (err) {
-      return { success: false, message: err instanceof Error ? err.message : 'Blog API request failed.' };
-    }
-  }
-
-  return { success: false, message: `Unsupported integration type: ${type}` };
-}
-
-function fetchWithTimeout(url: string, options: RequestInit, ms: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer      = setTimeout(() => controller.abort(), ms);
-  return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
-}

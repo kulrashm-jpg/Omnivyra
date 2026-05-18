@@ -12,7 +12,9 @@ import { getCreditCost, type CreditAction } from '@/backend/services/creditDeduc
 import { executeWithCredits, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { assertOrgMembership } from '@/backend/services/requestAccessService';
 import { generateMasterContentStrict } from '@/backend/services/contentGeneration/blueprintGenerator';
-import { updateActivity } from '@/backend/services/executionPlannerPersistence';
+// Phase-2 Step-3: master/variant enrichment persistence routes through the
+// ONE canonical write (reconciled, blank/stale-overwrite-safe, observable).
+import { updateExecutionContentByActivity } from '@/backend/services/orchestration';
 import { checkRateLimit } from '@/lib/auth/rateLimit';
 import { resolveMonetizationFeature } from '@/shared/monetization/featureRegistry';
 
@@ -81,38 +83,15 @@ function asObject(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-async function loadActivityContentEnvelope(activityId: string): Promise<Record<string, unknown> | null> {
-  if (!activityId || activityId.startsWith('workspace-')) return null; // transient ID, nothing to persist
-  try {
-    const { data: row } = await supabase
-      .from('daily_content_plans')
-      .select('content')
-      .eq('id', activityId)
-      .maybeSingle();
-    if (!row) return null;
-    try {
-      return typeof row.content === 'string' ? JSON.parse(row.content) : (row.content ?? {});
-    } catch {
-      return {};
-    }
-  } catch (err) {
-    console.warn('[activity-workspace/content] loadActivityContentEnvelope failed:', (err as Error)?.message);
-    return null;
-  }
-}
-
 async function persistContentEnvelopeToDb(
   activityId: string,
   transform: (existing: Record<string, unknown>) => Record<string, unknown>
 ): Promise<void> {
-  if (!activityId || activityId.startsWith('workspace-')) return;
-  try {
-    const existing = (await loadActivityContentEnvelope(activityId)) ?? {};
-    const updated = transform(existing);
-    await updateActivity(activityId, { content: JSON.stringify(updated) }, 'board');
-  } catch (err) {
-    console.warn('[activity-workspace/content] persistContentEnvelopeToDb failed:', (err as Error)?.message);
-  }
+  if (!activityId || activityId.startsWith('workspace-')) return; // transient ID, nothing to persist
+  // Canonical write: locates the row, applies the transform, reconciles
+  // (enrichment-priority merge, blank/stale-overwrite guards, log-only
+  // invariants), preserves legacy row shape, and emits write observability.
+  await updateExecutionContentByActivity(activityId, transform, 'activity-workspace/content');
 }
 
 /** Merge master_content into daily_content_plans.content JSON blob for the given activity row. */

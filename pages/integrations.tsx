@@ -28,6 +28,8 @@ type FocusArea = 'website' | 'data';
 
 interface Integration {
   id: string;
+  website_id?: string | null;
+  website_connection_id?: string | null;
   type: IntegrationType;
   name: string;
   status: IntegrationStatus;
@@ -35,6 +37,14 @@ interface Integration {
   last_tested_at: string | null;
   last_error: string | null;
   created_at: string;
+}
+
+interface Website {
+  id: string;
+  name: string;
+  canonical_url: string;
+  cms_provider: string | null;
+  status: string;
 }
 
 interface CategoryCard {
@@ -188,14 +198,16 @@ const CONFIG_FIELDS: Record<IntegrationType, { key: string; label: string; place
 interface ModalProps {
   mode: 'create' | 'edit';
   initial?: Partial<Integration>;
+  websites: Website[];
   onClose: () => void;
-  onSave: (data: { type: IntegrationType; name: string; config: Record<string, string> }) => Promise<void>;
+  onSave: (data: { type: IntegrationType; name: string; config: Record<string, string>; website_id?: string | null }) => Promise<void>;
 }
 
-function IntegrationModal({ mode, initial, onClose, onSave }: ModalProps) {
+function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalProps) {
   const [type, setType] = useState<IntegrationType>(initial?.type || 'lead_webhook');
   const [name, setName] = useState(initial?.name || '');
   const [config, setConfig] = useState<Record<string, string>>(initial?.config || {});
+  const [websiteId, setWebsiteId] = useState(initial?.website_id || websites[0]?.id || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -222,7 +234,7 @@ function IntegrationModal({ mode, initial, onClose, onSave }: ModalProps) {
     setSaving(true);
     setError(null);
     try {
-      await onSave({ type, name: name.trim(), config });
+      await onSave({ type, name: name.trim(), config, website_id: websiteId || null });
     } catch (err: any) {
       setError(err?.message || 'Failed to save.');
     } finally {
@@ -275,6 +287,22 @@ function IntegrationModal({ mode, initial, onClose, onSave }: ModalProps) {
               placeholder={`e.g. ${TYPE_LABELS[type]} - Production`}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Website Scope</label>
+            <select
+              value={websiteId}
+              onChange={(event) => setWebsiteId(event.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="">Default website</option>
+              {websites.map((website) => (
+                <option key={website.id} value={website.id}>
+                  {website.name} - {website.canonical_url}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="space-y-3">
@@ -963,6 +991,9 @@ export default function IntegrationsPage() {
   const focus: FocusArea = focusParam === 'data' ? 'data' : 'website';
 
   const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [websites, setWebsites] = useState<Website[]>([]);
+  const [websiteDraft, setWebsiteDraft] = useState({ name: '', canonical_url: '' });
+  const [websiteSaving, setWebsiteSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -998,12 +1029,20 @@ export default function IntegrationsPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/integrations?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to load');
+      const [integrationResponse, websiteResponse] = await Promise.all([
+        fetch(`/api/integrations?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' }),
+        fetch(`/api/websites?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' }),
+      ]);
+      const data = await integrationResponse.json();
+      const websiteData = await websiteResponse.json();
+      if (!integrationResponse.ok) {
+        throw new Error(data.error || 'Failed to load integrations');
+      }
+      if (!websiteResponse.ok) {
+        throw new Error(websiteData.error || 'Failed to load websites');
       }
       setIntegrations(data.integrations || []);
+      setWebsites(websiteData.websites || []);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -1434,7 +1473,33 @@ export default function IntegrationsPage() {
     }
   };
 
-  const handleSave = async (payload: { type: IntegrationType; name: string; config: Record<string, string> }) => {
+  const handleCreateWebsite = async () => {
+    if (!companyId || !websiteDraft.name.trim() || !websiteDraft.canonical_url.trim()) return;
+    setWebsiteSaving(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/websites', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_id: companyId,
+          name: websiteDraft.name.trim(),
+          canonical_url: websiteDraft.canonical_url.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to create website');
+      setWebsiteDraft({ name: '', canonical_url: '' });
+      await load();
+    } catch (err: any) {
+      setError(err.message || 'Failed to create website');
+    } finally {
+      setWebsiteSaving(false);
+    }
+  };
+
+  const handleSave = async (payload: { type: IntegrationType; name: string; config: Record<string, string>; website_id?: string | null }) => {
     if (modal?.mode === 'create') {
       const response = await fetch('/api/integrations', {
         method: 'POST',
@@ -1723,6 +1788,59 @@ export default function IntegrationsPage() {
           <div className="space-y-8">
             {showWebsiteFlow && (
               <>
+                <section id="website-foundation-section" className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                  <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h2 className="text-base font-semibold text-gray-900">Websites</h2>
+                      <p className="text-xs text-gray-500">Create website records that scope CMS connections, forms, publishing, and tracking.</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <a href="/website-setup" className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">Open setup wizard</a>
+                      <code className="rounded-lg bg-gray-100 px-2 py-1 text-xs text-gray-600">/public/omnivera-tracker.js</code>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {websites.map((website) => (
+                      <div key={website.id} className="rounded-xl border border-gray-200 p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">{website.name}</p>
+                            <p className="mt-1 break-all text-xs text-gray-500">{website.canonical_url}</p>
+                          </div>
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">{website.status}</span>
+                        </div>
+                        <p className="mt-2 text-xs text-gray-500">Tracking snippet: <code>{`<script src="${origin}/omnivera-tracker.js" data-website-id="${website.id}"></script>`}</code></p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {isAdmin && (
+                    <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
+                      <input
+                        value={websiteDraft.name}
+                        onChange={(event) => setWebsiteDraft((current) => ({ ...current, name: event.target.value }))}
+                        placeholder="Website name"
+                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <input
+                        value={websiteDraft.canonical_url}
+                        onChange={(event) => setWebsiteDraft((current) => ({ ...current, canonical_url: event.target.value }))}
+                        placeholder="https://example.com"
+                        className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button
+                        onClick={handleCreateWebsite}
+                        disabled={websiteSaving || !websiteDraft.name.trim() || !websiteDraft.canonical_url.trim()}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add Website
+                      </button>
+                    </div>
+                  )}
+                </section>
+
                 <section id="website-publishing-section">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -1869,7 +1987,15 @@ export default function IntegrationsPage() {
         )}
       </div>
 
-      {modal && <IntegrationModal mode={modal.mode} initial={modal.integration} onClose={() => setModal(null)} onSave={handleSave} />}
+      {modal && (
+        <IntegrationModal
+          mode={modal.mode}
+          initial={modal.integration}
+          websites={websites}
+          onClose={() => setModal(null)}
+          onSave={handleSave}
+        />
+      )}
     </div>
   );
 }

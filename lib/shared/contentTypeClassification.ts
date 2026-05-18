@@ -105,3 +105,34 @@ export function isBuiltInOmnivyra(contentType: string | null | undefined): boole
 export function isVideoBriefContentType(contentType: string | null | undefined): boolean {
   return classifyContentType(contentType).isVideoBrief;
 }
+
+/**
+ * UNIFIED creator-required detection (Round-3 item 3).
+ *
+ * A content type is "creator-required" when Omnivyra cannot autonomously
+ * produce it and a human must produce + upload the asset → it MUST enter
+ * the pending-creator flow (placeholder + calendar pending + scheduling
+ * lock until completion).
+ *
+ * Primary signal is the governance registry (`classifyContentType`). The
+ * fallback regex catches video-family ALIASES the registry doesn't
+ * enumerate (long-form video, vlog, webinar, igtv, story video, reel/
+ * short variants, podcast/audio clips, live replay) so a new alias can
+ * never silently slip into the autonomous/text lane. Additive + pure;
+ * does not mutate the registry.
+ */
+const CREATOR_REQUIRED_ALIAS_RE =
+  /\b(long[\s_-]?form|longform|vlog|webinar|igtv|live[\s_-]?replay|livestream|broadcast|story[\s_-]?video|video[\s_-]?story|reel|reels|short|shorts|tiktok|podcast|audiogram|video[\s_-]?clip|clip|video|movie|film|teaser|trailer|sizzle|promo[\s_-]?video|explainer[\s_-]?video|talking[\s_-]?head|ugc[\s_-]?video)\b/i;
+
+export function isCreatorRequiredContentType(
+  contentType: string | null | undefined,
+): boolean {
+  const cls = classifyContentType(contentType);
+  if (cls.isVideoBrief) return true; // governance registry says brief
+  if (cls.mode === 'bolt_text' || cls.mode === 'creator_autonomous') return false; // Omnivyra builds it
+  // Unsupported / unknown to the registry → alias fallback so video-like
+  // strings still route to the creator-required (brief) lane.
+  const ct = String(contentType ?? '').trim();
+  if (!ct) return false;
+  return CREATOR_REQUIRED_ALIAS_RE.test(ct);
+}

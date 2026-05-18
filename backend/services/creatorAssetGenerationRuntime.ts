@@ -13,6 +13,8 @@ import {
   normalizeCreatorFormat,
   CREATOR_LIFECYCLE_STATES,
 } from '../../lib/shared/creatorGovernanceRegistry';
+import { isCreatorRequiredContentType } from '../../lib/shared/contentTypeClassification';
+import { logPipelineEvent } from '../../lib/shared/observability';
 import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
 
 type DailyPlanRow = {
@@ -338,7 +340,23 @@ export async function runCreatorAssetGenerationRuntime(input: {
     // guidance / marketing package, skip rendering. No retry loop, no
     // renderer call. The row holds in place until a user uploads a media
     // URL via /api/activity-workspace/[id]/upload-media.
-    if (isAttachmentRequiredFormat(contentType)) {
+    // Unified creator-required detection (Round-4 item 2). Registry-known
+    // attachment formats OR any video-like ALIAS (long-form/vlog/webinar/
+    // igtv/clip/…) the registry doesn't enumerate → placeholder + pending
+    // + scheduling lock. This is the SAFE activation point: it broadens
+    // ONLY the awaiting-upload lane and never touches the
+    // intent_type='creator' / capability-CHECK path, so it cannot
+    // re-introduce the daily-plans rollback.
+    const aliasRequired =
+      !isAttachmentRequiredFormat(contentType) && isCreatorRequiredContentType(contentType);
+    if (isAttachmentRequiredFormat(contentType) || aliasRequired) {
+      if (aliasRequired) {
+        logPipelineEvent('creator.routing_enforced', 'info', {
+          campaign_id: input.campaignId,
+          content_type: contentType,
+          reason: 'alias_creator_required',
+        }, { dedupeKey: contentType });
+      }
       await markAwaitingMediaUpload({ row, campaignId: input.campaignId, companyId, userId });
       awaitingUploadCount++;
       input.onProgress?.(`awaiting-upload-${contentType}`);

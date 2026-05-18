@@ -23,7 +23,7 @@ interface FormBrand {
   font?: 'system' | 'sans' | 'serif';
 }
 interface CaptureForm {
-  id: string; company_id: string; name: string;
+  id: string; company_id: string; website_id?: string | null; name: string;
   fields: FormField[]; brand: FormBrand; integration_id: string | null; created_at: string;
 }
 interface Lead {
@@ -134,7 +134,28 @@ function generateEmbedCode(form: CaptureForm, origin: string): string {
       form.addEventListener("submit", function (e) {
         e.preventDefault();
         btn.disabled = true; btn.textContent = "Sending\u2026"; msg.style.display = "none";
-        var data = { form_id: cfg.id, company_id: cfg.company_id, source: "embed" };
+        function vfGet(storage, key) { try { return storage.getItem(key); } catch (_) { return null; } }
+        function vfSet(storage, key, val) { try { storage.setItem(key, val); } catch (_) {} }
+        function vfId() { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : "ov_" + Math.random().toString(36).slice(2); }
+        var anon = vfGet(localStorage, "omnivera_anonymous_id") || vfId(); vfSet(localStorage, "omnivera_anonymous_id", anon);
+        var sess = vfGet(sessionStorage, "omnivera_session_id") || vfId(); vfSet(sessionStorage, "omnivera_session_id", sess);
+        var landing = vfGet(sessionStorage, "omnivera_landing_page") || location.href; vfSet(sessionStorage, "omnivera_landing_page", landing);
+        var params = new URLSearchParams(location.search);
+        var attribution = {
+          website_id: cfg.website_id || null,
+          anonymous_id: anon,
+          session_id: sess,
+          utm_source: params.get("utm_source"),
+          utm_medium: params.get("utm_medium"),
+          utm_campaign: params.get("utm_campaign"),
+          utm_content: params.get("utm_content"),
+          utm_term: params.get("utm_term"),
+          referrer: document.referrer || "",
+          landing_page: landing,
+          current_page: location.href,
+          consent_state: vfGet(localStorage, "omnivera_consent") || "unknown"
+        };
+        var data = { form_id: cfg.id, company_id: cfg.company_id, website_id: cfg.website_id || null, source: "embed", attribution: attribution };
         cfg.fields.forEach(function (f) { data[f.name] = form.elements[f.name].value; });
         fetch(base + "/api/leads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
           .then(function (r) { return r.json(); })
@@ -242,7 +263,28 @@ ${fieldsHtml}
       var btn = document.getElementById('vf-btn');
       var msg = document.getElementById('vf-msg');
       btn.disabled = true; btn.textContent = 'Sending\u2026'; msg.style.display = 'none';
-      var d = { form_id: '${escJs(form.id)}', company_id: '${escJs(form.company_id)}', source: 'html_file' };
+      function vfGet(storage, key) { try { return storage.getItem(key); } catch (_) { return null; } }
+      function vfSet(storage, key, val) { try { storage.setItem(key, val); } catch (_) {} }
+      function vfId() { return (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : 'ov_' + Math.random().toString(36).slice(2); }
+      var anon = vfGet(localStorage, 'omnivera_anonymous_id') || vfId(); vfSet(localStorage, 'omnivera_anonymous_id', anon);
+      var sess = vfGet(sessionStorage, 'omnivera_session_id') || vfId(); vfSet(sessionStorage, 'omnivera_session_id', sess);
+      var landing = vfGet(sessionStorage, 'omnivera_landing_page') || location.href; vfSet(sessionStorage, 'omnivera_landing_page', landing);
+      var params = new URLSearchParams(location.search);
+      var attribution = {
+        website_id: '${escJs(form.website_id || '')}' || null,
+        anonymous_id: anon,
+        session_id: sess,
+        utm_source: params.get('utm_source'),
+        utm_medium: params.get('utm_medium'),
+        utm_campaign: params.get('utm_campaign'),
+        utm_content: params.get('utm_content'),
+        utm_term: params.get('utm_term'),
+        referrer: document.referrer || '',
+        landing_page: landing,
+        current_page: location.href,
+        consent_state: vfGet(localStorage, 'omnivera_consent') || 'unknown'
+      };
+      var d = { form_id: '${escJs(form.id)}', company_id: '${escJs(form.company_id)}', website_id: '${escJs(form.website_id || '')}' || null, source: 'html_file', attribution: attribution };
 ${fieldDataJs}
       fetch('${escJs(origin)}/api/leads', {
         method: 'POST',

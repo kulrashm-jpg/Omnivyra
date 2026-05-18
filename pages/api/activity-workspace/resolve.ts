@@ -1,6 +1,9 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '@/backend/db/supabaseClient';
-import { getUnifiedCampaignBlueprint } from '@/backend/services/campaignBlueprintService';
+// Phase-2 Step-1: blueprint item discovery now goes through the ONE
+// canonical orchestration adapter (reconciles enriched daily_content_plans
+// row > blueprint execution items > legacy, preserving execution_id).
+import { canonicalExecutionAdapter } from '@/backend/services/orchestration';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import {
   isContentArchitectSession,
@@ -89,40 +92,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!access) return;
     }
 
-    const blueprint = await getUnifiedCampaignBlueprint(campaignId);
-    if (!blueprint?.weeks?.length) {
-      return res.status(404).json({ error: 'Campaign plan not found', campaignId });
-    }
-
     const targetExecId = executionId;
-    let found: { week: any; item: any; weekNumber: number; day: string } | null = null;
 
-    for (const week of blueprint.weeks) {
-      const weekNumber = Number((week as any).week_number ?? (week as any).week ?? 0) || 0;
-      const items: any[] =
-        Array.isArray((week as any).daily_execution_items)
-          ? (week as any).daily_execution_items
-          : Array.isArray((week as any).execution_items)
-            ? (week as any).execution_items
-            : [];
-      for (const item of items) {
-        const eid = nonEmpty(item?.execution_id ?? item?.id ?? '');
-        if (eid === targetExecId) {
-          const day = nonEmpty(item?.day ?? '');
-          found = { week, item, weekNumber, day };
-          break;
-        }
-      }
-      if (found) break;
-    }
-
-    if (!found) {
+    // Phase-2 Step-1: single canonical read. Reconciles enriched
+    // daily_content_plans row > blueprint execution_items > legacy, and
+    // preserves the execution_id (no synth). __legacy_raw carries the exact
+    // legacy object the rest of this handler reads field-by-field, so
+    // downstream behavior is byte-compatible while the source is unified.
+    const canonical = await canonicalExecutionAdapter.getExecutionItem(campaignId, targetExecId);
+    if (!canonical) {
       return res.status(404).json({
         error: 'Activity not found',
         campaignId,
         executionId: targetExecId,
       });
     }
+
+    const legacyRaw: Record<string, any> =
+      canonical.metadata && typeof canonical.metadata.__legacy_raw === 'object' && canonical.metadata.__legacy_raw
+        ? (canonical.metadata.__legacy_raw as Record<string, any>)
+        : {};
+
+    const found: { week: any; item: any; weekNumber: number; day: string } = {
+      week: {},
+      item: {
+        ...legacyRaw,
+        title: legacyRaw.title ?? canonical.title,
+        topic: legacyRaw.topic ?? canonical.title,
+        platform: legacyRaw.platform ?? canonical.platform,
+        content_type: legacyRaw.content_type ?? canonical.content_type,
+        execution_id: canonical.execution_id,
+        theme: legacyRaw.theme ?? canonical.theme,
+        objective: legacyRaw.objective ?? canonical.objective,
+        dailyObjective: legacyRaw.dailyObjective ?? canonical.objective,
+        intent: legacyRaw.intent ?? canonical.intent ?? undefined,
+        writer_content_brief:
+          legacyRaw.writer_content_brief ?? canonical.writer_content_brief ?? undefined,
+        asset_payload: legacyRaw.asset_payload ?? canonical.asset_payload ?? undefined,
+        creator_workspace: legacyRaw.creator_workspace ?? canonical.creator_workspace ?? undefined,
+      },
+      weekNumber: Number(String(canonical.week_id).replace(/^wk/, '')) || 0,
+      day: canonical.day_id || '',
+    };
 
     const raw = found.item && typeof found.item === 'object' ? found.item : {};
     const hasNested =
@@ -237,30 +248,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       platform: string;
       contentType: string;
     };
+    // Phase-2 Step-1: enumerate all execution items via the canonical adapter
+    // (reconciled across blueprint + daily_content_plans) instead of scanning
+    // the raw blueprint directly.
     const allTopicEntries: RawScheduleEntry[] = [];
-    for (const week of blueprint.weeks) {
-      const wNum = Number((week as any).week_number ?? (week as any).week ?? 0) || 0;
-      const wItems: any[] =
-        Array.isArray((week as any).daily_execution_items)
-          ? (week as any).daily_execution_items
-          : Array.isArray((week as any).execution_items)
-            ? (week as any).execution_items
-            : [];
-      for (const wItem of wItems) {
-        const itemTitle = nonEmpty(
-          wItem?.title ?? wItem?.topic ?? wItem?.writer_content_brief?.topicTitle ?? ''
-        ).toLowerCase();
-        if (itemTitle === topicKey || itemTitle.includes(topicKey) || topicKey.includes(itemTitle)) {
-          const eid = nonEmpty(wItem?.execution_id ?? wItem?.id ?? '');
-          if (!eid) continue;
-          allTopicEntries.push({
-            executionId: eid,
-            weekNumber: wNum,
-            day: nonEmpty(wItem?.day ?? ''),
-            platform: nonEmpty(wItem?.platform ?? 'linkedin'),
-            contentType: nonEmpty(wItem?.content_type ?? 'post'),
-          });
-        }
+    const allCanonicalItems = await canonicalExecutionAdapter.getExecutionItems(campaignId);
+    for (const ci of allCanonicalItems) {
+      const itemTitle = nonEmpty(ci.title ?? '').toLowerCase();
+      if (itemTitle === topicKey || itemTitle.includes(topicKey) || topicKey.includes(itemTitle)) {
+        const eid = nonEmpty(ci.execution_id ?? '');
+        if (!eid) continue;
+        allTopicEntries.push({
+          executionId: eid,
+          weekNumber: Number(String(ci.week_id).replace(/^wk/, '')) || 0,
+          day: nonEmpty(ci.day_id ?? ''),
+          platform: nonEmpty(ci.platform ?? 'linkedin'),
+          contentType: nonEmpty(ci.content_type ?? 'post'),
+        });
       }
     }
 
