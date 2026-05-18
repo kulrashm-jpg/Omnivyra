@@ -76,8 +76,8 @@ function normalizeContentType(type: string): string {
 function buildWeeksFromCalendarPlan(calendarPlan: {
   weeks?: unknown[];
   days?: Array<{ week_number: number; day: string; activities?: unknown[] }>;
-  activities?: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; execution_id?: string }>;
-}): unknown[] {
+  activities?: Array<{ week_number?: number; day?: string; platform?: string; content_type?: string; title?: string; theme?: string; objective?: string; execution_id?: string }>;
+}, ctx?: { campaignGoal?: string; targetAudience?: string; keyMessage?: string; ideaTitle?: string }): unknown[] {
   const activities = Array.isArray(calendarPlan?.activities) ? calendarPlan.activities : [];
   if (activities.length === 0) return [];
 
@@ -102,14 +102,67 @@ function buildWeeksFromCalendarPlan(calendarPlan: {
     if (contentMix.length === 0) contentMix.push('post');
     const totalPosts = Object.values(platformAlloc).reduce((a, b) => a + b, 0) || 1;
 
-    const daily_execution_items = weekActivities.map((a, i) => ({
-      execution_id: a.execution_id ?? `wk${wn}-${i + 1}`,
-      platform: normalizePlatform(a.platform ?? 'linkedin'),
-      content_type: String(a.content_type ?? 'post').toLowerCase(),
-      topic: a.title ?? a.theme ?? `Week ${wn} slot ${i + 1}`,
-      title: a.title ?? a.theme ?? `Week ${wn} slot ${i + 1}`,
-      day: a.day ?? DAYS_OF_WEEK[i % 7],
-    }));
+    const audience = String(ctx?.targetAudience || 'the target audience').trim() || 'the target audience';
+    const goal = String(ctx?.campaignGoal || '').trim();
+    const daily_execution_items = weekActivities.map((a, i) => {
+      const topicTitle = String(a.title ?? a.theme ?? ctx?.ideaTitle ?? `Week ${wn} content ${i + 1}`).trim();
+      const themeText = String(a.theme ?? '').trim();
+      const objective =
+        String(a.objective ?? '').trim() ||
+        themeText ||
+        (goal ? `Advance the campaign goal: ${goal}` : 'Educate and engage the target audience');
+      const cta =
+        String(ctx?.keyMessage || '').trim() ||
+        (goal ? `Move ${audience} toward ${goal}` : 'Encourage the next relevant step');
+      const problem = `The key challenge ${audience} faces in relation to "${topicTitle}".`;
+      const learn = `${audience} should clearly understand "${topicTitle}" and why it matters now.`;
+      const intent = {
+        objective,
+        pain_point: problem,
+        outcome_promise: learn,
+        cta_type: cta,
+        target_audience: audience,
+        brief_summary: themeText || objective,
+      };
+      const writer_content_brief = {
+        topicTitle,
+        title: topicTitle,
+        tone: 'Clear, helpful, on-brand',
+        intent_type: 'educational',
+        core_message: objective,
+        writingIntent: themeText ? `Deliver on the week theme: ${themeText}` : objective,
+        whatShouldReaderLearn: learn,
+        whatProblemAreWeAddressing: problem,
+        desiredAction: cta,
+        narrativeStyle: '',
+        topicGoal: objective,
+        key_points: [] as string[],
+        must_include: [] as string[],
+        avoid: [] as string[],
+        cta_instruction: cta,
+        structure_hint: '',
+        progression_note: themeText ? `Part of the week theme: ${themeText}` : '',
+      };
+      return {
+        execution_id: a.execution_id ?? `wk${wn}-${i + 1}`,
+        platform: normalizePlatform(a.platform ?? 'linkedin'),
+        content_type: String(a.content_type ?? 'post').toLowerCase(),
+        topic: topicTitle,
+        title: topicTitle,
+        day: a.day ?? DAYS_OF_WEEK[i % 7],
+        // Deterministic brief so the Activity Workspace (which reads the
+        // blueprint item, not the row) renders populated for text cards.
+        objective,
+        dailyObjective: objective,
+        target_audience: audience,
+        whatProblemAreWeAddressing: problem,
+        whatShouldReaderLearn: learn,
+        desiredAction: cta,
+        cta,
+        intent,
+        writer_content_brief,
+      };
+    });
 
     return {
       week: wn,
@@ -304,7 +357,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let useCalendarPlanPath = false;
 
     if (hasCalendarPlan) {
-      weeks = buildWeeksFromCalendarPlan(bodyCalendarPlan as any);
+      const sc = (strategy_context && typeof strategy_context === 'object' ? strategy_context : {}) as {
+        campaign_goal?: string; target_audience?: string | string[]; key_message?: string;
+      };
+      const finalizeCtx = {
+        campaignGoal: typeof sc.campaign_goal === 'string' ? sc.campaign_goal : '',
+        targetAudience: Array.isArray(sc.target_audience)
+          ? sc.target_audience.filter(Boolean).join(', ')
+          : (typeof sc.target_audience === 'string' ? sc.target_audience : ''),
+        keyMessage: typeof sc.key_message === 'string' ? sc.key_message : '',
+        ideaTitle: typeof ideaTitle === 'string' ? ideaTitle : '',
+      };
+      weeks = buildWeeksFromCalendarPlan(bodyCalendarPlan as any, finalizeCtx);
       useCalendarPlanPath = weeks.length > 0;
     }
 

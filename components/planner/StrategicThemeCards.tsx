@@ -81,6 +81,41 @@ function groupActivitiesForWeek(
   });
 }
 
+/** Soft per-week status: Themed → Daily-planned → Content-ready. */
+function weekStatus(
+  activities: CalendarPlanActivity[],
+  week: number,
+  themeTitle?: string
+): { label: string; cls: string } {
+  const slots = activities.filter((a) => (Number(a.week_number) || 1) === week);
+  if (slots.length === 0) return { label: 'Themed', cls: 'bg-gray-100 text-gray-500' };
+  const hasTopic = (a: CalendarPlanActivity) => {
+    const t = (a.title ?? '').trim();
+    if (!t) return false;
+    if (themeTitle && t.toLowerCase() === themeTitle.trim().toLowerCase()) return false;
+    return true;
+  };
+  const planned = slots.filter(hasTopic).length;
+  const ready = slots.filter((a) => !!a.content_status || !!a.creator_asset).length;
+  if (ready === slots.length) return { label: 'Content-ready', cls: 'bg-emerald-100 text-emerald-700' };
+  if (planned === slots.length) return { label: 'Daily-planned', cls: 'bg-indigo-100 text-indigo-700' };
+  if (planned > 0) return { label: `Planning ${planned}/${slots.length}`, cls: 'bg-amber-100 text-amber-700' };
+  return { label: 'Themed', cls: 'bg-gray-100 text-gray-500' };
+}
+
+function flattenPlanActivities(
+  plan: { activities?: CalendarPlanActivity[]; days?: Array<{ week_number: number; day: string; activities?: CalendarPlanActivity[] }> } | null | undefined
+): CalendarPlanActivity[] {
+  if (!plan) return [];
+  if (Array.isArray(plan.activities) && plan.activities.length > 0) return plan.activities;
+  if (Array.isArray(plan.days) && plan.days.length > 0) {
+    return plan.days.flatMap((d) =>
+      (d.activities ?? []).map((a) => ({ ...a, day: a.day ?? d.day, week_number: a.week_number ?? d.week_number }))
+    );
+  }
+  return [];
+}
+
 function SharingDots({ count }: { count: number }) {
   const dots = Math.min(count, 5);
   return (
@@ -96,20 +131,15 @@ function CardsView({
   companyId,
   selectedWeek,
   onSelectWeek,
-  onConfirmed,
-  canConfirm = false,
-  skeletonAlreadyConfirmed = false,
 }: {
   companyId?: string | null;
   selectedWeek?: number | null;
   onSelectWeek?: (week: number | null) => void;
-  onConfirmed?: () => void;
-  canConfirm?: boolean;
-  skeletonAlreadyConfirmed?: boolean;
 }) {
-  const { state, setStrategicThemes, setStrategicCard, confirmStrategy } = usePlannerSession();
+  const { state, setStrategicThemes, setStrategicCard } = usePlannerSession();
   const themes = state.strategic_themes ?? [];
   const strategicCard = state.strategic_card ?? null;
+  const planActs = flattenPlanActivities(state.calendar_plan ?? state.execution_plan?.calendar_plan);
   const [intelligenceSource, setIntelligenceSource] = useState<IntelligenceSource>('hybrid');
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -173,12 +203,6 @@ function CardsView({
     } finally {
       setGenerating(false);
     }
-  }
-
-  function handleConfirmStrategy() {
-    if (!canConfirm) return;
-    confirmStrategy();
-    onConfirmed?.();
   }
 
   return (
@@ -311,6 +335,14 @@ function CardsView({
                             {theme.phase_label}
                           </span>
                         )}
+                        {(() => {
+                          const st = weekStatus(planActs, theme.week, theme.title);
+                          return (
+                            <span className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full ${st.cls}`}>
+                              {st.label}
+                            </span>
+                          );
+                        })()}
                         {isSelected && (
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold bg-indigo-600 text-white px-2 py-0.5 rounded-full">
                             <MessageSquare className="h-2.5 w-2.5" />
@@ -358,26 +390,6 @@ function CardsView({
         )}
       </div>
 
-      {themes.length > 0 && (
-        <div className="absolute bottom-3 left-0 right-0 px-3 flex flex-col items-center gap-1.5 pointer-events-none">
-          <button
-            type="button"
-            onClick={handleConfirmStrategy}
-            disabled={!canConfirm}
-            className={`pointer-events-auto w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-sm font-bold shadow-xl transition-all ${
-              canConfirm
-                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                : 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
-            }`}
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            {skeletonAlreadyConfirmed ? 'Confirm Strategy And Open Build' : 'Confirm Strategy And Open Skeleton'}
-          </button>
-          <p className="pointer-events-auto w-full rounded-lg border border-indigo-100 bg-white/95 px-3 py-2 text-[11px] text-gray-600 shadow-sm">
-            Weekly planning starts after both Skeleton and Strategy are confirmed.
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -474,10 +486,16 @@ export function StrategicThemeCards({
   canConfirm?: boolean;
   skeletonAlreadyConfirmed?: boolean;
 }) {
-  const { state } = usePlannerSession();
+  const { state, confirmStrategy } = usePlannerSession();
   const themes = state.strategic_themes ?? [];
   const [innerTab, setInnerTab] = useState<'cards' | 'themes'>('cards');
   const [activeWorkspace, setActiveWorkspace] = useState<ContentGroup | null>(null);
+
+  function handleConfirmStrategy() {
+    if (!canConfirm) return;
+    confirmStrategy();
+    onConfirmed?.();
+  }
 
   return (
     <>
@@ -523,9 +541,6 @@ export function StrategicThemeCards({
               companyId={companyId}
               selectedWeek={selectedWeek}
               onSelectWeek={onSelectWeek}
-              onConfirmed={onConfirmed}
-              canConfirm={canConfirm}
-              skeletonAlreadyConfirmed={skeletonAlreadyConfirmed}
             />
           ) : (
             <div className="overflow-y-auto h-full">
@@ -533,6 +548,29 @@ export function StrategicThemeCards({
             </div>
           )}
         </div>
+
+        {/* Shared confirm footer — visible on BOTH Cards and Themes tabs */}
+        {themes.length > 0 && (
+          <div className="flex-shrink-0 border-t border-gray-200 p-3 space-y-1.5 bg-white">
+            <button
+              type="button"
+              onClick={handleConfirmStrategy}
+              disabled={!canConfirm}
+              title={!canConfirm ? 'Generate strategic theme cards first' : undefined}
+              className={`w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all ${
+                canConfirm
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {skeletonAlreadyConfirmed ? 'Confirm Strategy & Open Build' : 'Confirm Strategy & Open Skeleton'}
+            </button>
+            <p className="text-[11px] text-gray-500 text-center">
+              Optional — confirming marks Strategy done. Build &amp; Launch unlocks once a skeleton and themes exist.
+            </p>
+          </div>
+        )}
       </div>
 
       {activeWorkspace && (

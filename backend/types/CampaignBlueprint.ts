@@ -87,6 +87,12 @@ export interface CampaignBlueprintWeek {
    * Kept as `any` here to avoid tight coupling across services.
    */
   execution_items?: any[];
+  /**
+   * Planner-finalize daily execution units (one row per activity/day/platform),
+   * carrying the planner activity execution_id. Preserved verbatim so the
+   * Activity Workspace can resolve a slot by campaignId + executionId.
+   */
+  daily_execution_items?: any[];
   posting_execution_map?: any[];
   resolved_postings?: any[];
   /** Flexible key-value store for AI/UI additions: summary, objectives, days_to_post, etc. */

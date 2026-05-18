@@ -24,6 +24,8 @@ import { StrategicThemeCards } from '../components/planner/StrategicThemeCards';
 import { StrategyAIChat } from '../components/planner/StrategyAIChat';
 import { AccountInsightPanel } from '../components/planner/AccountInsightPanel';
 import { SkeletonBuilderPanel } from '../components/planner/SkeletonBuilderPanel';
+import { WeekDailyPlanPanel } from '../components/planner/WeekDailyPlanPanel';
+import { CreateCampaignAndBuild } from '../components/planner/CreateCampaignAndBuild';
 import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter';
 import styles from '../styles/planner-layout.module.css';
 import { useCampaignResume } from '../hooks/useCampaignResume';
@@ -59,7 +61,7 @@ function CampaignPlannerLayout({
     }
     return 'skeleton';
   });
-  const [leftPanelTab, setLeftPanelTab] = useState<'plan' | 'chat'>(() => {
+  const [leftPanelTab, setLeftPanelTab] = useState<'plan' | 'chat' | 'week'>(() => {
     if (typeof window !== 'undefined') {
       const panel = new URLSearchParams(window.location.search).get('leftPanel');
       if (panel === 'chat') return 'chat';
@@ -67,7 +69,7 @@ function CampaignPlannerLayout({
     return 'plan';
   });
   const [selectedThemeWeek, setSelectedThemeWeek] = useState<number | null>(null);
-  const [canvasTab, setCanvasTab] = useState<'calendar' | 'content'>('calendar');
+  const [canvasTab, setCanvasTab] = useState<'calendar' | 'daily' | 'content'>('calendar');
   const hasAdvancedRef = useRef(false);
 
   // Load account context on mount; bust cache when returning from OAuth (connected=*)
@@ -92,20 +94,29 @@ function CampaignPlannerLayout({
   const hasSkeletonDraft =
     Boolean(state.calendar_plan?.activities?.length) || Boolean(state.calendar_plan?.days?.length);
 
-  // Strategy can only be confirmed after a campaign-level strategic card exists.
-  const hasStrategyDraft = Boolean(state.strategic_card);
+  // Strategy is confirmable once themes exist (a strategic card is a bonus,
+  // not a hard gate) — matches the soft-gating model and the footer note.
+  const hasStrategyDraft =
+    (state.strategic_themes?.length ?? 0) > 0 || Boolean(state.strategic_card);
 
   const hasSkeleton = state.skeleton_confirmed === true;
   const hasStrategy = state.strategy_confirmed === true;
-  const canBuild = hasSkeleton && hasStrategy;
+  const themesReady = (state.strategic_themes?.length ?? 0) > 0;
+  // Soft gating: Build & Launch opens as soon as there's a skeleton draft and
+  // themes are ready — confirming Skeleton/Strategy is status-only, never a gate.
+  const canBuild = hasSkeletonDraft && themesReady;
 
-  // Auto-advance to Strategy tab when a skeleton is first confirmed
+  // When the skeleton becomes final, switch to the Strategy view so the user
+  // can work on content through the weekly cards. Driven by the skeleton_confirmed
+  // false→true transition so it fires every time the skeleton is (re)confirmed —
+  // not just once per page load — and also when resuming a confirmed session.
   useEffect(() => {
-    if (hasSkeleton && !hasAdvancedRef.current) {
-      hasAdvancedRef.current = true;
-      setActiveTab('strategy');
+    const wasConfirmed = hasAdvancedRef.current;
+    hasAdvancedRef.current = hasSkeleton;
+    if (hasSkeleton && !wasConfirmed) {
+      setActiveTab(hasStrategy ? 'build' : 'strategy');
     }
-  }, [hasSkeleton]);
+  }, [hasSkeleton, hasStrategy]);
 
   return (
     <div className={`${styles.plannerPage} flex-1 flex flex-col min-h-0`}>
@@ -228,6 +239,20 @@ function CampaignPlannerLayout({
                     </span>
                   )}
                 </button>
+                {selectedThemeWeek !== null && (
+                  <button
+                    type="button"
+                    onClick={() => setLeftPanelTab('week')}
+                    className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
+                      leftPanelTab === 'week'
+                        ? 'border-indigo-600 text-indigo-700'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    <CalendarDays className="h-3.5 w-3.5" />
+                    Week {selectedThemeWeek} Plan
+                  </button>
+                )}
               </div>
 
               {/* Plan tab content */}
@@ -254,6 +279,18 @@ function CampaignPlannerLayout({
                   />
                 </div>
               )}
+
+              {/* Week daily-plan content */}
+              {leftPanelTab === 'week' && selectedThemeWeek !== null && (
+                <div className="flex-1 min-h-0 overflow-hidden">
+                  <WeekDailyPlanPanel companyId={companyId} campaignId={campaignId} week={selectedThemeWeek} />
+                </div>
+              )}
+              {leftPanelTab === 'week' && selectedThemeWeek === null && (
+                <div className="flex-1 flex items-center justify-center text-xs text-gray-400 px-4 text-center">
+                  Select a week card on the right to plan its days.
+                </div>
+              )}
             </div>
 
             {/* ── Right column: Strategic Theme Cards (30%) ── */}
@@ -263,7 +300,7 @@ function CampaignPlannerLayout({
                 selectedWeek={selectedThemeWeek}
                 onSelectWeek={(week) => {
                   setSelectedThemeWeek(week);
-                  if (week !== null) setLeftPanelTab('chat');
+                  setLeftPanelTab(week !== null ? 'week' : 'plan');
                 }}
                 onConfirmed={() => setActiveTab(hasSkeleton ? 'build' : 'skeleton')}
                 canConfirm={hasStrategyDraft}
@@ -292,6 +329,16 @@ function CampaignPlannerLayout({
                 </button>
                 <button
                   type="button"
+                  onClick={() => setCanvasTab('daily')}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium ${
+                    canvasTab === 'daily' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <CalendarDays className="h-4 w-4" />
+                  Daily Plan
+                </button>
+                <button
+                  type="button"
                   onClick={() => setCanvasTab('content')}
                   className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium ${
                     canvasTab === 'content' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600 hover:bg-gray-100'
@@ -306,7 +353,43 @@ function CampaignPlannerLayout({
               {campaignId && companyId && (
                 <CampaignHealthPanel campaignId={campaignId} companyId={companyId} />
               )}
-              {canvasTab === 'content' && hasSkeleton ? (
+              {canvasTab === 'daily' ? (
+                (() => {
+                  const weeks = (state.strategic_themes ?? []).map((t) => t.week).sort((a, b) => a - b);
+                  const activeWeek = selectedThemeWeek != null && weeks.includes(selectedThemeWeek)
+                    ? selectedThemeWeek
+                    : weeks[0] ?? null;
+                  if (activeWeek == null) {
+                    return (
+                      <div className="flex-1 flex items-center justify-center text-xs text-gray-400 text-center px-4">
+                        Generate strategic themes first to plan content by week.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="flex-1 min-h-0 flex flex-col">
+                      <div className="flex-shrink-0 pb-3">
+                        <CreateCampaignAndBuild companyId={companyId} campaignId={campaignId} />
+                      </div>
+                      <div className="flex-shrink-0 flex items-center gap-2 pb-3">
+                        <span className="text-xs font-medium text-gray-500">Planning week</span>
+                        <select
+                          value={activeWeek}
+                          onChange={(e) => setSelectedThemeWeek(Number(e.target.value))}
+                          className="text-sm border border-gray-300 rounded-lg px-2 py-1 bg-white"
+                        >
+                          {weeks.map((w) => (
+                            <option key={w} value={w}>Week {w}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex-1 min-h-0 border border-gray-200 rounded-lg overflow-hidden">
+                        <WeekDailyPlanPanel companyId={companyId} campaignId={campaignId} week={activeWeek} />
+                      </div>
+                    </div>
+                  );
+                })()
+              ) : canvasTab === 'content' && hasSkeletonDraft ? (
                 <ContentTab campaignId={campaignId} companyId={companyId} />
               ) : (
                 <>

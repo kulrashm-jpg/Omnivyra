@@ -17,6 +17,7 @@ import { type PlannerStrategicCard, syncPlannerStrategicCardThemes } from '../..
 
 const PLANNER_STORAGE_KEY_PREFIX = 'omnivyra_planner_session_';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const PLANNER_DAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 function getPlannerStorageKey(companyId: string | null | undefined): string {
   const id = typeof companyId === 'string' && companyId.trim() ? companyId.trim() : 'default';
@@ -243,6 +244,7 @@ type PlannerSessionContextValue = {
   setPlanPreview: (preview: { weeks?: unknown[] } | null) => void;
   setCampaignStructure: (value: CampaignStructure | null) => void;
   setCalendarPlan: (value: CalendarPlan | null) => void;
+  mergePlanActivities: (activities: CalendarPlanActivity[]) => void;
   setSelectedActivity: (value: CalendarPlanActivity | null) => void;
   setRecommendedSuggestions: (goal?: string | null, audience?: string[] | null) => void;
   setCampaignDesign: (partial: Partial<Pick<CampaignDesign, 'company_context_mode' | 'focus_modules' | 'trend_context'>>) => void;
@@ -483,6 +485,32 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
     }));
   }, []);
 
+  // Daily-plan edits: replace activities + rebuild the days index WITHOUT
+  // resetting skeleton_confirmed (the skeleton structure is unchanged — we are
+  // only attaching topics/objectives onto its fixed slots).
+  const mergePlanActivities = useCallback((activities: CalendarPlanActivity[]) => {
+    setState((prev) => {
+      const cp = (prev.calendar_plan ?? {}) as CalendarPlan;
+      const dayMap = new Map<string, CalendarPlanDay>();
+      for (const act of activities) {
+        const wk = Number(act.week_number) || 1;
+        const day = act.day ?? 'Monday';
+        const key = `${wk}-${day}`;
+        if (!dayMap.has(key)) dayMap.set(key, { week_number: wk, day, activities: [] });
+        dayMap.get(key)!.activities.push(act);
+      }
+      const days = Array.from(dayMap.values()).sort(
+        (a, b) =>
+          a.week_number - b.week_number ||
+          PLANNER_DAY_ORDER.indexOf(a.day) - PLANNER_DAY_ORDER.indexOf(b.day)
+      );
+      return {
+        ...prev,
+        calendar_plan: { ...cp, activities, days },
+      };
+    });
+  }, []);
+
   const setCampaignDesign = useCallback((partial: Partial<Pick<CampaignDesign, 'company_context_mode' | 'focus_modules' | 'trend_context'>>) => {
     setState((prev) => ({
       ...prev,
@@ -567,6 +595,7 @@ export function PlannerSessionProvider({ children, companyId }: PlannerSessionPr
     setPlanPreview,
     setCampaignStructure,
     setCalendarPlan,
+    mergePlanActivities,
     setSelectedActivity,
     setRecommendedSuggestions,
     setCampaignDesign,

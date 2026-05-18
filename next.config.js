@@ -60,6 +60,16 @@ const nextConfig = {
     },
   ],
   redirects: async () => [
+    // Canonicalize the loopback IP to `localhost`. 127.0.0.1 and localhost are
+    // distinct browser origins (separate cookie jars; WebAuthn RP is
+    // `localhost`), so hitting the IP causes phantom-logout / passkey-origin
+    // failures. Host-scoped: never fires in prod (host is the real domain).
+    {
+      source: '/:path*',
+      has: [{ type: 'host', value: '127.0.0.1' }],
+      destination: 'http://localhost:3000/:path*',
+      permanent: false,
+    },
     { source: '/blogs', destination: '/blogs/create', permanent: false },
     { source: '/content-creation', destination: '/posts/create', permanent: false },
     { source: '/content-studio/post', destination: '/posts/create', permanent: false },

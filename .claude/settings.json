@@ -15,7 +15,18 @@
       "Bash(echo \"exit:$?\")",
       "Bash(cp c:/tmp/billing-db-introspect.ts ./scripts/audit/_tmp_introspect.ts)",
       "Bash(sed -i \"s#../virality/backend#../../backend#\" ./scripts/audit/_tmp_introspect.ts)",
-      "Bash(cd c:/virality && git status --porcelain | grep -E 'scripts/audit/\\(reconcile-migration-ledger|_tmp\\)' ; rm -f scripts/audit/_tmp_*.ts 2>/dev/null; echo \"kept: reconcile-migration-ledger.ts \\(reusable read-only tool\\)\")"
+      "Bash(cd c:/virality && git status --porcelain | grep -E 'scripts/audit/\\(reconcile-migration-ledger|_tmp\\)' ; rm -f scripts/audit/_tmp_*.ts 2>/dev/null; echo \"kept: reconcile-migration-ledger.ts \\(reusable read-only tool\\)\")",
+      "PowerShell($ErrorActionPreference='SilentlyContinue'; \"node: $\\(node -v\\)\"; \"npm: $\\(npm -v\\)\"; \"railway via npx?: \"; \\(Get-Command railway\\).Source; \"RAILWAY_TOKEN set: $\\([bool]$env:RAILWAY_TOKEN\\)\")",
+      "PowerShell($t=[Environment]::GetEnvironmentVariable\\('RAILWAY_API_TOKEN','User'\\); if\\(-not $t\\){\"NOT FOUND in User env\"} else {\"found, length=$\\($t.Length\\)\"; $env:RAILWAY_API_TOKEN=$t; railway whoami 2>&1})",
+      "PowerShell(foreach\\($s in 'User','Machine','Process'\\){ foreach\\($n in 'RAILWAY_API_TOKEN','RAILWAY_TOKEN'\\){ $v=[Environment]::GetEnvironmentVariable\\($n,$s\\); \"$s/$n : $\\(if\\($v\\){'SET len='+$v.Length}else{'\\(empty\\)'}\\)\" } })",
+      "PowerShell($line=\\(Select-String -Path 'c:\\\\virality\\\\.env.local' -Pattern '^RAILWAY_API_TOKEN=' \\).Line; $env:RAILWAY_API_TOKEN=$line.Split\\('=',2\\)[1].Trim\\(\\); \"token loaded len=$\\($env:RAILWAY_API_TOKEN.Length\\)\"; \"--- whoami ---\"; railway whoami 2>&1)",
+      "PowerShell($line=\\(Select-String -Path 'c:\\\\virality\\\\.env.local' -Pattern '^RAILWAY_API_TOKEN='\\).Line; $tok=$line.Split\\('=',2\\)[1].Trim\\(\\); Remove-Item Env:RAILWAY_API_TOKEN -ErrorAction SilentlyContinue; $env:RAILWAY_TOKEN=$tok; \"--- status ---\"; railway status 2>&1; \"--- variables \\(names only\\) ---\"; railway variables 2>&1 | Select-Object -First 5)",
+      "PowerShell($env:RAILWAY_TOKEN='de81a4fc-e570-4be5-b5a2-b7742a0cea01'; railway setup agent -y 2>&1)",
+      "PowerShell($env:RAILWAY_TOKEN='de81a4fc-e570-4be5-b5a2-b7742a0cea01'; \"--- variables for service Omnivyra \\(names only\\) ---\"; railway variables --service Omnivyra --kv 2>&1 | ForEach-Object { \\($_ -split '=',2\\)[0] })",
+      "PowerShell($procs = Get-CimInstance Win32_Process -Filter \"name='node.exe'\" | Where-Object { $_.CommandLine -match 'start-all|next dev|startWorkers|scheduler/cron|start-server|dev:full' }; foreach \\($p in $procs\\) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 800; \"stopped\")",
+      "Bash(git worktree *)",
+      "Bash(git -C c:/tmp/omnivyra-deploy log -1 --pretty=format:'%H %s')",
+      "Bash(git -C c:/tmp/omnivyra-deploy status --porcelain)"
     ],
     "additionalDirectories": [
       "C:\\virality\\pages\\api\\activity-workspace\\[id]",

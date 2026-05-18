@@ -17,6 +17,7 @@ import {
   autoBalanceMatrix,
 } from './platformContentPresets';
 import { ChevronRight, ChevronDown, Trash2, Scale } from 'lucide-react';
+import { classifyContentType } from '../../lib/shared/contentTypeClassification';
 
 export interface PlatformContentMatrixProps {
   companyId?: string | null;
@@ -293,6 +294,30 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
                     return (
                       <div key={ct} className="flex items-center gap-2" title={`${label} / ${capitalize(ct)}`}>
                         <span className="text-sm text-gray-600 w-20 capitalize">{ct}</span>
+                        {(() => {
+                          const cls = classifyContentType(ct);
+                          if (cls.isVideoBrief) {
+                            return (
+                              <span
+                                className="text-[9px] font-semibold px-1 py-0.5 rounded bg-amber-50 text-amber-700"
+                                title="Video — Omnivyra provides the theme + marketing brief; you produce & upload"
+                              >
+                                brief
+                              </span>
+                            );
+                          }
+                          if (cls.mode === 'unsupported') {
+                            return (
+                              <span
+                                className="text-[9px] font-semibold px-1 py-0.5 rounded bg-gray-100 text-gray-400"
+                                title="Not a supported buildable content type"
+                              >
+                                n/a
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
                         <input
                           type="number"
                           min={0}

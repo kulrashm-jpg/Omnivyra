@@ -52,24 +52,45 @@ const SETUP_SECTIONS: SectionDef[] = [
   },
 ];
 
+// Mastery v2 — capability-weighted, tiered partial scoring. Total = 100 pts.
 const MASTERY_SECTIONS: SectionDef[] = [
-  {
-    title: 'Reports',
-    color: '#6366f1',
-    items: [{ key: 'report_generated', label: 'Reports generated', points: 30, href: '/reports' }],
-  },
   {
     title: 'Content',
     color: '#ec4899',
-    items: [{ key: 'blog_created', label: 'Content created', points: 35, href: '/command-center/content' }],
+    items: [
+      { key: 'content_writer', label: 'Writer (long-form)', points: 9, href: '/command-center/content' },
+      { key: 'content_short_format', label: 'Short-format posts', points: 7, href: '/command-center/content' },
+      { key: 'content_creator', label: 'Creator (video / reel)', points: 9, href: '/command-center/content' },
+      { key: 'content_writer_asset', label: 'Content with assets', points: 7, href: '/command-center/content' },
+    ],
+  },
+  {
+    title: 'Reports',
+    color: '#6366f1',
+    items: [{ key: 'report_generated', label: 'Reports generated', points: 14, href: '/reports' }],
   },
   {
     title: 'Campaigns',
     color: '#f97316',
     items: [
-      { key: 'social_accounts_connected', label: 'Integrations explored', points: 12, href: '/social-platforms' },
-      { key: 'campaign_created', label: 'Campaign created', points: 12, href: '/command-center/campaigns' },
-      { key: 'campaign_published', label: 'Campaign published', points: 11, href: '/campaigns' },
+      { key: 'social_accounts_connected', label: 'Integrations explored', points: 5, href: '/social-platforms' },
+      { key: 'campaign_created', label: 'Campaign created', points: 6, href: '/command-center/campaigns' },
+      { key: 'campaign_published', label: 'Campaign published', points: 7, href: '/campaigns' },
+    ],
+  },
+  {
+    title: 'Intelligence',
+    color: '#0ea5e9',
+    items: [
+      { key: 'market_pulse_used', label: 'Market Pulse used', points: 11, href: '/market-pulse' },
+      { key: 'active_leads_used', label: 'Active Leads used', points: 11, href: '/active-leads' },
+    ],
+  },
+  {
+    title: 'Credits',
+    color: '#10b981',
+    items: [
+      { key: 'free_credits_used', label: 'Free credits engaged', points: 14, href: '/credits' },
     ],
   },
 ];

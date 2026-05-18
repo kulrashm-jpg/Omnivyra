@@ -9,7 +9,7 @@
 
 import { useRef, useState } from 'react';
 import { Sparkles, Loader2, CalendarDays, Send } from 'lucide-react';
-import { usePlannerSession, type StrategyContext } from './plannerSessionStore';
+import { usePlannerSession, type StrategyContext, type IdeaSpine } from './plannerSessionStore';
 import { weeksToCalendarPlan } from './calendarPlanConverter';
 import { PlatformContentMatrix } from './PlatformContentMatrix';
 import ChatVoiceButton from '../ChatVoiceButton';
@@ -50,6 +50,29 @@ function deriveStrategyFromMatrix(
     campaign_goal: prev?.campaign_goal ?? '',
     target_audience: prev?.target_audience ?? '',
     planned_start_date: startDate,
+  };
+}
+
+/**
+ * When starting from the Skeleton step there is no idea spine yet, but the
+ * plan-preview API requires a title. The skeleton is purely structural
+ * (platforms × content type × cadence), so synthesize a minimal spine when
+ * none exists; the real idea/strategy/messaging is defined in later steps.
+ */
+function ensureIdeaSpine(
+  spine: IdeaSpine | null | undefined,
+  strategy: StrategyContext | null
+): IdeaSpine {
+  if (spine && (spine.refined_title?.trim() || spine.title?.trim())) return spine;
+  const goal = typeof strategy?.campaign_goal === 'string' ? strategy.campaign_goal.trim() : '';
+  const title = goal || 'Multi-platform content skeleton';
+  return {
+    title,
+    description:
+      goal ||
+      'Structural content skeleton — platforms, content types, and cadence. Strategy and messaging are defined in the next steps.',
+    origin: 'direct',
+    selected_angle: spine?.selected_angle ?? null,
   };
 }
 
@@ -100,7 +123,7 @@ export function SkeletonBuilderPanel({
     setScheduleLoading(true);
     setScheduleError(null);
     try {
-      const spine = state.campaign_design?.idea_spine;
+      const spine = ensureIdeaSpine(state.campaign_design?.idea_spine, strategyFromMatrix);
       const mergedStrategyContext = {
         ...strategyFromMatrix,
         ...(prev?.selected_aspects?.length ? { selected_aspects: prev.selected_aspects } : {}),
@@ -240,7 +263,6 @@ export function SkeletonBuilderPanel({
         setChatHistory((h) => [...h, { role: 'assistant', text: data.reply ?? 'Skeleton updated.' }]);
       } else {
         // No skeleton yet — generate one from scratch
-        const spine = state.campaign_design?.idea_spine;
         const strategyContext = prev ? {
           ...prev,
           duration_weeks: durationWeeks,
@@ -254,6 +276,7 @@ export function SkeletonBuilderPanel({
           campaign_goal: '',
           target_audience: '',
         };
+        const spine = ensureIdeaSpine(state.campaign_design?.idea_spine, strategyContext as StrategyContext);
         const handoff = buildPlannerExecutionHandoff({
           skeleton_confirmed: state.skeleton_confirmed,
           strategy_confirmed: state.strategy_confirmed,

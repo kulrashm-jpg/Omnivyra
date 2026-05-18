@@ -3,9 +3,9 @@
  * variant="social" → social presence numbers (followers, engagement, reach per platform)
  * variant="content" → content-perspective health per platform + recommendations
  *
- * Shows top 3 platforms by default (sorted by followers desc).
- * A "Show" button opens a dropdown listing all configured platforms;
- * user can pick up to 3.
+ * Shows all connected platforms by default (sorted by followers desc).
+ * A "Show" button opens a dropdown listing every configured platform;
+ * user can toggle any number on/off (at least one stays selected).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -27,8 +27,6 @@ function audienceTerm(platform: string): string {
     default:         return 'followers';
   }
 }
-
-const MAX_SELECTED = 3;
 
 function PlatformPickerDropdown({
   platforms,
@@ -59,31 +57,27 @@ function PlatformPickerDropdown({
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-600 border border-gray-300 rounded-lg bg-white hover:bg-gray-50 transition-colors"
       >
-        Show ({selected.size}/{MAX_SELECTED})
+        Show ({selected.size}/{platforms.length})
         <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
         <div className="absolute right-0 top-full mt-1 z-20 w-48 bg-white border border-gray-200 rounded-xl shadow-lg py-1">
           <p className="px-3 py-1.5 text-[10px] font-medium text-gray-400 uppercase tracking-wide">
-            Select up to {MAX_SELECTED}
+            Select platforms
           </p>
           {platforms.map((p) => {
             const checked = selected.has(p.platform);
-            const atMax = selected.size >= MAX_SELECTED && !checked;
             return (
               <button
                 key={p.platform}
                 type="button"
-                disabled={atMax}
                 onClick={() => onToggle(p.platform)}
-                className={`w-full flex items-center justify-between px-3 py-2 text-sm transition-colors ${
-                  atMax
-                    ? 'text-gray-300 cursor-not-allowed'
-                    : 'text-gray-700 hover:bg-indigo-50'
-                } ${checked ? 'bg-indigo-50' : ''}`}
+                className={`w-full flex items-center justify-between px-3 py-2 text-sm transition-colors text-gray-700 hover:bg-indigo-50 ${
+                  checked ? 'bg-indigo-50' : ''
+                }`}
               >
-                <PlatformIcon platform={p.platform} size={14} showLabel useBrandColor={!atMax} />
+                <PlatformIcon platform={p.platform} size={14} showLabel useBrandColor />
                 {checked && <Check className="h-3.5 w-3.5 text-indigo-600 flex-shrink-0" />}
               </button>
             );
@@ -98,18 +92,18 @@ export function AccountInsightPanel({ variant }: { variant: 'social' | 'content'
   const { state } = usePlannerSession();
   const ctx = state.account_context;
 
-  // Sort all configured platforms by followers desc; default top 3 selected
+  // Sort all configured platforms by followers desc; default all selected
   const sortedPlatforms = [...(ctx?.platforms ?? [])].sort((a, b) => b.followers - a.followers);
   const [selected, setSelected] = useState<Set<string> | null>(null);
 
   useEffect(() => {
     if (ctx && !selected) {
-      setSelected(new Set(sortedPlatforms.slice(0, MAX_SELECTED).map((p) => p.platform)));
+      setSelected(new Set(sortedPlatforms.map((p) => p.platform)));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx]);
 
-  const activeSelected = selected ?? new Set(sortedPlatforms.slice(0, MAX_SELECTED).map((p) => p.platform));
+  const activeSelected = selected ?? new Set(sortedPlatforms.map((p) => p.platform));
 
   function togglePlatform(platform: string) {
     setSelected((prev) => {
@@ -118,7 +112,6 @@ export function AccountInsightPanel({ variant }: { variant: 'social' | 'content'
         if (next.size === 1) return next; // keep at least one
         next.delete(platform);
       } else {
-        if (next.size >= MAX_SELECTED) return next; // cap at 3
         next.add(platform);
       }
       return next;

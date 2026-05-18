@@ -24,6 +24,19 @@ export enum FeatureKey {
   // Tools & Integration
   CHROME_EXTENSION_INSTALLED = 'chrome_extension_installed',
   API_CONFIGURED = 'api_configured',
+
+  // Content Mastery (sub-capabilities — tiered partial scoring)
+  CONTENT_WRITER = 'content_writer',                 // long-form writer content
+  CONTENT_SHORT_FORMAT = 'content_short_format',      // post / tweet / poll
+  CONTENT_CREATOR = 'content_creator',                // reel / video / short / story
+  CONTENT_WRITER_ASSET = 'content_writer_asset',      // content with attached visual asset
+
+  // Intelligence Mastery
+  MARKET_PULSE_USED = 'market_pulse_used',
+  ACTIVE_LEADS_USED = 'active_leads_used',
+
+  // Credits Mastery (engagement with the shared free-credit program)
+  FREE_CREDITS_USED = 'free_credits_used',
 }
 
 /**

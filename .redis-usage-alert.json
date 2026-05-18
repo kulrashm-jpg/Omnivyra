@@ -1,1 +1,1 @@
-{"level":"critical","recovered":false,"effectivePct":296.44,"memoryPct":0.08,"requestsPct":296.44,"usedMb":7,"maxMb":8192,"dailyUsed":592881,"dailyLimit":200000,"ts":"2026-05-12T06:47:06.474Z"}
+{"level":"critical","recovered":false,"effectivePct":1722.5,"memoryPct":0.49,"requestsPct":1722.5,"usedMb":0,"maxMb":64,"dailyUsed":430626,"dailyLimit":25000,"ts":"2026-05-17T20:34:22.273Z"}

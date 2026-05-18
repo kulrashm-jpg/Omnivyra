@@ -118,10 +118,14 @@ async function detectWebsiteConnected(companyId: string): Promise<FeatureDetecti
  */
 async function detectBlogCreated(companyId: string): Promise<FeatureDetectionResult> {
   try {
+    // Persisted/used only: a blog row is written even for transient AI drafts,
+    // so a draft alone does not count. Require the content to have been
+    // committed for actual use (scheduled to publish or already published).
     const { data: blogs, error } = await supabase
       .from('blogs')
       .select('id')
       .eq('company_id', companyId)
+      .in('status', ['scheduled', 'published'])
       .limit(10);
 
     if (error) {
@@ -136,7 +140,7 @@ async function detectBlogCreated(companyId: string): Promise<FeatureDetectionRes
     return {
       isCompleted,
       score,
-      reason: `${count} piece(s) of content created`,
+      reason: `${count} piece(s) of content scheduled/published`,
       completedAt: isCompleted ? new Date() : undefined,
       metadata: { count },
     };
@@ -151,16 +155,21 @@ async function detectBlogCreated(companyId: string): Promise<FeatureDetectionRes
  */
 async function detectReportGenerated(companyId: string): Promise<FeatureDetectionResult> {
   try {
+    // analytics_reports has no status column — every row is a finalized,
+    // persisted snapshot, so existence counts as a generated report.
     const { data: analyticsRows, error: analyticsError } = await supabase
       .from('analytics_reports')
       .select('id')
       .eq('company_id', companyId)
       .limit(5);
 
+    // reports has a generation lifecycle — only a fully completed report is
+    // persisted/usable; pending/processing/failed runs do not count.
     const { data: reportRows, error: reportsError } = await supabase
       .from('reports')
       .select('id')
       .eq('company_id', companyId)
+      .eq('status', 'completed')
       .limit(5);
 
     if (analyticsError && reportsError) {
@@ -291,26 +300,45 @@ async function detectCampaignPublished(companyId: string): Promise<FeatureDetect
 
 /**
  * CHROME_EXTENSION_INSTALLED
- * Detects if company has the Chrome extension flag or status
+ * Sticky "ever redeemed/seen" detection: the extension is considered installed
+ * once it has successfully connected at least once. A redeem / first command
+ * poll creates an `extension_sessions` row keyed by `org_id` (which is the same
+ * UUID as `companies.id`). Existence of ANY such row — regardless of expiry or
+ * last_seen recency — means the extension was authenticated for this company,
+ * so the factor never reverts even if the extension is later uninstalled.
+ * A manually-set `feature_completion` flag still counts as a fallback.
  */
 async function detectChromeExtensionInstalled(companyId: string): Promise<FeatureDetectionResult> {
-  // Check feature_completion table for a manually-set chrome extension flag
-  // (no extension_installations table exists yet)
   try {
-    const { data } = await supabase
-      .from('feature_completion')
-      .select('status')
-      .eq('company_id', companyId)
-      .eq('feature_key', 'chrome_extension_installed')
-      .single();
+    const [sessionRes, flagRes] = await Promise.all([
+      supabase
+        .from('extension_sessions')
+        .select('id, last_seen')
+        .eq('org_id', companyId)
+        .order('last_seen', { ascending: false, nullsFirst: false })
+        .limit(1),
+      supabase
+        .from('feature_completion')
+        .select('status')
+        .eq('company_id', companyId)
+        .eq('feature_key', 'chrome_extension_installed')
+        .maybeSingle(),
+    ]);
 
-    // Only trust an existing DB record if it was manually set to completed
-    const isCompleted = data?.status === 'completed';
+    const everConnected = (sessionRes.data?.length ?? 0) > 0;
+    const manuallyCompleted = flagRes.data?.status === 'completed';
+    const isCompleted = everConnected || manuallyCompleted;
+
     return {
       isCompleted,
       score: isCompleted ? 1 : 0,
-      reason: isCompleted ? 'Chrome extension installed' : 'Chrome extension not yet installed',
+      reason: everConnected
+        ? 'Chrome extension connected (extension session found)'
+        : manuallyCompleted
+          ? 'Chrome extension installed (manually marked)'
+          : 'Chrome extension not yet installed',
       completedAt: isCompleted ? new Date() : undefined,
+      metadata: { everConnected, manuallyCompleted },
     };
   } catch {
     return { isCompleted: false, score: 0, reason: 'Chrome extension not yet installed' };
@@ -346,6 +374,233 @@ async function detectApiConfigured(companyId: string): Promise<FeatureDetectionR
 }
 
 /**
+ * Resolve all campaign IDs owned by a company. Several content tables
+ * (bolt_content_jobs, content_assets) are campaign-scoped rather than
+ * company-scoped, so we map company → campaign IDs first.
+ */
+async function getCompanyCampaignIds(companyId: string): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('campaigns')
+    .select('id')
+    .eq('company_id', companyId)
+    .limit(500);
+  if (error) return [];
+  return (data || [])
+    .map((row: { id?: string | null }) => row?.id)
+    .filter((id): id is string => Boolean(id));
+}
+
+/**
+ * CONTENT_WRITER — long-form writer content (blogs table holds long-form
+ * pieces). Persisted/used only: scheduled or published, not raw drafts.
+ * Tier: 1 → 40%, 2 → 70%, 3+ → 100%.
+ */
+async function detectContentWriter(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const { data, error } = await supabase
+      .from('blogs')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('status', ['scheduled', 'published'])
+      .limit(5);
+    if (error) return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
+    const count = data?.length ?? 0;
+    const score = count === 0 ? 0 : count === 1 ? 0.4 : count === 2 ? 0.7 : 1;
+    return {
+      isCompleted: score >= 1,
+      score,
+      reason: `${count} long-form writer piece(s)`,
+      completedAt: score >= 1 ? new Date() : undefined,
+      metadata: { count },
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * CONTENT_SHORT_FORMAT — short posts (post / tweet / poll) generated and
+ * completed via the BOLT pipeline. Tier: 1 → 40%, 3 → 70%, 5+ → 100%.
+ */
+async function detectContentShortFormat(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const campaignIds = await getCompanyCampaignIds(companyId);
+    if (campaignIds.length === 0) {
+      return { isCompleted: false, score: 0, reason: 'No short-format content yet', metadata: { count: 0 } };
+    }
+    const { data, error } = await supabase
+      .from('bolt_content_jobs')
+      .select('id')
+      .in('campaign_id', campaignIds)
+      .in('content_type', ['post', 'tweet', 'poll', 'short_story'])
+      .eq('status', 'done')
+      .limit(5);
+    if (error) return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
+    const count = data?.length ?? 0;
+    const score = count === 0 ? 0 : count >= 5 ? 1 : count >= 3 ? 0.7 : 0.4;
+    return {
+      isCompleted: score >= 1,
+      score,
+      reason: `${count} short-format post(s) completed`,
+      completedAt: score >= 1 ? new Date() : undefined,
+      metadata: { count },
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * CONTENT_CREATOR — short-form creator media (reel / video / short / story)
+ * completed via the BOLT pipeline. Tier: 1 → 50%, 2 → 75%, 3+ → 100%.
+ */
+async function detectContentCreator(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const campaignIds = await getCompanyCampaignIds(companyId);
+    if (campaignIds.length === 0) {
+      return { isCompleted: false, score: 0, reason: 'No creator content yet', metadata: { count: 0 } };
+    }
+    const { data, error } = await supabase
+      .from('bolt_content_jobs')
+      .select('id')
+      .in('campaign_id', campaignIds)
+      .in('content_type', ['reel', 'video', 'short', 'story'])
+      .eq('status', 'done')
+      .limit(5);
+    if (error) return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
+    const count = data?.length ?? 0;
+    const score = count === 0 ? 0 : count === 1 ? 0.5 : count === 2 ? 0.75 : 1;
+    return {
+      isCompleted: score >= 1,
+      score,
+      reason: `${count} creator media piece(s) completed`,
+      completedAt: score >= 1 ? new Date() : undefined,
+      metadata: { count },
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * CONTENT_WRITER_ASSET — content paired with a produced visual asset
+ * (content_assets row past the draft stage). Tier: 1 → 60%, 2+ → 100%.
+ */
+async function detectContentWriterAsset(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const campaignIds = await getCompanyCampaignIds(companyId);
+    if (campaignIds.length === 0) {
+      return { isCompleted: false, score: 0, reason: 'No content assets yet', metadata: { count: 0 } };
+    }
+    const { data, error } = await supabase
+      .from('content_assets')
+      .select('asset_id')
+      .in('campaign_id', campaignIds)
+      .neq('status', 'draft')
+      .limit(2);
+    if (error) return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
+    const count = data?.length ?? 0;
+    const score = count === 0 ? 0 : count === 1 ? 0.6 : 1;
+    return {
+      isCompleted: score >= 1,
+      score,
+      reason: `${count} content asset(s) attached`,
+      completedAt: score >= 1 ? new Date() : undefined,
+      metadata: { count },
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * MARKET_PULSE_USED — generated Market Pulse intelligence (comparative or
+ * opportunity signals). Tier: 1 → 50%, 3+ → 100%.
+ */
+async function detectMarketPulseUsed(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const [cmp, opp] = await Promise.all([
+      supabase
+        .from('marketpulse_comparative_intelligence')
+        .select('id')
+        .eq('company_id', companyId)
+        .limit(3),
+      supabase
+        .from('marketpulse_opportunity_intelligence')
+        .select('id')
+        .eq('company_id', companyId)
+        .limit(3),
+    ]);
+    const count = (cmp.data?.length ?? 0) + (opp.data?.length ?? 0);
+    const score = count === 0 ? 0 : count >= 3 ? 1 : count === 1 ? 0.5 : 0.75;
+    return {
+      isCompleted: score >= 1,
+      score,
+      reason: `${count} Market Pulse signal(s)`,
+      completedAt: score >= 1 ? new Date() : undefined,
+      metadata: { count },
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * ACTIVE_LEADS_USED — lead signals detected for the org (engagement or
+ * listening). Tier: 1 → 50%, 5+ → 100%.
+ */
+async function detectActiveLeadsUsed(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const { data, error } = await supabase
+      .from('lead_signals')
+      .select('id')
+      .eq('organization_id', companyId)
+      .limit(5);
+    if (error) return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
+    const count = data?.length ?? 0;
+    const score = count === 0 ? 0 : count >= 5 ? 1 : count === 1 ? 0.5 : 0.5 + (count - 1) * 0.125;
+    return {
+      isCompleted: score >= 1,
+      score,
+      reason: `${count} active lead signal(s)`,
+      completedAt: score >= 1 ? new Date() : undefined,
+      metadata: { count },
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
+ * FREE_CREDITS_USED — the org actually spent shared free credits on real
+ * product actions (credit_transactions: deduction, category='free').
+ * Tier: 1 → 40%, 3 → 70%, 5+ → 100%.
+ */
+async function detectFreeCreditsUsed(companyId: string): Promise<FeatureDetectionResult> {
+  try {
+    const { data, error } = await supabase
+      .from('credit_transactions')
+      .select('id')
+      .eq('organization_id', companyId)
+      .eq('transaction_type', 'deduction')
+      .eq('category', 'free')
+      .limit(5);
+    if (error) return { isCompleted: false, score: 0, reason: `Error: ${error.message}` };
+    const count = data?.length ?? 0;
+    const score = count === 0 ? 0 : count >= 5 ? 1 : count >= 3 ? 0.7 : 0.4;
+    return {
+      isCompleted: score >= 1,
+      score,
+      reason: `${count} free-credit action(s) used`,
+      completedAt: score >= 1 ? new Date() : undefined,
+      metadata: { count },
+    };
+  } catch (err) {
+    return { isCompleted: false, score: 0, reason: `Error: ${(err as Error).message}` };
+  }
+}
+
+/**
  * Compute feature completion for a company
  * Runs all detection logic and returns array of computed features
  * 
@@ -367,6 +622,13 @@ export async function computeFeatureCompletion(
     [FeatureKey.CAMPAIGN_PUBLISHED]: detectCampaignPublished,
     [FeatureKey.CHROME_EXTENSION_INSTALLED]: detectChromeExtensionInstalled,
     [FeatureKey.API_CONFIGURED]: detectApiConfigured,
+    [FeatureKey.CONTENT_WRITER]: detectContentWriter,
+    [FeatureKey.CONTENT_SHORT_FORMAT]: detectContentShortFormat,
+    [FeatureKey.CONTENT_CREATOR]: detectContentCreator,
+    [FeatureKey.CONTENT_WRITER_ASSET]: detectContentWriterAsset,
+    [FeatureKey.MARKET_PULSE_USED]: detectMarketPulseUsed,
+    [FeatureKey.ACTIVE_LEADS_USED]: detectActiveLeadsUsed,
+    [FeatureKey.FREE_CREDITS_USED]: detectFreeCreditsUsed,
   };
 
   const results = await Promise.all(

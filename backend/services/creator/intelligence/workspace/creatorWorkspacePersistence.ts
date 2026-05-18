@@ -219,7 +219,14 @@ export function fromPersistedCreatorRow(
   if (!parsed) return null;
 
   const intentType = asStr(parsed.intent_type) || asStr(row.intent_type);
-  if (intentType !== 'creator') return null; // not ours — skip
+  // NOTE: the non-creator skip is deferred to after `human` is computed.
+  // Video / Group-B formats are intentionally persisted in the human-
+  // production lane (intent_type='text' + content_status='guidance_ready')
+  // because daily_content_plans_creator_capability_check gates
+  // intent_type='creator'. Read-side only: we still reconstruct those rows
+  // as a Group-B creator brief so the workspace shows the video/creator
+  // brief instead of the text brief. Pure BOLT-text rows (not human-
+  // production) are still skipped below — behaviour unchanged for them.
 
   const assetType =
     asStr(parsed.asset_type) || asStr(row.asset_type) ||
@@ -240,6 +247,11 @@ export function fromPersistedCreatorRow(
   const human =
     parsed.requires_human_production === true ||
     isHumanProductionAsset(fmt, assetType);
+
+  // Deferred skip: keep only creator rows OR Group-B human-production rows
+  // (video/reel/short/podcast). Pure BOLT-text rows still return null exactly
+  // as before — no contamination, backward compatible.
+  if (intentType !== 'creator' && !human) return null;
 
   const packaging = coercePackaging(parsed.packaging);
   const assetPayload = sanitizePayload(assetType, parsed.asset_payload);

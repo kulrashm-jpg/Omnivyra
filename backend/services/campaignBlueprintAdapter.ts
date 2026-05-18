@@ -46,6 +46,7 @@ export function fromStructuredPlan(plan: any): CampaignBlueprint {
     platform_content_breakdown: w.platform_content_breakdown,
     platform_topics: w.platform_topics,
     execution_items: Array.isArray(w.execution_items) ? w.execution_items : undefined,
+    daily_execution_items: Array.isArray(w.daily_execution_items) ? w.daily_execution_items : undefined,
     posting_execution_map: Array.isArray(w.posting_execution_map) ? w.posting_execution_map : undefined,
     resolved_postings: Array.isArray(w.resolved_postings) ? w.resolved_postings : undefined,
     week_extras: (w.week_extras && typeof w.week_extras === 'object') ? { ...w.week_extras } : undefined,
