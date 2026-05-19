@@ -1,0 +1,51 @@
+name: Stability Contracts
+
+# Static REGRESSION-LOCK contracts (Jest substring asserts, no server / no DB).
+# Gates merges so a refactor cannot silently regress the locked auth + billing
+# wiring: password login, magic-link login, password reset, and the
+# signup -> company -> initial-free-credits flow.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/stability.yml'
+      - 'jest.stability.config.js'
+      - 'package.json'
+      - 'tests/stability/**'
+      - 'pages/login.tsx'
+      - 'pages/auth/callback.tsx'
+      - 'pages/auth/set-password.tsx'
+      - 'pages/api/auth/**'
+      - 'pages/api/onboarding/**'
+      - 'backend/services/initialFreeCreditService.ts'
+  push:
+    branches: [main]
+    tags: ['v*', 'release-*']
+  release:
+    types: [published, prereleased]
+  workflow_dispatch:
+
+concurrency:
+  group: stability-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  stability-contracts:
+    name: Stability regression lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Static stability contracts (no server, no DB)
+        run: npm run test:stability

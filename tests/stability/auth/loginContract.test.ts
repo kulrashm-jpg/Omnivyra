@@ -43,7 +43,11 @@ describe('stability/auth login contract', () => {
       "supabase.rpc('auth_user_has_password'",
       "p_user_id: supabaseUid",
     ]);
-    expect(api).toMatch(/authHasPassword === false \|\| \(!publicHasPassword && authHasPassword !== true\)/);
+    // Source was intentionally refactored (commit 341d46c8 "source password
+    // capability from Supabase Auth"): when the user has a supabase_uid, Auth
+    // is the source of truth (authHasPassword !== true → NO_PASSWORD);
+    // otherwise fall back to public.users.has_password. Lock that decision.
+    expect(api).toMatch(/noPassword\s*=\s*hasSupabaseUid\s*\?\s*authHasPassword !== true\s*:\s*!publicHasPassword/);
 
     expectContainsAll(migration, [
       'CREATE OR REPLACE FUNCTION public.auth_user_has_password',
