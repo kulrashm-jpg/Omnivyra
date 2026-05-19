@@ -16,7 +16,9 @@
 
 import { supabase } from '../db/supabaseClient';
 import { getPlatformBenchmark } from './globalPatternService';
-import { deductCreditsIfValueAwaited } from './creditExecutionService';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from './billing/phase2RouteWiring';
+import { PaymentRequiredError } from './billing/phase2EnforcementGate';
 
 export type ContentArea = {
   topic: string;
@@ -94,6 +96,12 @@ function labelArea(coverage: number, engagement: number, avgEngagement: number):
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function evaluateMarketPosition(companyId: string): Promise<MarketPosition> {
+  // Task 5D — market-positioning work unit, wrapped by the dark gate as the
+  // executeWithCredits executor (HOLD-first). Legacy value-gated, post-facto,
+  // fail-open `deductCreditsIfValueAwaited(... dataFound ...)` REMOVED:
+  // charging now occurs on EXECUTION (not "free if no whitespace") and only
+  // under ENFORCE. companyId is a required param → no no-org passthrough.
+  const doEvaluate = async (): Promise<MarketPosition> => {
   const evaluatedAt = new Date().toISOString();
 
   // ── Load performance data ────────────────────────────────────────────────
@@ -217,9 +225,6 @@ export async function evaluateMarketPosition(companyId: string): Promise<MarketP
   }
   promptLines.push(`\nRecommendation: ${recommendation}`);
 
-  const dataFound = whitespace.length + strengths.length + saturated.length > 0;
-  await deductCreditsIfValueAwaited(companyId, 'market_positioning', dataFound, { note: `Market positioning: ${whitespace.length} whitespace opportunities` });
-
   return {
     company_id: companyId,
     whitespace_opportunities: whitespace,
@@ -230,4 +235,22 @@ export async function evaluateMarketPosition(companyId: string): Promise<MarketP
     prompt_context: promptLines.join('\n'),
     evaluated_at: evaluatedAt,
   };
+  };
+
+  // OFF (prod default): passthrough → byte-identical, no HOLD, no wallet
+  // mutation. SHADOW: passthrough + telemetry, never blocks. ENFORCE:
+  // executeWithCredits HOLD→CONFIRM/RELEASE; insufficient → PaymentRequiredError.
+  // Day-bucketed referenceId mirrors catalog smart_dedup (market_positioning
+  // = 1d): same-day duplicate/replay reuses the HOLD; new day = new run.
+  const dayBucket = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  return await wirePhase2Route<MarketPosition>({
+    surface:        'intelligence.market-positioning',
+    organizationId: companyId,
+    action:         'market_positioning',
+    referenceType:  'market_positioning',
+    referenceId:    createHash('sha256')
+      .update([companyId, 'market_positioning', dayBucket].join('|'))
+      .digest('hex').slice(0, 40),
+    run: doEvaluate,
+  });
 }

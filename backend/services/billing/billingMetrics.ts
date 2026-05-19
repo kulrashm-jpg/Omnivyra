@@ -54,6 +54,16 @@ const counters: Record<string, number> = {
   recovery_retry_total:                 0,
   reconciliation_after_recovery_total:  0,
   heartbeat_timeout_total:              0,
+  // Phase 2 — canary enforcement gate telemetry
+  phase2_gate_enforce_total:            0,
+  phase2_gate_shadow_total:             0,
+  phase2_gate_off_total:                0,
+  phase2_gate_killswitch_total:         0,
+  phase2_shadow_would_block_total:      0,
+  // Phase 3.1 — black-hole cost-capture failure (was logs-only).
+  black_hole_cost_capture_failed_total: 0,
+  // Task 5H — pre-HOLD 80% executable-balance safety gate blocked an execution.
+  credit_safety_gate_blocked_total:     0,
 };
 
 export type BillingCounter = keyof typeof counters;

@@ -15,6 +15,7 @@ import { ownedDbTable } from '../db/writeOwner';
 import { supabase } from '../db/supabaseClient';
 import { recordCostAnomaly } from './pricingService';
 import { logger } from './logger';
+import { ledgerLinkColumnEnabled } from './billing/ledgerLinkColumnFlag';
 
 // In-memory cache of per-org credit_rate_usd. The rate changes rarely; per-write
 // DB lookup would double the unified ledger's insert cost.
@@ -72,6 +73,9 @@ export interface UnifiedTransactionInput {
 
   reference_type?:  string | null;
   reference_id?:    string | null;
+
+  /** Phase 2/3 — deterministic ledger lineage anchor (originating HOLD id). */
+  ledger_hold_transaction_id?: string | null;
 
   pricing_snapshot?: Record<string, unknown> | null;
   metadata?:         Record<string, unknown>;
@@ -145,6 +149,11 @@ export async function recordUnifiedTransaction(input: UnifiedTransactionInput): 
       reference_id:      input.reference_id ?? null,
       pricing_snapshot:  input.pricing_snapshot ?? null,
       metadata:          input.metadata ?? {},
+      // Phase 3 Task 2: controlled-activation gated first-class column.
+      // OFF (default) → key absent → safe on envs without migration 20260667.
+      ...(ledgerLinkColumnEnabled() && input.ledger_hold_transaction_id
+        ? { ledger_hold_transaction_id: input.ledger_hold_transaction_id }
+        : {}),
     };
 
     const { error } = await ownedDbTable('unified_transactions').insert(row);

@@ -20,7 +20,9 @@ import { contributePattern } from './globalPatternService';
 import { upsertLearning } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';
 import { scoreHookQuality } from './contentValidationService';
-import { deductCreditsIfValueAwaited } from './creditExecutionService';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from './billing/phase2RouteWiring';
+import { PaymentRequiredError } from './billing/phase2EnforcementGate';
 
 export type PatternCluster = {
   pattern: string;
@@ -85,6 +87,13 @@ function extractCtaSignals(text: string): string[] {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function detectWinningPatterns(companyId: string): Promise<DetectedPatterns> {
+  // Task 5C — the pattern-detection work unit, wrapped by the dark gate as
+  // the executeWithCredits executor (HOLD-first). The legacy value-gated,
+  // post-facto, fail-open `deductCreditsIfValueAwaited(... patternsFound>0 ...)`
+  // was REMOVED: charging now occurs on EXECUTION (not "free if no patterns")
+  // and only under ENFORCE. companyId is always present (required param) so
+  // there is no no-org passthrough branch.
+  const doDetect = async (): Promise<DetectedPatterns> => {
   const detectedAt = new Date().toISOString();
 
   // Load performance feedback with content text
@@ -230,9 +239,6 @@ export async function detectWinningPatterns(companyId: string): Promise<Detected
     },
   });
 
-  const patternsFound = winningPatterns.length + losingPatterns.length;
-  await deductCreditsIfValueAwaited(companyId, 'pattern_detection', patternsFound > 0, { note: `Detected ${patternsFound} patterns` });
-
   return {
     company_id: companyId,
     winning_patterns: winningPatterns,
@@ -242,4 +248,24 @@ export async function detectWinningPatterns(companyId: string): Promise<Detected
     content_type_clusters: contentTypeClusters,
     detected_at: detectedAt,
   };
+  };
+
+  // OFF (prod default): passthrough → byte-identical detection, no HOLD, no
+  // wallet mutation. SHADOW: passthrough + telemetry, never blocks. ENFORCE:
+  // executeWithCredits HOLD→CONFIRM/RELEASE; insufficient → PaymentRequiredError
+  // (deterministic block, NOT a silent free detection). referenceId is
+  // day-bucketed to mirror the catalog smart_dedup (pattern_detection = 1d):
+  // same-day duplicate/replay reuses the HOLD (no double-charge); a new day
+  // is a new billable run.
+  const dayBucket = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  return await wirePhase2Route<DetectedPatterns>({
+    surface:        'intelligence.pattern-detection',
+    organizationId: companyId,
+    action:         'pattern_detection',
+    referenceType:  'pattern_detection',
+    referenceId:    createHash('sha256')
+      .update([companyId, 'pattern_detection', dayBucket].join('|'))
+      .digest('hex').slice(0, 40),
+    run: doDetect,
+  });
 }

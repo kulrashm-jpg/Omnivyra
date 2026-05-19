@@ -3,6 +3,9 @@ import { getSupabaseUserFromRequest } from '@/backend/services/supabaseAuthServi
 import { processContent, PLATFORM_CHAR_LIMITS } from '@/backend/services/unifiedContentProcessor';
 import { optimizeDiscoverabilityForPlatform } from '@/backend/services/contentGeneration/discoverabilityHelpers';
 import { runCompletionWithOperation } from '@/backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '@/backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
 import { getProfile } from '@/backend/services/companyProfileService';
 import type { CompanyProfile } from '@/backend/services/companyProfile/types';
 
@@ -387,7 +390,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let rewriteApplied = false;
     let rewriteError: unknown = null;
     try {
-      const rewritten = await rewriteForPlatform({
+      const doRewrite = () => rewriteForPlatform({
         content,
         platform,
         contentType,
@@ -395,11 +398,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         topic,
         companyContext,
       });
+      // No companyId → nothing to charge; passthrough (honest, like Task 2).
+      const rewritten = companyId
+        ? await wirePhase2Route({
+            surface:        'content.quick-platform-adapt',
+            organizationId: companyId,
+            action:         'quick_platform_adapt',
+            referenceType:  'quick_platform_adapt',
+            referenceId:    createHash('sha256')
+              .update([companyId, platform, contentType, content].join('|'))
+              .digest('hex').slice(0, 40),
+            run: doRewrite,
+          })
+        : await doRewrite();
       if (rewritten) {
         workingContent = rewritten;
         rewriteApplied = true;
       }
     } catch (err) {
+      if (err instanceof PaymentRequiredError) throw err; // surface as 402
       rewriteError = err;
       console.error('[quick-platform-adapt] rewrite failed', {
         platform,
@@ -450,6 +467,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
   } catch (routeError) {
+    if (routeError instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: routeError.message, code: routeError.code });
+    }
     return res.status(500).json({
       error: routeError instanceof Error ? routeError.message : 'Failed to adapt content quickly',
     });

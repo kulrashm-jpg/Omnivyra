@@ -12,6 +12,9 @@ import {
   suggestDurationForOpportunity,
   suggestDurationFromQuestionnaire,
 } from '../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 import { getLatestCampaignVersion } from '../../../backend/db/campaignVersionStore';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -82,8 +85,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       creationCapacity != null ||
       (typeof inHouseNotes === 'string' && inHouseNotes.trim().length > 0);
 
-    const result = hasQuestionnaire
-      ? await suggestDurationFromQuestionnaire({
+    const result = await wirePhase2Route({
+      surface:        'campaigns.suggest-duration',
+      organizationId: companyId,
+      action:         'campaign_suggest_duration',
+      referenceType:  'campaign_suggest_duration',
+      referenceId:    createHash('sha256')
+        .update([companyId, String(campaignId), String(sourceOpportunityId), String(hasQuestionnaire)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => hasQuestionnaire
+      ? suggestDurationFromQuestionnaire({
           companyId,
           campaignName,
           campaignDescription,
@@ -100,16 +111,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               : undefined,
           inHouseNotes: typeof inHouseNotes === 'string' ? inHouseNotes : null,
         })
-      : await suggestDurationForOpportunity({
+      : suggestDurationForOpportunity({
           companyId,
           campaignName,
           campaignDescription,
           contextPayload,
           targetRegions,
-        });
+        }),
+    });
 
     return res.status(200).json(result);
   } catch (err: any) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
     console.error('[suggest-duration]', err);
     return res.status(500).json({
       error: err?.message || 'Internal server error',

@@ -7,6 +7,9 @@ import { getProfile } from '../../../backend/services/companyProfileService';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { getStrategyHistoryForCompany } from '../../../backend/services/strategyHistoryService';
 import { formatForUserOutput } from '../../../backend/utils/refineUserFacingResponse';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -106,7 +109,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       insight_source === 'api' || insight_source === 'llm' || insight_source === 'hybrid'
         ? insight_source
         : 'hybrid';
-    const result = await generateRecommendations(
+    const result = await wirePhase2Route({
+      surface:        'recommendations.generate',
+      organizationId: companyId,
+      action:         'recommendations_generate',
+      referenceType:  'recommendations_generate',
+      referenceId:    createHash('sha256')
+        .update([
+          companyId,
+          String(resolvedCampaignId ?? ''),
+          String(durationWeeks),
+          resolvedInsightSource,
+          String(objective ?? ''),
+        ].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => generateRecommendations(
       {
         companyId,
         campaignId: resolvedCampaignId ?? undefined,
@@ -129,7 +146,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           : undefined,
       }
-    );
+      ),
+    });
 
     // Direct AI fallback: if the pipeline returned nothing, bypass all complexity and
     // call theme generation directly. This handles fresh companies with sparse profiles
@@ -482,6 +500,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     return res.status(200).json(refined);
   } catch (error: any) {
+    if (error instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: error.message, code: error.code });
+    }
     if (error?.code === 'CAMPAIGN_NOT_IN_COMPANY') {
       return res.status(403).json({ error: 'CAMPAIGN_NOT_IN_COMPANY' });
     }

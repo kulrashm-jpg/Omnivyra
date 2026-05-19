@@ -7,6 +7,9 @@ import { supabase } from '../../../backend/db/supabaseClient';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { generateRecommendation } from '../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 import {
   countActive,
   upsertOpportunities,
@@ -225,7 +228,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
 
     let recommendationContext: Record<string, any> | null = null;
-    const result = await generateRecommendations(
+    const result = await wirePhase2Route({
+      surface:        'recommendations.detected-opportunities',
+      organizationId: companyId,
+      action:         'recommendations_opportunities',
+      referenceType:  'recommendations_opportunities',
+      referenceId:    createHash('sha256')
+        .update([companyId, String(campaignId)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => generateRecommendations(
       {
         companyId,
         campaignId,
@@ -238,7 +249,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
           recommendationContext = context;
         },
       }
-    );
+      ),
+    });
 
     const trendReasoningMap = new Map<string, string>();
     const trendSignals = Array.isArray(recommendationContext?.trend_reasoning)
@@ -499,6 +511,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     return res.status(200).json({ opportunities: opportunitiesFromRows });
   } catch (error) {
+    if (error instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: error.message, code: error.code });
+    }
     console.error('Error loading detected opportunities:', error);
     return res.status(500).json({ error: 'Failed to load detected opportunities' });
   }

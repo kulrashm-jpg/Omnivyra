@@ -3,6 +3,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { resolveUserContext, enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { getThreadMessages } from '../../../backend/services/engagementMessageService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 type RefineBody = {
   organization_id?: string;
@@ -48,7 +51,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .join('\n')
       .slice(0, 2500);
 
-    const result = await runCompletionWithOperation({
+    const result = await wirePhase2Route({
+      surface:        'engagement.refine-suggestion',
+      organizationId,
+      action:         'engagement_refine',
+      referenceType:  'engagement_refine',
+      referenceId:    createHash('sha256')
+        .update([organizationId, threadId, instruction, draft].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => runCompletionWithOperation({
       companyId: organizationId,
       campaignId: null,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -70,6 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             'Return one improved reply only.',
         },
       ],
+      }),
     });
 
     const refined = (result.output ?? '').toString().trim();
@@ -79,6 +91,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ refined });
   } catch (err) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
     const message = (err as Error)?.message ?? 'Failed to refine suggestion';
     console.error('[engagement/refine-suggestion]', message);
     return res.status(500).json({ error: message });

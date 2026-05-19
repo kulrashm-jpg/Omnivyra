@@ -38,7 +38,7 @@ export const CONTENT_NAV_SECTIONS: ContentNavSection[] = [
   {
     id: 'creator',
     label: 'Creator Content',
-    description: '6 AI-supported creator content types',
+    description: '5 AI-supported creator content types',
     summary: 'Compose visual assets with governed layout, platform sizing, and render safety.',
     badge: 'Visual assets',
     href: '/command-center/creator-content',
@@ -47,7 +47,6 @@ export const CONTENT_NAV_SECTIONS: ContentNavSection[] = [
       { id: 'carousel', label: 'Carousel', route: '/command-center/creator-content/carousel', description: 'Multi-slide narrative asset' },
       { id: 'banner', label: 'Banner', route: '/command-center/creator-content/banner', description: 'Promotional banner creative' },
       { id: 'infographic', label: 'Infographic', route: '/command-center/creator-content/infographic', description: 'Structured visual explanation' },
-      { id: 'pdf', label: 'PDF', route: '/command-center/creator-content/pdf', description: 'Document-style asset package' },
       { id: 'slider', label: 'Slider', route: '/command-center/creator-content/slider', description: 'Presentation-flow slide asset' },
     ],
   },

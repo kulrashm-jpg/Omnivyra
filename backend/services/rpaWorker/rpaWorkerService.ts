@@ -4,6 +4,7 @@ import { runRpaScript } from './rpaPlaywrightRunner';
 import { rpaEnvReady, assertRpaEnvReady, isProbeFailure } from './rpaEnv';
 import { admitRpaTask, observeAllActiveOrgs } from './rpaQueueState';
 import { enqueueRpaRetry, flushRpaRetryQueueRoundRobin } from './rpaRetryQueue';
+import { withHeavyJobSlot } from '../../queue/bullmqClient';
 
 export type RpaTask = {
   tenant_id: string;
@@ -50,8 +51,16 @@ export { assertRpaEnvReady };
  */
 export const rpaSchedulerHooks = {
   observeBackpressure: observeAllActiveOrgs,
-  flushRetries: async (opts?: { limit_per_org?: number; max_orgs?: number }) =>
-    flushRpaRetryQueueRoundRobin({
+  flushRetries: async (opts?: { limit_per_org?: number; max_orgs?: number }) => {
+    // Single env readiness check per tick. If Playwright/Chromium is
+    // unavailable, skip the whole tick cleanly instead of iterating every
+    // due row (each would otherwise fail downstream identically).
+    const ready = await rpaEnvReady();
+    if (isProbeFailure(ready)) {
+      console.warn(`[rpaRetryQueueFlush] skipped — RPA env not ready: ${ready.reason}`);
+      return { orgs_visited: 0, claimed: 0, succeeded: 0, failed: 0, errors: 0, remaining: 0 };
+    }
+    return flushRpaRetryQueueRoundRobin({
       handler: async (task) => {
         // Retry path bypasses the admission gate to avoid infinite
         // deferral during partial outages. Env readiness is still
@@ -62,7 +71,8 @@ export const rpaSchedulerHooks = {
       },
       limitPerOrg: opts?.limit_per_org,
       maxOrgs: opts?.max_orgs,
-    }),
+    });
+  },
 };
 
 /**
@@ -75,7 +85,11 @@ const playwrightHandler: RpaHandler = async (task) => {
   if ('error' in script) {
     return { success: false, error: script.error };
   }
-  return runRpaScript(task, script);
+  // Chromium execution counts toward the shared in-process heavy-job budget
+  // (HEAVY_JOB_CONCURRENCY) alongside ai-heavy + creator-render. buildScript()
+  // is cheap and intentionally left outside the slot. Single chokepoint:
+  // covers BOTH the scheduler retry path and the executeRpaTask path.
+  return withHeavyJobSlot(() => runRpaScript(task, script));
 };
 
 const handlers: Record<string, RpaHandler> = {

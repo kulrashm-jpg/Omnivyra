@@ -8,6 +8,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 import { buildPlannerStrategicCard, type PlannerStrategicSourceMode } from '../../../lib/plannerStrategicCard';
 
 interface ThemeEntry {
@@ -137,13 +140,22 @@ Return only JSON.`;
       content: `${contextBlock}${currentThemesBlock}\n\nUser instruction: ${message.trim()}`,
     });
 
-    const result = await runCompletionWithOperation({
+    const result = await wirePhase2Route({
+      surface:        'planner.chat-themes',
+      organizationId: companyId,
+      action:         'chat_theme_refine',
+      referenceType:  'chat_theme_refine',
+      referenceId:    createHash('sha256')
+        .update([companyId, message.trim(), String(selected_week ?? ''), String(chatHistory.length)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => runCompletionWithOperation({
       companyId,
       model: 'gpt-4o',
       temperature: 0.7,
       response_format: { type: 'json_object' },
       messages,
       operation: 'generatePlatformVariants',
+      }),
     });
 
     let parsed: { themes?: ThemeEntry[]; reply?: string } = {};
@@ -201,6 +213,9 @@ Return only JSON.`;
       }),
     });
   } catch (err: unknown) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
     console.error('[planner/chat-themes]', err);
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Failed to process request',

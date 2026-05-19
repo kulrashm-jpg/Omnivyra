@@ -2,11 +2,46 @@ version: '3.8'
 services:
   redis:
     image: redis:7
+    # Distinct from the ad-hoc `--name redis` container that scripts/start-all.js
+    # may create — avoids a compose↔script container-name collision.
+    container_name: omnivyra-redis
     restart: always
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Local Railway-worker parity. Builds the SAME image Railway runs
+  # (Dockerfile.worker production target: compiled dist/, glibc, Chromium,
+  # templates/, node dist/backend/workers/main.js + co-located cron + health
+  # server). Not used by `npm run dev:app` — the web app stays native.
+  worker:
+    container_name: omnivyra-worker
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      target: production
+    # Mirror railway.json restartPolicy (ON_FAILURE, max 5).
+    restart: on-failure:5
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Same env source as native dev; REDIS_URL is overridden below so the
+    # worker talks to the compose Redis instead of the Upstash URL in the file.
+    env_file:
+      - .env.local
+    environment:
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+      PORT: "8080"
+    ports:
+      - "8080:8080"
 
 volumes:
   redis_data:

@@ -118,7 +118,7 @@ const HEADER_NAV_ITEMS: HeaderNavItem[] = [
       {
         label: 'Creator Content',
         href: '/command-center/creator-content',
-        description: '6 AI-supported creator content types',
+        description: '5 AI-supported creator content types',
         contentSectionId: 'creator',
       },
     ],

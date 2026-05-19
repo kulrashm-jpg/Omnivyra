@@ -12,6 +12,11 @@ export const SECRET_CONFIG_KEYS = new Set([
   'refresh_token',
   'client_secret',
   'webhook_secret',
+  // Multi-provider CMS auth secrets (Ghost / Drupal / Joomla / Shopify).
+  'admin_api_key',
+  'api_token',
+  'bearer_token',
+  'shopify_access_token',
 ]);
 
 export function splitSecretConfig(config: Record<string, unknown> | null | undefined): {

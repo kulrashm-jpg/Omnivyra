@@ -14,6 +14,9 @@ import { containsDirectThreadDuplication, transformThreadForVisual } from '../..
 import { detectSemanticThreadDuplication } from '../../../../backend/services/creatorSemanticDuplication';
 import { enqueueDurableCreatorRenderJob } from '../../../../backend/services/creatorRenderDurableQueue';
 import { createCreatorAuditId } from '../../../../backend/services/creatorRenderObservability';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 
 type GenerateCreatorBody = {
   company_id?: string;
@@ -512,6 +515,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
 
+  // Phase 2 Task 4 (Batch D): single-charge per generate request. The three
+  // content paths below are mutually exclusive → exactly ONE charge. Internal
+  // fan-out (generateFromIntent + adaptForPlatform) and the durable render
+  // queue do NOT self-charge (verified: 0 credit calls) → no nesting/double-
+  // charge. OFF (default) = byte-identical passthrough.
+  const creatorRefId = createHash('sha256')
+    .update([companyId, contentType, topic, targetPlatforms.join(',')].join('|'))
+    .digest('hex')
+    .slice(0, 40);
+  const chargeCreator = <T>(run: () => Promise<T>): Promise<T> =>
+    wirePhase2Route<T>({
+      surface:        'command-center.creator-content.generate',
+      organizationId: companyId,
+      action:         'creator_content',
+      referenceType:  'creator_content',
+      referenceId:    creatorRefId,
+      run,
+    });
+
   // Text-only formats (post / thread) take a separate path: they produce
   // platform-ready text content directly via LLM. The existing creator
   // engine throws for these (canonical_asset_family: 'text', ai_renderable:
@@ -520,7 +542,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (isTextOnlyContentType(contentType)) {
     try {
       const textOutput = await withCreatorTimeout(
-        generateTextContent({
+        chargeCreator(() => generateTextContent({
           companyId,
           userId: user?.userId ?? null,
           topic,
@@ -530,7 +552,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           objective: String(body.objective || '').trim() || undefined,
           summary: String(body.summary || '').trim() || undefined,
           creatorCard,
-        }),
+        })),
         'Creator text content',
       );
       return res.status(200).json({
@@ -540,6 +562,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         output: textOutput,
       });
     } catch (error) {
+      if (error instanceof PaymentRequiredError) {
+        return res.status(402).json({ error: error.message, code: error.code });
+      }
       const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
         ? (error as { statusCode: number }).statusCode
         : 500;
@@ -557,7 +582,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (isGuidanceOnlyContentType(contentType)) {
     try {
       const treatment = await withCreatorTimeout(
-        generateThemeTreatment({
+        chargeCreator(() => generateThemeTreatment({
           companyId,
           userId: user?.userId ?? null,
           topic,
@@ -567,7 +592,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           objective: String(body.objective || '').trim() || undefined,
           summary: String(body.summary || '').trim() || undefined,
           creatorCard,
-        }),
+        })),
         'Creator theme treatment',
       );
       return res.status(200).json({
@@ -577,6 +602,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         output: treatment,
       });
     } catch (error) {
+      if (error instanceof PaymentRequiredError) {
+        return res.status(402).json({ error: error.message, code: error.code });
+      }
       const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
         ? (error as { statusCode: number }).statusCode
         : 500;
@@ -594,7 +622,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     ]);
     const creatorEngine = createCreatorExecutionEngine();
     const primaryPlatform = targetPlatforms[0];
-    const output = await withCreatorTimeout((async () => {
+    const output = await withCreatorTimeout(chargeCreator(() => (async () => {
       const generated = await measureCreatorDuration('creator_generate_intent', {
         contentType,
         platform: primaryPlatform,
@@ -660,7 +688,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         companyId,
       }));
       return mergeRenderedMedia(adapted, rendered);
-    })(), 'Creator generation').catch((error) => {
+    })()), 'Creator generation').catch((error) => {
+      if (error instanceof PaymentRequiredError) {
+        throw error; // surface enforcement as 402, never fall back to free output
+      }
       if (normalizedAttachment.compositionIntent) {
         throw error;
       }
@@ -691,6 +722,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       output,
     });
   } catch (error) {
+    if (error instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: error.message, code: error.code });
+    }
     const statusCode = typeof (error as { statusCode?: unknown })?.statusCode === 'number'
       ? (error as { statusCode: number }).statusCode
       : 500;

@@ -1,6 +1,14 @@
 import type { Blog } from '../blogService';
+import type { CmsValidationReport } from './cmsEnvironmentFramework';
 
-export type CmsProvider = 'wordpress' | 'custom_blog_api';
+export type CmsProvider =
+  | 'wordpress'
+  | 'custom_blog_api'
+  | 'ghost'
+  | 'drupal'
+  | 'joomla'
+  | 'webflow'
+  | 'shopify';
 
 export interface CmsAdapterContext {
   provider: CmsProvider;
@@ -9,6 +17,8 @@ export interface CmsAdapterContext {
   websiteId?: string | null;
   config: Record<string, string>;
   timeoutMs?: number;
+  /** When true, bypass persisted/cached API base and re-run discovery. */
+  forceApiRediscovery?: boolean;
 }
 
 export interface CmsPostInput {
@@ -30,6 +40,10 @@ export interface CmsHealthResult {
   healthy: boolean;
   message: string;
   providerResponse?: unknown;
+  /** Machine-readable failure code (universal CMS error model). */
+  code?: string;
+  /** Standardized provider-agnostic validation report for the Integrations UI. */
+  diagnostics?: CmsValidationReport;
 }
 
 export interface CmsTaxonomyItem {

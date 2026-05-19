@@ -21,6 +21,7 @@ import { evaluateCampaignDecision } from './campaignDecisionEngine';
 import { getTopLearnings, formatLearningsForPrompt } from './campaignLearningsStore';
 import { logDecision } from './autonomousDecisionLogger';
 import { predictCampaignOutcome } from './campaignPredictionEngine';
+import { PaymentRequiredError } from './billing/phase2EnforcementGate';
 import {
   confirmCreditReservation,
   makeIdempotencyKey,
@@ -264,7 +265,13 @@ export async function generateNextCampaign(companyId: string): Promise<Autonomou
         ...prediction.warnings,
       ];
     }
-  } catch (_) { /* non-blocking */ }
+  } catch (e) {
+    // Task 5B: a credit-enforcement block must NOT be silently swallowed into
+    // a "successful" plan missing predicted metrics. Genuine prediction
+    // failures remain non-blocking enrichment (existing behavior preserved).
+    if (e instanceof PaymentRequiredError) throw e;
+    /* non-blocking */
+  }
 
   await logDecision({
     company_id:    companyId,

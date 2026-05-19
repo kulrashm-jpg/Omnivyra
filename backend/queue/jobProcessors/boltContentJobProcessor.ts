@@ -275,7 +275,51 @@ async function markSlotReady(
 // Main processor
 // ---------------------------------------------------------------------------
 
+/**
+ * Priority-6 async billing gate. Mirrors contentGenerationProcessor's
+ * withQueueBilling pattern (queue-native exactly-once HOLD across BullMQ
+ * retries/replays — no new system, no settlement/retry-orchestration change).
+ * OFF (default) = byte-identical passthrough. SHADOW = passthrough +
+ * telemetry. ENFORCE = withQueueBilling reservation lifecycle. No org →
+ * nothing billable → passthrough (honest, like the nullable-org HTTP routes).
+ */
 export async function processBoltContentJob(job: Job): Promise<void> {
+  const d = job.data as BoltContentJobData;
+  const orgId = d?.campaign?.company_id ? String(d.campaign.company_id) : null;
+  if (!orgId) return processBoltContentJobInner(job);
+
+  const { resolveEnforcementMode } = await import('../../services/billing/phase2EnforcementGate');
+  const { mode } = await resolveEnforcementMode(orgId, 'queue.bolt-content');
+
+  if (mode !== 'enforce') {
+    if (mode === 'shadow') {
+      const { incrCounter } = await import('../../services/billing/billingMetrics');
+      incrCounter('phase2_gate_shadow_total');
+    }
+    return processBoltContentJobInner(job);
+  }
+
+  const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');
+  const wrapped = await withQueueBilling(
+    {
+      queueName:      'bolt-content',
+      jobId:          String(job.id ?? d.bolt_job_id ?? `inline-${Date.now()}`),
+      payload:        { bolt_job_id: d.bolt_job_id, run_id: d.run_id, content_type: d.content_type },
+      organizationId: orgId,
+      userId:         String(d.campaign?.user_id ?? orgId),
+      action:         'content_generation',
+      referenceType:  'bolt_content_job',
+      referenceId:    String(d.bolt_job_id ?? job.id ?? d.run_id),
+    },
+    () => processBoltContentJobInner(job),
+  );
+  if (wrapped.kind === 'duplicate_blocked') {
+    const { incrCounter } = await import('../../services/billing/billingMetrics');
+    incrCounter('queue_replay_blocked_total');
+  }
+}
+
+async function processBoltContentJobInner(job: Job): Promise<void> {
   const data = job.data as BoltContentJobData;
   const {
     run_id,

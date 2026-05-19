@@ -20,6 +20,7 @@ import {
 } from './pricingService';
 import { recordUnifiedTransaction } from './unifiedTransactionService';
 import { logger } from './logger';
+import { ledgerLinkColumnEnabled } from './billing/ledgerLinkColumnFlag';
 import {
   getProcessTypeToActionKeyMap,
   isKnownPricingKey,
@@ -230,6 +231,16 @@ export async function logUsageEvent(params: {
   reference_id?:    string | null;
   beta_cohort?: string | null;
   monetization_beta_enabled?: boolean;
+
+  /**
+   * Phase 2 Task 6 — deterministic ledger lineage anchor: the originating
+   * HOLD transaction id. Set ONLY by the credit-execution path. From this id,
+   * credit_transactions.parent_transaction_id yields CONFIRM/RELEASE/partial-
+   * confirm settlement deterministically (no timestamp/fuzzy joins). Travels
+   * in metadata under the reserved key today; the indexed first-class column
+   * (migration 20260667) is the post-apply upgrade.
+   */
+  ledger_hold_transaction_id?: string | null;
 }): Promise<void> {
   try {
     const attemptMeta =
@@ -239,9 +250,16 @@ export async function logUsageEvent(params: {
             ...(params.final_attempt != null ? { final_attempt: params.final_attempt } : {}),
           }
         : {};
+    // Phase 2 Task 6: reserved, explicit, deterministic ledger-lineage key.
+    // Always folded in when the credit path supplies it so reconciliation
+    // never relies on timestamp/fuzzy joins. (Indexed column 20260667 is the
+    // post-apply upgrade; this metadata key is the pre-apply-safe mechanism.)
+    const linkMeta = params.ledger_hold_transaction_id
+      ? { ledger_hold_transaction_id: params.ledger_hold_transaction_id }
+      : {};
     const mergedMetadata =
-      Object.keys(attemptMeta).length > 0
-        ? { ...(params.metadata ?? {}), ...attemptMeta }
+      Object.keys(attemptMeta).length > 0 || Object.keys(linkMeta).length > 0
+        ? { ...(params.metadata ?? {}), ...attemptMeta, ...linkMeta }
         : params.metadata ?? null;
 
     warnIfUnknownProcessType(params.process_type);
@@ -426,6 +444,13 @@ export async function logUsageEvent(params: {
       pricing_snapshot: params.pricing_snapshot ?? null,
       beta_cohort: betaTag.beta_cohort,
       monetization_beta_enabled: betaTag.monetization_beta_enabled,
+      // Phase 3 Task 2: first-class linkage column, controlled-activation
+      // gated. OFF (default) → key absent → safe on unmigrated envs. The
+      // reserved metadata.ledger_hold_transaction_id key (mergedMetadata)
+      // always carries the same anchor regardless of this flag.
+      ...(ledgerLinkColumnEnabled() && params.ledger_hold_transaction_id
+        ? { ledger_hold_transaction_id: params.ledger_hold_transaction_id }
+        : {}),
       metadata: mergedMetadata,
     });
 
@@ -454,6 +479,7 @@ export async function logUsageEvent(params: {
       error_type:       params.error_type ?? null,
       reference_type:   params.reference_type ?? null,
       reference_id:     params.reference_id ?? null,
+      ledger_hold_transaction_id: params.ledger_hold_transaction_id ?? null,
       pricing_snapshot: params.pricing_snapshot ?? null,
       metadata: {
         ...(params.metadata ?? {}),
@@ -463,6 +489,8 @@ export async function logUsageEvent(params: {
         campaign_id:     params.campaign_id ?? null,
         unit_cost:       params.unit_cost ?? null,
         final_price_usd: params.final_price_usd ?? null,
+        // Phase 2 Task 6 — same deterministic ledger-lineage anchor.
+        ledger_hold_transaction_id: params.ledger_hold_transaction_id ?? null,
       },
     });
   } catch (error: any) {

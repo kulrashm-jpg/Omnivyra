@@ -24,6 +24,7 @@ import { evaluatePortfolioDecision } from '@/backend/services/portfolioDecisionE
 import { getDecisionLog } from '@/backend/services/autonomousDecisionLogger';
 import { getEffectiveLearnings } from '@/backend/services/learningDecayService';
 import { injectGlobalPatternsIntoPrompt } from '@/backend/services/globalPatternService';
+import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
@@ -37,6 +38,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sections = ((req.query.sections as string) ?? 'patterns,market,competitors,evolution,portfolio,decisions,learnings').split(',');
   const include = new Set(sections);
 
+  // Task 5C/5D: deterministic enforcement propagation. pattern_detection and
+  // market_positioning are fail-closed; their PaymentRequiredError must surface
+  // as 402, never an accidental 500 or silent partial response. The remaining
+  // intel services (competitors/evolution/portfolio) stay `.catch(()=>null)`
+  // until their own conversion tasks.
+  try {
   const [
     patterns,
     market,
@@ -47,8 +54,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     topLearnings,
     globalPatternContext,
   ] = await Promise.all([
-    include.has('patterns')   ? detectWinningPatterns(companyId).catch(() => null) : Promise.resolve(null),
-    include.has('market')     ? evaluateMarketPosition(companyId).catch(() => null) : Promise.resolve(null),
+    include.has('patterns')   ? detectWinningPatterns(companyId).catch((e) => { if (e instanceof PaymentRequiredError) throw e; return null; }) : Promise.resolve(null),
+    include.has('market')     ? evaluateMarketPosition(companyId).catch((e) => { if (e instanceof PaymentRequiredError) throw e; return null; }) : Promise.resolve(null),
     include.has('competitors')? fetchCompetitorSignals(companyId).catch(() => null) : Promise.resolve(null),
     include.has('evolution')  ? evolveStrategy(companyId).catch(() => null) : Promise.resolve(null),
     include.has('portfolio')  ? evaluatePortfolioDecision(companyId).catch(() => null) : Promise.resolve(null),
@@ -105,4 +112,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     },
   });
+  } catch (e) {
+    if (e instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: e.message, code: e.code });
+    }
+    throw e; // preserve prior behavior for non-billing errors (default 500)
+  }
 }

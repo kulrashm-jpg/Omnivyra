@@ -29,9 +29,26 @@ import { checkDomainEligibility } from '../../../backend/services/domainEligibil
 import { checkRateLimit, EMAIL_LINK_LIMIT } from '../../../lib/auth/rateLimit';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
+import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
 
 type SuccessResponse = { proceed: true };
-type ErrorResponse = { error: string; code?: string };
+type ErrorResponse = {
+  error: string;
+  code?: string;
+  /** COMPANY_CLAIMED only: the prospect was already emailed on a prior attempt. */
+  alreadyReferred?: boolean;
+  /** COMPANY_CLAIMED only: masked admin email shown on the contact-admin screen. */
+  adminEmailMasked?: string | null;
+};
+
+/** "jo••••@acme.com" — enough to recognise the admin without leaking the full address. */
+function maskEmail(email: string | null): string | null {
+  if (!email) return null;
+  const [local, host] = email.split('@');
+  if (!local || !host) return null;
+  const shown = local.slice(0, 2);
+  return `${shown}${'•'.repeat(Math.max(1, local.length - shown.length))}@${host}`;
+}
 
 export default async function handler(
   req: NextApiRequest,
@@ -121,11 +138,9 @@ export default async function handler(
     });
   }
 
-  // (moved to post-email-auth) The pre-auth COMPANY_CLAIMED check that
-  // used to live here returned a 409 the moment a domain match was found.
-  // Detection + the two emails (referral to prospect, notice to admin)
-  // now run inside /api/auth/sync-supabase-user once the user has
-  // verified their email — we only contact the admin about real humans.
+  // The COMPANY_CLAIMED gate runs in section 4 below (after the orphaned
+  // auth.users check) so a returning user with their OWN email resumes via
+  // ACCOUNT_EXISTS / RESUME_SIGNUP instead of being told to contact an admin.
 
   // ── 3. auth.users already has this email confirmed? ───────────────────────
   // Catches the orphan case where auth.users was created by a prior flow
@@ -148,13 +163,85 @@ export default async function handler(
     logger.warn('auth_signup_auth_confirmed_rpc_threw', { email: normalizedEmail, message: err?.message });
   }
 
-  // ── 4. (moved to post-email-auth) Domain-claimed handling ────────────────
-  // Detection of a claimed domain + the two emails it triggers (referral
-  // email to the prospect, notification email to the existing admin) now
-  // run inside /api/auth/sync-supabase-user → bootstrapCompanyFromSignupIntent
-  // AFTER the user has verified their email. This ensures emails only fly
-  // for verified humans and gives the admin a real-person notification.
-  // Signup is allowed to proceed here so the verification email is sent.
+  // ── 4. Domain already claimed by an existing company ─────────────────────
+  // If any company already owns this email's domain, a NEW person from that
+  // domain CANNOT self-register. We block here — BEFORE the confirmation
+  // email is sent — so they never get a verification mail for an account
+  // that can't exist. They see the admin's (masked) contact details, and
+  // both the prospect and the company admin are emailed. Deduped per
+  // prospect email via signup_referrals so repeat attempts don't re-spam
+  // the admin (the signup endpoint is also IP rate-limited above).
+  // The first user of a domain is unaffected: their company row doesn't
+  // exist yet at signup time, so there's nothing to match.
+  {
+    const { data: byWebsite } = await supabase
+      .from('companies')
+      .select('id, name')
+      .eq('website_domain', domain)
+      .maybeSingle();
+    const claimedCompany =
+      byWebsite ??
+      (
+        await supabase
+          .from('companies')
+          .select('id, name')
+          .eq('admin_email_domain', domain)
+          .maybeSingle()
+      ).data;
+
+    if (claimedCompany) {
+      const company = claimedCompany as { id: string; name: string | null };
+
+      // Resolve the company admin's email for the masked display.
+      const { data: adminRole } = await supabase
+        .from('user_company_roles')
+        .select('user_id')
+        .eq('company_id', company.id)
+        .eq('role', 'COMPANY_ADMIN')
+        .eq('status', 'active')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      const adminUserId = (adminRole as { user_id?: string } | null)?.user_id ?? null;
+      const { data: adminUser } = adminUserId
+        ? await supabase.from('users').select('email').eq('id', adminUserId).maybeSingle()
+        : { data: null };
+      const adminEmail = (adminUser as { email?: string } | null)?.email ?? null;
+
+      // alreadyReferred = the prospect was already emailed on a prior attempt.
+      const { data: priorReferral } = await supabase
+        .from('signup_referrals')
+        .select('admin_email_sent_at')
+        .eq('email', normalizedEmail)
+        .maybeSingle();
+      const alreadyReferred = !!(priorReferral as { admin_email_sent_at?: string | null } | null)
+        ?.admin_email_sent_at;
+
+      // Fire both emails (idempotent / deduped inside the service; never throws).
+      await notifyAdminAndProspectOfClaimedDomain(supabase, {
+        prospectEmail: normalizedEmail,
+        emailDomain:   domain,
+        companyId:     company.id,
+        companyName:   company.name,
+        nowIso:        new Date().toISOString(),
+      });
+
+      logger.info('auth_signup_company_claimed_blocked', {
+        email:     normalizedEmail,
+        domain,
+        companyId: company.id,
+        alreadyReferred,
+      });
+
+      return res.status(409).json({
+        error:
+          'Your company is already on Omnivyra. Please ask your company admin to invite you.',
+        code:             'COMPANY_CLAIMED',
+        alreadyReferred,
+        adminEmailMasked: maskEmail(adminEmail),
+      });
+    }
+  }
 
   // ── 5. Fresh signup path — upsert signup_intents and let the client proceed.
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();

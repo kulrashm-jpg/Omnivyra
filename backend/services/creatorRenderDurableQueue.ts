@@ -1,5 +1,6 @@
 import { Queue, Worker, QueueEvents, type JobsOptions, type Job } from 'bullmq';
 import IORedis from 'ioredis';
+import { getSharedRedisClient } from '../queue/bullmqClient';
 import { createRenderJobId, type RenderJobStatus } from './creatorRenderQueue';
 import { recordCreatorRenderMetric } from './creatorRenderObservability';
 import { persistCreatorRenderJobState } from './creatorRenderPersistence';
@@ -38,19 +39,14 @@ export function isDurableCreatorRenderQueueConfigured(): boolean {
 }
 
 function connection(): IORedis {
-  const url = redisUrl();
-  if (!url) throw new Error('CREATOR_RENDER_REDIS_UNCONFIGURED');
-  // Mirror backend/queue/redis.ts: Upstash (and rediss://) require TLS, else
-  // the connection is reset endlessly ([creator-render-worker] read ECONNRESET).
-  let needsTls = false;
-  try {
-    const u = new URL(url);
-    needsTls = u.hostname.includes('upstash.io') || u.protocol === 'rediss:';
-  } catch { /* malformed URL — fall back to no TLS */ }
-  return new IORedis(url, {
-    maxRetriesPerRequest: null,
-    ...(needsTls ? { tls: {} } : {}),
-  });
+  if (!redisUrl()) throw new Error('CREATOR_RENDER_REDIS_UNCONFIGURED');
+  // Centralized: reuse the single hardened shared ioredis client (TLS /
+  // rediss:// / connectTimeout / maxRetriesPerRequest:null applied there).
+  // BullMQ duplicates it internally for blocking/subscriber roles.
+  // NOTE: CREATOR_RENDER_REDIS_URL is no longer honored as a *separate*
+  // Redis server — creator-render now shares REDIS_URL with the rest of
+  // the worker (the override was unused and was a divergent factory).
+  return getSharedRedisClient();
 }
 
 export function getCreatorRenderQueue(): Queue<CreatorDurableRenderJobData> {
@@ -78,18 +74,30 @@ export function buildCreatorRenderJobOptions(input: {
     attempts: input.maxAttempts ?? 3,
     backoff: { type: 'exponential', delay: 5_000 },
     removeOnComplete: { age: 60 * 60 * 24, count: 500 },
-    removeOnFail: false,
+    // Was `false` (unbounded failed-job key growth in Redis). Bounded
+    // retention keeps recent failures for debugging without leaking keys.
+    removeOnFail: { age: 7 * 24 * 60 * 60, count: 1000 },
   };
 }
 
-function withRenderTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => Promise<void>): Promise<T> {
+function withRenderTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  onTimeout: () => Promise<void>,
+  onAbort?: () => void,
+): Promise<T> {
   let timer: NodeJS.Timeout | null = null;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      // Signal cooperative cancellation to the render pipeline.
+      try { onAbort?.(); } catch { /* non-fatal */ }
       void onTimeout();
       reject(new Error(`render_job_timeout_${timeoutMs}ms`));
     }, timeoutMs);
   });
+  // Detach the losing promise: a post-timeout settle from orphaned native
+  // work must not surface as an unhandledRejection or stack onto a retry.
+  promise.catch(() => { /* superseded by timeout */ });
   return Promise.race([promise, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   });
@@ -168,6 +176,10 @@ export async function cancelDurableCreatorRenderJob(jobId: string): Promise<Crea
 export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRenderJobData>) => Promise<unknown>): Worker<CreatorDurableRenderJobData> {
   return new Worker<CreatorDurableRenderJobData>(QUEUE_NAME, async (job) => {
     const started = Date.now();
+    const abortController = new AbortController();
+    // Expose a cancellation signal to the render pipeline WITHOUT changing
+    // processor signatures (additive; honored where the renderer checks it).
+    (job as Job<CreatorDurableRenderJobData> & { signal?: AbortSignal }).signal = abortController.signal;
     try {
       const timeoutMs = Number(job.data.timeoutMs ?? process.env.CREATOR_RENDER_JOB_TIMEOUT_MS ?? 180_000) || 180_000;
       const result = await withRenderTimeout(processor(job), timeoutMs, async () => {
@@ -190,7 +202,7 @@ export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRen
           eventType: 'timeout',
           eventMetadata: { timeoutMs },
         });
-      });
+      }, () => abortController.abort());
       recordCreatorRenderMetric({
         name: 'render_duration_ms',
         value: Date.now() - started,
@@ -223,7 +235,15 @@ export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRen
       }
       throw error;
     }
-  }, { connection: connection(), concurrency: Number(process.env.CREATOR_RENDER_WORKER_CONCURRENCY ?? 3) || 3 });
+  }, {
+    connection: connection(),
+    concurrency: Number(process.env.CREATOR_RENDER_WORKER_CONCURRENCY ?? 3) || 3,
+    // Explicit conservative stalled detection. creator-render was on the
+    // BullMQ default (30s); pinned to 60s — fast crash recovery for this
+    // crash-prone (sharp/pdf OOM) queue without increasing Redis poll cost
+    // vs the implicit default.
+    stalledInterval: 60_000,
+  });
 }
 
 export async function replayCreatorRenderDeadLetterJob(jobId: string): Promise<CreatorDurableRenderStatus> {

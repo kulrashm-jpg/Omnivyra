@@ -6,28 +6,10 @@
 import { Worker, Job } from 'bullmq';
 import { ingestSignals } from '../services/intelligenceIngestionModule';
 import type { IntelligencePollingJobPayload } from '../queue/intelligencePollingQueue';
-import { config } from '@/config';
-
-const REDIS_URL = config.REDIS_URL;
-const REDIS_HOST = config.REDIS_HOST;
-const REDIS_PORT = config.REDIS_PORT;
-const REDIS_PASSWORD = config.REDIS_PASSWORD;
-
-function getConnection() {
-  if (REDIS_URL && REDIS_URL.includes('://')) {
-    const parsed = new URL(REDIS_URL);
-    const needsTls = parsed.hostname.includes('upstash.io');
-    return {
-      host: parsed.hostname || 'localhost',
-      port: parseInt(parsed.port || '6379', 10),
-      password: parsed.password || undefined,
-      ...(needsTls ? { tls: {} } : {}),
-      enableReadyCheck: false,
-      maxRetriesPerRequest: null,
-    };
-  }
-  return { host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD };
-}
+// Redis connection is centralized: reuse the single hardened shared
+// ioredis client (TLS/rediss/connectTimeout/maxRetriesPerRequest:null all
+// applied there). BullMQ duplicates it internally for the blocking client.
+import { getSharedRedisClient } from '../queue/bullmqClient';
 
 const QUEUE_NAME = 'intelligence-polling';
 
@@ -93,7 +75,7 @@ export function getIntelligencePollingWorker(): Worker {
       await processIntelligencePollingJob(job);
     },
     {
-      connection: getConnection(),
+      connection: getSharedRedisClient(),
       concurrency: 2,
       limiter: {
         max: 10,

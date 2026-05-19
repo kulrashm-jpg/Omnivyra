@@ -29,7 +29,7 @@ validateWorkerEnv();
 
 import os from 'os';
 import { Worker }                    from 'bullmq';
-import { getRedisConfig, getWorker, getConnectionConfig, closeConnections } from '../queue/bullmqClient';
+import { getWorker, closeConnections, getSharedRedisClient, withHeavyJobSlot } from '../queue/bullmqClient';
 import { instrumentWorker }          from '../queue/queueInstrumentation';
 import { processPublishJob }         from '../queue/jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from '../queue/jobProcessors/engagementPollingProcessor';
@@ -48,16 +48,24 @@ import { startCron } from '../scheduler/cron';
 
 // ── Worker instances ──────────────────────────────────────────────────────────
 
-const redisConfig       = getRedisConfig();
-const boltConcurrency   = Math.min(4, Math.max(1, os.cpus().length));
+const boltConcurrency   = (() => {
+  // Deterministic, env-overridable. Default preserves prior behavior
+  // (min(4, cpus)); BOLT_WORKER_CONCURRENCY (1–16) takes precedence so
+  // local and Railway are not subject to host CPU-count variance.
+  const o = Number(process.env.BOLT_WORKER_CONCURRENCY);
+  return Number.isInteger(o) && o >= 1 && o <= 16
+    ? o
+    : Math.min(4, Math.max(1, os.cpus().length));
+})();
 
 const publishWorker     = getWorker('publish', processPublishJob);
 const boltWorker        = getWorker('bolt-execution', processBoltJob, { concurrency: boltConcurrency });
 const engagementWorker  = getWorker('engagement-polling', async () => {
   await processEngagementPollingJob();
-});
+}, { concurrency: 1 });
 const intelligenceWorker = getIntelligencePollingWorker();
-const creatorRenderWorker = createCreatorRenderWorker(processCreatorRenderJob);
+const creatorRenderWorker = createCreatorRenderWorker((job) =>
+  withHeavyJobSlot(() => processCreatorRenderJob(job)));
 creatorRenderWorker.on('failed', (job, err) =>
   console.error('[creator-render-worker] failed', { jobId: job?.id, error: err.message }));
 creatorRenderWorker.on('error', (err) =>
@@ -69,7 +77,7 @@ creatorRenderWorker.on('error', (err) =>
 const leadThreadRecomputeWorker = new Worker(
   'lead-thread-recompute',
   async () => { await runLeadThreadRecomputeWorker(); },
-  { connection: getConnectionConfig(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
+  { connection: getSharedRedisClient(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
 leadThreadRecomputeWorker.on('failed', (job, err) =>
   console.error('[lead-thread-recompute] job failed', { jobId: job?.id, error: err.message }));
@@ -80,7 +88,7 @@ instrumentWorker(leadThreadRecomputeWorker);
 const conversationMemoryRebuildWorker = new Worker(
   'conversation-memory-rebuild',
   async () => { await runConversationMemoryWorker(); },
-  { connection: getConnectionConfig(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
+  { connection: getSharedRedisClient(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
 conversationMemoryRebuildWorker.on('failed', (job, err) =>
   console.error('[conversation-memory-rebuild] job failed', { jobId: job?.id, error: err.message }));
@@ -103,7 +111,18 @@ const engineWorker = new Worker(
       await processMarketPulseJobV1(jobId);
     }
   },
-  { connection: redisConfig, drainDelay: 300, stalledInterval: 1_800_000 },
+  {
+    connection: getSharedRedisClient(),
+    // Was implicit BullMQ default (1) → LEAD and MARKET_PULSE were fully
+    // serialized. Small bounded value; env-overridable (1–8). No ordering
+    // guarantee exists between job types, so >1 is semantically safe.
+    concurrency: (() => {
+      const o = Number(process.env.ENGINE_JOBS_CONCURRENCY);
+      return Number.isInteger(o) && o >= 1 && o <= 8 ? o : 2;
+    })(),
+    drainDelay: 300,
+    stalledInterval: 1_800_000,
+  },
 );
 engineWorker.on('error', (err) => console.error('[engine-worker] error:', err));
 
@@ -112,14 +131,19 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
   'ai-heavy',
   async (job) => {
     if (job.name !== 'campaign-planning') return; // other job types skip
-    await processCampaignPlanningJob(job);
+    // Heavy-job slot acquired AFTER the skip check so skipped jobs never
+    // hold a slot. Shared cap across ai-heavy + creator-render.
+    await withHeavyJobSlot(() => processCampaignPlanningJob(job));
   },
   {
-    connection:     redisConfig,
+    connection:     getSharedRedisClient(),
     concurrency:    3,
     limiter:        { max: 5, duration: 1_000 },
     drainDelay:     300,
-    stalledInterval: 1_800_000,
+    // Heavy/crash-prone queue: 2-min stalled detection (was 30 min) so an
+    // OOM/restart-orphaned campaign job re-runs quickly. Single low-volume
+    // worker → Redis poll cost negligible.
+    stalledInterval: 120_000,
   },
 );
 campaignWorker.on('completed', (job) =>
@@ -130,7 +154,35 @@ campaignWorker.on('error', (err) => console.error('[campaign-worker] error:', er
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 
+/**
+ * Redis readiness preflight. Forces the shared connection (whose 'connect'
+ * handler deterministically runs ensureRedisInfraStarted — instrumentation,
+ * usage-protection, metrics — before queues do real work) and verifies
+ * connectivity with a bounded PING. A failure exits the process so Railway's
+ * ON_FAILURE restart policy retries instead of running a "healthy" worker
+ * that silently consumes nothing.
+ */
+async function ensureRedisReady(): Promise<void> {
+  const PING_TIMEOUT_MS = 10_000;
+  const client = getSharedRedisClient();
+  try {
+    await Promise.race([
+      client.ping(),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error(`Redis ping timed out after ${PING_TIMEOUT_MS}ms`)), PING_TIMEOUT_MS)),
+    ]);
+    console.info('[main] Redis preflight OK');
+  } catch (err) {
+    console.error('[main] Redis preflight FAILED — exiting for Railway restart:',
+      (err as Error)?.message);
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
+  // Redis readiness gate — before any queue processing begins
+  await ensureRedisReady();
+
   // Pre-warm template cache (zero GPT cost, improves first-job latency)
   await runCacheWarmup().catch((err) =>
     console.warn('[main] cache warmup failed (non-fatal):', err?.message));

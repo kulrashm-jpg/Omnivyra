@@ -23,6 +23,16 @@ const MAX_ATTEMPTS = 5;
 const BACKOFF_CAP_MINUTES = 120;
 const DEFAULT_PER_ORG_LIMIT = 10;
 
+// Conservative per-tick global execution cap. A large post-outage backlog
+// (worst case ~maxOrgs × limitPerOrg ≈ 1000 serial Chromium sessions in one
+// tick) is spread across multiple ticks instead. Env-configurable; does NOT
+// change retry counts, backoff, or round-robin fairness — untouched rows
+// remain due and drain on the next tick.
+const MAX_TASKS_PER_TICK = (() => {
+  const o = Number(process.env.RPA_FLUSH_MAX_TASKS_PER_TICK);
+  return Number.isInteger(o) && o >= 1 && o <= 1000 ? o : 50;
+})();
+
 export async function enqueueRpaRetry(task: RpaTask, opts?: {
   error?: string | null;
   delaySeconds?: number;
@@ -207,17 +217,22 @@ export async function flushRpaRetryQueueRoundRobin(input: {
 
   const perOrg: PerOrgFlushOutcome[] = [];
   let claimed = 0, succeeded = 0, failed = 0, errors = 0;
+  let budget = MAX_TASKS_PER_TICK;
   for (const orgId of orgIds) {
+    if (budget <= 0) break; // per-tick cap reached — remaining orgs drain next tick
     const outcome = await flushRpaRetryQueueForOrg({
       organization_id: orgId,
       handler: input.handler,
-      limit: limitPerOrg,
+      // Round-robin fairness preserved: still ≤ limitPerOrg per org, just
+      // additionally bounded by the remaining global per-tick budget.
+      limit: Math.min(limitPerOrg, budget),
     });
     perOrg.push(outcome);
     claimed += outcome.claimed;
     succeeded += outcome.succeeded;
     failed += outcome.failed;
     errors += outcome.errors;
+    budget -= outcome.claimed;
   }
 
   // Remaining backlog across all orgs (rows still eligible).

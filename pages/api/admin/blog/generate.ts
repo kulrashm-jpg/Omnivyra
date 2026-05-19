@@ -38,6 +38,9 @@ import { runUnifiedLongFormGeneration } from '../../../../lib/content/unifiedLon
 import type { BlogAngle } from '../../../../lib/blog/blogGenerationEngine';
 import { buildContentContext } from '../../../../lib/content/buildContentContext';
 import { isValidBlogFormat } from '../../../../lib/blog/blogStructureTemplates';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -101,16 +104,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Profile context enrichment is best-effort and must not block generation.
   }
 
-  // ── 2. Generate ──────────────────────────────────────────────────────────────
-  const result = await runUnifiedLongFormGeneration({
-    ...generationRequest,
-    contentType: 'blog',
-    formatType: typeof generationRequest.formatType === 'string' ? generationRequest.formatType : undefined,
-    templateBlocks: generationRequest.template_blocks,
-    targetWordCount: generationRequest.answers?.target_word_count
-      ? Number.parseInt(String(generationRequest.answers.target_word_count), 10) || undefined
-      : generationRequest.target_words,
-  });
+  // ── 2. Generate (Phase 2 Task 4: routed through the canary gate) ────────────
+  // OFF (default/prod) → runs verbatim, ZERO behavior change. SHADOW → +
+  // would-block telemetry. ENFORCE (canary orgs only) → HOLD-before-execute
+  // with action_key 'blog_generation'. referenceId is deterministic per
+  // request so retries reuse the same HOLD (no double-charge).
+  const referenceId = createHash('sha256')
+    .update([
+      company_id,
+      generationRequest.mode,
+      generationRequest.topic,
+      String(generationRequest.formatType ?? 'standard'),
+    ].join('|'))
+    .digest('hex')
+    .slice(0, 40);
 
-  return res.status(200).json(result);
+  try {
+    const result = await wirePhase2Route({
+      surface:        'admin.blog.generate',
+      organizationId: company_id,
+      action:         'blog_generation',
+      referenceType:  'blog_generation',
+      referenceId,
+      run: () => runUnifiedLongFormGeneration({
+        ...generationRequest,
+        contentType: 'blog',
+        formatType: typeof generationRequest.formatType === 'string' ? generationRequest.formatType : undefined,
+        templateBlocks: generationRequest.template_blocks,
+        targetWordCount: generationRequest.answers?.target_word_count
+          ? Number.parseInt(String(generationRequest.answers.target_word_count), 10) || undefined
+          : generationRequest.target_words,
+      }),
+    });
+    return res.status(200).json(result);
+  } catch (err) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
+    throw err;
+  }
 }

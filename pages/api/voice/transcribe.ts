@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
+import { captureFlatProviderCost } from '../../../backend/services/billing/blackHoleCostCapture';
 
 // Voice transcription API using Whisper (OpenAI) and AssemblyAI
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -24,6 +25,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       transcription = await transcribeWithAssemblyAI(audioFile);
     } else {
       return res.status(400).json({ error: 'Invalid provider. Use "whisper" or "assemblyai"' });
+    }
+
+    // Phase 4.1 Task 3: best-effort provider-cost capture (telemetry only,
+    // no billing, no auth change). Additive optional org from body — existing
+    // callers that don't send it are unaffected and remain (honestly)
+    // unattributed rather than fake-attributed. process_type is a generic
+    // catalog-known carrier ('ai_reply') because no voice catalog key exists;
+    // the real activity is in metadata.activity.
+    const voiceOrgId =
+      typeof (req.body as any)?.companyId === 'string' ? (req.body as any).companyId
+      : typeof (req.body as any)?.organization_id === 'string' ? (req.body as any).organization_id
+      : null;
+    if (voiceOrgId) {
+      const seconds = Number((transcription as any)?.duration) || 0;
+      const ratePerMin = provider === 'assemblyai' ? 0.0062 : 0.006; // Whisper $0.006/min
+      await captureFlatProviderCost({
+        organizationId: voiceOrgId,
+        processType:    'ai_reply',
+        provider:       provider === 'assemblyai' ? 'assemblyai' : 'openai',
+        model:          provider === 'assemblyai' ? 'assemblyai-transcript' : 'whisper-1',
+        totalCostUsd:   (seconds / 60) * ratePerMin,
+        units:          { audio_seconds: seconds, voice_provider: provider },
+        activity:       'voice_transcription',
+      });
     }
 
     // Process transcription for campaign planning context

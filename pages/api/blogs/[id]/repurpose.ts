@@ -17,6 +17,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 import { extractBlogContext } from '../../../../lib/blog/blockExtractor';
 import {
   buildRepurposeSystemPrompt,
@@ -127,22 +130,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // ── AI generation ─────────────────────────────────────────────────────────
   let output: RepurposeOutput | null = null;
 
+  const runAi = () => runCompletionWithOperation({
+    operation:       'blogRepurpose',
+    companyId,
+    model:           'gpt-4o-mini',
+    temperature:     0.5,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: buildRepurposeSystemPrompt() },
+      { role: 'user',   content: buildRepurposeUserPrompt(input) },
+    ],
+  });
+
   try {
-    const result = await runCompletionWithOperation({
-      operation:       'blogRepurpose',
-      companyId,
-      model:           'gpt-4o-mini',
-      temperature:     0.5,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: buildRepurposeSystemPrompt() },
-        { role: 'user',   content: buildRepurposeUserPrompt(input) },
-      ],
-    });
+    // Public blogs have no company → nothing to charge; passthrough (honest).
+    const result = companyId
+      ? await wirePhase2Route({
+          surface:        'blogs.repurpose',
+          organizationId: companyId,
+          action:         'content_repurpose',
+          referenceType:  'content_repurpose',
+          referenceId:    createHash('sha256')
+            .update([companyId, String(id), String(tone)].join('|'))
+            .digest('hex').slice(0, 40),
+          run: runAi,
+        })
+      : await runAi();
 
     const raw = result.output ? JSON.parse(result.output) : null;
     output = validateRepurposeOutput(raw);
   } catch (_err) {
+    if (_err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: _err.message, code: _err.code });
+    }
     // AI failure → deterministic fallback (no hallucination risk)
     output = null;
   }

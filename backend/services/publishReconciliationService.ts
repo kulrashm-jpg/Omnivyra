@@ -1,5 +1,6 @@
 import { ownedDbTable } from '../db/writeOwner';
 import { mergeConnectionConfig } from './integrationCredentialService';
+import { rediscoverAndRepairApiBase, resolveCanonicalApiBase } from './cms/cmsApiBaseResolver';
 import { recordAuditEvent, recordCredentialAccessAudit } from './auditEventService';
 import { captureQueueMetrics, recordWorkerHeartbeat } from './queueOperationsService';
 
@@ -258,9 +259,39 @@ async function verifyExternalPublish(context: Awaited<ReturnType<typeof loadPubl
   if (!context.externalId) return { status: 'orphaned', providerSnapshot: {}, driftSummary: { reason: 'missing_external_id' } };
 
   const auth = Buffer.from(`${username}:${appPassword}`).toString('base64');
-  const res = await fetch(`${siteUrl}/wp-json/wp/v2/posts/${encodeURIComponent(context.externalId)}?context=edit`, {
-    headers: { Authorization: `Basic ${auth}` },
+  const connectionId = (context.connection as any)?.id ?? null;
+
+  // Reconciliation uses the SAME canonical API base as publishing — never the
+  // hardcoded /wp-json/wp/v2 (broke /wp, subdir & proxy installs).
+  const resolved = await resolveCanonicalApiBase({
+    provider: 'wordpress',
+    siteUrl,
+    connectionId,
+    fetchFn: (url) => fetch(url),
   });
+  let apiBase = resolved.apiBase;
+  const fetchPost = (base: string) =>
+    fetch(`${base}/posts/${encodeURIComponent(context.externalId!)}?context=edit`, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+
+  let res = await fetchPost(apiBase);
+
+  // A 404 may mean the post is gone OR the REST root moved. Repair the base
+  // once before concluding the external post is missing (avoids false drift).
+  if (res.status === 404) {
+    const repaired = await rediscoverAndRepairApiBase({
+      provider: 'wordpress',
+      siteUrl,
+      connectionId,
+      fetchFn: (url) => fetch(url),
+    });
+    if (repaired.apiBase && repaired.apiBase !== apiBase) {
+      apiBase = repaired.apiBase;
+      res = await fetchPost(apiBase);
+    }
+  }
+
   const payload = await res.json().catch(() => ({}));
   if (res.status === 404) {
     return { status: 'missing', providerSnapshot: { status: res.status }, driftSummary: { reason: 'external_post_missing' } };

@@ -6,12 +6,30 @@
  * Output: reply text + confidence score
  *
  * Uses few-shot prompting with platform-specific tone guidelines.
- * Model: Claude Haiku (cost-efficient for reply-scale volume).
+ *
+ * ⚠️ DORMANT / UNWIRED (verified Task 5A.2, 2026-05-20): `generateReply` is
+ * exported but has ZERO runtime callers. The live engagement-reply path uses
+ * `engagementAiAssistantService.generateReplySuggestions` /
+ * `responseGenerationService` — NOT this function. It is retained for the
+ * intended (not-yet-implemented) extension flow documented in
+ * EXTENSION_ARCHITECTURE_DATA_FLOWS.md.
+ *
+ * Monetization status: already converted to HOLD-first / fail-closed via the
+ * dark `phase2EnforcementGate` (Task 5A). Because the gate defaults OFF and
+ * there are no callers, there is NO active or hidden billing surface here.
+ *
+ * BEFORE WIRING a real caller: (1) ensure the caller catches
+ * `PaymentRequiredError` and surfaces deterministic 402/block (it propagates
+ * by design — never swallow to a silent empty reply); (2) re-run the Task-5A
+ * runtime certification against the now-live path.
  */
 
 import OpenAI from 'openai';
+import { createHash } from 'crypto';
 import type { SentimentLabel } from './engagementIngestService';
-import { deductCreditsAwaited as deductCredits } from './creditExecutionService';
+import { wirePhase2Route } from './billing/phase2RouteWiring';
+import { PaymentRequiredError } from './billing/phase2EnforcementGate';
+import { captureTokenProviderCost } from './billing/blackHoleCostCapture';
 import {
   formatContentForPlatform,
   getPlatformLimits,
@@ -129,7 +147,9 @@ Comment: "${input.comment.slice(0, 500)}"
 
 Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
 
-  try {
+  // The provider call + parse + cost-visibility telemetry. Pure work unit
+  // wrapped by the gate as the executeWithCredits executor (HOLD-first).
+  const doGenerate = async (): Promise<ReplyOutput> => {
     const response = await getClient().chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       max_tokens: 200,
@@ -148,8 +168,19 @@ Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
       links: [],
     });
     const reply = formatted.text.trim().slice(0, replyBudget).trim();
+    // Cost VISIBILITY only (source_type:'system', NOT a credit settlement —
+    // not a duplicate charge; the credit HOLD/CONFIRM is owned by
+    // executeWithCredits via the gate). Best-effort, never throws.
     if (input.company_id) {
-      await deductCredits(input.company_id, 'reply_generation', { note: `Reply on ${platform}` });
+      await captureTokenProviderCost({
+        organizationId: input.company_id,
+        processType:    'reply_generation',
+        provider:       'openai',
+        model:          process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        inputTokens:    response.usage?.prompt_tokens ?? null,
+        outputTokens:   response.usage?.completion_tokens ?? null,
+        activity:       'engagement_reply_generation',
+      });
     }
     return {
       reply,
@@ -157,7 +188,38 @@ Respond with JSON: {"reply":"<text>","confidence":<0-1>}`;
       tone_used:  toneGuide,
       platform,
     };
-  } catch {
+  };
+
+  try {
+    // Task 5A — HOLD-first / fail-closed via the existing dark gate.
+    //  - OFF (prod default): passthrough → byte-identical generation. The
+    //    legacy fail-open post-facto deductCredits is REMOVED; charging now
+    //    occurs ONLY under ENFORCE (unifies reply_generation with every
+    //    Phase-2 path; no silent best-effort post-facto charge anymore).
+    //  - SHADOW: passthrough + telemetry; never blocks, never mutates balance.
+    //  - ENFORCE: executeWithCredits HOLD→CONFIRM/RELEASE; insufficient
+    //    credits → PaymentRequiredError (deterministic block, NOT a silent
+    //    empty reply). Replay/retry → deterministic referenceId → existing
+    //    HOLD reused (no double-charge).
+    // No org → nothing billable → honest passthrough (no fake attribution).
+    if (!input.company_id) {
+      return await doGenerate();
+    }
+    return await wirePhase2Route<ReplyOutput>({
+      surface:        'engagement.reply-generation',
+      organizationId: input.company_id,
+      action:         'reply_generation',
+      referenceType:  'reply_generation',
+      referenceId:    createHash('sha256')
+        .update([input.company_id, platform, String(input.sentiment), input.comment].join('|'))
+        .digest('hex').slice(0, 40),
+      run: doGenerate,
+    });
+  } catch (e) {
+    // Fail-CLOSED for billing: an enforcement block must NEVER be swallowed
+    // into a silent empty "success". Genuine AI/parse failures still degrade
+    // to the existing empty ReplyOutput (resilience + response-shape preserved).
+    if (e instanceof PaymentRequiredError) throw e;
     return {
       reply:      '',
       confidence: 0,

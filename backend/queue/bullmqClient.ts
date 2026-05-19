@@ -22,6 +22,7 @@ import {
 import { getMetricsReport } from '../../lib/redis/instrumentation';
 import IORedis from 'ioredis';
 import { createHash } from 'crypto';
+import { isRedisUrlTLS } from '../../lib/redis/sanitizer';
 import {
   createInstrumentedClient,
   startInstrumentation,
@@ -50,7 +51,9 @@ function parseRedisUrl(url: string) {
   if (url.includes('://')) {
     const parsed = new URL(url);
     const host = parsed.hostname;
-    const needsTls = host.includes('upstash.io');
+    // TLS decision is centralized in sanitizer.isRedisUrlTLS (single
+    // authority) — honors BOTH rediss:// scheme AND Upstash hosts.
+    const needsTls = isRedisUrlTLS(url);
     return {
       host,
       port: parseInt(parsed.port || '6379'),
@@ -109,6 +112,13 @@ export function getConnectionConfig() {
     enableReadyCheck: false,
     maxRetriesPerRequest: null as null,
     lazyConnect: true,
+    // Bound the TCP connect phase so a cold start / TLS misconfig fails
+    // visibly instead of hanging. commandTimeout is intentionally NOT set
+    // here: this config backs BullMQ Worker connections that issue blocking
+    // BRPOPLPUSH/BLMOVE (drainDelay 300s) — a per-command timeout would abort
+    // job fetch and silently stop consumption. (Non-blocking standalone
+    // clients enforce commandTimeout in lib/redis/client.ts & queue/redis.ts.)
+    connectTimeout: 10_000,
   };
 }
 
@@ -118,6 +128,7 @@ let redisInfraStarted = false;
 let usageProtectionReadyPromise: Promise<void> = Promise.resolve();
 let redisUnavailable = false;
 let lastRedisErrorLogAt = 0;
+let redisConsecutiveFailures = 0;
 
 function logRedisErrorOnce(err: unknown): void {
   const now = Date.now();
@@ -153,6 +164,21 @@ function getRedisConnection(): IORedis {
     redisConnection.on('error', (err) => {
       if (IS_OPTIONAL_LOCAL_REDIS) {
         redisUnavailable = true;
+      } else {
+        // Non-local (Upstash/managed): escalate clearly instead of masking
+        // an infinite silent reconnect. Loud on first failure and every
+        // 10th thereafter, bypassing the 30s info-log cooldown.
+        redisConsecutiveFailures++;
+        if (redisConsecutiveFailures === 1 || redisConsecutiveFailures % 10 === 0) {
+          console.error(JSON.stringify({
+            level: 'ERROR',
+            event: 'redis_connection_unhealthy',
+            host: redisConfig.host,
+            tls: !!redisConfig.tls,
+            consecutiveFailures: redisConsecutiveFailures,
+            message: (err as Error)?.message,
+          }));
+        }
       }
       logRedisErrorOnce(err);
     });
@@ -160,12 +186,22 @@ function getRedisConnection(): IORedis {
     redisConnection.on('connect', () => {
       console.log('✅ Redis connected');
       redisUnavailable = false;
+      redisConsecutiveFailures = 0;
       ensureRedisInfraStarted();
     });
 
     redisConnection.connect().catch((err) => {
       if (IS_OPTIONAL_LOCAL_REDIS) {
         redisUnavailable = true;
+      } else {
+        redisConsecutiveFailures++;
+        console.error(JSON.stringify({
+          level: 'ERROR',
+          event: 'redis_initial_connect_failed',
+          host: redisConfig.host,
+          tls: !!redisConfig.tls,
+          message: (err as Error)?.message,
+        }));
       }
       logRedisErrorOnce(err);
     });
@@ -180,6 +216,54 @@ function getRedisConnection(): IORedis {
  */
 export function getSharedRedisClient(): IORedis {
   return getRedisConnection();
+}
+
+// ── Heavy-job in-process coordination ─────────────────────────────────────────
+//
+// A minimal, fair (FIFO) async counting semaphore SHARED across heavy job
+// types (ai-heavy, creator-render) so their combined in-flight count cannot
+// explode CPU/memory and OOM the Railway worker. In-process only — NO Redis,
+// NO global/external infra. Each queue keeps its own BullMQ concurrency; this
+// only bounds the *union* of opted-in heavy processors. Not a system-wide
+// serializer (light queues never call this).
+const HEAVY_JOB_CONCURRENCY = (() => {
+  const o = Number(process.env.HEAVY_JOB_CONCURRENCY);
+  return Number.isInteger(o) && o >= 1 && o <= 8 ? o : 3;
+})();
+let _heavyActive = 0;
+const _heavyWaiters: Array<() => void> = [];
+
+function acquireHeavySlot(): Promise<void> {
+  if (_heavyActive < HEAVY_JOB_CONCURRENCY) {
+    _heavyActive++;
+    return Promise.resolve();
+  }
+  // FIFO queue → fairness; resolver is called by releaseHeavySlot().
+  return new Promise<void>((resolve) => { _heavyWaiters.push(resolve); });
+}
+
+function releaseHeavySlot(): void {
+  const next = _heavyWaiters.shift();
+  if (next) {
+    // Hand the slot directly to the next waiter; _heavyActive unchanged.
+    next();
+    return;
+  }
+  _heavyActive = Math.max(0, _heavyActive - 1);
+}
+
+/**
+ * Run `fn` while holding one shared heavy-job slot. Acquire→finally-release
+ * guarantees no slot leak / no deadlock even if `fn` throws. Preserves the
+ * caller's result and error semantics (BullMQ retry behavior unchanged).
+ */
+export async function withHeavyJobSlot<T>(fn: () => Promise<T>): Promise<T> {
+  await acquireHeavySlot();
+  try {
+    return await fn();
+  } finally {
+    releaseHeavySlot();
+  }
 }
 
 /**
@@ -305,7 +389,7 @@ let postingQueue: Queue | null = null;
 export function getPostingQueue(): Queue {
   if (!postingQueue) {
     postingQueue = new Queue('posting', {
-      connection: getConnectionConfig(),
+      connection: getRedisConnection(),
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5_000 },
@@ -330,7 +414,7 @@ export function getPostingQueue(): Queue {
 export function getAiHeavyQueue(): Queue {
   if (!aiHeavyQueue) {
     aiHeavyQueue = new Queue('ai-heavy', {
-      connection: getConnectionConfig(),
+      connection: getRedisConnection(),
       defaultJobOptions: {
         attempts: 2,
         backoff: { type: 'exponential', delay: 30_000 },
@@ -356,7 +440,7 @@ export function getEngagementPollingQueue(): Queue {
   if (!engagementPollingQueue) {
     const connection = getRedisConnection();
     engagementPollingQueue = new Queue('engagement-polling', {
-      connection: getConnectionConfig(),
+      connection: getRedisConnection(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: true,
@@ -381,7 +465,7 @@ export function getEngagementPollingQueue(): Queue {
 export function getLeadThreadRecomputeQueue(): Queue {
   if (!leadThreadRecomputeQueue) {
     leadThreadRecomputeQueue = new Queue('lead-thread-recompute', {
-      connection: getConnectionConfig(),
+      connection: getRedisConnection(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: true,
@@ -406,7 +490,7 @@ export function getLeadThreadRecomputeQueue(): Queue {
 export function getConversationMemoryRebuildQueue(): Queue {
   if (!conversationMemoryRebuildQueue) {
     conversationMemoryRebuildQueue = new Queue('conversation-memory-rebuild', {
-      connection: getConnectionConfig(),
+      connection: getRedisConnection(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: true,
@@ -432,7 +516,7 @@ export function getQueue(): Queue {
     const queueName = 'publish';
     
     publishQueue = new Queue(queueName, {
-      connection: getConnectionConfig(),
+      connection: getRedisConnection(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: {
@@ -468,7 +552,7 @@ export function getWorker(
 ): Worker {
   const concurrency = opts?.concurrency ?? 5;
   const worker = new Worker(queueName, processor, {
-    connection: getConnectionConfig(),
+    connection: getRedisConnection(),
     concurrency,
     limiter: {
       max: 10,
@@ -508,7 +592,7 @@ export function getEngagementPollingWorker(): Worker {
       await processEngagementPollingJob();
     },
     {
-      connection: getConnectionConfig(),
+      connection: getRedisConnection(),
       concurrency: 1,
     }
   );
@@ -567,7 +651,7 @@ export function createQueue(name: string): Queue {
   // Note: BullMQ v5+ handles delayed jobs automatically, no QueueScheduler needed
   
   const q = new Queue(name, {
-    connection: getConnectionConfig(),
+    connection: getRedisConnection(),
     defaultJobOptions: {
       attempts: 3,
       backoff: {
@@ -606,7 +690,7 @@ export function createWorker(
   const processor = processorPathOrFn;
   
   const worker = new Worker(name, processor as any, {
-    connection: getConnectionConfig(),
+    connection: getRedisConnection(),
     concurrency,
     limiter: {
       max: 10,

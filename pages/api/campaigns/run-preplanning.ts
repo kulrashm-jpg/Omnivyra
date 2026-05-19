@@ -15,6 +15,9 @@ import { normalizeExecutionState } from '../../../backend/governance/ExecutionSt
 import { recordGovernanceEvent } from '../../../backend/services/GovernanceEventService';
 import { generatePrePlanningExplanation } from '../../../backend/services/aiGateway';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -187,7 +190,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
 
-    const explanation_summary = await generatePrePlanningExplanation(companyId, {
+    const explanation_summary = await wirePhase2Route({
+      surface:        'campaigns.run-preplanning',
+      organizationId: companyId,
+      action:         'campaign_preplanning',
+      referenceType:  'campaign_preplanning',
+      referenceId:    createHash('sha256')
+        .update([companyId, String(campaignId), String(weeks), String(evaluation.status)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => generatePrePlanningExplanation(companyId, {
       status: evaluation.status,
       requested_weeks: weeks,
       max_weeks_allowed: evaluation.max_weeks_allowed,
@@ -195,6 +206,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       limiting_constraints: evaluation.limiting_constraints ?? [],
       blocking_constraints: evaluation.blocking_constraints ?? [],
       tradeOffOptions: evaluation.tradeOffOptions,
+      }),
     });
 
     return res.status(200).json({
@@ -210,6 +222,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       explanation_summary,
     });
   } catch (err: any) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
     console.error('[run-preplanning]', err);
     return res.status(500).json({
       error: err?.message || 'Internal server error',

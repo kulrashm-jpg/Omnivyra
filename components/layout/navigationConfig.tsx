@@ -60,7 +60,7 @@ export const PRIMARY_NAV_ITEMS: PrimaryNavItem[] = [
       },
       {
         label: 'Creator Content',
-        description: 'Open the creator lane with 6 AI-supported creator content types.',
+        description: 'Open the creator lane with 5 AI-supported creator content types.',
         href: '/command-center/creator-content',
         icon: Sparkles,
       },

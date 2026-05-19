@@ -9,6 +9,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { predictCampaignOutcome, type CampaignPlanInput } from '@/backend/services/campaignPredictionEngine';
+import { PaymentRequiredError } from '@/backend/services/billing/phase2EnforcementGate';
 import { evaluatePredictionAccuracy } from '@/backend/services/predictionAccuracyService';
 import { requireAuth, requireCompanyAccess } from '@/backend/middleware/authMiddleware';
 import { supabase as adminSupabase } from '@/backend/db/supabaseClient';
@@ -110,6 +111,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const prediction = await predictCampaignOutcome(planInput);
       return res.status(200).json({ success: true, data: prediction });
     } catch (err: any) {
+      if (err instanceof PaymentRequiredError) {
+        return res.status(402).json({ error: err.message, code: err.code });
+      }
       console.error('[prediction/run]', err?.message);
       return res.status(500).json({ error: 'Internal server error' });
     }

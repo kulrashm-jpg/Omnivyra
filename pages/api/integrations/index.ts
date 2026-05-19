@@ -7,7 +7,16 @@ import {
   IntegrationType,
 } from '../../../backend/services/integrationService';
 
-const ALLOWED_TYPES: IntegrationType[] = ['lead_webhook', 'wordpress', 'custom_blog_api'];
+const ALLOWED_TYPES: IntegrationType[] = [
+  'lead_webhook',
+  'wordpress',
+  'custom_blog_api',
+  'ghost',
+  'drupal',
+  'joomla',
+  'webflow',
+  'shopify',
+];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const companyId =

@@ -51,7 +51,28 @@ export type CreditAction =
   | 'voice_per_minute'    // 10
   | 'deep_analysis'       // 60
   | 'full_strategy'       // 80
-  | 'campaign_generation'; // 50 — autonomous campaign generation
+  | 'campaign_generation' // 50 — autonomous campaign generation
+  // Phase 2 §C.4 coverage (catalog rows: migration 20260665). Resolved via
+  // getCreditCost DB fallback (?? action); no registry feature entry needed.
+  | 'blog_generation'
+  | 'blog_rewrite_hook'
+  | 'blog_brief_suggestions'
+  | 'content_repurpose'
+  | 'content_suggestions'
+  | 'quick_platform_adapt'
+  | 'creator_content'
+  | 'chat_theme_refine'
+  | 'engagement_refine'
+  | 'campaign_chat'
+  | 'campaign_suggest_update'
+  | 'campaign_suggest_duration'
+  | 'campaign_preplanning'
+  | 'skeleton_command'
+  | 'async_campaign_planning'
+  | 'recommendations_generate'
+  | 'recommendations_opportunities'
+  | 'recommendations_preview_strategy'
+  | 'recommendations_group_preview';
 export const CREDIT_ACTIONS: CreditAction[] = [
   'ai_reply',
   'auto_post',
@@ -78,6 +99,26 @@ export const CREDIT_ACTIONS: CreditAction[] = [
   'deep_analysis',
   'full_strategy',
   'campaign_generation',
+  // Phase 2 §C.4 coverage
+  'blog_generation',
+  'blog_rewrite_hook',
+  'blog_brief_suggestions',
+  'content_repurpose',
+  'content_suggestions',
+  'quick_platform_adapt',
+  'creator_content',
+  'chat_theme_refine',
+  'engagement_refine',
+  'campaign_chat',
+  'campaign_suggest_update',
+  'campaign_suggest_duration',
+  'campaign_preplanning',
+  'skeleton_command',
+  'async_campaign_planning',
+  'recommendations_generate',
+  'recommendations_opportunities',
+  'recommendations_preview_strategy',
+  'recommendations_group_preview',
 ];
 
 // ── DB-driven cost getter (overrides hardcoded map when config row exists) ─────

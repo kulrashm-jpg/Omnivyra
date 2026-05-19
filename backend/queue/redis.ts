@@ -1,4 +1,5 @@
 import IORedis from 'ioredis';
+import { isRedisUrlTLS } from '../../lib/redis/sanitizer';
 
 function parseUrl(url: string) {
   // Strip any accidental redis-cli command prefix (e.g. "redis-cli --tls -u redis://...")
@@ -6,7 +7,8 @@ function parseUrl(url: string) {
   if (match) url = match[0];
   try {
     const u = new URL(url);
-    const needsTls = u.hostname.includes('upstash.io') || u.protocol === 'rediss:';
+    // TLS decision is centralized in sanitizer.isRedisUrlTLS (single authority)
+    const needsTls = isRedisUrlTLS(url);
     return {
       host:     u.hostname,
       port:     parseInt(u.port || '6379'),
@@ -27,6 +29,11 @@ export const redis = new IORedis({
   tls:              cfg.tls,
   enableReadyCheck: false,
   maxRetriesPerRequest: null,
+  // Lazy: do not open a socket at module-import time.
+  lazyConnect:      true,
+  // Bounded connect/command behavior (non-blocking standalone client).
+  connectTimeout:   10_000,
+  commandTimeout:   10_000,
 });
 
 // Suppress unhandled error events (e.g. Upstash rate-limit errors).

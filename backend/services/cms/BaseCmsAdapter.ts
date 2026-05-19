@@ -9,6 +9,15 @@ import type {
   CmsSyncResult,
   CmsTaxonomyItem,
 } from './types';
+import {
+  runCmsValidationPipeline,
+  type CmsAuthProbeResult,
+} from './cmsEnvironmentFramework';
+import {
+  invalidateApiBaseCache,
+  persistCanonicalApiBase,
+  resolveCanonicalApiBase,
+} from './cmsApiBaseResolver';
 
 export class CmsAdapterError extends Error {
   constructor(
@@ -64,5 +73,76 @@ export abstract class BaseCmsAdapter implements CmsAdapter {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
     return fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Canonical, universal validation entrypoint shared by all non-WordPress
+   * adapters. Runs the universal pipeline (env → HTTPS → discovery → auth),
+   * then promotes a validated discovery into the persisted canonical API base
+   * so publish/queue/reconciliation never use a runtime-only path.
+   */
+  protected async validateViaPipeline(
+    context: CmsAdapterContext,
+    siteUrl: string,
+    authProbe?: (apiBase: string) => Promise<CmsAuthProbeResult>,
+    canonicalBaseOverride?: string,
+  ): Promise<CmsHealthResult> {
+    const timeoutMs = context.timeoutMs ?? 10_000;
+    if (context.forceApiRediscovery) invalidateApiBaseCache(context.connectionId);
+
+    const result = await runCmsValidationPipeline({
+      provider: this.provider,
+      siteUrl,
+      timeoutMs,
+      fetchFn: (url) => this.fetchWithTimeout(url, { method: 'GET' }, timeoutMs),
+      authProbe,
+    });
+
+    const canonicalBase = canonicalBaseOverride ?? result.report?.apiBase;
+    // Surface the real provider base in diagnostics for auth-gated providers
+    // whose pipeline skipped unauthenticated discovery.
+    if (canonicalBaseOverride && result.report) {
+      result.report.apiBase = canonicalBaseOverride;
+      if (!result.report.detectedApiRoot && result.healthy) {
+        result.report.detectedApiRoot = canonicalBaseOverride;
+      }
+    }
+    if (result.healthy && context.connectionId && canonicalBase) {
+      await persistCanonicalApiBase(context.connectionId, {
+        apiBase: canonicalBase,
+        detectedApiRoot: result.report?.detectedApiRoot ?? canonicalBase,
+        metadata: {
+          provider: this.provider,
+          discoveredVia: 'validate_connection',
+          environmentType: result.report.environmentType,
+        },
+      });
+      invalidateApiBaseCache(context.connectionId);
+    }
+
+    return {
+      healthy: result.healthy,
+      message: result.message,
+      code: result.code,
+      providerResponse: result.providerResponse,
+      diagnostics: result.report,
+    };
+  }
+
+  /** Resolve the canonical operational API base for this connection. */
+  protected async canonicalApiBase(
+    context: CmsAdapterContext,
+    siteUrl: string,
+    forceRediscover = false,
+  ): Promise<string> {
+    const timeoutMs = context.timeoutMs ?? 10_000;
+    const resolved = await resolveCanonicalApiBase({
+      provider: this.provider,
+      siteUrl,
+      connectionId: context.connectionId,
+      fetchFn: (url) => this.fetchWithTimeout(url, { method: 'GET' }, timeoutMs),
+      forceRediscover,
+    });
+    return resolved.apiBase;
   }
 }

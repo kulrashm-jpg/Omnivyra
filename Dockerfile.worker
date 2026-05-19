@@ -5,30 +5,56 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Stage 1: build ────────────────────────────────────────────────────────────
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim@sha256:6ed70fbf60557fb3a2faea5657d4105bace34c93449c2571919a1589fae30153 AS builder
 
 WORKDIR /app
+
+# Native build toolchain for argon2 (node-gyp) — glibc prebuilt is normally
+# used; toolchain retained in the builder as a compile fallback only.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+# Do not let the playwright postinstall pull a bundled browser; the runtime
+# Chromium is installed explicitly in the production stage.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 # Install ALL deps (including devDeps: typescript, ts-node) with legacy peer
 # deps to bypass eslint v8/v9 ERESOLVE conflict
 COPY package*.json ./
-RUN npm install --legacy-peer-deps
+RUN npm ci --legacy-peer-deps
 
 # Copy source and compile
 COPY . .
-RUN npx tsc -p tsconfig.worker.json && node scripts/fix-worker-aliases.js
+RUN NODE_OPTIONS=--max-old-space-size=4096 \
+    npx tsc -p tsconfig.worker.json \
+ && node scripts/fix-worker-aliases.js
 
 # ── Stage 2: production ───────────────────────────────────────────────────────
-FROM node:22-alpine AS production
+FROM node:22-bookworm-slim@sha256:6ed70fbf60557fb3a2faea5657d4105bace34c93449c2571919a1589fae30153 AS production
 
 WORKDIR /app
 
-# Install production dependencies only
+# Prevent the playwright postinstall from downloading a bundled (generic)
+# browser; only the explicitly installed Chromium below is used.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+# Install production dependencies only (argon2 uses the glibc prebuilt — no
+# build toolchain required in the runtime image).
 COPY package*.json ./
-RUN npm install --omit=dev --legacy-peer-deps
+RUN npm ci --omit=dev --legacy-peer-deps
+
+# Install Chromium + ONLY its required OS libs/fonts via the Playwright-
+# supported mechanism. chromium.launch() (no executablePath) resolves this
+# build automatically because the playwright versions match. No ffmpeg, no
+# GUI packages.
+RUN npx playwright install --with-deps chromium \
+  && rm -rf /var/lib/apt/lists/*
 
 # Copy compiled output from builder
 COPY --from=builder /app/dist ./dist
+
+# Runtime assets required by worker execution that are not under dist/
+COPY templates ./templates
 
 # Remove any accidentally-copied secrets
 RUN rm -f .env .env.local .env.production
@@ -36,8 +62,9 @@ RUN rm -f .env .env.local .env.production
 ENV NODE_ENV=production
 ENV PORT=8080
 
+# wget is not present on debian-slim; use a node-based health probe.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:8080/health || exit 1
+  CMD node -e "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 EXPOSE 8080
 

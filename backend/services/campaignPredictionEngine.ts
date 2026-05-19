@@ -22,7 +22,9 @@ import { extractFeatures, type FeatureInput, type FeatureVector } from './predic
 import { aggregateCampaignPerformance } from './performanceFeedbackService';
 import { generatePerformanceInsights } from './performanceInsightGenerator';
 import { getPredictionConfig } from './configService';
-import { deductCreditsAwaited as deductCredits } from './creditExecutionService';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from './billing/phase2RouteWiring';
+import { PaymentRequiredError } from './billing/phase2EnforcementGate';
 import type { StrategyContext } from '../types/campaignPlanning';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -249,11 +251,11 @@ function optimizePlan(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function predictCampaignOutcome(plan: CampaignPlanInput): Promise<CampaignPrediction> {
-  // Non-blocking credit deduction — prediction runs regardless
-  if (plan.company_id) {
-    await deductCredits(plan.company_id, 'prediction', { referenceId: plan.campaign_id, note: 'Campaign outcome prediction' });
-  }
-
+  // Task 5B — the prediction work unit. Wrapped by the dark gate as the
+  // executeWithCredits executor (HOLD-first). The legacy fail-open post-facto
+  // `deductCredits(... 'prediction' ...)` was REMOVED — charging now occurs
+  // only under ENFORCE, fail-closed, via the proven Phase-2 infra.
+  const doPredict = async (): Promise<CampaignPrediction> => {
   const cfg = await getPredictionConfig();
 
   const weights = {
@@ -360,4 +362,25 @@ export async function predictCampaignOutcome(plan: CampaignPlanInput): Promise<C
   }
 
   return prediction;
+  };
+
+  // OFF (prod default): passthrough → byte-identical prediction, no HOLD, no
+  // wallet mutation. SHADOW: passthrough + telemetry, never blocks. ENFORCE:
+  // executeWithCredits HOLD→CONFIRM/RELEASE; insufficient → PaymentRequiredError
+  // (deterministic block, NOT a silent free prediction). Deterministic
+  // referenceId (company+campaign) → replay reuses the same HOLD (no
+  // double-charge). No org → nothing billable → honest passthrough.
+  if (!plan.company_id) {
+    return doPredict();
+  }
+  return await wirePhase2Route<CampaignPrediction>({
+    surface:        'campaigns.prediction',
+    organizationId: plan.company_id,
+    action:         'prediction',
+    referenceType:  'prediction',
+    referenceId:    createHash('sha256')
+      .update([plan.company_id, String(plan.campaign_id)].join('|'))
+      .digest('hex').slice(0, 40),
+    run: doPredict,
+  });
 }

@@ -7,7 +7,6 @@ type CreatorTypeId =
   | 'carousel'
   | 'banner'
   | 'infographic'
-  | 'pdf'
   | 'slider';
 
 type CreatorCard = {
@@ -92,23 +91,6 @@ const CREATOR_CARDS: CreatorCard[] = [
     accentTo: 'to-purple-50',
     borderColor: 'border-violet-200',
     ctaColor: 'bg-violet-600 hover:bg-violet-700',
-  },
-  {
-    id: 'pdf',
-    title: 'PDF',
-    category: 'Document Asset',
-    outcome: 'Document-style content package for distribution, downloads, or campaign use',
-    description: 'Create a PDF-oriented asset workflow where AI defines structure, sections, key messaging, and creative packaging.',
-    bullets: [
-      'Useful for gated content and document-style sharing',
-      'Can connect strongly to authority campaigns',
-      'Document-first creator path',
-    ],
-    cta: 'Create PDF',
-    accentFrom: 'from-rose-50',
-    accentTo: 'to-pink-50',
-    borderColor: 'border-rose-200',
-    ctaColor: 'bg-rose-600 hover:bg-rose-700',
   },
   {
     id: 'slider',

@@ -21,6 +21,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 
 function extractFirstParagraph(html: string): string {
   const m = html.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
@@ -58,8 +61,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const angleContext = angle_type ? `\nEditorial angle: ${angle_type}` : '';
 
+  const referenceId = createHash('sha256')
+    .update([company_id, topic, currentHook].join('|'))
+    .digest('hex')
+    .slice(0, 40);
+
   try {
-    const result = await runCompletionWithOperation({
+    const result = await wirePhase2Route({
+      surface:        'admin.blog.rewrite-hook',
+      organizationId: company_id,
+      action:         'blog_rewrite_hook',
+      referenceType:  'blog_rewrite_hook',
+      referenceId,
+      run: () => runCompletionWithOperation({
       operation:       'blogGeneration',
       companyId:       company_id,
       model:           'gpt-4o-mini',
@@ -86,6 +100,7 @@ The value must be a complete <p> tag with the rewritten text inside. No markdown
           content: `Topic: ${topic}${angleContext}\n\nCurrent opening paragraph:\n"${currentHook}"`,
         },
       ],
+      }),
     });
 
     const raw = result.output ? JSON.parse(result.output) : null;
@@ -93,7 +108,10 @@ The value must be a complete <p> tag with the rewritten text inside. No markdown
       return res.status(200).json({ new_hook: raw.new_hook.trim() });
     }
     return res.status(502).json({ error: 'AI returned unexpected output' });
-  } catch {
+  } catch (e) {
+    if (e instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: e.message, code: e.code });
+    }
     return res.status(500).json({ error: 'Hook rewrite failed' });
   }
 }

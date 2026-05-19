@@ -8,6 +8,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../../backend/services/userContextService';
 import { supabase } from '../../../../backend/db/supabaseClient';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -50,7 +53,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       'You are a campaign planning advisor. Given an engagement insight from community/conversation signals, suggest a concrete campaign planning update. Output a single, actionable suggestion in plain text (e.g. "Week 4 campaign should address pricing questions."). Be specific and brief.';
     const userPrompt = `Campaign ID: ${campaignId}. Engagement insight (${insightType}${platform ? `, ${platform}` : ''}): "${insightText}". Provide one planning suggestion.`;
 
-    const { output } = await runCompletionWithOperation({
+    const { output } = await wirePhase2Route({
+      surface:        'campaigns.planner.suggest-update',
+      organizationId: companyId,
+      action:         'campaign_suggest_update',
+      referenceType:  'campaign_suggest_update',
+      referenceId:    createHash('sha256')
+        .update([companyId, String(campaignId), String(insight_id)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => runCompletionWithOperation({
       companyId,
       campaignId,
       model: 'gpt-4o-mini',
@@ -60,12 +71,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         { role: 'user', content: userPrompt },
       ],
       operation: 'plannerSuggestUpdate',
+      }),
     });
 
     const suggestion = (typeof output === 'string' ? output : '').trim() || 'No suggestion generated.';
 
     return res.status(200).json({ suggestion, insight_id, campaignId });
   } catch (err: unknown) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
     console.error('[planner/suggest-update]', err);
     return res.status(500).json({
       error: (err as Error)?.message ?? 'Failed to generate planning suggestion',

@@ -53,13 +53,33 @@ export function validateRedisUrl(url: string): string | null {
 }
 
 /**
+ * Coerce a TLS-required Redis URL to the rediss:// scheme.
+ *
+ * If the host requires TLS (Upstash) but the scheme is plain redis://,
+ * upgrade it to rediss:// so TLS is never silently dropped. Localhost and
+ * already-rediss:// URLs are returned unchanged.
+ */
+export function coerceTlsScheme(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'redis:' && parsed.hostname?.includes('upstash.io')) {
+      return url.replace(/^redis:\/\//i, 'rediss://');
+    }
+  } catch {
+    // Non-parseable input is handled by validateRedisUrl elsewhere.
+  }
+  return url;
+}
+
+/**
  * Normalize Redis URL
  * - Ensure protocol is present
  * - Validates structure
+ * - Coerces TLS-required hosts to rediss://
  */
 export function normalizeRedisUrl(input: string): string {
   const trimmed = input.trim();
-  
+
   // Check for redis-cli command syntax issues
   if (trimmed.includes('redis-cli')) {
     const extracted = extractRedisUrl(trimmed);
@@ -69,9 +89,9 @@ export function normalizeRedisUrl(input: string): string {
         'Expected format: redis://user:pass@host:port'
       );
     }
-    return extracted;
+    return coerceTlsScheme(extracted);
   }
-  
+
   // Check for other shell syntax issues
   if (trimmed.includes('--tls') || trimmed.includes('-u ')) {
     const extracted = extractRedisUrl(trimmed);
@@ -81,16 +101,16 @@ export function normalizeRedisUrl(input: string): string {
         'Expected format: redis://user:pass@host:port (without flags)'
       );
     }
-    return extracted;
+    return coerceTlsScheme(extracted);
   }
-  
+
   // Validate URL format
   const error = validateRedisUrl(trimmed);
   if (error) {
     throw new Error(error);
   }
-  
-  return trimmed;
+
+  return coerceTlsScheme(trimmed);
 }
 
 /**

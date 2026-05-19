@@ -46,6 +46,9 @@ import {
   loadCreditHoldSplit,
 } from '../repositories/creditExecutionRepository';
 import { resolveMonetizationFeature } from '../../shared/monetization/featureRegistry';
+import { buildHoldPolicySnapshot, freezeHoldPolicySnapshot } from './billing/holdPolicySnapshot';
+import { evaluateCreditSafetyGate } from './billing/creditSafetyGate';
+import { resolveBillingPolicy } from './billing/billingPolicyResolver';
 
 /** Fire credit threshold alerts in the background — non-blocking, swallows errors. */
 function fireAlerts(orgId: string): void {
@@ -384,6 +387,24 @@ export async function reserveCreditsForWork(opts: {
     return { status: 'insufficient_credits', available: available?.total ?? 0, required: credits };
   }
 
+  // Task 5H — pre-HOLD 80% executable-balance safety gate (additive, default
+  // OFF → byte-identical). Same model as the executeWithCredits path; reuses
+  // already-resolved `available`/`credits`; on block returns the existing
+  // insufficient_credits result.
+  const billingPolicy = await resolveBillingPolicy(orgId);
+  if (
+    evaluateCreditSafetyGate({
+      orgId,
+      action,
+      availableTotal: available?.total ?? 0,
+      projectedCredits: credits,
+      policy: billingPolicy,
+    }) === 'block'
+  ) {
+    fireAlerts(orgId);
+    return { status: 'insufficient_credits', available: available?.total ?? 0, required: credits };
+  }
+
   const { error: holdErr, transactionId } = await callCreditReservation({
     orgId,
     phase: 'hold',
@@ -471,6 +492,7 @@ export async function confirmCreditReservation(handle: CreditReservationHandle &
       user_id: handle.userId,
       source_type: 'internal',
       source_name: 'credit_reservation',
+      ledger_hold_transaction_id: handle.holdTransactionId,
       process_type: handle.action,
       input_tokens: 0,
       output_tokens: 0,
@@ -670,6 +692,24 @@ export async function executeWithCredits<T>(
       };
     }
 
+    // Task 5H — pre-HOLD 80% executable-balance safety gate (additive,
+    // default OFF → byte-identical). Reuses the already-resolved `available`
+    // + `credits`; on block returns the EXISTING insufficient_credits result
+    // (callers/wirePhase2Route already map it → 402). Runs only on the fresh
+    // HOLD path, so resumed HOLDs are never double-gated.
+    if (
+      evaluateCreditSafetyGate({
+        orgId,
+        action,
+        availableTotal: available.total ?? 0,
+        projectedCredits: credits,
+        policy: await resolveBillingPolicy(orgId),
+      }) === 'block'
+    ) {
+      fireAlerts(orgId);
+      return { status: 'insufficient_credits', available: available.total ?? 0, required: credits };
+    }
+
     usedSplit = split;
 
     const { error: holdErr, transactionId } = await callCreditReservation({
@@ -705,6 +745,30 @@ export async function executeWithCredits<T>(
         paid: usedSplit.paid,
       });
     }
+  }
+
+  // ── 3b. Freeze deterministic policy snapshot at HOLD (Phase 2 Task 7) ─────
+  // BEFORE execution; covers both fresh + resumed HOLD (holdId/usedSplit set
+  // in both branches). Best-effort, idempotent, never throws — a snapshot
+  // failure must not affect HOLD→EXECUTE or settlement.
+  if (holdId) {
+    await freezeHoldPolicySnapshot({
+      holdTransactionId: holdId,
+      organizationId:    orgId,
+      snapshot:          buildHoldPolicySnapshot({
+        action,
+        credits,
+        opts: {
+          amountOverride: opts.amountOverride ?? null,
+          referenceType,
+          llmPricing:     opts.llmPricing ?? null,
+        },
+        split:              usedSplit,
+        referenceType,
+        referenceId,
+        idempotencyBaseKey: baseKey,
+      }),
+    });
   }
 
   // ── 4. EXECUTE ─────────────────────────────────────────────────────────────
@@ -1011,6 +1075,7 @@ export async function executeWithCredits<T>(
       user_id:         userId,
       source_type:     'internal',
       source_name:     'credit_execution',
+      ledger_hold_transaction_id: holdId,
       process_type:    action,
       input_tokens:    0,
       output_tokens:   0,

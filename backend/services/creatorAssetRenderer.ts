@@ -7,6 +7,7 @@ import {
   resolveCreatorBrandKit,
   type CreatorBrandKit,
 } from './creatorBrandKit';
+import { captureImageProviderCost } from './billing/blackHoleCostCapture';
 import { creatorEvent } from './creatorObservation';
 import { recordCreatorDuration } from './creatorRuntimeMetrics';
 import { validateProviderImageTextSafety } from './creatorImageTextValidation';
@@ -850,6 +851,16 @@ async function generateProviderImage(input: {
     subtype?:     string | null;
     platform?:    string | null;
   };
+  /**
+   * Phase 4.1 Task 1 — deterministic org/exec attribution for provider-cost
+   * capture. Telemetry only; never affects the prompt or API call. When
+   * organizationId is absent the capture is skipped (no fake attribution).
+   */
+  attribution?: {
+    organizationId?: string | null;
+    campaignId?:     string | null;
+    userId?:         string | null;
+  };
 }): Promise<ProviderImageResult> {
   const apiKey = await resolveOpenAiImageKey();
   if (!apiKey) {
@@ -898,11 +909,26 @@ async function generateProviderImage(input: {
         attachmentMode: input.eventContext?.attachmentMode ?? null,
       });
       const first = getFirstImageResult(response);
-      if (first?.b64_json) {
-        return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model } };
-      }
-      if (first?.url) {
-        return { image: { buffer: await bufferFromRemoteImage(first.url), model } };
+      if (first?.b64_json || first?.url) {
+        // Phase 4.1 Task 1: best-effort image provider-cost capture
+        // (telemetry only, never throws, no billing, no behavior change).
+        if (input.attribution?.organizationId) {
+          await captureImageProviderCost({
+            organizationId: input.attribution.organizationId,
+            campaignId:     input.attribution.campaignId ?? null,
+            userId:         input.attribution.userId ?? null,
+            processType:    'creator_content',
+            provider:       'openai',
+            model,
+            imageCount:     1,
+            size:           AI_IMAGE_SIZE,
+            activity:       'creator_image_generation',
+          });
+        }
+        if (first.b64_json) {
+          return { image: { buffer: Buffer.from(first.b64_json, 'base64'), model } };
+        }
+        return { image: { buffer: await bufferFromRemoteImage(first.url as string), model } };
       }
       failures.push(`${model}: no image returned`);
     } catch (error) {
@@ -1204,6 +1230,11 @@ async function composeSingleVisualAsset(
       attachmentMode: attachmentRenderPolicy,
       subtype:     subtypeHint?.subtypeId ?? null,
       platform,
+    },
+    attribution: {
+      organizationId: options.companyId ?? null,
+      campaignId:     options.campaignId ?? null,
+      userId:         options.userId ?? null,
     },
   });
   const providerOcr = providerResult.image

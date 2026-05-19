@@ -4,6 +4,9 @@ import { enforceRole, Role } from '../../../../backend/services/rbacService';
 import { getProfile } from '../../../../backend/services/companyProfileService';
 import { runCompletionWithOperation } from '../../../../backend/services/aiGateway';
 import { buildFormattedStyleInstructions } from '../../../../lib/content/writingStyleEngine';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 
 type SuggestionResponse = {
   uniqueness_directive_options: string[];
@@ -102,7 +105,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       valuesObj.target_word_count || valuesObj.targetWords ? `Target word count: ${String(valuesObj.target_word_count ?? valuesObj.targetWords)}` : '',
     ].filter(Boolean).join('\n\n');
 
-    const ai = await runCompletionWithOperation({
+    const ai = await wirePhase2Route({
+      surface:        'admin.blog.brief-suggestions',
+      organizationId: company_id,
+      action:         'blog_brief_suggestions',
+      referenceType:  'blog_brief_suggestions',
+      referenceId:    createHash('sha256')
+        .update([company_id, String(topic), String(suggestionRange.max)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => runCompletionWithOperation({
       operation: 'blogGeneration',
       companyId: company_id,
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -135,6 +146,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             `- For target length tiers, use these counts for each field: 800+ => 3, 1200+ => 4-5, 1600+ => 5-6, 2000+ => 6-8`,
         },
       ],
+      }),
     });
 
     const raw = ai.output ? JSON.parse(ai.output) as Record<string, unknown> : {};
@@ -147,7 +159,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     return res.status(200).json(out);
-  } catch {
+  } catch (e) {
+    if (e instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: e.message, code: e.code });
+    }
     return res.status(200).json(EMPTY);
   }
 }

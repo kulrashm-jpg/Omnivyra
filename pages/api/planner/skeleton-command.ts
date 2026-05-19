@@ -12,6 +12,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
@@ -226,7 +229,15 @@ Respond with ONLY valid JSON — no markdown:
 Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
     }
 
-    const result = await runCompletionWithOperation({
+    const result = await wirePhase2Route({
+      surface:        'planner.skeleton-command',
+      organizationId: companyId,
+      action:         'skeleton_command',
+      referenceType:  'skeleton_command',
+      referenceId:    createHash('sha256')
+        .update([companyId, message.trim(), intent, String(actList.length)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => runCompletionWithOperation({
       companyId,
       model: 'gpt-4o',
       temperature: 0.1,
@@ -239,6 +250,7 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
         },
       ],
       operation: 'generatePlatformVariants',
+      }),
     });
 
     let parsed: Record<string, unknown> = {};
@@ -304,6 +316,9 @@ Use null in delete_filter for fields not specified. Use [] for unused arrays.`;
     });
 
   } catch (err: unknown) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
     console.error('[planner/skeleton-command]', err);
     return res.status(500).json({ error: err instanceof Error ? err.message : 'Failed' });
   }

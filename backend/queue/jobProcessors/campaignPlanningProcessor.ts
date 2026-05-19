@@ -28,6 +28,43 @@ import { generateCampaignStrategy } from '../../services/campaignStrategyEngine'
 import { expandCampaign, assessExpansionConfidence } from '../../services/campaignExpansionEngine';
 import { batchedGenerateBlueprint } from '../../services/batchAiProcessor';
 import { tryTemplateBlueprintFor } from '../../services/aiTemplateLayer';
+
+// Bounded intra-job OpenAI fan-out. ai-heavy queue concurrency (3) ×
+// unbounded slot fan-out (≤10) was up to ~30 parallel OpenAI calls; this
+// caps per-job fan-out (env-overridable 1–10, default 3) so worst case is
+// ai-heavy_concurrency × this. In-process only; no external limiter.
+const BLUEPRINT_FANOUT_CONCURRENCY = (() => {
+  const o = Number(process.env.CAMPAIGN_BLUEPRINT_CONCURRENCY);
+  return Number.isInteger(o) && o >= 1 && o <= 10 ? o : 3;
+})();
+
+/**
+ * Bounded-concurrency equivalent of Promise.allSettled(items.map(fn)).
+ * Results preserve input order; rejections are captured (never thrown),
+ * matching PromiseSettledResult semantics the caller already relies on.
+ */
+async function settledWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let next = 0;
+  const runner = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: 'fulfilled', value: await fn(items[i]) };
+      } catch (reason) {
+        results[i] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, runner),
+  );
+  return results;
+}
 import { findSimilarStrategy, indexStrategy, type StrategyFingerprint } from '../../services/strategyReuseIndex';
 import { getRefinementThreshold, recordOutcome } from '../../services/confidenceCalibrator';
 import { recordCampaignMetric } from '../../services/metricsCollector';
@@ -121,8 +158,10 @@ async function maybeRefine(
   if (ruleBasedSlots.length === 0) return plan;
 
   // Upgrade D: use gpt-4o-mini (mini) for hooks/CTAs — they don't need full model
-  const refinedBlueprints = await Promise.allSettled(
-    ruleBasedSlots.map(slot =>
+  const refinedBlueprints = await settledWithConcurrency(
+    ruleBasedSlots,
+    BLUEPRINT_FANOUT_CONCURRENCY,
+    slot =>
       batchedGenerateBlueprint({
         topic:        slot.topic,
         content_type: slot.content_type,
@@ -133,7 +172,6 @@ async function maybeRefine(
           cta_type:        'Soft CTA',
         },
       }),
-    ),
   );
 
   const refinedSlotMap = new Map<string, (typeof ruleBasedSlots)[0]['blueprint']>();
@@ -226,7 +264,49 @@ async function persistPlan(
 
 // ── Main processor ────────────────────────────────────────────────────────────
 
+/**
+ * Priority-6 async billing gate. Mirrors contentGenerationProcessor's
+ * withQueueBilling pattern (queue-native exactly-once HOLD across retries/
+ * replays — no new system, no settlement/retry-orchestration change). OFF
+ * (default) = byte-identical passthrough. SHADOW = passthrough + telemetry.
+ * ENFORCE = withQueueBilling. No org → passthrough (honest).
+ */
 export async function processCampaignPlanningJob(job: Job<CampaignPlanningJobPayload>): Promise<void> {
+  const orgId = job.data?.companyId ? String(job.data.companyId) : null;
+  if (!orgId) return processCampaignPlanningJobInner(job);
+
+  const { resolveEnforcementMode } = await import('../../services/billing/phase2EnforcementGate');
+  const { mode } = await resolveEnforcementMode(orgId, 'queue.campaign-planning');
+
+  if (mode !== 'enforce') {
+    if (mode === 'shadow') {
+      const { incrCounter } = await import('../../services/billing/billingMetrics');
+      incrCounter('phase2_gate_shadow_total');
+    }
+    return processCampaignPlanningJobInner(job);
+  }
+
+  const { withQueueBilling } = await import('../../services/billing/queueBillingMiddleware');
+  const wrapped = await withQueueBilling(
+    {
+      queueName:      'campaign-planning',
+      jobId:          String(job.id ?? job.data?.jobId ?? `inline-${Date.now()}`),
+      payload:        { jobId: job.data?.jobId, campaignId: job.data?.campaignId, planTier: job.data?.planTier },
+      organizationId: orgId,
+      userId:         orgId,
+      action:         'async_campaign_planning',
+      referenceType:  'campaign_planning_job',
+      referenceId:    String(job.data?.jobId ?? job.id ?? job.data?.campaignId),
+    },
+    () => processCampaignPlanningJobInner(job),
+  );
+  if (wrapped.kind === 'duplicate_blocked') {
+    const { incrCounter } = await import('../../services/billing/billingMetrics');
+    incrCounter('queue_replay_blocked_total');
+  }
+}
+
+async function processCampaignPlanningJobInner(job: Job<CampaignPlanningJobPayload>): Promise<void> {
   const payload = job.data;
   const {
     jobId, campaignId, companyId,

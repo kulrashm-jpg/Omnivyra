@@ -22,9 +22,46 @@ import {
 import { useCompanyContext } from '../components/CompanyContext';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 
-type IntegrationType = 'lead_webhook' | 'wordpress' | 'custom_blog_api';
+type IntegrationType =
+  | 'lead_webhook'
+  | 'wordpress'
+  | 'custom_blog_api'
+  | 'ghost'
+  | 'drupal'
+  | 'joomla'
+  | 'webflow'
+  | 'shopify';
 type IntegrationStatus = 'connected' | 'failed' | 'pending';
 type FocusArea = 'website' | 'data';
+
+type CmsEnvironmentType = 'localhost' | 'local_network' | 'staging' | 'production';
+
+// Mirrors backend CmsValidationReport (cmsEnvironmentFramework.ts).
+interface CmsValidationReport {
+  provider: string;
+  environmentType: CmsEnvironmentType;
+  httpsEnabled: boolean;
+  apiReachable: boolean;
+  detectedApiRoot: string | null;
+  apiBase: string | null;
+  authSupported: boolean | null;
+  authWorking: boolean | null;
+  publishSupported: boolean | null;
+  webhookSupported: boolean | null;
+  errorCode: string | null;
+  severity: 'fatal' | 'error' | 'warning' | null;
+  retryable: boolean | null;
+  remediationSteps: string[];
+  diagnostics?: Record<string, unknown>;
+}
+
+interface TestResultState {
+  id: string;
+  success: boolean;
+  message: string;
+  code?: string;
+  diagnostics?: CmsValidationReport;
+}
 
 interface Integration {
   id: string;
@@ -158,18 +195,33 @@ const TYPE_LABELS: Record<IntegrationType, string> = {
   lead_webhook: 'Lead Webhook',
   wordpress: 'WordPress',
   custom_blog_api: 'Custom Blog API',
+  ghost: 'Ghost',
+  drupal: 'Drupal',
+  joomla: 'Joomla',
+  webflow: 'Webflow',
+  shopify: 'Shopify Blog',
 };
 
 const TYPE_ICONS: Record<IntegrationType, React.ReactNode> = {
   lead_webhook: <Plug className="h-5 w-5" />,
   wordpress: <Globe className="h-5 w-5" />,
   custom_blog_api: <Rss className="h-5 w-5" />,
+  ghost: <Files className="h-5 w-5" />,
+  drupal: <Database className="h-5 w-5" />,
+  joomla: <Files className="h-5 w-5" />,
+  webflow: <Globe className="h-5 w-5" />,
+  shopify: <Rss className="h-5 w-5" />,
 };
 
 const TYPE_COLORS: Record<IntegrationType, string> = {
   lead_webhook: 'bg-emerald-100 text-emerald-700',
   wordpress: 'bg-blue-100 text-blue-700',
   custom_blog_api: 'bg-violet-100 text-violet-700',
+  ghost: 'bg-gray-100 text-gray-700',
+  drupal: 'bg-sky-100 text-sky-700',
+  joomla: 'bg-orange-100 text-orange-700',
+  webflow: 'bg-indigo-100 text-indigo-700',
+  shopify: 'bg-green-100 text-green-700',
 };
 
 const STATUS_BADGE: Record<IntegrationStatus, { label: string; cls: string; icon: React.ReactNode }> = {
@@ -184,7 +236,7 @@ const CONFIG_FIELDS: Record<IntegrationType, { key: string; label: string; place
     { key: 'secret', label: 'Secret (optional)', placeholder: 'my-secret-key', hint: 'Sent as X-Webhook-Secret header' },
   ],
   wordpress: [
-    { key: 'site_url', label: 'Site URL', placeholder: 'https://myblog.com' },
+    { key: 'site_url', label: 'Site URL', placeholder: 'https://myblog.com', hint: 'Production sites must use https:// (WordPress blocks Application Passwords over HTTP). Localhost/dev sites can use http://.' },
     { key: 'username', label: 'WordPress Username', placeholder: 'admin' },
     { key: 'app_password', label: 'Application Password', placeholder: 'xxxx xxxx xxxx xxxx', type: 'password', hint: 'Generate in WordPress under Users > Profile > Application Passwords' },
   ],
@@ -192,6 +244,31 @@ const CONFIG_FIELDS: Record<IntegrationType, { key: string; label: string; place
     { key: 'endpoint_url', label: 'Endpoint URL', placeholder: 'https://api.myblog.com/posts' },
     { key: 'api_key', label: 'API Key', placeholder: 'sk-...', type: 'password' },
     { key: 'auth_header', label: 'Auth Header (optional)', placeholder: 'Authorization', hint: 'Defaults to Authorization: Bearer <api_key>' },
+  ],
+  ghost: [
+    { key: 'site_url', label: 'Site URL', placeholder: 'https://myblog.com', hint: 'Ghost base URL. Localhost/dev allowed over http://.' },
+    { key: 'admin_api_key', label: 'Admin API Key', placeholder: 'id:secret', type: 'password', hint: 'Ghost Admin → Settings → Integrations → custom integration → Admin API Key.' },
+    { key: 'author_email', label: 'Author Email (optional)', placeholder: 'author@site.com' },
+  ],
+  drupal: [
+    { key: 'site_url', label: 'Site URL', placeholder: 'https://mydrupal.com', hint: 'JSON:API root is auto-detected (/jsonapi). Production must be HTTPS.' },
+    { key: 'bearer_token', label: 'Bearer Token', placeholder: 'token', type: 'password', hint: 'OAuth/JSON:API bearer token with node create permission.' },
+    { key: 'node_bundle', label: 'Node Bundle (optional)', placeholder: 'article' },
+  ],
+  joomla: [
+    { key: 'site_url', label: 'Site URL', placeholder: 'https://myjoomla.com', hint: 'Enable Web Services (REST API) in Global Configuration.' },
+    { key: 'api_token', label: 'Joomla API Token', placeholder: 'token', type: 'password', hint: 'Users → Manage → (user) → API tokens.' },
+    { key: 'default_catid', label: 'Default Category ID (optional)', placeholder: '2' },
+  ],
+  webflow: [
+    { key: 'access_token', label: 'OAuth Access Token', placeholder: 'wf-...', type: 'password', hint: 'Webflow OAuth access token or site API token.' },
+    { key: 'collection_id', label: 'CMS Collection ID (optional)', placeholder: 'Run validate to discover collections', hint: 'Required for publishing; discovered on validation.' },
+    { key: 'site_url', label: 'Site URL (optional)', placeholder: 'https://mysite.webflow.io' },
+  ],
+  shopify: [
+    { key: 'shop_domain', label: 'Shop Domain', placeholder: 'mystore.myshopify.com' },
+    { key: 'shopify_access_token', label: 'Admin API Access Token', placeholder: 'shpat_...', type: 'password', hint: 'Custom app token with write_content scope.' },
+    { key: 'blog_id', label: 'Blog ID (optional)', placeholder: 'Auto-selects first blog' },
   ],
 };
 
@@ -246,7 +323,7 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-gray-900">{mode === 'create' ? 'Add Integration' : 'Edit Integration'}</h2>
+          <h2 className="text-base font-semibold text-gray-900">{mode === 'create' ? 'Connect Your Website' : 'Edit Connection'}</h2>
           <button onClick={onClose} className="rounded p-1 text-gray-500 hover:bg-gray-100">
             <X className="h-5 w-5" />
           </button>
@@ -257,7 +334,8 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
 
           {mode === 'create' && (
             <div>
-              <label className="mb-1 block text-sm font-medium text-gray-700">Integration Type</label>
+              <label className="mb-1 block text-sm font-medium text-gray-700">How is your website managed?</label>
+              <p className="mb-2 text-xs text-gray-500">Pick your platform and we'll show only the steps that apply to it.</p>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 {(Object.keys(TYPE_LABELS) as IntegrationType[]).map((integrationType) => (
                   <button
@@ -279,7 +357,7 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
           )}
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Name</label>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Name this connection</label>
             <input
               type="text"
               value={name}
@@ -290,7 +368,7 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700">Website Scope</label>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Which website is this for?</label>
             <select
               value={websiteId}
               onChange={(event) => setWebsiteId(event.target.value)}
@@ -306,7 +384,7 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
           </div>
 
           <div className="space-y-3">
-            <div className="border-t border-gray-100 pt-3 text-sm font-medium text-gray-700">Connection Settings</div>
+            <div className="border-t border-gray-100 pt-3 text-sm font-medium text-gray-700">Enable publishing on {TYPE_LABELS[type]}</div>
             {fields.map((field) => (
               <div key={field.key}>
                 <label className="mb-1 block text-sm font-medium text-gray-700">{field.label}</label>
@@ -327,7 +405,7 @@ function IntegrationModal({ mode, initial, websites, onClose, onSave }: ModalPro
               Cancel
             </button>
             <button type="submit" disabled={saving} className="w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 sm:w-auto">
-              {saving ? 'Saving...' : mode === 'create' ? 'Add Integration' : 'Save Changes'}
+              {saving ? 'Saving...' : mode === 'create' ? 'Connect' : 'Save Changes'}
             </button>
           </div>
         </form>
@@ -458,6 +536,226 @@ function CategoryAction({ action }: { action: IntegrationAction }) {
     >
       {action.label}
     </button>
+  );
+}
+
+const WP_LOCAL_CONFIG_SNIPPET = `define('WP_ENVIRONMENT_TYPE', 'local');
+
+// or, equivalently:
+define('WP_ENVIRONMENT_TYPE', 'development');`;
+
+// Client-side mirror of provider local-dev guidance (label + optional snippet).
+const PROVIDER_META: Record<string, { label: string; snippet?: string; localHint?: string }> = {
+  wordpress: {
+    label: 'WordPress',
+    snippet: WP_LOCAL_CONFIG_SNIPPET,
+    localHint: 'WordPress disables Application Passwords on non-HTTPS environments by default. Add this to wp-config.php to enable local auth:',
+  },
+  ghost: { label: 'Ghost', localHint: 'Create a Custom Integration in Ghost Admin and use its Admin API key for local development.' },
+  joomla: { label: 'Joomla', localHint: 'Enable Web Services (REST API) and create a Joomla API token for local development.' },
+  drupal: { label: 'Drupal', localHint: 'Enable the core JSON:API module to allow local development access.' },
+  webflow: { label: 'Webflow' },
+  shopify: { label: 'Shopify Blog' },
+  hubspot: { label: 'HubSpot CMS' },
+  custom_blog_api: { label: 'Custom Blog API' },
+};
+
+function providerMeta(provider: string) {
+  return PROVIDER_META[provider] ?? { label: provider };
+}
+
+const ENV_BADGE: Record<CmsEnvironmentType, { label: string; cls: string }> = {
+  localhost: { label: 'Localhost', cls: 'bg-violet-50 text-violet-700 border-violet-200' },
+  local_network: { label: 'Local network', cls: 'bg-violet-50 text-violet-700 border-violet-200' },
+  staging: { label: 'Staging / Dev', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  production: { label: 'Production', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+};
+
+function DiagRow({ label, ok, detail }: { label: string; ok: boolean | null; detail?: string }) {
+  const icon =
+    ok === true ? (
+      <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+    ) : ok === false ? (
+      <XCircle className="h-3.5 w-3.5 text-red-600" />
+    ) : (
+      <Clock className="h-3.5 w-3.5 text-gray-400" />
+    );
+  return (
+    <div className="flex items-center gap-2 text-xs text-gray-700">
+      {icon}
+      <span className="font-medium">{label}:</span>
+      <span className="text-gray-500">{detail ?? (ok === true ? 'OK' : ok === false ? 'Failed' : 'Not checked')}</span>
+    </div>
+  );
+}
+
+function CmsDiagnosticsPanel({
+  report,
+  onRedetect,
+  redetecting,
+}: {
+  report: CmsValidationReport;
+  onRedetect?: () => void;
+  redetecting?: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [showDev, setShowDev] = useState(false);
+  const env = ENV_BADGE[report.environmentType] ?? ENV_BADGE.production;
+  // Canonical operational base = apiBase. No detected root while apiReachable
+  // means publishing is running on the legacy fallback (degraded).
+  const usingFallback = report.apiReachable && !report.detectedApiRoot;
+  const meta = providerMeta(report.provider);
+  const isLocalDev = report.environmentType === 'localhost' || report.environmentType === 'local_network';
+  // Local-setup guidance is only relevant for non-HTTPS local/dev sites where
+  // the provider would otherwise refuse to authenticate, and only while auth
+  // is not yet working.
+  const showLocalGuidance =
+    isLocalDev && !report.httpsEnabled && report.authWorking !== true && Boolean(meta.localHint);
+  const devDiag =
+    report.diagnostics && typeof report.diagnostics === 'object'
+      ? (report.diagnostics as any).developerDiagnostics
+      : null;
+
+  const copySnippet = async () => {
+    if (!meta.snippet) return;
+    try {
+      await navigator.clipboard.writeText(meta.snippet);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard unavailable — snippet is still visible to copy manually */
+    }
+  };
+
+  const sevBadge =
+    report.severity === 'fatal'
+      ? 'bg-red-100 text-red-800 border-red-300'
+      : report.severity === 'warning'
+        ? 'bg-amber-50 text-amber-700 border-amber-200'
+        : 'bg-red-50 text-red-700 border-red-200';
+
+  return (
+    <div className="mt-3 space-y-3 rounded-lg border border-gray-200 bg-white p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold text-gray-700">{meta.label} diagnostics</span>
+        <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${env.cls}`}>
+          <Globe className="h-3 w-3" />
+          {env.label}
+        </span>
+        <span
+          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+            report.httpsEnabled ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+          }`}
+        >
+          {report.httpsEnabled ? 'HTTPS' : 'HTTP only'}
+        </span>
+        {report.errorCode && (
+          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${sevBadge}`}>
+            {report.errorCode}
+            {report.retryable ? ' · retryable' : ''}
+          </span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        <DiagRow label="API" ok={report.apiReachable} detail={report.apiReachable ? 'Reachable' : 'Unreachable'} />
+        <DiagRow
+          label="Auth"
+          ok={report.authWorking}
+          detail={
+            report.authWorking === true
+              ? 'Working'
+              : report.authWorking === false
+                ? 'Failed'
+                : report.authSupported === false
+                  ? 'Unsupported'
+                  : 'Not checked'
+          }
+        />
+        <DiagRow label="Publish" ok={report.publishSupported} />
+        <DiagRow label="Webhook" ok={report.webhookSupported} detail={report.webhookSupported ? 'Supported' : 'Unsupported'} />
+        <DiagRow
+          label="API root"
+          ok={report.detectedApiRoot ? true : report.apiReachable ? null : false}
+          detail={report.detectedApiRoot ?? 'Not detected'}
+        />
+        <DiagRow
+          label="Canonical base"
+          ok={report.apiBase ? true : null}
+          detail={report.apiBase ?? 'Unresolved'}
+        />
+      </div>
+
+      {(usingFallback || onRedetect) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {usingFallback && (
+            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+              Fallback mode — REST root not auto-detected, using legacy default
+            </span>
+          )}
+          {onRedetect && (
+            <button
+              type="button"
+              onClick={onRedetect}
+              disabled={redetecting}
+              className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-600 hover:bg-indigo-100 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3 w-3 ${redetecting ? 'animate-spin' : ''}`} />
+              {redetecting ? 'Re-detecting…' : 'Re-detect API'}
+            </button>
+          )}
+        </div>
+      )}
+
+      {report.remediationSteps.length > 0 && (
+        <div className="rounded-md bg-gray-50 p-2">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">How to fix</div>
+          <ul className="list-disc space-y-1 pl-4 text-xs text-gray-700">
+            {report.remediationSteps
+              .filter((step) => !meta.snippet || step.trim() !== meta.snippet.trim())
+              .map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
+          </ul>
+        </div>
+      )}
+
+      {showLocalGuidance && (
+        <div className="rounded-md border border-violet-200 bg-violet-50 p-2">
+          <div className="mb-1 text-xs font-semibold text-violet-800">Local development setup</div>
+          <p className="mb-2 text-xs text-violet-700">{meta.localHint}</p>
+          {meta.snippet && (
+            <div className="relative">
+              <pre className="overflow-x-auto rounded bg-gray-900 p-2 pr-16 text-[11px] leading-relaxed text-emerald-300">
+                <code>{meta.snippet}</code>
+              </pre>
+              <button
+                type="button"
+                onClick={copySnippet}
+                className="absolute right-1.5 top-1.5 rounded bg-white/10 px-2 py-1 text-[11px] font-medium text-white hover:bg-white/20"
+              >
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {devDiag && (
+        <div className="text-[11px] text-gray-500">
+          <button
+            type="button"
+            onClick={() => setShowDev((v) => !v)}
+            className="font-medium text-gray-600 underline-offset-2 hover:underline"
+          >
+            {showDev ? 'Hide' : 'Show'} developer diagnostics
+          </button>
+          {showDev && (
+            <pre className="mt-1 overflow-x-auto rounded bg-gray-100 p-2 text-gray-700">{String(devDiag)}</pre>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -997,7 +1295,7 @@ export default function IntegrationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<{ id: string; success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<TestResultState | null>(null);
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; integration?: Integration } | null>(null);
   const [gaStatus, setGaStatus] = useState<GoogleAnalyticsStatusResponse | null>(null);
   const [gaLoading, setGaLoading] = useState(false);
@@ -1528,7 +1826,7 @@ export default function IntegrationsPage() {
     await load();
   };
 
-  const handleTest = async (id: string) => {
+  const handleTest = async (id: string, rediscover = false) => {
     setTestingId(id);
     setTestResult(null);
     try {
@@ -1536,10 +1834,16 @@ export default function IntegrationsPage() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ company_id: companyId }),
+        body: JSON.stringify({ company_id: companyId, rediscover }),
       });
       const data = await response.json();
-      setTestResult({ id, success: data.success, message: data.message });
+      setTestResult({
+        id,
+        success: data.success,
+        message: data.message,
+        code: data.code,
+        diagnostics: data.diagnostics,
+      });
       await load();
     } catch {
       setTestResult({ id, success: false, message: 'Test request failed.' });
@@ -1570,29 +1874,29 @@ export default function IntegrationsPage() {
     {
       id: 'website-publishing',
       focus: 'website',
-      title: 'Website Publishing',
-      description: 'Choose where blogs and site content should publish once content is ready.',
-      badge: 'Live now',
+      title: 'Connect Your Website',
+      description: 'Link your site so Omnivyra can publish content to it automatically. We support most website platforms.',
+      badge: 'Start here',
       icon: <Globe className="h-5 w-5" />,
       badgeClassName: 'border-blue-200 bg-blue-50 text-blue-700',
-      items: ['WordPress publishing', 'Custom blog API endpoints', 'Website content delivery'],
+      items: ['Works with WordPress, Shopify, Webflow & more', 'Automatic publishing once connected', 'No code for most platforms'],
       actions: [
-        { label: 'Manage website publishing', href: '#website-publishing-section' },
-        ...(isAdmin ? [{ label: 'Add WordPress', onClick: () => setModal({ mode: 'create', integration: { type: 'wordpress' } as Integration }), tone: 'secondary' as const }] : []),
+        { label: 'View connected websites', href: '#website-publishing-section' },
+        ...(isAdmin ? [{ label: 'Connect a website', onClick: () => setModal({ mode: 'create', integration: { type: 'wordpress' } as Integration }), tone: 'secondary' as const }] : []),
       ],
     },
     {
       id: 'lead-capture-forms',
       focus: 'website',
-      title: 'Lead Capture Forms',
-      description: 'Control how the website or landing pages collect leads and where those leads flow next.',
+      title: 'Capture Leads From Your Site',
+      description: 'Collect leads from your website or landing pages and send them wherever your team works.',
       badge: 'Live now',
       icon: <Plug className="h-5 w-5" />,
       badgeClassName: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-      items: ['Hosted lead capture pages', 'Embeddable website forms', 'Webhook delivery to downstream tools'],
+      items: ['Hosted lead capture pages', 'Embeddable website forms', 'Send leads to your CRM or tools'],
       actions: [
-        { label: 'Open forms workspace', href: '/leads?tab=forms' },
-        { label: 'Open webhook setup', href: '/leads?tab=connections' },
+        { label: 'Set up forms', href: '/leads?tab=forms' },
+        { label: 'Send leads elsewhere', href: '/leads?tab=connections' },
       ],
     },
     {
@@ -1644,10 +1948,10 @@ export default function IntegrationsPage() {
   const visibleCategoryCards = categoryCards.filter((card) => card.focus === focus);
   const showWebsiteFlow = focus === 'website';
   const showDataFlow = focus === 'data';
-  const categoryTitle = focus === 'website' ? 'Website & Lead Capture' : 'Data & CRM Sources';
+  const categoryTitle = focus === 'website' ? 'What you can set up' : 'Data & CRM Sources';
   const categoryDescription =
     focus === 'website'
-      ? 'These are the website-side setup cards for publishing, forms, and lead capture.'
+      ? 'Start by connecting your website — publishing, forms, and visitor tracking turn on from there.'
       : 'These are the business data setup cards for CRM, analytics, and imported files.';
 
   return (
@@ -1655,9 +1959,9 @@ export default function IntegrationsPage() {
       <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
         <div className="mb-6 flex flex-col gap-4 sm:mb-8 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">Integrations</h1>
+            <h1 className="text-xl font-bold text-gray-900 sm:text-2xl">Connect Your Website</h1>
             <p className="mt-1 text-sm text-gray-500">
-              Build the input layer for publishing, lead capture, CRM context, analytics, and imported business data.
+              Link your website to Omnivyra so it can publish content, capture leads, and track visitors — we'll adapt the steps to how your site is built.
             </p>
           </div>
           {isAdmin && (
@@ -1666,7 +1970,7 @@ export default function IntegrationsPage() {
               className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 sm:w-auto"
             >
               <Plus className="h-4 w-4" />
-              Add Integration
+              Connect Website
             </button>
           )}
         </div>
@@ -1770,15 +2074,24 @@ export default function IntegrationsPage() {
 
         {testResult && (
           <div
-            className={`mb-4 flex items-start gap-2 rounded-xl border px-4 py-3 text-sm ${
+            className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
               testResult.success ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-700'
             }`}
           >
-            {testResult.success ? <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
-            <span>{testResult.message}</span>
-            <button onClick={() => setTestResult(null)} className="ml-auto shrink-0">
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-start gap-2">
+              {testResult.success ? <CheckCircle className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
+              <span>{testResult.message}</span>
+              <button onClick={() => setTestResult(null)} className="ml-auto shrink-0">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            {testResult.diagnostics && (
+              <CmsDiagnosticsPanel
+                report={testResult.diagnostics}
+                onRedetect={() => handleTest(testResult.id, true)}
+                redetecting={testingId === testResult.id}
+              />
+            )}
           </div>
         )}
 
@@ -1791,11 +2104,11 @@ export default function IntegrationsPage() {
                 <section id="website-foundation-section" className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
                   <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <h2 className="text-base font-semibold text-gray-900">Websites</h2>
-                      <p className="text-xs text-gray-500">Create website records that scope CMS connections, forms, publishing, and tracking.</p>
+                      <h2 className="text-base font-semibold text-gray-900">Your Websites</h2>
+                      <p className="text-xs text-gray-500">Each website you add can have its own publishing, forms, and visitor tracking.</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <a href="/website-setup" className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">Open setup wizard</a>
+                      <a href="/website-setup" className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">Guided setup</a>
                       <code className="rounded-lg bg-gray-100 px-2 py-1 text-xs text-gray-600">/public/omnivera-tracker.js</code>
                     </div>
                   </div>
@@ -1844,8 +2157,8 @@ export default function IntegrationsPage() {
                 <section id="website-publishing-section">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h2 className="text-base font-semibold text-gray-900">Website Integrations</h2>
-                      <p className="text-xs text-gray-500">Connect the website or blog destination that published content should flow into.</p>
+                      <h2 className="text-base font-semibold text-gray-900">Connected Websites</h2>
+                      <p className="text-xs text-gray-500">Websites where Omnivyra can publish content automatically.</p>
                     </div>
                     {isAdmin && (
                       <div className="flex flex-wrap gap-2">
@@ -1854,14 +2167,14 @@ export default function IntegrationsPage() {
                           className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          Add WordPress
+                          Connect website
                         </button>
                         <button
                           onClick={() => setModal({ mode: 'create', integration: { type: 'custom_blog_api' } as Integration })}
                           className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          Add Blog API
+                          Custom publishing
                         </button>
                       </div>
                     )}
@@ -1869,12 +2182,12 @@ export default function IntegrationsPage() {
 
                   {blogIntegrations.length === 0 ? (
                     <EmptyConnections
-                      title="No website integrations yet."
+                      title="No website connected yet — connect one to start publishing automatically."
                       actions={
                         isAdmin
                           ? [
-                              { label: 'Add WordPress', onClick: () => setModal({ mode: 'create', integration: { type: 'wordpress' } as Integration }) },
-                              { label: 'Add Blog API', onClick: () => setModal({ mode: 'create', integration: { type: 'custom_blog_api' } as Integration }) },
+                              { label: 'Connect website', onClick: () => setModal({ mode: 'create', integration: { type: 'wordpress' } as Integration }) },
+                              { label: 'Connect custom publishing', onClick: () => setModal({ mode: 'create', integration: { type: 'custom_blog_api' } as Integration }) },
                             ]
                           : []
                       }
@@ -1899,8 +2212,8 @@ export default function IntegrationsPage() {
                 <section id="lead-capture-section" className="space-y-4">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <h2 className="text-base font-semibold text-gray-900">Lead Capture Integrations</h2>
-                      <p className="text-xs text-gray-500">Use forms in the lead workspace and connect webhook delivery for captured leads.</p>
+                      <h2 className="text-base font-semibold text-gray-900">Forms &amp; Leads</h2>
+                      <p className="text-xs text-gray-500">Collect leads from your site and choose where they should go.</p>
                     </div>
                     {isAdmin && (
                       <button
@@ -1908,7 +2221,7 @@ export default function IntegrationsPage() {
                         className="flex items-center gap-1.5 text-xs font-medium text-indigo-600 hover:text-indigo-700"
                       >
                         <Plus className="h-3.5 w-3.5" />
-                        Add Webhook
+                        Send leads to a tool
                       </button>
                     )}
                   </div>

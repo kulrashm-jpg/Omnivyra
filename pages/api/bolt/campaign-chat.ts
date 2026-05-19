@@ -8,6 +8,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
 import { getProfile } from '../../../backend/services/companyProfileService';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -302,13 +305,22 @@ Return only JSON.`;
       content: `${contextBlock}${message.trim()}`,
     });
 
-    const result = await runCompletionWithOperation({
+    const result = await wirePhase2Route({
+      surface:        'bolt.campaign-chat',
+      organizationId: companyId,
+      action:         'campaign_chat',
+      referenceType:  'campaign_chat',
+      referenceId:    createHash('sha256')
+        .update([companyId, message.trim(), String(chatHistory.length)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => runCompletionWithOperation({
       companyId,
       model: 'gpt-4o-mini',
       temperature: 0.7,
       response_format: { type: 'json_object' },
       messages,
       operation: 'generatePlatformVariants',
+      }),
     });
 
     let parsed: {
@@ -370,6 +382,9 @@ Return only JSON.`;
       suggested_audience: suggestedAudience,
     });
   } catch (err: unknown) {
+    if (err instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: err.message, code: err.code });
+    }
     console.error('[bolt/campaign-chat]', err);
     return res.status(500).json({
       error: err instanceof Error ? err.message : 'Failed to process request',

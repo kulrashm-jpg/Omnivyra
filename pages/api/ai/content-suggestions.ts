@@ -6,6 +6,9 @@
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { runCompletionWithOperation } from '../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -64,7 +67,15 @@ Return a JSON object with exactly this structure:
 Provide exactly 4-6 suggestions. Focus on practical, immediately applicable improvements.
 Prioritize: hook strength, audience relevance, platform optimization, CTA clarity.`;
 
-    const result = await runCompletionWithOperation({
+    const result = await wirePhase2Route({
+      surface:        'ai.content-suggestions',
+      organizationId: String(companyId),
+      action:         'content_suggestions',
+      referenceType:  'content_suggestions',
+      referenceId:    createHash('sha256')
+        .update([String(companyId), String(topic), String(contentType ?? ''), String(platform ?? '')].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => runCompletionWithOperation({
       companyId,
       model: 'gpt-4o-mini',
       temperature: 0.6,
@@ -74,6 +85,7 @@ Prioritize: hook strength, audience relevance, platform optimization, CTA clarit
         { role: 'user', content: prompt },
       ],
       operation: 'contentSuggestions',
+      }),
     });
 
     let parsed: any = {};
@@ -87,6 +99,9 @@ Prioritize: hook strength, audience relevance, platform optimization, CTA clarit
 
     return res.status(200).json(parsed);
   } catch (error: any) {
+    if (error instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: error.message, code: error.code });
+    }
     // If AI is blocked (cost guard), return deterministic suggestions
     if (error?.code === 'COST_BLOCKED') {
       const { topic, contentType, platform, hook, keyPoints, cta, targetAudience } = req.body;

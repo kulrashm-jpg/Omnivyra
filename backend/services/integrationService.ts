@@ -10,9 +10,29 @@ import {
   upsertConnectionCredentials,
 } from './integrationCredentialService';
 import { getCmsAdapter, isCmsProvider } from './cms/registry';
+import { ensureCanonicalConnectionForIntegration } from './cms/cmsConnectionNormalizationService';
 
-export type IntegrationType = 'lead_webhook' | 'wordpress' | 'custom_blog_api';
+export type IntegrationType =
+  | 'lead_webhook'
+  | 'wordpress'
+  | 'custom_blog_api'
+  | 'ghost'
+  | 'drupal'
+  | 'joomla'
+  | 'webflow'
+  | 'shopify';
 export type IntegrationStatus = 'connected' | 'failed' | 'pending';
+
+/** Connection auth_type per CMS provider (drives website_connections.auth_type). */
+const PROVIDER_AUTH_TYPE: Record<string, string> = {
+  wordpress: 'basic',
+  ghost: 'admin_api_key',
+  drupal: 'bearer_token',
+  joomla: 'api_token',
+  webflow: 'oauth2',
+  shopify: 'api_token',
+  custom_blog_api: 'api_key',
+};
 
 export interface Integration {
   id: string;
@@ -62,7 +82,7 @@ export async function createIntegration(
   const connection = await createWebsiteConnection({
     websiteId: website.id,
     provider: type,
-    authType: options.authType ?? (type === 'wordpress' ? 'basic' : 'api_key'),
+    authType: options.authType ?? PROVIDER_AUTH_TYPE[type] ?? 'api_key',
     nonSecretConfig,
     status: 'pending',
   });
@@ -178,15 +198,29 @@ async function hydrateIntegration(row: Integration): Promise<Integration> {
 export interface TestResult {
   success: boolean;
   message: string;
+  /** Machine-readable failure code (e.g. WordPress HTTPS_REQUIRED). */
+  code?: string;
+  /** Structured WordPress environment / REST / auth diagnostics, when available. */
+  diagnostics?: unknown;
 }
 
-export async function validateIntegration(id: string, companyId: string): Promise<TestResult> {
+export async function validateIntegration(
+  id: string,
+  companyId: string,
+  opts: { rediscover?: boolean } = {},
+): Promise<TestResult> {
   const integration = await getIntegration(id, companyId);
   if (!integration) return { success: false, message: 'Integration not found.' };
 
+  // Enforcement: no CMS operation runs without a canonical connection.
+  if (isCmsProvider(integration.type) && !integration.website_connection_id) {
+    const connId = await ensureCanonicalConnectionForIntegration(integration).catch(() => null);
+    if (connId) integration.website_connection_id = connId;
+  }
+
   let result: TestResult;
   try {
-    result = await testConnection(integration);
+    result = await testConnection(integration, opts);
   } catch (err) {
     result = { success: false, message: err instanceof Error ? err.message : 'Unknown error' };
   }
@@ -205,7 +239,10 @@ export async function validateIntegration(id: string, companyId: string): Promis
   return result;
 }
 
-async function testConnection(integration: Integration): Promise<TestResult> {
+async function testConnection(
+  integration: Integration,
+  opts: { rediscover?: boolean } = {},
+): Promise<TestResult> {
   const { type, config } = integration;
   const timeout = 10_000;
 
@@ -225,7 +262,7 @@ async function testConnection(integration: Integration): Promise<TestResult> {
     return { success: false, message: `Webhook returned status ${res.status}.` };
   }
 
-  if (type === 'wordpress') {
+  if (type === 'wordpress' || isCmsProvider(type)) {
     const health = await getCmsAdapter(type).validateConnection({
       provider: type,
       companyId: integration.company_id,
@@ -233,20 +270,14 @@ async function testConnection(integration: Integration): Promise<TestResult> {
       websiteId: integration.website_id,
       config,
       timeoutMs: timeout,
+      forceApiRediscovery: opts.rediscover === true,
     });
-    return { success: health.healthy, message: health.message };
-  }
-
-  if (isCmsProvider(type)) {
-    const health = await getCmsAdapter(type).validateConnection({
-      provider: type,
-      companyId: integration.company_id,
-      connectionId: integration.website_connection_id,
-      websiteId: integration.website_id,
-      config,
-      timeoutMs: timeout,
-    });
-    return { success: health.healthy, message: health.message };
+    return {
+      success: health.healthy,
+      message: health.message,
+      code: health.code,
+      diagnostics: health.diagnostics,
+    };
   }
 
   return { success: false, message: `Unknown integration type: ${type}` };
@@ -282,11 +313,15 @@ export async function publishBlog(
   const type = preferType || 'wordpress';
   const integration = await getActiveIntegration(companyId, type);
   if (!integration) return { success: false, message: `No active ${type} integration found.` };
+  // Enforcement: ensure the canonical connection exists before publishing.
+  const connId =
+    integration.website_connection_id ??
+    (await ensureCanonicalConnectionForIntegration(integration).catch(() => null));
   const adapter = getCmsAdapter(type);
   const result = await adapter.publishPost({
     provider: type,
     companyId,
-    connectionId: integration.website_connection_id,
+    connectionId: connId,
     websiteId: integration.website_id,
     config: integration.config,
   }, {

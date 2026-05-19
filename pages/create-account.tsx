@@ -202,10 +202,9 @@ export default function CreateAccountPage() {
                   className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95">
                   Go to log in
                 </Link>
-                <button onClick={() => { setClaimed(null); setError(null); }}
-                  className="text-sm text-[#6B7C93] hover:text-[#0A66C2]">
-                  Try a different email
-                </button>
+                <p className="text-xs text-[#6B7C93]">
+                  Only your company admin can add new members for this domain.
+                </p>
               </div>
             </div>
           </main>

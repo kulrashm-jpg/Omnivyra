@@ -291,6 +291,18 @@ const workerTimers: NodeJS.Timeout[] = [];
  * @param logFields Fields from the result to include in the success log (truthy-checked).
  * @param jitterMs  Optional extra jitter added to each interval (default 0).
  */
+// getCronAdminConfig() already 30s-caches, but 19 loops calling it every
+// tick (incl. 30s/60s/90s loops) still churns Redis/Supabase at the cache
+// boundary. Collapse the per-tick warm to one shared refresh per window.
+let _lastCronAdminWarmAt = 0;
+const CRON_ADMIN_WARM_THROTTLE_MS = 30_000;
+async function warmCronAdminConfig(): Promise<void> {
+  const now = Date.now();
+  if (now - _lastCronAdminWarmAt < CRON_ADMIN_WARM_THROTTLE_MS) return;
+  _lastCronAdminWarmAt = now;
+  await getCronAdminConfig().catch(() => { /* non-fatal */ });
+}
+
 function scheduleWorker(
   fn: () => Promise<Record<string, number>>,
   intervalMs: number,
@@ -305,7 +317,7 @@ function scheduleWorker(
       try {
         // BUG#20 fix: warm admin config cache before each tick so shouldRunCronJob()
         // and per-activity overrides read a fresh value, not cold/stale cache.
-        await getCronAdminConfig().catch(() => { /* non-fatal */ });
+        await warmCronAdminConfig();
         const result = await fn();
         const hasActivity = logFields.some((f) => (result[f] ?? 0) > 0);
         if (hasActivity) {

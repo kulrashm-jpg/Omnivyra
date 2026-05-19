@@ -4,6 +4,9 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getUserRole, Role } from '../../../../backend/services/rbacService';
 import { getProfile } from '../../../../backend/services/companyProfileService';
 import { previewStrategy } from '../../../../backend/services/aiGateway';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../../backend/services/billing/phase2EnforcementGate';
 
 const allowedRoles = new Set([Role.COMPANY_ADMIN, Role.CONTENT_CREATOR, Role.SUPER_ADMIN]);
 
@@ -88,7 +91,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
   let parsed: any = {};
   try {
-    const completion = await previewStrategy({
+    const completion = await wirePhase2Route({
+      surface:        'recommendations.preview-strategy',
+      organizationId: companyId,
+      action:         'recommendations_preview_strategy',
+      referenceType:  'recommendations_preview_strategy',
+      referenceId:    createHash('sha256')
+        .update([companyId, String(id), String(recommendation?.snapshot_hash ?? '')].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => previewStrategy({
       companyId,
       model,
       temperature: 0.4,
@@ -100,9 +111,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
         { role: 'user', content: message },
       ],
+      }),
     });
     parsed = completion.output || {};
-  } catch {
+  } catch (e) {
+    if (e instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: e.message, code: e.code });
+    }
     return res.status(500).json({ error: 'Failed to parse preview response' });
   }
 

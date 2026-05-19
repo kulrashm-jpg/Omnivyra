@@ -2,6 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import OpenAI from 'openai';
 import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
 import { validateAndModerateUserMessage } from '../../../backend/chatGovernance';
+import { captureTokenProviderCost } from '../../../backend/services/billing/blackHoleCostCapture';
 
 function getOpenAiClient(): OpenAI {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -225,6 +226,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       temperature: 0.7,
       response_format: { type: 'json_object' },
       messages,
+    });
+
+    // Phase 2 Task 2: previously a direct OpenAI call with zero cost capture.
+    // Telemetry only — best-effort, never throws, no billing change.
+    await captureTokenProviderCost({
+      organizationId: String(companyId),
+      processType:    'ai_reply',
+      provider:       'openai',
+      model:          process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      inputTokens:    completion.usage?.prompt_tokens ?? null,
+      outputTokens:   completion.usage?.completion_tokens ?? null,
+      userId:         user.id,
+      activity:       'blog_card_chat',
     });
 
     const raw = completion.choices[0]?.message?.content?.trim() || '{}';

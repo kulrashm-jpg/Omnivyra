@@ -22,6 +22,7 @@ enforceNodeRuntime('lib/redis/client');
 
 import IORedis from 'ioredis';
 import { config } from '@/config';
+import { isRedisUrlTLS } from './sanitizer';
 import type { RedisFeature } from './instrumentation';
 import { createInstrumentedClient } from './instrumentation';
 import { initializeHealthMetrics, recordTerminalStateDetection } from './healthMetrics';
@@ -46,8 +47,8 @@ export function getRedisConnectionConfig() {
     const port = parseInt(parsed.port || '6379', 10);
     const password = parsed.password || undefined;
     
-    // Auto-detect TLS for Upstash or rediss:// protocol
-    const needsTls = host.includes('upstash.io') || parsed.protocol === 'rediss:';
+    // TLS decision is centralized in sanitizer.isRedisUrlTLS (single authority)
+    const needsTls = isRedisUrlTLS(url);
     
     return {
       host,

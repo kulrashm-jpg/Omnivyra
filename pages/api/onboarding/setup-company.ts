@@ -32,6 +32,10 @@ import {
   SELF_REGISTERED_JOIN_SOURCE,
   selectCompatibleCompanyRole,
 } from '../../../backend/services/companyMembershipIntegrityService';
+import { resolveDomain } from '../../../backend/services/domainCanonicalService';
+import { checkRateLimit, DOMAIN_RESOLUTION_LIMIT } from '../../../lib/auth/rateLimit';
+import { logDomainEvent } from '../../../backend/services/domainEventLogger';
+import { notifyAdminAndProspectOfClaimedDomain } from '../../../backend/services/claimedDomainNotifyService';
 
 type Result =
   | { companyId: string; selfJoined?: boolean; matchedCompanyName?: string }
@@ -80,6 +84,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
   const { user, error: userErr } = await getSupabaseUserFromRequest(req);
   if (userErr || !user) return res.status(401).json({ error: 'Invalid session' });
+
+  // Client IP — used to rate-limit the outbound domain-canonical HTTP probe
+  // (caps the SSRF/abuse surface a single IP can drive). Mirrors the
+  // extraction in pages/api/auth/sync-supabase-user.ts.
+  const clientIp = (() => {
+    const raw = String(
+      req.headers['x-forwarded-for']
+      ?? (req.socket as any)?.remoteAddress
+      ?? 'unknown',
+    ).split(',')[0].trim();
+    return raw && raw !== 'unknown' ? raw : undefined;
+  })();
+
+  /**
+   * Rule 5 — a verified user from an already-claimed domain tried to create an
+   * account. Don't auto-join; email both the prospect (admin contact details)
+   * and the company admin (someone from your domain tried to sign up). The
+   * "company-exists" screen the client already renders is the on-screen
+   * "consult your admin" message; this adds the two emails. Best-effort: the
+   * shared service never throws, so onboarding is never blocked by it.
+   */
+  const notifyClaimedDomain = async (
+    matchedCompanyId: string,
+    matchedCompanyName: string | null,
+  ): Promise<void> => {
+    const emailDomain = extractDomain(user.email ?? '') ?? '';
+    if (!user.email || !emailDomain || isFreeEmailDomain(emailDomain)) return;
+    await notifyAdminAndProspectOfClaimedDomain(supabase, {
+      prospectUserId: user.id,
+      prospectEmail:  user.email,
+      emailDomain,
+      companyId:      matchedCompanyId,
+      companyName:    matchedCompanyName,
+      nowIso:         new Date().toISOString(),
+    });
+  };
 
   // Service role bypasses RLS — required for inserts into companies,
   // user_company_roles, company_profiles, and free_credit_profiles.
@@ -320,6 +360,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       }
 
       const adminName = await fetchAdminName(supabase, matched.company_id);
+      await notifyClaimedDomain(matched.company_id, matched.company_name);
       return res.status(200).json({
         companyExists:      true,
         matchedCompanyId:   matched.company_id,
@@ -401,11 +442,90 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         // Not a member — do NOT auto-join. Only the first user creates the
         // company; everyone else must be invited by the company admin.
         const adminName = await fetchAdminName(supabase, domainCompany.id);
+        await notifyClaimedDomain(domainCompany.id, domainCompany.name);
         return res.status(200).json({
           companyExists:      true,
           matchedCompanyId:   domainCompany.id,
           matchedCompanyName: domainCompany.name,
           adminName,
+        });
+      }
+    }
+
+    // ── Rule 4: the work-email domain must HOST A LIVE WEBSITE on itself ──────
+    // (not email/DNS forwarding, not a redirect to another domain). This is
+    // the gate that lets the FIRST user of a domain create the company. It
+    // runs only here — once the domain is claimed the branches above have
+    // already returned, and invited / public-email users never reach this.
+    // resolveDomain is SSRF-hardened and fail-closed: any DNS/timeout/fetch
+    // failure → resolution_failed, which we treat as "no hosted website".
+    if (adminEmailDomain) {
+      if (clientIp) {
+        const rl = await checkRateLimit(clientIp, DOMAIN_RESOLUTION_LIMIT);
+        if (!rl.allowed) {
+          return res.status(429).json({
+            code:  'DOMAIN_RESOLUTION_FAILED',
+            error: 'Too many domain verification attempts. Please try again in a few minutes.',
+          });
+        }
+      }
+
+      let resolution;
+      try {
+        resolution = await resolveDomain(adminEmailDomain);
+      } catch (err) {
+        void logDomainEvent({
+          event_type:   'DOMAIN_RESOLUTION_FAILED',
+          company_id:   null,
+          final_domain: adminEmailDomain,
+          user_id:      user.id,
+          metadata:     { reason: 'threw', message: err instanceof Error ? err.message : String(err) },
+        });
+        return res.status(503).json({
+          code:  'DOMAIN_RESOLUTION_FAILED',
+          error: 'We could not verify that your company domain hosts a live website. Please try again shortly.',
+        });
+      }
+
+      if (resolution.resolution_failed || resolution.resolution_blocked) {
+        void logDomainEvent({
+          event_type:   resolution.resolution_blocked ? 'DOMAIN_RESOLUTION_BLOCKED' : 'DOMAIN_RESOLUTION_FAILED',
+          company_id:   null,
+          final_domain: adminEmailDomain,
+          user_id:      user.id,
+          metadata:     { reason: resolution.resolution_blocked ? 'ssrf_or_rebind' : 'fail_closed' },
+        });
+        return res.status(503).json({
+          code:  'DOMAIN_RESOLUTION_FAILED',
+          error: `We could not reach a live website at ${adminEmailDomain}. An account can only be created for a domain that hosts its own website. Please try again, or contact ${'support@omnivyra.com'} if your company website is live.`,
+        });
+      }
+
+      if (resolution.input_domain !== resolution.final_domain) {
+        void logDomainEvent({
+          event_type:   'DOMAIN_NOT_CANONICAL',
+          company_id:   null,
+          final_domain: resolution.final_domain,
+          user_id:      user.id,
+          metadata:     { input_domain: resolution.input_domain, is_forwarding: resolution.is_forwarding },
+        });
+        return res.status(400).json({
+          code:  'DOMAIN_NOT_CANONICAL',
+          error: `${adminEmailDomain} forwards to ${resolution.final_domain} and does not host its own website. Please register using your primary corporate domain.`,
+        });
+      }
+
+      if (resolution.is_forwarding) {
+        void logDomainEvent({
+          event_type:   'DOMAIN_FORWARDING_BLOCKED',
+          company_id:   null,
+          final_domain: resolution.final_domain,
+          user_id:      user.id,
+          metadata:     { input_domain: resolution.input_domain },
+        });
+        return res.status(400).json({
+          code:  'DOMAIN_FORWARDING_NOT_ALLOWED',
+          error: 'Forwarding-only domains cannot be used to create an account. Please use the primary corporate domain that hosts your company website.',
         });
       }
     }
@@ -448,6 +568,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
         // Different user won the race — treat as existing company.
         const adminName = await fetchAdminName(supabase, raceWinner.id);
+        await notifyClaimedDomain(raceWinner.id, raceWinner.name);
         return res.status(200).json({
           companyExists:      true,
           matchedCompanyId:   raceWinner.id,

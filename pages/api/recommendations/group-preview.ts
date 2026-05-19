@@ -3,6 +3,9 @@ import { generateRecommendation } from '../../../backend/services/aiGateway';
 import { Role } from '../../../backend/services/rbacService';
 import { withRBAC } from '../../../backend/middleware/withRBAC';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { createHash } from 'crypto';
+import { wirePhase2Route } from '../../../backend/services/billing/phase2RouteWiring';
+import { PaymentRequiredError } from '../../../backend/services/billing/phase2EnforcementGate';
 
 const normalizeObject = (value: any) => {
   if (!value) return {};
@@ -224,7 +227,15 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         2
       )}`;
 
-    const completion = await generateRecommendation({
+    const completion = await wirePhase2Route({
+      surface:        'recommendations.group-preview',
+      organizationId: String(company_id),
+      action:         'recommendations_group_preview',
+      referenceType:  'recommendations_group_preview',
+      referenceId:    createHash('sha256')
+        .update([String(company_id), JSON.stringify(selected_recommendations)].join('|'))
+        .digest('hex').slice(0, 40),
+      run: () => generateRecommendation({
       companyId: company_id,
       model,
       temperature: 0.3,
@@ -233,10 +244,14 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         { role: 'system', content: 'You are a campaign strategy clustering assistant.' },
         { role: 'user', content: message },
       ],
+      }),
     });
 
     return res.status(200).json(completion.output || {});
   } catch (error) {
+    if (error instanceof PaymentRequiredError) {
+      return res.status(402).json({ error: error.message, code: error.code });
+    }
     console.error('Group preview failed', error);
     return res.status(500).json({ error: 'Failed to generate grouping preview' });
   }
