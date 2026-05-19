@@ -1,0 +1,46 @@
+services:
+  wordpress:
+    image: wordpress:6.5-php8.2-apache
+    ports:
+      - "${WORDPRESS_PORT:-8088}:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: omnivera
+      WORDPRESS_DB_PASSWORD: omnivera
+      WORDPRESS_DB_NAME: omnivera_wp
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_ENVIRONMENT_TYPE', 'staging');
+        define('WP_DEBUG', true);
+        define('WP_DEBUG_LOG', true);
+    volumes:
+      - wordpress-html:/var/www/html
+      - ./seed:/docker-entrypoint-initwp.d
+      - ../../wordpress-plugin/omnivera-website-intelligence:/var/www/html/wp-content/plugins/omnivera-website-intelligence
+    depends_on:
+      - db
+  db:
+    image: mariadb:11
+    environment:
+      MARIADB_DATABASE: omnivera_wp
+      MARIADB_USER: omnivera
+      MARIADB_PASSWORD: omnivera
+      MARIADB_ROOT_PASSWORD: omnivera_root
+    volumes:
+      - wordpress-db:/var/lib/mysql
+  cli:
+    image: wordpress:cli-php8.2
+    user: "33:33"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: omnivera
+      WORDPRESS_DB_PASSWORD: omnivera
+      WORDPRESS_DB_NAME: omnivera_wp
+    volumes:
+      - wordpress-html:/var/www/html
+      - ../../wordpress-plugin/omnivera-website-intelligence:/var/www/html/wp-content/plugins/omnivera-website-intelligence
+    depends_on:
+      - wordpress
+    entrypoint: ["wp"]
+volumes:
+  wordpress-db:
+  wordpress-html:

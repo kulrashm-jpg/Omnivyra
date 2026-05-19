@@ -1,0 +1,51 @@
+name: Website Intelligence Production Readiness
+
+on:
+  pull_request:
+    paths:
+      - 'backend/services/**'
+      - 'pages/api/website-intelligence/**'
+      - 'pages/api/wordpress-plugin/**'
+      - 'pages/api/admin/website-intelligence/**'
+      - 'public/omnivera-tracker.js'
+      - 'wordpress-plugin/**'
+      - 'supabase/migrations/**website_intelligence**.sql'
+      - 'scripts/website-intelligence-*.ts'
+      - '.github/workflows/website-intelligence-production-readiness.yml'
+  workflow_dispatch:
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: TypeScript baseline
+        run: npm run typecheck:ci
+      - name: Website Intelligence migration validation
+        run: npx tsx scripts/website-intelligence-migration-validate.ts
+      - name: Website Intelligence security validation
+        run: npx tsx scripts/website-intelligence-security-validate.ts
+      - name: Website Intelligence load thresholds dry-run
+        run: npx tsx scripts/website-intelligence-load-test.ts --dry-run
+      - name: Website Intelligence deployment readiness dry-run
+        run: npx tsx scripts/website-intelligence-deploy-readiness.ts
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: dry-run
+          SUPABASE_SERVICE_ROLE_KEY: dry-run
+          CREDENTIAL_ENCRYPTION_KEY: dry-run
+          PUBLISHING_WORKER_SECRET: dry-run
+      - name: WordPress plugin package artifact
+        run: |
+          cd wordpress-plugin
+          zip -r omnivera-website-intelligence.zip omnivera-website-intelligence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omnivera-website-intelligence-plugin
+          path: wordpress-plugin/omnivera-website-intelligence.zip
