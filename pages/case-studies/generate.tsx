@@ -75,6 +75,10 @@ export default function CaseStudyGeneratePage() {
   const [error, setError] = useState<string | null>(null);
   const [posts, setPosts] = useState<BlogPost[]>([]);
   const [brief, setBrief] = useState<BriefInsight | null>(null);
+  // Topic is editable: prefilled flows (recommended card / brief) seed it via
+  // the effect below; the write-your-own flow (no prefill_topic) lets the user
+  // type it, which is what activates "Suggest Inputs" + the generator.
+  const [topic, setTopic] = useState('');
   const [showGenerator, setShowGenerator] = useState(false);
   const [targetWords, setTargetWords] = useState('1800');
   const [templateBlocks, setTemplateBlocks] = useState<ContentBlock[] | undefined>(undefined);
@@ -218,6 +222,13 @@ export default function CaseStudyGeneratePage() {
     }
   }, [selectedCompanyId, prefillBriefToken, prefillCardToken, prefillBundleToken, templateToken, suggestionToken]);
 
+  // Seed the editable topic from the URL prefill once it resolves (router
+  // query is empty on first render). User edits are preserved — prefill only
+  // fills while the field is still untouched.
+  useEffect(() => {
+    if (prefillTopic) setTopic((cur) => (cur ? cur : prefillTopic));
+  }, [prefillTopic]);
+
   const handleGenerated = (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
     confidence: 'high' | 'medium',
@@ -234,7 +245,7 @@ export default function CaseStudyGeneratePage() {
       prefillReason,
       brief,
       company_id: selectedCompanyId,
-      prefillTopic,
+      prefillTopic: topic,
       target_word_count: parseInt(targetWords, 10) || 1800,
       savedAt: new Date().toISOString(),
     };
@@ -249,7 +260,7 @@ export default function CaseStudyGeneratePage() {
   };
 
   const fetchSuggestions = async () => {
-    if (!selectedCompanyId || !prefillTopic) return;
+    if (!selectedCompanyId || !topic.trim()) return;
     setSuggesting(true);
     setSuggestionError(null);
 
@@ -260,7 +271,7 @@ export default function CaseStudyGeneratePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: selectedCompanyId,
-          topic: prefillTopic,
+          topic: topic.trim(),
           reason: prefillReason,
           brief,
           currentValues: {
@@ -296,9 +307,12 @@ export default function CaseStudyGeneratePage() {
   };
 
   useEffect(() => {
-    if (!prefillTopic || suggestions || suggesting) return;
+    // Auto-suggest ONLY for prefilled flows, once, after the topic is seeded.
+    // `topic === prefillTopic` ensures we don't fire per-keystroke while the
+    // user types their own topic (write-your-own uses the manual button).
+    if (!prefillTopic || topic !== prefillTopic || suggestions || suggesting) return;
     void fetchSuggestions();
-  }, [prefillTopic, suggestions, suggesting]);
+  }, [prefillTopic, topic, suggestions, suggesting]);
 
   if (loading) {
     return (
@@ -335,8 +349,17 @@ export default function CaseStudyGeneratePage() {
 
             <div className="space-y-4">
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-700">Case Study Topic</p>
-                <p className="text-sm font-bold text-amber-900">{prefillTopic || 'No topic prefilled - add one below'}</p>
+                <label htmlFor="case-study-topic" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-amber-700">
+                  Case Study Topic
+                </label>
+                <input
+                  id="case-study-topic"
+                  type="text"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  placeholder="Enter the case study topic you want to write about"
+                  className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-amber-900 placeholder:font-normal placeholder:text-amber-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
                 {prefillReason && <p className="mt-1 text-xs text-amber-700">{prefillReason}</p>}
               </div>
 
@@ -364,7 +387,7 @@ export default function CaseStudyGeneratePage() {
                   <button
                     type="button"
                     onClick={fetchSuggestions}
-                    disabled={!selectedCompanyId || !prefillTopic || suggesting}
+                    disabled={!selectedCompanyId || !topic.trim() || suggesting}
                     className="inline-flex items-center gap-1 rounded-md border border-amber-600/25 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-50"
                   >
                     {suggesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
@@ -567,7 +590,7 @@ export default function CaseStudyGeneratePage() {
           clusters={[]}
           blogs={posts}
           industry={null}
-          initialTopic={prefillTopic || customerName || challenge}
+          initialTopic={topic || customerName || challenge}
           initialTargetWords={targetWords}
           initialIntent={brief?.intent || 'conversion'}
           initialTone={brief?.tone}

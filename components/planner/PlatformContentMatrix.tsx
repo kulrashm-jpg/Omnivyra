@@ -18,6 +18,7 @@ import {
 } from './platformContentPresets';
 import { ChevronRight, ChevronDown, Trash2, Scale } from 'lucide-react';
 import { classifyContentType } from '../../lib/shared/contentTypeClassification';
+import { resolveBoltContentTypesForPlatform } from './boltPlannerTaxonomy';
 
 export interface PlatformContentMatrixProps {
   companyId?: string | null;
@@ -45,10 +46,52 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
     });
   };
 
-  /** Build allowed map: platform -> Set<content_type> from API config */
+  /**
+   * Connected platforms = the platforms shown in the strip above (Stage /
+   * Authority), sourced from account_context. Twitter normalized to x.
+   */
+  const connectedPlatforms = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const pm of state.account_context?.platforms ?? []) {
+      const p = String(pm?.platform ?? '').toLowerCase().trim();
+      if (p) set.add(p === 'twitter' ? 'x' : p);
+    }
+    return set;
+  }, [state.account_context]);
+
+  /**
+   * Effective matrix config: (1) aligned to the connected (strip)
+   * platforms only, and (2) content types restricted to the BOLT taxonomy
+   * per platform (Post/Thread/Short Stories/Poll/Tweet + Image/Banner/
+   * Carousel/Slider/Infographics/Video/Short/Reel; Tweet → X only; rest
+   * removed). Until account_context loads, the platform filter is skipped
+   * (BOLT type filter still applies) so the matrix isn't blank mid-load.
+   */
+  const effectiveConfig = React.useMemo(() => {
+    const accountLoaded = Array.isArray(state.account_context?.platforms);
+    return config
+      .map(({ platform, content_types }) => {
+        const pNorm = String(platform).toLowerCase().trim().replace(/^twitter$/i, 'x');
+        return {
+          platform,
+          pNorm,
+          content_types: resolveBoltContentTypesForPlatform(pNorm, content_types ?? []),
+        };
+      })
+      .filter(
+        (c) =>
+          c.content_types.length > 0 &&
+          (!accountLoaded || connectedPlatforms.size === 0
+            ? true
+            : connectedPlatforms.has(c.pNorm)),
+      )
+      .map(({ platform, content_types }) => ({ platform, content_types }));
+  }, [config, connectedPlatforms, state.account_context]);
+
+  /** Build allowed map: platform -> Set<content_type> from effective config */
   const allowedMap = React.useMemo(() => {
     const m = new Map<string, Set<string>>();
-    for (const { platform, content_types } of config) {
+    for (const { platform, content_types } of effectiveConfig) {
       const p = String(platform).toLowerCase().trim().replace(/^twitter$/i, 'x');
       if (!p) continue;
       const set = new Set<string>();
@@ -59,7 +102,7 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
       m.set(p, set);
     }
     return m;
-  }, [config]);
+  }, [effectiveConfig]);
 
   /** Only use platform/content_type present in config; discard unsupported before saving */
   const current = React.useMemo(() => {
@@ -139,15 +182,15 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
     return () => { cancelled = true; };
   }, [companyId]);
 
-  /** Build allowed set from config: platform -> Set<content_type> */
+  /** Build allowed set from effective (connected + BOLT) config. */
   const allowedPlatformContent = React.useMemo(() => {
     const map = new Map<string, Set<string>>();
-    for (const { platform, content_types } of config) {
+    for (const { platform, content_types } of effectiveConfig) {
       const p = platform.toLowerCase().trim();
       map.set(p, new Set((content_types ?? []).map((ct) => String(ct).toLowerCase().trim())));
     }
     return map;
-  }, [config]);
+  }, [effectiveConfig]);
 
   /** Sanitize matrix: keep only platform/content_type present in config */
   const sanitizeMatrix = React.useCallback(
@@ -256,11 +299,20 @@ export function PlatformContentMatrix({ companyId, className = '', durationWeeks
     );
   }
 
+  if (effectiveConfig.length === 0) {
+    return (
+      <div className={className}>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Platform content matrix</label>
+        <p className="text-sm text-gray-500">No connected platforms with BOLT-supported content types.</p>
+      </div>
+    );
+  }
+
   return (
     <div className={className}>
       <label className="block text-sm font-medium text-gray-700 mb-2">Platform content matrix (frequency per week)</label>
       <div className="space-y-1">
-        {config.map(({ platform, content_types }) => {
+        {effectiveConfig.map(({ platform, content_types }) => {
           const p = platform.toLowerCase().trim();
           const label = PLATFORM_LABELS[p] ?? capitalize(p);
           const isExpanded = expandedPlatforms.has(p);

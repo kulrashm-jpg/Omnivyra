@@ -77,6 +77,10 @@ export default function ArticleGeneratePage() {
   const [posts, setPosts] = useState<BlogPost[]>([]);
   const [showGenerator, setShowGenerator] = useState(false);
   const [brief, setBrief] = useState<BriefInsight | null>(null);
+  // Topic is editable: prefilled flows (recommended card / brief) seed it via
+  // the effect below; the write-your-own flow (no prefill_topic) lets the user
+  // type it, which is what activates "Suggest Inputs" + the generator.
+  const [topic, setTopic] = useState('');
   const [targetWords, setTargetWords] = useState('1600');
   const [uniquenessDirective, setUniquenessDirective] = useState('');
   const [mustInclude, setMustInclude] = useState('');
@@ -226,6 +230,13 @@ export default function ArticleGeneratePage() {
     }
   }, [selectedCompanyId, prefillBriefToken, prefillCardToken, prefillBundleToken, templateToken, suggestionToken]);
 
+  // Seed the editable topic from the URL prefill once it resolves (router
+  // query is empty on first render). User edits are preserved — prefill only
+  // fills while the field is still untouched.
+  useEffect(() => {
+    if (prefillTopic) setTopic((cur) => (cur ? cur : prefillTopic));
+  }, [prefillTopic]);
+
   const handleGenerated = (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
     confidence: 'high' | 'medium',
@@ -242,7 +253,7 @@ export default function ArticleGeneratePage() {
       prefillReason,
       brief,
       company_id: selectedCompanyId,
-      prefillTopic,
+      prefillTopic: topic,
       target_word_count: parseInt(targetWords, 10) || 1600,
       savedAt: new Date().toISOString(),
     };
@@ -257,7 +268,7 @@ export default function ArticleGeneratePage() {
   };
 
   const fetchSuggestions = async () => {
-    if (!selectedCompanyId || !prefillTopic) return;
+    if (!selectedCompanyId || !topic.trim()) return;
     setSuggesting(true);
     setSuggestionError(null);
 
@@ -268,7 +279,7 @@ export default function ArticleGeneratePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: selectedCompanyId,
-          topic: prefillTopic,
+          topic: topic.trim(),
           reason: prefillReason,
           brief,
           currentValues: {
@@ -304,9 +315,12 @@ export default function ArticleGeneratePage() {
   };
 
   useEffect(() => {
-    if (!prefillTopic || suggestions || suggesting) return;
+    // Auto-suggest ONLY for prefilled flows, once, after the topic is seeded.
+    // `topic === prefillTopic` ensures we don't fire per-keystroke while the
+    // user types their own topic (write-your-own uses the manual button).
+    if (!prefillTopic || topic !== prefillTopic || suggestions || suggesting) return;
     void fetchSuggestions();
-  }, [prefillTopic, suggestions, suggesting]);
+  }, [prefillTopic, topic, suggestions, suggesting]);
 
   if (loading) {
     return (
@@ -342,8 +356,17 @@ export default function ArticleGeneratePage() {
 
           <div className="space-y-4">
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-              <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-1">Recommended Topic</p>
-              <p className="text-sm font-bold text-blue-900">{prefillTopic || 'No topic prefilled'}</p>
+              <label htmlFor="article-topic" className="block text-xs font-semibold text-blue-700 uppercase tracking-wide mb-1">
+                {prefillTopic ? 'Recommended Topic' : 'Topic'}
+              </label>
+              <input
+                id="article-topic"
+                type="text"
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="Enter the article topic you want to write about"
+                className="w-full rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-900 placeholder:font-normal placeholder:text-blue-400 focus:border-[#0B5ED7] focus:outline-none focus:ring-1 focus:ring-[#0B5ED7]"
+              />
               {prefillReason && <p className="text-xs text-blue-700 mt-1">{prefillReason}</p>}
             </div>
 
@@ -371,7 +394,7 @@ export default function ArticleGeneratePage() {
                 <button
                   type="button"
                   onClick={fetchSuggestions}
-                  disabled={!selectedCompanyId || !prefillTopic || suggesting}
+                  disabled={!selectedCompanyId || !topic.trim() || suggesting}
                   className="inline-flex items-center gap-1 rounded-md border border-[#0B5ED7]/25 bg-white px-2.5 py-1 text-[11px] font-semibold text-[#0B5ED7] hover:bg-[#0B5ED7]/5 disabled:opacity-50"
                 >
                   {suggesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
@@ -532,7 +555,7 @@ export default function ArticleGeneratePage() {
           clusters={[]}
           blogs={posts}
           industry={null}
-          initialTopic={prefillTopic}
+          initialTopic={topic}
           initialTargetWords={targetWords}
           initialIntent={brief?.intent}
           initialTone={brief?.tone}

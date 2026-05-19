@@ -138,10 +138,49 @@ const _inFlight = new Map<string, Promise<GatewayResponse<string>>>();
 
 // ── Shared timing helper (used by semaphore + retry) ─────────────────────────
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+// Base timeout for short-form generation (post/tweet, small max_tokens). Long-form
+// generation requests far larger max_tokens and cannot complete in 30s — see
+// resolveProviderTimeoutMs below. This constant remains the floor/default.
 const LLM_PROVIDER_TIMEOUT_MS = 30_000;
 
-function timeoutError(label: string): Error & { code?: string; status?: number } {
-  const error = new Error(`${label} timed out after ${LLM_PROVIDER_TIMEOUT_MS}ms`) as Error & { code?: string; status?: number };
+/**
+ * Long-form-capable operations. These generate full articles / blogs /
+ * newsletters / blueprints and routinely take 40–180s on gpt-4o(-mini).
+ * CRITICAL: the content-creator path (generateMasterContent /
+ * generateContentBlueprint) calls the gateway WITHOUT max_tokens, so a
+ * token-based heuristic alone never widens their budget — they must be
+ * recognised by operation name or they keep timing out at 30s. This was the
+ * root cause of "can't create long-format content".
+ */
+const LONG_FORM_OPERATIONS = new Set<string>([
+  'generateMasterContent',
+  'generateContentBlueprint',
+  'blogGeneration',
+  'blogOptimization',
+  'newsletterGeneration',
+]);
+
+/**
+ * The provider timeout must scale with the work. A 30s cap kills any long-form
+ * (article/blog/newsletter/whitepaper) generation. Short-form (post/tweet and
+ * small helper calls) keeps the original 30s budget so latency-sensitive paths
+ * are unchanged.
+ *
+ * Resolution order:
+ *   1. Known long-form operation        → 240s (covers no-max_tokens callers)
+ *   2. max_tokens > 8192                → 240s
+ *   3. max_tokens > 4096                → 120s
+ *   4. otherwise                        → 30s (unchanged short-form default)
+ */
+function resolveProviderTimeoutMs(maxTokens?: number, operation?: string): number {
+  if (operation && LONG_FORM_OPERATIONS.has(operation)) return 240_000;
+  if (maxTokens && maxTokens > 8192) return 240_000;
+  if (maxTokens && maxTokens > 4096) return 120_000;
+  return LLM_PROVIDER_TIMEOUT_MS;
+}
+
+function timeoutError(label: string, timeoutMs: number): Error & { code?: string; status?: number } {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`) as Error & { code?: string; status?: number };
   error.code = 'PROVIDER_TIMEOUT';
   error.status = 504;
   return error;
@@ -250,17 +289,32 @@ async function callOpenAi(params: {
   messages: GatewayRequest['messages'];
   response_format?: GatewayRequest['response_format'];
   max_tokens?: number;
+  operation?: string;
 }): Promise<NormalizedCompletion> {
   const client = getOpenAiClient(params.apiKey);
+  const timeoutMs = resolveProviderTimeoutMs(params.max_tokens, params.operation);
   const completion = await client.chat.completions.create({
     model: params.model,
     temperature: params.temperature,
     response_format: params.response_format,
     messages: params.messages,
     ...(params.max_tokens ? { max_tokens: params.max_tokens } : {}),
-  }, { timeout: LLM_PROVIDER_TIMEOUT_MS });
+  }, { timeout: timeoutMs });
   const content = completion.choices?.[0]?.message?.content?.trim() || '';
   const u = completion.usage;
+  // Truncation detection: a response that stopped because it hit the token
+  // budget ships incomplete long-form content silently. Surface it so callers
+  // (and ops logs) can see why an article looks cut off.
+  const finishReason = completion.choices?.[0]?.finish_reason;
+  if (finishReason === 'length' && process.env.NODE_ENV !== 'test') {
+    console.warn('[ai-gateway] output-truncated', {
+      provider: 'openai',
+      model: params.model,
+      max_tokens: params.max_tokens,
+      completion_tokens: u?.completion_tokens ?? null,
+      reason: 'finish_reason=length — output hit max_tokens cap and was truncated',
+    });
+  }
   return {
     content,
     usage: u
@@ -275,13 +329,15 @@ async function callAnthropic(params: {
   temperature: number;
   messages: GatewayRequest['messages'];
   max_tokens?: number;
+  operation?: string;
 }): Promise<NormalizedCompletion> {
   // Separate system message (Anthropic requires it top-level)
   const systemMsg = params.messages.find((m) => m.role === 'system');
   const userMessages = params.messages.filter((m) => m.role !== 'system');
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(timeoutError('Anthropic request')), LLM_PROVIDER_TIMEOUT_MS);
+  const timeoutMs = resolveProviderTimeoutMs(params.max_tokens, params.operation);
+  const timeout = setTimeout(() => controller.abort(timeoutError('Anthropic request', timeoutMs)), timeoutMs);
   let response: Response;
   try {
     response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -301,7 +357,7 @@ async function callAnthropic(params: {
       }),
     });
   } catch (error) {
-    if ((error as Error).name === 'AbortError') throw timeoutError('Anthropic request');
+    if ((error as Error).name === 'AbortError') throw timeoutError('Anthropic request', timeoutMs);
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -317,6 +373,15 @@ async function callAnthropic(params: {
   const data = await response.json();
   const content = (data.content?.[0]?.text ?? '').trim();
   const u = data.usage;
+  if (data.stop_reason === 'max_tokens' && process.env.NODE_ENV !== 'test') {
+    console.warn('[ai-gateway] output-truncated', {
+      provider: 'anthropic',
+      model: params.model,
+      max_tokens: params.max_tokens,
+      completion_tokens: u?.output_tokens ?? null,
+      reason: 'stop_reason=max_tokens — output hit max_tokens cap and was truncated',
+    });
+  }
   return {
     content,
     usage: u
@@ -744,6 +809,7 @@ const executeGatewayCompletion = async (
       response_format: request.response_format,
       messages:        request.messages,
       max_tokens:      request.max_tokens,
+      operation:       request.operation,
     }, true, trackingCtx);
   } catch (error: any) {
     const latency = Date.now() - start;

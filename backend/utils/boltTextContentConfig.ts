@@ -16,7 +16,17 @@
  * capability.
  */
 
-/** Content types allowed for BOLT (text-based, ≤800 words). */
+/**
+ * Content types allowed for BOLT (text-based, ≤800 words).
+ *
+ * COLLISION NOTE: `article` is ALSO a member of the long-form registry
+ * (lib/content/longFormContentTypeConfig — LongFormContentType). BOLT
+ * `article` is the short ≤800-word text item; the long-form engine /
+ * content-creator owns the full editorial `article`. The engine context —
+ * NOT the type string — disambiguates them. See `resolveIsLongForm` /
+ * `isDualRegistryContentType` in longFormContentTypeConfig before routing
+ * an `article` by content type alone.
+ */
 export const BOLT_TEXT_CONTENT_TYPES = new Set([
   'post',
   'tweet',

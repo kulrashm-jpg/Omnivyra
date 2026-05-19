@@ -420,11 +420,34 @@ export async function runBlogGeneration(
     // Scale max_tokens to word target.
     // Template-aware path outputs JSON with block structure, metadata, and nested objects
     // which requires ~5 tokens per target word. Standard HTML path needs ~2.5 tokens/word.
+    //
+    // The 16384 ceiling is NOT arbitrary: it is gpt-4o's hard max-output-token
+    // limit. Requesting more would be rejected by the provider, so we clamp
+    // here. The practical consequence: at 2.5 tok/word the standard path tops
+    // out near ~6500 words and the template path (5 tok/word) near ~3200 words.
+    // Beyond that the model is forced to truncate; the AI gateway now logs
+    // [ai-gateway] output-truncated (finish_reason=length) when this happens so
+    // truncated long-form no longer ships silently.
+    const TOKEN_OUTPUT_CEILING = 16384; // gpt-4o hard max output tokens
     const isTemplatePath = effectiveTemplateBlocks && Array.isArray(effectiveTemplateBlocks) && effectiveTemplateBlocks.length > 0;
     const tokensPerWord = isTemplatePath ? 5 : 2.5;
     const maxTokens = targetWc && targetWc >= 800
-      ? Math.min(16384, Math.max(4096, Math.round(targetWc * tokensPerWord)))
+      ? Math.min(TOKEN_OUTPUT_CEILING, Math.max(4096, Math.round(targetWc * tokensPerWord)))
       : 4096;
+
+    // Warn up-front when the requested word target cannot physically fit the
+    // token ceiling — operators see the cause before the truncation log fires.
+    if (targetWc && Math.round(targetWc * tokensPerWord) > TOKEN_OUTPUT_CEILING) {
+      const maxAchievableWords = Math.floor(TOKEN_OUTPUT_CEILING / tokensPerWord);
+      console.warn('[blog-generation] target-exceeds-token-budget', {
+        contentType,
+        requestedWords: targetWc,
+        maxAchievableWords,
+        tokensPerWord,
+        path: isTemplatePath ? 'template' : 'standard',
+        note: 'output will be truncated near maxAchievableWords for this model',
+      });
+    }
 
     // ── Template-aware generation path ─────────────────────────────────────
     // When a template is provided, AI fills the block structure directly

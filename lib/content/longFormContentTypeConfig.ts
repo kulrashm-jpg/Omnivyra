@@ -150,6 +150,45 @@ export function isLongFormContentType(value: string): value is LongFormContentTy
   return (LONG_FORM_CONTENT_TYPES as readonly string[]).includes(value);
 }
 
+/**
+ * DUAL-REGISTRY COLLISION GUARD — `article` is intentionally a member of BOTH
+ * this long-form registry AND backend/utils/boltTextContentConfig
+ * (BOLT_TEXT_CONTENT_TYPES, ≤800-word text). They are two different products
+ * that share a name:
+ *
+ *   • BOLT "article"  → short text item, ≤800 words, scheduled by orchestration
+ *                        (classifyContentType → bolt_text).
+ *   • Long-form "article" → full editorial piece produced by the long-form
+ *                        engine / content-creator (this registry).
+ *
+ * The disambiguator is the ENGINE, not the type string: only callers that
+ * enter the long-form engine (guarded by isLongFormContentType in
+ * unifiedLongFormEngine) treat `article` as long-form. Any code that routes
+ * by content type alone MUST call this guard so a long-form article is never
+ * silently downgraded to the BOLT ≤800-word path (or vice-versa). This is an
+ * explicit assertion point — keep it; do not "simplify" it away.
+ */
+export const DUAL_REGISTRY_CONTENT_TYPES: readonly LongFormContentType[] = ['article'];
+
+export function isDualRegistryContentType(value: string): boolean {
+  return (DUAL_REGISTRY_CONTENT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Explicit routing guard. Given a content type and the engine context the
+ * caller is in, returns whether it should be handled as long-form. For the
+ * ambiguous `article`, long-form is decided by `inLongFormEngineContext`
+ * (e.g. the content-creator / long-form engine sets this true). Non-ambiguous
+ * types fall back to registry membership.
+ */
+export function resolveIsLongForm(
+  value: string,
+  inLongFormEngineContext: boolean,
+): boolean {
+  if (isDualRegistryContentType(value)) return inLongFormEngineContext;
+  return isLongFormContentType(value);
+}
+
 export function toManagedLongFormContentType(value: LongFormContentType): ManagedContentType {
   return value === 'case-study' ? 'case-study' : value;
 }

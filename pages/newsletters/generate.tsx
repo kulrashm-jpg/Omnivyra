@@ -53,6 +53,10 @@ export default function NewsletterGeneratePage() {
   const [posts, setPosts] = useState<BlogPost[]>([]);
   const [showGenerator, setShowGenerator] = useState(false);
   const [brief, setBrief] = useState<BriefInsight | null>(null);
+  // Topic is editable: prefilled flows (recommended card / brief) seed it via
+  // the effect below; the write-your-own flow (no prefill_topic) lets the user
+  // type it, which is what activates "Suggest Inputs" + the generator.
+  const [topic, setTopic] = useState('');
   const [targetWords, setTargetWords] = useState('1200');
   const [uniquenessDirective, setUniquenessDirective] = useState('');
   const [mustInclude, setMustInclude] = useState('');
@@ -167,6 +171,13 @@ export default function NewsletterGeneratePage() {
     }
   }, [selectedCompanyId, prefillBriefToken, prefillCardToken, templateToken]);
 
+  // Seed the editable topic from the URL prefill once it resolves (router
+  // query is empty on first render). User edits are preserved — prefill only
+  // fills while the field is still untouched.
+  useEffect(() => {
+    if (prefillTopic) setTopic((cur) => (cur ? cur : prefillTopic));
+  }, [prefillTopic]);
+
   const handleGenerated = (
     output: BlogGenerationOutput & { content_blocks?: unknown[] },
     confidence: 'high' | 'medium',
@@ -183,7 +194,7 @@ export default function NewsletterGeneratePage() {
       prefillReason,
       brief,
       company_id: selectedCompanyId,
-      prefillTopic,
+      prefillTopic: topic,
       target_word_count: parseInt(targetWords, 10) || 1200,
       savedAt: new Date().toISOString(),
     };
@@ -198,7 +209,7 @@ export default function NewsletterGeneratePage() {
   };
 
   const fetchSuggestions = async () => {
-    if (!selectedCompanyId || !prefillTopic) return;
+    if (!selectedCompanyId || !topic.trim()) return;
     setSuggesting(true);
     setSuggestionError(null);
 
@@ -209,7 +220,7 @@ export default function NewsletterGeneratePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: selectedCompanyId,
-          topic: prefillTopic,
+          topic: topic.trim(),
           reason: prefillReason,
           brief,
           currentValues: {
@@ -278,8 +289,17 @@ export default function NewsletterGeneratePage() {
 
           <div className="space-y-4">
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-              <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1">Newsletter Topic</p>
-              <p className="text-sm font-bold text-amber-900">{prefillTopic || 'No topic prefilled — enter one below'}</p>
+              <label htmlFor="newsletter-topic" className="block text-xs font-semibold text-amber-700 uppercase tracking-wide mb-1">
+                Newsletter Topic
+              </label>
+              <input
+                id="newsletter-topic"
+                type="text"
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="Enter the newsletter topic you want to write about"
+                className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-amber-900 placeholder:font-normal placeholder:text-amber-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+              />
               {prefillReason && <p className="text-xs text-amber-700 mt-1">{prefillReason}</p>}
             </div>
 
@@ -307,7 +327,7 @@ export default function NewsletterGeneratePage() {
                 <button
                   type="button"
                   onClick={fetchSuggestions}
-                  disabled={!selectedCompanyId || !prefillTopic || suggesting}
+                  disabled={!selectedCompanyId || !topic.trim() || suggesting}
                   className="inline-flex items-center gap-1 rounded-md border border-amber-600/25 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-600 hover:bg-amber-50 disabled:opacity-50"
                 >
                   {suggesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
@@ -498,7 +518,7 @@ export default function NewsletterGeneratePage() {
           clusters={[]}
           blogs={posts}
           industry={null}
-          initialTopic={prefillTopic}
+          initialTopic={topic}
           initialTargetWords={targetWords}
           initialIntent={brief?.intent}
           initialTone={brief?.tone}

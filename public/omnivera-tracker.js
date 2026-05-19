@@ -152,14 +152,35 @@
 
   document.addEventListener('focusin', function (event) {
     if (event.target && event.target.closest && event.target.closest('form')) {
-      enqueue('form_start', { form_id: event.target.closest('form').id || null });
+      var form = event.target.closest('form');
+      var field = event.target.getAttribute('name') || event.target.id || event.target.getAttribute('data-field-key') || '';
+      enqueue('form_start', { form_id: form.id || form.getAttribute('data-omnivera-form-id') || null });
+      if (field) enqueue('form_field_focus', { form_id: form.id || form.getAttribute('data-omnivera-form-id') || null, field_key: field });
+    }
+  }, true);
+  document.addEventListener('change', function (event) {
+    if (event.target && event.target.closest && event.target.closest('form')) {
+      var form = event.target.closest('form');
+      var field = event.target.getAttribute('name') || event.target.id || event.target.getAttribute('data-field-key') || '';
+      if (field) enqueue('form_field_complete', { form_id: form.id || form.getAttribute('data-omnivera-form-id') || null, field_key: field });
     }
   }, true);
   document.addEventListener('submit', function (event) {
     if (event.target && event.target.tagName === 'FORM') {
-      enqueue('form_submit', { form_id: event.target.id || null });
+      event.target.setAttribute('data-omnivera-submitted', 'true');
+      enqueue('form_submit', { form_id: event.target.id || event.target.getAttribute('data-omnivera-form-id') || null });
     }
   }, true);
+  Array.prototype.slice.call(document.querySelectorAll('form')).forEach(function (form) {
+    enqueue('form_impression', { form_id: form.id || form.getAttribute('data-omnivera-form-id') || null });
+  });
+  window.addEventListener('beforeunload', function () {
+    Array.prototype.slice.call(document.querySelectorAll('form')).forEach(function (form) {
+      var formId = form.id || form.getAttribute('data-omnivera-form-id') || null;
+      if (formId && form.getAttribute('data-omnivera-submitted') !== 'true') enqueue('form_abandon', { form_id: formId });
+    });
+    flush();
+  });
   window.addEventListener('scroll', function () { window.requestAnimationFrame(checkScroll); }, { passive: true });
   window.addEventListener('online', flush);
   window.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flush(); });
