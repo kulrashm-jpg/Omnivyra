@@ -58,6 +58,12 @@ export default function LoginPage() {
   }, [reason]);
 
   useEffect(() => {
+    if (router.query.mode === 'forgot') {
+      setMode('forgot');
+    }
+  }, [router.query.mode]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadResumeStatus() {

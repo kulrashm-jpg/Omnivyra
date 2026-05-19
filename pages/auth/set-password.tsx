@@ -308,17 +308,34 @@ export default function SetPasswordPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
                   </svg>
                 </div>
-                <h2 className="text-2xl font-bold tracking-tight text-[#0B1F33]">Link expired</h2>
+                <h2 className="text-2xl font-bold tracking-tight text-[#0B1F33]">
+                  {flow === 'recovery' ? 'Reset link expired' : 'Link expired'}
+                </h2>
                 <p className="mx-auto mt-3 max-w-sm text-sm leading-relaxed text-[#6B7C93]">{error}</p>
+                {flow === 'recovery' && (
+                  <p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-[#6B7C93]">
+                    Password reset links work once and expire quickly. Request a fresh one and open the
+                    newest email right away — older reset emails will no longer work.
+                  </p>
+                )}
                 <div className="mt-8 flex flex-col items-center gap-3">
-                  <Link href="/create-account"
-                    className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95">
-                    New sign-up link
-                  </Link>
-                  <Link href="/login"
-                    className="text-sm text-[#6B7C93] hover:text-[#0A66C2]">
-                    Reset password instead
-                  </Link>
+                  {flow === 'recovery' ? (
+                    <Link href="/login?mode=forgot"
+                      className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95">
+                      Request a new reset link
+                    </Link>
+                  ) : (
+                    <>
+                      <Link href="/create-account"
+                        className="rounded-full bg-gradient-to-r from-[#0A66C2] to-[#3FA9F5] px-6 py-3 text-sm font-semibold text-white shadow-[0_4px_16px_rgba(10,102,194,0.35)] transition hover:opacity-95">
+                        New sign-up link
+                      </Link>
+                      <Link href="/login"
+                        className="text-sm text-[#6B7C93] hover:text-[#0A66C2]">
+                        Reset password instead
+                      </Link>
+                    </>
+                  )}
                 </div>
               </div>
             )}
