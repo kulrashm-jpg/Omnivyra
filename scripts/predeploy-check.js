@@ -9,6 +9,12 @@
  *
  * Exit 1 (block) if the working tree is dirty — you must never deploy a
  * snapshot that does not correspond to a committed, pushed SHA.
+ *
+ * Exit 1 (block) if HEAD is not the exact tip of origin/main. Deploying a
+ * stale worktree or a divergent branch ships old/divergent code and
+ * silently regresses already-fixed functionality — this is the root cause
+ * of the recurring "worked before, broke after deploy" problem. Deploy
+ * ONLY a fresh, clean checkout of the latest origin/main.
  */
 const { execSync } = require('child_process');
 
@@ -43,8 +49,33 @@ if (porcelain) {
   process.exit(1);
 }
 
+// Regression guard: deploy ONLY the exact tip of origin/main. A clean but
+// stale worktree (or a feature branch) deploying old/divergent code is the
+// #1 cause of "worked before, broke after deploy".
+let originMain;
+try {
+  execSync('git fetch origin main --quiet', { stdio: 'ignore' });
+  originMain = git('rev-parse origin/main');
+} catch (e) {
+  process.stdout.write(
+    `RESULT: BLOCKED — cannot verify origin/main (git fetch failed): ${e.message}\n`,
+  );
+  process.exit(1);
+}
+
+if (sha !== originMain) {
+  process.stdout.write(
+    `RESULT: BLOCKED — HEAD ${shortSha} is NOT the tip of origin/main (${originMain.slice(0, 7)}).\n\n` +
+    `Deploying a stale worktree or divergent branch ships old code and\n` +
+    `silently regresses already-fixed functionality.\n\n` +
+    `Deploy only a fresh checkout of the latest origin/main:\n` +
+    `  git fetch origin && git checkout main && git reset --hard origin/main\n`,
+  );
+  process.exit(1);
+}
+
 process.stdout.write(
-  `RESULT: OK — clean tree at ${shortSha}.\n\n` +
+  `RESULT: OK — clean tree at ${shortSha} (== origin/main).\n\n` +
   `Manual deploy is your action (not automated here). AFTER a verified\n` +
   `successful 'vercel --prod' deploy of omnivyra, record traceability:\n\n` +
   `  git tag -a ${tag} ${shortSha} -m "omnivyra prod deploy ${stamp}"\n` +

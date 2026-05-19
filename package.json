@@ -11,6 +11,8 @@
     "build": "node scripts/safe-build.js",
     "build:ci": "node scripts/safe-build.js",
     "build:webpack": "node scripts/safe-build.js",
+    "deploy:check": "node scripts/predeploy-check.js",
+    "deploy:prod": "node scripts/predeploy-check.js && vercel --prod --scope rawats-projects-5fb9f1f3",
     "prestart": "node -e \"require('./scripts/dev-runtime-guard').assertNoActiveDevRuntime('start production server')\"",
     "start": "next start",
     "worker:all": "node dist/backend/workers/main.js",
