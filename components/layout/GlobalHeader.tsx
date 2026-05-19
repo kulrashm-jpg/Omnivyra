@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import {
+  AlertTriangle,
   BarChart3,
   BookOpen,
   Camera,
@@ -31,7 +32,7 @@ import { useCompanyContext } from '../CompanyContext';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { logoutCurrentSession } from '../../lib/security/sessionClient';
 import { clearBrowserAuthState } from '../../utils/authStorage';
-import { useCredits } from '@/hooks/useCredits';
+import { useCredits, type CreditsStatus } from '@/hooks/useCredits';
 import { useTour } from '../tour/TourContext';
 import { TourOverlay } from '../tour/TourOverlay';
 import { NotificationBell } from '../NotificationBell';
@@ -206,7 +207,64 @@ function useClickOutside(ref: React.RefObject<HTMLElement | null>, onClose: () =
   }, [onClose, ref]);
 }
 
-function CreditPill({ total, remaining }: { total: number; remaining: number }) {
+function CreditPill({
+  status,
+  total,
+  remaining,
+}: {
+  status?: CreditsStatus;
+  total: number;
+  remaining: number;
+}) {
+  // Legacy callers/tests that don't pass `status` keep the prior numeric
+  // behavior (backward compatible).
+  const effective: CreditsStatus = status ?? 'ready';
+
+  // LOADING — animated placeholder, never a numeric 0.
+  if (effective === 'loading') {
+    return (
+      <div
+        aria-busy="true"
+        aria-label="Loading credit balance"
+        className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 sm:flex"
+      >
+        <Zap className="h-3.5 w-3.5 text-slate-300" />
+        <span className="h-3 w-8 animate-pulse rounded bg-slate-200" />
+      </div>
+    );
+  }
+
+  // AUTH / API / TRANSIENT ERROR — warning indicator + tooltip, never 0.
+  if (effective === 'error') {
+    return (
+      <Link
+        href="/pricing#addons"
+        title="Credit balance unavailable — couldn't reach the billing service. Retrying automatically."
+        aria-label="Credit balance unavailable"
+        className="hidden items-center gap-1 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 transition-colors hover:bg-amber-100 sm:flex"
+      >
+        <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+        <span className="text-xs font-semibold text-amber-700">—</span>
+      </Link>
+    );
+  }
+
+  // NO WALLET / UNAVAILABLE — explicit unavailable state, never 0.
+  if (effective === 'unavailable') {
+    return (
+      <Link
+        href="/pricing#addons"
+        title="No credit account yet for this workspace."
+        aria-label="No credit account yet"
+        className="hidden items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 transition-colors hover:bg-slate-50 sm:flex"
+      >
+        <Zap className="h-3.5 w-3.5 text-slate-300" />
+        <span className="text-xs font-semibold text-slate-400">—</span>
+      </Link>
+    );
+  }
+
+  // READY — verified valid balance; 0 here is a REAL zero.
   const usedPercent = total > 0 ? ((total - remaining) / total) * 100 : 0;
   const accent =
     usedPercent >= 95 ? 'text-red-500' : usedPercent >= 80 ? 'text-amber-500' : 'text-sky-600';
@@ -363,6 +421,7 @@ function NavDropdown({
                     setExpandedSection(section.id);
                     setFocusedCategoryIndex(index);
                     setFocusedItemIndex(0);
+                    navigateToContentItem(section.href);
                   }}
                   className={`group relative mt-2 w-full rounded-xl border px-3 py-3 text-left transition-all duration-200 ${
                     sectionActive || routeActive
@@ -774,9 +833,8 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
   const router = useRouter();
   const { userName, selectedCompanyId, userRole, isAuthenticated } = useCompanyContext();
   const { startTour } = useTour();
-  const { totalCredits, remainingCredits } = useCredits(isAuthenticated ? selectedCompanyId : null);
+  const { status: creditsStatus, totalCredits, remainingCredits } = useCredits(isAuthenticated ? selectedCompanyId : null);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [mobileContentSection, setMobileContentSection] = useState<ContentNavSection['id'] | null>(null);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -846,7 +904,7 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {isAuthenticated ? <NotificationBell /> : null}
             {isAuthenticated ? (
-              <CreditPill total={totalCredits} remaining={remainingCredits} />
+              <CreditPill status={creditsStatus} total={totalCredits} remaining={remainingCredits} />
             ) : null}
             {isAuthenticated ? (
               <UserMenu
@@ -896,21 +954,20 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                   {item.label === 'Content' ? (
                     <div className="space-y-1 px-1 pb-1 pt-2">
                       {CONTENT_NAV_SECTIONS.map((section) => {
-                        const expanded = mobileContentSection === section.id;
                         const SectionIcon = section.id === 'writer' ? PenTool : Sparkles;
+                        const sectionActive = isPathMatch(router.asPath, section.href);
                         return (
                           <div key={section.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                            <button
-                              type="button"
-                              aria-expanded={expanded}
-                              onClick={() => setMobileContentSection((current) => current === section.id ? null : section.id)}
+                            <Link
+                              href={section.href}
+                              onClick={() => setMobileOpen(false)}
                               className={`flex w-full items-center justify-between gap-3 px-3 py-3 text-left text-sm transition-colors ${
-                                expanded ? 'bg-sky-50 text-sky-800' : 'text-slate-700 hover:bg-slate-50'
+                                sectionActive ? 'bg-sky-50 text-sky-800' : 'text-slate-700 hover:bg-slate-50'
                               }`}
                             >
                               <span className="flex min-w-0 items-start gap-3">
                                 <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
-                                  expanded ? 'border-sky-100 bg-white text-sky-700' : 'border-slate-200 bg-slate-50 text-slate-500'
+                                  sectionActive ? 'border-sky-100 bg-white text-sky-700' : 'border-slate-200 bg-slate-50 text-slate-500'
                                 }`}>
                                   <SectionIcon className="h-4 w-4" />
                                 </span>
@@ -922,9 +979,9 @@ const GlobalHeader: React.FC<GlobalHeaderProps> = () => {
                                   </span>
                                 </span>
                               </span>
-                              <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-                            </button>
-                            <div className={`grid transition-all duration-200 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                              <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                            </Link>
+                            <div className="grid grid-rows-[1fr]">
                               <div className="overflow-hidden">
                                 <div className="border-t border-slate-100 px-3 py-2 text-xs leading-5 text-slate-500">
                                   {section.summary}

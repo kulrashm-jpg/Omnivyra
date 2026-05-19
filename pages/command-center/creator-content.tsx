@@ -3,19 +3,12 @@ import { useRouter } from 'next/router';
 import { useCompanyContext } from '../../components/CompanyContext';
 
 type CreatorTypeId =
-  | 'carousel'
   | 'image'
+  | 'carousel'
   | 'banner'
   | 'infographic'
   | 'pdf'
-  | 'slider'
-  | 'post'
-  | 'thread'
-  | 'video'
-  | 'reel'
-  | 'short'
-  | 'podcast'
-  | 'story';
+  | 'slider';
 
 type CreatorCard = {
   id: CreatorTypeId;
@@ -133,125 +126,6 @@ const CREATOR_CARDS: CreatorCard[] = [
     accentTo: 'to-indigo-50',
     borderColor: 'border-sky-200',
     ctaColor: 'bg-sky-600 hover:bg-sky-700',
-  },
-  {
-    id: 'post',
-    title: 'Post',
-    category: 'Social Copy',
-    outcome: 'Platform-ready post creative with optional reusable asset context',
-    description: 'Create a focused social post with structured direction, CTA, platform packaging, and optional saved asset support.',
-    bullets: [
-      'Best for LinkedIn and Instagram post packaging',
-      'Can attach existing creator assets when useful',
-      'Ready for campaign, blog, or scheduler handoff',
-    ],
-    cta: 'Create Post',
-    accentFrom: 'from-lime-50',
-    accentTo: 'to-emerald-50',
-    borderColor: 'border-lime-200',
-    ctaColor: 'bg-lime-700 hover:bg-lime-800',
-  },
-  {
-    id: 'thread',
-    title: 'Thread',
-    category: 'Sequence Copy',
-    outcome: 'Connected post sequence with optional reusable asset context',
-    description: 'Build a thread narrative with hook, progression, CTA, platform packaging, and optional saved asset support.',
-    bullets: [
-      'Strong fit for authority and launch narratives',
-      'Can reuse saved assets as context or support',
-      'Easy handoff into long-form and social workflows',
-    ],
-    cta: 'Create Thread',
-    accentFrom: 'from-fuchsia-50',
-    accentTo: 'to-rose-50',
-    borderColor: 'border-fuchsia-200',
-    ctaColor: 'bg-fuchsia-700 hover:bg-fuchsia-800',
-  },
-  {
-    id: 'video',
-    title: 'Video',
-    category: 'Theme Treatment',
-    outcome: 'Shot-by-shot treatment for long-form video — AI gives direction, your team produces',
-    description: 'AI cannot film the video, but it produces a complete treatment: hook scene, scene-by-scene direction, audio cues, and CTA — ready to hand to your editor.',
-    bullets: [
-      'Best for YouTube, LinkedIn, and brand-anthem video',
-      'Returns a written treatment, not a rendered file',
-      'Pairs well with carousel + post for cross-format launches',
-    ],
-    cta: 'Create Video Treatment',
-    accentFrom: 'from-purple-50',
-    accentTo: 'to-indigo-50',
-    borderColor: 'border-purple-200',
-    ctaColor: 'bg-purple-700 hover:bg-purple-800',
-  },
-  {
-    id: 'reel',
-    title: 'Reel',
-    category: 'Theme Treatment',
-    outcome: 'Tight 15–90s vertical treatment with hook, beat-by-beat scenes, and audio cues',
-    description: 'AI produces a vertical short-form treatment for Instagram Reels and Facebook — your team shoots and edits from the brief.',
-    bullets: [
-      'Designed for IG, FB, and YouTube vertical placements',
-      'Includes pattern-interrupt hook + scene pacing notes',
-      'Returns a written treatment, not a rendered video',
-    ],
-    cta: 'Create Reel Treatment',
-    accentFrom: 'from-pink-50',
-    accentTo: 'to-rose-50',
-    borderColor: 'border-pink-200',
-    ctaColor: 'bg-pink-700 hover:bg-pink-800',
-  },
-  {
-    id: 'short',
-    title: 'Short',
-    category: 'Theme Treatment',
-    outcome: 'YouTube / TikTok short-form treatment with on-screen text + audio direction',
-    description: 'AI produces a 60-second treatment ready for your team to film — myth-buster, tip-stack, or before/after structures with pacing direction.',
-    bullets: [
-      'Designed for YouTube Shorts, TikTok, IG Reels',
-      'Returns shot list, on-screen text, and trending audio cues',
-      'Returns a written treatment, not a rendered video',
-    ],
-    cta: 'Create Short Treatment',
-    accentFrom: 'from-amber-50',
-    accentTo: 'to-orange-50',
-    borderColor: 'border-amber-200',
-    ctaColor: 'bg-amber-700 hover:bg-amber-800',
-  },
-  {
-    id: 'podcast',
-    title: 'Podcast',
-    category: 'Theme Treatment',
-    outcome: 'Audio-first episode treatment — hook beat, chapters, sonic palette, CTA',
-    description: 'AI produces a complete episode treatment — chapter structure, audio cues, voice direction, and CTA — ready to hand to your producer.',
-    bullets: [
-      'Works for solo monologue, interview, or narrative episodes',
-      'Returns chapter-by-chapter direction with sonic palette',
-      'Returns a written treatment, not a rendered audio file',
-    ],
-    cta: 'Create Episode Treatment',
-    accentFrom: 'from-slate-50',
-    accentTo: 'to-gray-50',
-    borderColor: 'border-slate-200',
-    ctaColor: 'bg-slate-700 hover:bg-slate-800',
-  },
-  {
-    id: 'story',
-    title: 'Story',
-    category: 'Ephemeral Visual',
-    outcome: '9:16 ephemeral story frame with overlay text — ready to post',
-    description: 'Create a vertical story frame for Instagram, Facebook, or LinkedIn Stories with AI-defined hook copy, visual direction, and CTA.',
-    bullets: [
-      '24-hour ephemeral format on Instagram, Facebook, LinkedIn',
-      'Single-frame visual + overlay text',
-      'Ready for direct publishing handoff',
-    ],
-    cta: 'Create Story',
-    accentFrom: 'from-cyan-50',
-    accentTo: 'to-blue-50',
-    borderColor: 'border-cyan-200',
-    ctaColor: 'bg-cyan-700 hover:bg-cyan-800',
   },
 ];
 

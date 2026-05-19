@@ -64,25 +64,35 @@ function openDesktopContentMenu() {
 }
 
 describe('GlobalHeader Content expandable navigation', () => {
-  test('Writer Content expands to all 9 writer content types without category navigation', () => {
+  test('Writer Content is expanded by default and lists all 9 writer content types', () => {
     renderHeader();
     const menu = openDesktopContentMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: /Writer Content/i }));
 
-    expect(push).not.toHaveBeenCalled();
     expect(within(menu).getByText('9 text-first content types')).toBeInTheDocument();
-    ['Post', 'Thread', 'Blog', 'Newsletter', 'Ad Copy', 'Product Copy', 'Landing Page', 'SEO Content', 'Script']
+    ['Post', 'Blog', 'Story', 'Article', 'Whitepaper', 'Case Study', 'Thread', 'Guide', 'Newsletter']
       .forEach((label) => expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument());
   });
 
-  test('Creator Content expands to all 6 creator content types', () => {
+  test('hovering Creator Content reveals all 6 creator content types', () => {
     renderHeader();
     const menu = openDesktopContentMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: /Creator Content/i }));
+    fireEvent.mouseEnter(within(menu).getByRole('menuitem', { name: /Creator Content/i }));
 
     expect(within(menu).getByText('6 AI-supported creator content types')).toBeInTheDocument();
-    ['Supporting Image', 'Banner', 'Infographic', 'Carousel', 'Brand Card', 'PDF/Slider']
+    ['Image', 'Carousel', 'Banner', 'Infographic', 'PDF', 'Slider']
       .forEach((label) => expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument());
+  });
+
+  test('clicking a section header navigates to its landing page', () => {
+    renderHeader();
+    let menu = openDesktopContentMenu();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Writer Content/i }));
+    expect(push).toHaveBeenCalledWith('/command-center/writer-content');
+
+    push.mockClear();
+    menu = openDesktopContentMenu();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Creator Content/i }));
+    expect(push).toHaveBeenCalledWith('/command-center/creator-content');
   });
 
   test('clicking a content item routes to the configured page', () => {
@@ -100,16 +110,15 @@ describe('GlobalHeader Content expandable navigation', () => {
     expect(push).toHaveBeenCalledWith('/command-center/creator-content/image');
   });
 
-  test('mobile Content menu uses nested accordion behavior', () => {
+  test('mobile Content menu links section headers to their landing pages with sub-items always visible', () => {
     renderHeader();
     fireEvent.click(screen.getByRole('button', { name: /Toggle navigation/i }));
-    const writerAccordion = screen.getAllByRole('button', { name: /Writer Content/i }).find((button) =>
-      button.getAttribute('aria-expanded') === 'false'
-    );
-    expect(writerAccordion).toBeDefined();
-    fireEvent.click(writerAccordion as HTMLElement);
-    expect((writerAccordion as HTMLElement).getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByRole('link', { name: 'SEO Content' })).toHaveAttribute('href', '/command-center/writer-content?type=seo-content');
+
+    expect(screen.getByRole('link', { name: /Writer Content/i })).toHaveAttribute('href', '/command-center/writer-content');
+    expect(screen.getByRole('link', { name: /Creator Content/i })).toHaveAttribute('href', '/command-center/creator-content');
+    // Sub-items are rendered without needing to expand an accordion.
+    expect(screen.getByRole('link', { name: /Guide/i })).toHaveAttribute('href', '/guides/create');
+    expect(screen.getByRole('link', { name: /Infographic/i })).toHaveAttribute('href', '/command-center/creator-content/infographic');
   });
 
   test('counts, routes, and active item state are preserved', () => {
@@ -119,7 +128,7 @@ describe('GlobalHeader Content expandable navigation', () => {
 
     renderHeader('/command-center/creator-content/banner');
     const menu = openDesktopContentMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: /Creator Content/i }));
+    // The active route auto-expands the Creator section on open (no click needed).
     expect(within(menu).getByRole('menuitem', { name: 'Banner' })).toHaveClass('bg-sky-600');
   });
 });
