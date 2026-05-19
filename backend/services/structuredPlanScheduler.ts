@@ -1886,17 +1886,23 @@ async function scheduleStructuredPlanRuntime(
   // NOTE: execution_mode and creator_asset are optional columns — if they don't exist in the
   // DB schema, Supabase returns an error and hasDailyPlans becomes false, causing placeholder
   // content. We select only guaranteed-to-exist core columns and handle optional ones gracefully.
-  const { data: dailyPlans, error: dailyPlansError } = await ownedDbTable('daily_content_plans')
+  const { data: dailyPlansRaw, error: dailyPlansError } = await ownedDbTable('daily_content_plans')
     .select('id, campaign_id, week_number, day_of_week, date, platform, content_type, title, topic, scheduled_time, content, content_status, intent_type, asset_type, template_id, plan_version, locked_by, lease_expires_at, attempt_count, retry_count, max_retries, failure_reason, failure_type')
     .eq('campaign_id', campaignId)
     .order('date', { ascending: true })
     .order('week_number', { ascending: true });
+  // `let` alias (Phase-2 Step-34): downstream references are unchanged;
+  // physical pruning under AUTHORITATIVE reassigns this to canonical-ready
+  // rows only. Fail-soft ⇒ stays the original query result.
+  let dailyPlans = dailyPlansRaw;
 
   if (dailyPlansError) {
     console.warn('[schedule] daily_content_plans query failed — falling back to allocation scheduling', dailyPlansError.message);
   }
 
-  const hasDailyPlans = !dailyPlansError && Array.isArray(dailyPlans) && dailyPlans.length > 0;
+  // `let` (was const): Phase-2 Step-34 physically prunes dailyPlans to
+  // canonical-ready rows under AUTHORITATIVE, which re-derives this flag.
+  let hasDailyPlans = !dailyPlansError && Array.isArray(dailyPlans) && dailyPlans.length > 0;
 
   if (hasDailyPlans && Array.isArray(dailyPlans)) {
     // Creator-format governance applies ONLY to creator-intent rows. BOLT
@@ -1923,8 +1929,113 @@ async function scheduleStructuredPlanRuntime(
         execution_mode: r.execution_mode ?? null,
         creator_asset: r.creator_asset ?? null,
       })));
-      if (!eligibility.eligible) {
-        throw new ScheduleEligibilityError(eligibility);
+      // Phase-2 Step-32: AUTHORITATIVE scheduler ENFORCEMENT cutover.
+      // Under AUTHORITATIVE the canonical PublishingExecutionProjection
+      // decides eligibility; otherwise the legacy `eligibility` verdict
+      // governs byte-identically (SHADOW diff-only, rollback-safe).
+      // Fail-soft: any enforcement failure ⇒ enforced:false ⇒ legacy.
+      let canonicalEnforcement: { enforced: boolean; eligible: boolean } = {
+        enforced: false,
+        eligible: eligibility.eligible,
+      };
+      try {
+        const orch = await import('./orchestration');
+        canonicalEnforcement = await orch.enforceSchedulerEligibility(
+          campaignId,
+          eligibility.eligible,
+        );
+      } catch {
+        canonicalEnforcement = { enforced: false, eligible: eligibility.eligible };
+      }
+      // Phase-2 Step-33: PER-EXECUTION authoritative enqueue control.
+      // Under AUTHORITATIVE the run is rejected ONLY when EVERY execution
+      // is blocked/unusable (no whole-run rejection for a single bad row);
+      // deferred/blocked executions are recorded with lineage in the
+      // ExecutionEnqueueSummary (no silent drops, requeue-eligible).
+      // SHADOW/LEGACY/not-usable ⇒ Step-32 whole-run semantics preserved.
+      let perExecutionUsable = false;
+      let perExecutionAllBlocked = false;
+      let pruning: { enqueueableRows: DailyPlanRow[]; usable: boolean } | null = null;
+      try {
+        const orch = await import('./orchestration');
+        const enqueueSummary = await orch.resolveExecutionEnqueue(campaignId);
+        orch.diffEnqueueVsLegacy(campaignId, enqueueSummary, eligibility.eligible);
+        perExecutionUsable = enqueueSummary.usable;
+        perExecutionAllBlocked = enqueueSummary.all_blocked;
+        // Phase-2 Step-34: PHYSICAL pruning — deferred/blocked rows exit
+        // the live enqueue loop so ONLY canonical-ready executions
+        // traverse downstream. Conservative + fail-soft (unmapped rows
+        // stay enqueueable; never wipes a non-all-blocked run).
+        const pr = orch.pruneExecutions<DailyPlanRow>(
+          campaignId,
+          dailyPlans as DailyPlanRow[],
+          enqueueSummary,
+        );
+        orch.diffPruningVsLegacy(campaignId, dailyPlans.length, pr);
+        pruning = { enqueueableRows: pr.enqueueableRows, usable: pr.summary.usable };
+        // Phase-2 Step-35: AUTONOMOUS deferred replay. The coordinator
+        // scans canonical state with dedupe + cooldown; the *physical*
+        // replay happens by virtue of THIS and future runs re-resolving
+        // every execution canonically (a now-ready prior-deferred row
+        // routes to enqueue), so nothing stays permanently stranded.
+        // Fire-and-forget, cooldown-guarded, fail-soft — never blocks.
+        let replayedCount = 0;
+        let permanentlyBlockedCount = 0;
+        if (pr.summary.deferred_requeue_candidates.length > 0) {
+          try {
+            const replay = await orch.coordinateReplay(
+              campaignId,
+              pr.summary.deferred_requeue_candidates,
+            );
+            replayedCount = replay.replayed_ids.length;
+            permanentlyBlockedCount = replay.permanently_blocked_ids.length;
+          } catch {
+            /* fail-soft: coordinator already isolated + logged */
+          }
+        }
+        // Final orchestration validation + cutover-state observability.
+        try {
+          orch.emitFinalOrchestrationDiff({
+            campaignId,
+            legacyEligible: eligibility.eligible,
+            enqueueable: enqueueSummary.enqueued_count,
+            deferred: enqueueSummary.deferred_count,
+            blocked: enqueueSummary.blocked_count,
+            pruningUsable: pr.summary.usable,
+            replayedCount,
+            permanentlyBlockedCount,
+          });
+        } catch {
+          /* observability only — never block the run */
+        }
+      } catch {
+        perExecutionUsable = false;
+        pruning = null;
+      }
+
+      if (perExecutionUsable) {
+        // Per-execution authority: only an entirely-blocked run rejects.
+        if (perExecutionAllBlocked) {
+          throw new ScheduleEligibilityError(eligibility);
+        }
+        // Physically prune the in-flight rows so deferred/blocked
+        // executions no longer traverse downstream enqueue/publish/CMS
+        // loops. Only when pruning is usable (else Step-33 logical only).
+        if (pruning && pruning.usable) {
+          // Cast: pruned rows are the same DB rows, narrowed to the
+          // canonical-ready subset (DailyPlanRow ⊃ the select shape).
+          dailyPlans = pruning.enqueueableRows as unknown as typeof dailyPlans;
+          hasDailyPlans = Array.isArray(dailyPlans) && dailyPlans.length > 0;
+        }
+      } else {
+        // Authority: canonical when enforced, legacy otherwise. Legacy
+        // ScheduleEligibilityError contract is preserved exactly.
+        const effectivelyEligible = canonicalEnforcement.enforced
+          ? canonicalEnforcement.eligible
+          : eligibility.eligible;
+        if (!effectivelyEligible) {
+          throw new ScheduleEligibilityError(eligibility);
+        }
       }
     }
   }

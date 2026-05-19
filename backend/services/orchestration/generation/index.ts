@@ -23,6 +23,12 @@ export {
   authoritativeWeeklyGenerator,
 } from './weekly';
 export type { AuthoritativeWeeklyPlan, AuthoritativeWeeklyRow } from './weekly';
+export {
+  produceAuthoritativeDaily,
+  evaluateAuthoritativeDaily,
+  authoritativeDailyGenerator,
+} from './daily';
+export type { AuthoritativeDailyPlan, AuthoritativeDailyCard } from './daily';
 export type {
   GenerationExecutionContext,
   GenerationMode,

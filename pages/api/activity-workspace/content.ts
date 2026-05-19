@@ -12,6 +12,7 @@ import { getCreditCost, type CreditAction } from '@/backend/services/creditDeduc
 import { executeWithCredits, makeIdempotencyKey } from '@/backend/services/creditExecutionService';
 import { assertOrgMembership } from '@/backend/services/requestAccessService';
 import { generateMasterContentStrict } from '@/backend/services/contentGeneration/blueprintGenerator';
+import { getContentTypeCategory } from '@/backend/services/contentGeneration/contentTypeHelpers';
 // Phase-2 Step-3: master/variant enrichment persistence routes through the
 // ONE canonical write (reconciled, blank/stale-overwrite-safe, observable).
 import { updateExecutionContentByActivity } from '@/backend/services/orchestration';
@@ -637,7 +638,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const PROVIDER = 'openai';
-      const MODEL    = 'gpt-4o-mini';
+      // Model tiering by content category: long-format (article / white_paper /
+      // newsletter / short_story → category 'article') needs the stronger model
+      // for 700+ word editorial quality; short-form (post/tweet/poll/thread)
+      // stays on the cheaper mini. Plan-tier budget logic in the gateway
+      // (resolveEffectiveModel / evaluateJobCost) may still downgrade this for
+      // budget-constrained orgs — intended.
+      const isLongFormCategory =
+        getContentTypeCategory(String(item?.content_type || '').toLowerCase()) === 'article';
+      const MODEL = isLongFormCategory ? 'gpt-4o' : 'gpt-4o-mini';
       // Conservative upper bounds used to size the HOLD. validateModelLimits
       // (called inside estimateLlmHoldCredits) rejects if these exceed the
       // model's configured max_context_tokens / max_output_tokens.
@@ -772,7 +781,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({
           success: true,
           refined_content: refined,
-          usage: directResult.usage,
+          usage: directResult.metadata?.token_usage ?? null,
           billing: {
             charged: false,
             reason: refineBilling.reason,

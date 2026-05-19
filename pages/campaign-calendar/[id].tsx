@@ -203,8 +203,17 @@ const buildStageGroupsForDay = (dateKey: string, dayItems: CalendarActivity[]): 
 
 import { useCampaignCalendar } from '../../hooks/useCampaignCalendar';
 import CampaignCalendarView from '../../components/CampaignCalendarView';
+import { CalendarOrchestrationStrip } from '../../components/orchestration/CalendarOrchestrationStrip';
 export default function CampaignCalendarPage() {
   const d = useCampaignCalendar();
   if (d._ef1) return null;
-  return <CampaignCalendarView d={d} />;
+  // Phase-2 Step-15: read-only orchestration visibility (fixed overlay,
+  // fail-soft, additive — does not alter calendar layout/UX).
+  const orchestrationCampaignId = (d as { campaignId?: string }).campaignId;
+  return (
+    <>
+      <CalendarOrchestrationStrip campaignId={orchestrationCampaignId} />
+      <CampaignCalendarView d={d} />
+    </>
+  );
 }

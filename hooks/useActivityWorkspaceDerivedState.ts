@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { inferExecutionMode } from '@/lib/shared/executionModeInference';
 import {
   CONTENT_TYPE_OPTIONS_BY_PLATFORM,
@@ -12,6 +12,15 @@ import {
   type WorkspacePayload,
 } from '@/lib/activity-workspace/shared';
 import type { ScheduleItem } from '../types/activityWorkspace';
+// Step-28: authoritative workspace UI consumption (projection PRIMARY under
+// AUTHORITATIVE cutover; legacy fallback-only; SHADOW = diff-only).
+import {
+  useAuthoritativeWorkspace,
+  buildRenderAuthority,
+  workspaceRenderDiagnostics,
+  detectDirectReads,
+  extendRenderDiffWithConsumption,
+} from '../components/activity-workspace/orchestration';
 
 type Params = {
   payload: WorkspacePayload | null;
@@ -117,6 +126,127 @@ export function useActivityWorkspaceDerivedState({
     variant?: Record<string, unknown> | null
   ) => buildMarketingSupportHelper({ platform, contentType: variantContentType, content, variant, payload, normalizeKey });
 
+  // ── Step-28: authoritative workspace UI consumption ──────────────────
+  // Legacy values above remain the FALLBACK. The canonical projection
+  // (Step-27 `workspace_projection`) becomes PRIMARY only when the server
+  // cut over to AUTHORITATIVE (gated, default SHADOW → byte-identical;
+  // SHADOW emits [WORKSPACE_UI_DIFF] only; rollback/LEGACY → legacy).
+  const legacyAiAssetState = String(
+    (asObject((dailyRaw as any)?.ai_asset_override)?.state ??
+      asObject((dailyRaw as any)?.ai_asset)?.asset_state ??
+      'NONE') as string,
+  ).toUpperCase();
+  const legacyScheduled = (payload?.schedules || schedules || []).some(
+    (s: ScheduleItem) => s?.scheduledFor,
+  );
+  const legacyReadinessReady = ['render_ready', 'ready', 'creator_ready', 'scheduled', 'published'].includes(
+    String((dailyRaw as any)?.content_status ?? '').toLowerCase(),
+  );
+  // Memoized on primitives so the authority hook's effect doesn't re-fire
+  // (and log) every render.
+  const legacyUISnapshot = useMemo(
+    () => ({
+      isCreatorActivity,
+      hasCreatorAsset,
+      uploadRequired: isCreatorActivity && !hasCreatorAsset,
+      aiAssetState: legacyAiAssetState,
+      schedulingState: legacyScheduled ? 'SCHEDULED' : 'UNSCHEDULED',
+      readinessReady: legacyReadinessReady,
+    }),
+    [isCreatorActivity, hasCreatorAsset, legacyAiAssetState, legacyScheduled, legacyReadinessReady],
+  );
+  const authoritativeWorkspace = useAuthoritativeWorkspace(
+    payload,
+    legacyUISnapshot,
+    {
+      campaignId: String((payload as any)?.campaignId ?? '') || null,
+      executionId: String((payload as any)?.activityId ?? '') || null,
+    },
+  );
+  const authView = authoritativeWorkspace.view;
+
+  // ── Step-29: full render-authority cutover ───────────────────────────
+  // Every render-facing signal resolves from the canonical view when mode
+  // is AUTHORITATIVE; otherwise the legacy-derived values render
+  // (fallback-only). SHADOW still computes the diff (no render change).
+  const renderAuthorityResult = useMemo(
+    () =>
+      buildRenderAuthority({
+        mode: authoritativeWorkspace.mode,
+        view: authoritativeWorkspace.shadowView,
+        legacy: {
+          executionMode,
+          isCreatorActivity,
+          hasCreatorAsset,
+          uploadRequired: isCreatorActivity && !hasCreatorAsset,
+          aiAssetState: legacyAiAssetState,
+          schedulingState: legacyScheduled ? 'SCHEDULED' : 'UNSCHEDULED',
+          readinessReady: legacyReadinessReady,
+        },
+      }),
+    [
+      authoritativeWorkspace.mode,
+      authoritativeWorkspace.shadowView,
+      executionMode,
+      isCreatorActivity,
+      hasCreatorAsset,
+      legacyAiAssetState,
+      legacyScheduled,
+      legacyReadinessReady,
+    ],
+  );
+  const renderAuthority = renderAuthorityResult.render;
+  const workspaceRenderDiff = renderAuthorityResult.diff;
+
+  // ── Step-30: direct-consumption guard ────────────────────────────────
+  // Centralized detection of legacy signals present on the raw resolve
+  // payload that panels could read directly, bypassing render authority.
+  // Detection/observability only — never changes what renders.
+  const directReadViolation = useMemo(
+    () => detectDirectReads('activity-workspace', payload),
+    [payload],
+  );
+  const effectiveIsCreatorActivity = renderAuthority.isCreatorActivity;
+  const effectiveHasCreatorAsset = renderAuthority.hasCreatorAsset;
+
+  useEffect(() => {
+    const base = {
+      campaign_id: String((payload as any)?.campaignId ?? '') || null,
+      execution_id: String((payload as any)?.activityId ?? '') || null,
+      workspace_mode: authoritativeWorkspace.mode,
+      rendered_readiness: renderAuthority.readinessState,
+      rendered_scheduling: renderAuthority.schedulingState,
+      rendered_ai_asset: renderAuthority.aiAssetState,
+      rendered_creator: renderAuthority.isCreatorActivity ? 'creator' : 'non_creator',
+      fallback_active: renderAuthority.source === 'legacy',
+      mismatch_count: workspaceRenderDiff?.mismatch_count ?? 0,
+    };
+    if (renderAuthority.source === 'authoritative') workspaceRenderDiagnostics.authority(base);
+    else workspaceRenderDiagnostics.fallback(base);
+    workspaceRenderDiagnostics.scheduling(base);
+    workspaceRenderDiagnostics.aiAsset(base);
+    if (renderAuthority.blockingReasons.length > 0) {
+      workspaceRenderDiagnostics.blockers({ ...base, blockers: renderAuthority.blockingReasons });
+    }
+    if (workspaceRenderDiff) {
+      workspaceRenderDiagnostics.diff({
+        ...base,
+        orchestration_fidelity: workspaceRenderDiff.orchestration_fidelity,
+        mismatches: workspaceRenderDiff.mismatches,
+      });
+    }
+    // Step-30: extend the render diff with panel-consumption fidelity
+    // (direct-read / authority-bypass), emits [WORKSPACE_PANEL_DIFF].
+    extendRenderDiffWithConsumption({
+      panelName: 'activity-workspace',
+      campaignId: base.campaign_id,
+      executionId: base.execution_id,
+      workspaceMode: authoritativeWorkspace.mode,
+      baseDiff: workspaceRenderDiff,
+      violation: directReadViolation,
+    });
+  }, [renderAuthority, workspaceRenderDiff, authoritativeWorkspace.mode, payload, directReadViolation]);
+
   return {
     allContentTypesForAdd,
     allPlatformOptions,
@@ -130,13 +260,46 @@ export function useActivityWorkspaceDerivedState({
     dailyRaw,
     effectiveProblemAddressed,
     effectiveWhatReaderLearns,
-    executionMode,
+    // Step-29: render-authority cutover — executionMode renders from the
+    // canonical routing/creator lineage under AUTHORITATIVE (legacy
+    // inferExecutionMode is fallback-only).
+    executionMode: renderAuthority.executionMode,
     getAddablePlatformsForType,
     getContentTypeOptionsForPlatform,
-    hasCreatorAsset,
+    hasCreatorAsset: effectiveHasCreatorAsset,
     hasMasterGenerated,
     intent,
-    isCreatorActivity,
+    isCreatorActivity: effectiveIsCreatorActivity,
+    // Step-28 authoritative surfaces (additive; consumers may adopt
+    // incrementally — no layout/JSX change forced here).
+    workspaceMode: authoritativeWorkspace.mode,
+    workspaceFallbackActive: authoritativeWorkspace.fallbackActive,
+    authoritativeWorkspaceView: authView,
+    authoritativeWorkspaceShadowView: authoritativeWorkspace.shadowView,
+    workspaceUIDiff: authoritativeWorkspace.diff,
+    // Step-29 render-ready surfaces (authoritative under AUTHORITATIVE,
+    // legacy-equivalent otherwise — stable shape, no forced JSX change).
+    renderSource: renderAuthority.source,
+    renderReadinessState: renderAuthority.readinessState,
+    renderPublishState: renderAuthority.publishState,
+    renderReadinessScore: renderAuthority.readinessScore,
+    renderBlockingReasons: renderAuthority.blockingReasons,
+    renderSchedulingState: renderAuthority.schedulingState,
+    renderSchedulable: renderAuthority.schedulable,
+    renderAiAssetState: renderAuthority.aiAssetState,
+    renderAiAssetOrigin: renderAuthority.aiAssetOrigin,
+    renderAiPreviewUrl: renderAuthority.aiPreviewUrl,
+    renderAiPreviewPending: renderAuthority.aiPreviewPending,
+    renderAiFallbackMode: renderAuthority.aiFallbackMode,
+    renderAiUploadOverrideAvailable: renderAuthority.aiUploadOverrideAvailable,
+    renderUploadRequired: renderAuthority.uploadRequired,
+    renderUploadAssetState: renderAuthority.uploadAssetState,
+    renderRoutingLineage: renderAuthority.routingLineage,
+    renderProvenance: renderAuthority.provenance,
+    workspaceRenderDiff,
+    // Step-30: panel direct-consumption guard surface (observability;
+    // panels may adopt guardedRead/panelAuthority incrementally).
+    workspaceDirectReadViolation: directReadViolation,
     isDailyTopicView,
     isVideoContentTypeForValue,
     labelize,

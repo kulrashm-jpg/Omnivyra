@@ -3,6 +3,7 @@ import { getCmsAdapter, isCmsProvider } from './cms/registry';
 import type { CmsProvider } from './cms/types';
 import { getIntegration } from './integrationService';
 import type { Blog } from './blogService';
+import { captureQueueMetrics, recordWorkerHeartbeat } from './queueOperationsService';
 
 export type PublishingJobStatus = 'queued' | 'processing' | 'published' | 'failed' | 'retrying' | 'cancelled' | 'dead_letter' | 'scheduled';
 export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown';
@@ -219,6 +220,7 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
 
 export async function runPublishingWorker(input: { workerId?: string; limit?: number; lockMs?: number } = {}): Promise<WorkerRunResult> {
   const workerId = input.workerId ?? `publisher-${Date.now()}`;
+  await recordWorkerHeartbeat({ workerId, workerType: 'publishing', queueName: 'publishing_jobs', status: 'healthy' });
   const jobs = await claimDuePublishingJobs({ workerId, limit: input.limit ?? 5, lockMs: input.lockMs });
   const result: WorkerRunResult = { claimed: jobs.length, published: 0, retrying: 0, failed: 0, deadLettered: 0 };
 
@@ -233,6 +235,16 @@ export async function runPublishingWorker(input: { workerId?: string; limit?: nu
     }
   }
 
+  await recordWorkerHeartbeat({
+    workerId,
+    workerType: 'publishing',
+    queueName: 'publishing_jobs',
+    status: result.deadLettered || result.failed ? 'warning' : 'healthy',
+    processedCount: result.published + result.retrying + result.failed + result.deadLettered,
+    failedCount: result.failed + result.deadLettered,
+    metadata: { ...result },
+  });
+  await captureQueueMetrics({ queueName: 'publishing_jobs' }).catch(() => null);
   return result;
 }
 

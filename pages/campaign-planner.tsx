@@ -26,6 +26,7 @@ import { AccountInsightPanel } from '../components/planner/AccountInsightPanel';
 import { SkeletonBuilderPanel } from '../components/planner/SkeletonBuilderPanel';
 import { WeekDailyPlanPanel } from '../components/planner/WeekDailyPlanPanel';
 import { CreateCampaignAndBuild } from '../components/planner/CreateCampaignAndBuild';
+import { PlannerOrchestrationStrip } from '../components/orchestration/PlannerOrchestrationStrip';
 import { weeksToCalendarPlan } from '../components/planner/calendarPlanConverter';
 import styles from '../styles/planner-layout.module.css';
 import { useCampaignResume } from '../hooks/useCampaignResume';
@@ -353,6 +354,8 @@ function CampaignPlannerLayout({
               {campaignId && companyId && (
                 <CampaignHealthPanel campaignId={campaignId} companyId={companyId} />
               )}
+              {/* Phase-2 Step-15: read-only orchestration visibility (fail-soft, additive). */}
+              <PlannerOrchestrationStrip campaignId={campaignId} />
               {canvasTab === 'daily' ? (
                 (() => {
                   const weeks = (state.strategic_themes ?? []).map((t) => t.week).sort((a, b) => a - b);

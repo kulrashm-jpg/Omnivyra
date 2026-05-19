@@ -16,6 +16,8 @@ import {
 } from './plannerSessionStore';
 import { InlineActivityEditor } from './InlineActivityEditor';
 import { fetchWithAuth } from '../community-ai/fetchWithAuth';
+// Step-21: fail-soft inline AI-asset hydration into this legacy card.
+import { ActivityCardAIAssetState } from '../orchestration/assets/card';
 
 const DAYS_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -210,6 +212,14 @@ export function ActivityCardWithControls({
         {scheduledTimeStr && (
           <span className="text-[10px] text-gray-500 block mt-0.5">{scheduledTimeStr}</span>
         )}
+        {/* Step-21: inline AI-asset state badge in the existing card body
+            (badge-only footprint, fail-soft → null for video/manual/none). */}
+        <span className="block mt-0.5">
+          <ActivityCardAIAssetState
+            campaignId={state.source_ids?.campaign_id ?? null}
+            executionId={activity.execution_id ?? null}
+          />
+        </span>
       </span>
     </div>
   );

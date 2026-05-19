@@ -64,7 +64,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ success: false, error: 'Failed to load daily plans' });
     }
 
-    const plans = dailyPlans ?? [];
+    // `let` (was const): Phase-2 Step-34 physically prunes to canonical-
+    // ready plans under AUTHORITATIVE (parity with structuredPlanScheduler).
+    let plans = dailyPlans ?? [];
     if (plans.length === 0) {
       return res.status(400).json({
         success: false,
@@ -112,7 +114,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       execution_mode?: string | null;
       creator_asset?: unknown;
     }>);
-    if (executionProfile !== 'creator' && !eligibility.eligible) {
+    // Phase-2 Step-32: AUTHORITATIVE scheduler enforcement (fail-soft).
+    // Canonical projection governs eligibility under AUTHORITATIVE cutover;
+    // legacy `eligibility.eligible` governs otherwise (SHADOW/rollback).
+    // Phase-2 Step-33: per-execution parity — reject ONLY when EVERY
+    // execution is blocked; otherwise proceed (deferred/blocked rows
+    // recorded in the ExecutionEnqueueSummary, no whole-run rejection for
+    // a single bad row). Fail-soft ⇒ Step-32 whole-run governs.
+    let effectiveEligible = eligibility.eligible;
+    try {
+      const orch = await import('../../../../backend/services/orchestration');
+      const enforced = await orch.enforceSchedulerEligibility(
+        campaignId,
+        eligibility.eligible,
+      );
+      const enqueueSummary = await orch.resolveExecutionEnqueue(campaignId);
+      orch.diffEnqueueVsLegacy(campaignId, enqueueSummary, eligibility.eligible);
+      if (enqueueSummary.usable) {
+        effectiveEligible = !enqueueSummary.all_blocked;
+        // Phase-2 Step-34: physical pruning parity — deferred/blocked
+        // plans exit the live scheduling path. Conservative + fail-soft
+        // (unmapped plans stay; never wipes a non-all-blocked run).
+        const pr = orch.pruneExecutions<(typeof plans)[number]>(
+          campaignId,
+          plans,
+          enqueueSummary,
+        );
+        orch.diffPruningVsLegacy(campaignId, plans.length, pr);
+        if (pr.summary.usable) {
+          plans = pr.enqueueableRows;
+        }
+        if (pr.summary.deferred_requeue_candidates.length > 0) {
+          void orch
+            .prepareDeferredReplay(campaignId, pr.summary.deferred_requeue_candidates)
+            .catch(() => {});
+        }
+      } else {
+        effectiveEligible = enforced.enforced ? enforced.eligible : eligibility.eligible;
+      }
+    } catch {
+      effectiveEligible = eligibility.eligible;
+    }
+    if (executionProfile !== 'creator' && !effectiveEligible) {
       return res.status(409).json({
         success: false,
         error: 'Campaign has creator-dependent activities waiting for media links.',

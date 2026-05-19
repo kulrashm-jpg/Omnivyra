@@ -1603,6 +1603,12 @@ export async function generateWeeklyStructure(body: GenerateWeeklyStructureInput
       // behaviour unchanged; AUTHORITATIVE (env opt-in) records the binding
       // decision + rolls back to legacy on incomplete context.
       void orch.runAuthoritativeGenerationGate(campaignId, 'generate-weekly-structure').catch(() => {});
+      // Phase-2 Step-13: authoritative DAILY engine — SHADOW (default)
+      // computes day-addressable execution cards from the orchestration
+      // context and diffs vs the persisted count; non-binding, behaviour
+      // unchanged. AUTHORITATIVE (env opt-in) makes the daily plan available
+      // with rollback on regression.
+      void orch.evaluateAuthoritativeDaily(campaignId, persistRows.length).catch(() => {});
     } catch { /* observability only — never blocks generation */ }
   }
 

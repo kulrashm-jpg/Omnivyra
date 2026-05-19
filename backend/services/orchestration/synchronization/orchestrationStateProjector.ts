@@ -53,6 +53,11 @@ export function projectExecutionState(item: CanonicalExecutionItem): ExecutionSt
   const requires_asset =
     routing.asset_requirement === 'REQUIRED' ||
     item.asset_requirements?.media_upload_required === true;
+  // Phase-2 Step-17: Group-A autonomous (image/carousel/banner/infographic/
+  // pdf/slider) is AI-creatable — Omnivyra renders it, so it must NOT count
+  // as pending/blocked just because no upload exists. Video/Group-B unchanged.
+  const ai_creatable =
+    routing.execution_type === 'BOLT_CREATOR' && routing.workflow_type === 'AUTONOMOUS';
   // Boolean(...) wrapper intentionally breaks TS aliased-condition narrowing
   // so later `approval === 'approved'` comparisons remain valid.
   const requires_approval = Boolean(approval === 'pending' || approval === 'reapproval_required');
@@ -89,6 +94,7 @@ export function projectExecutionState(item: CanonicalExecutionItem): ExecutionSt
   if (!requires_asset && !has_asset) asset_state = 'NONE';
   else if (has_asset && (lifecycle === 'ready_for_schedule' || lifecycle === 'scheduled')) asset_state = 'READY';
   else if (has_asset) asset_state = 'UPLOADED';
+  else if (ai_creatable) asset_state = 'READY'; // AI-ready (Omnivyra renders it)
   else asset_state = 'PENDING';
 
   // ── workflow_state ────────────────────────────────────────────────────────
@@ -111,7 +117,7 @@ export function projectExecutionState(item: CanonicalExecutionItem): ExecutionSt
   // ── blocking_reasons ──────────────────────────────────────────────────────
   const blocking_reasons: string[] = [];
   if (!has_copy && !is_video_flow) blocking_reasons.push('MISSING_COPY');
-  if (requires_asset && !has_asset) blocking_reasons.push('MISSING_ASSET');
+  if (requires_asset && !has_asset && !ai_creatable) blocking_reasons.push('MISSING_ASSET');
   if (routing.publish_readiness === 'INVALID_CONFIGURATION') blocking_reasons.push('INVALID_ROUTING');
   if (requires_approval && approval !== 'approved') blocking_reasons.push('MISSING_APPROVAL');
   if (item.scheduling_status === 'blocked') blocking_reasons.push('SCHEDULING_CONFLICT');

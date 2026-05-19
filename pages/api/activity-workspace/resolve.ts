@@ -3,7 +3,7 @@ import { supabase } from '@/backend/db/supabaseClient';
 // Phase-2 Step-1: blueprint item discovery now goes through the ONE
 // canonical orchestration adapter (reconciles enriched daily_content_plans
 // row > blueprint execution items > legacy, preserving execution_id).
-import { canonicalExecutionAdapter } from '@/backend/services/orchestration';
+import { canonicalExecutionAdapter, resolveAuthoritativeWorkspace } from '@/backend/services/orchestration';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
 import {
   isContentArchitectSession,
@@ -355,9 +355,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ...(creatorWorkspaceRowId != null ? { creator_workspace_row_id: creatorWorkspaceRowId } : {}),
     };
 
+    // Phase-2 Step-27: attach the canonical authoritative workspace
+    // projection ADDITIVELY (new key only — no existing field is mutated,
+    // so SHADOW/legacy behavior is byte-identical). The resolver is
+    // fail-soft and self-isolates to LEGACY when canonical state is
+    // missing / rollback / cutover LEGACY. Diff diagnostics are emitted
+    // inside the resolver ([WORKSPACE_EXECUTION_DIFF]).
+    let workspaceProjection: unknown = null;
+    try {
+      const authoritative = await resolveAuthoritativeWorkspace(campaignId, targetExecId);
+      if (authoritative.projection) {
+        workspaceProjection = {
+          mode: authoritative.mode,
+          fallback_active: authoritative.fallback_active,
+          projection: authoritative.projection,
+          diff: authoritative.diff,
+        };
+      }
+    } catch {
+      /* fail-soft: never block the existing workspace load */
+    }
+
     return res.status(200).json({
       workspaceKey: `activity-workspace-${campaignId}-${targetExecId}`,
-      payload,
+      payload: {
+        ...payload,
+        ...(workspaceProjection != null ? { workspace_projection: workspaceProjection } : {}),
+      },
     });
   } catch (err) {
     console.error('activity-workspace resolve error:', err);

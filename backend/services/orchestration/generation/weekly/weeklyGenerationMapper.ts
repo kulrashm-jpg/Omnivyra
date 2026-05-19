@@ -9,6 +9,7 @@
  */
 
 import type { GenerationExecutionContext } from '../generationExecutionContextTypes';
+import { buildAuthoritativeProvenance } from '../../provenance/provenanceMapper';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -139,6 +140,19 @@ export function mapContextToWeeklyPlan(
       },
       readiness_workflow: directiveTag,
       owned_content_workflows: ownedByType,
+      // Phase-2 Step-16: TRUE execution provenance (no heuristic detection).
+      provenance: buildAuthoritativeProvenance({
+        execution_id: r.execution_id ?? `wk${week}-${platform}-${content_type}-${i}`,
+        stage: 'WEEKLY',
+        generation_mode: ctx.generation_mode,
+        authoritative_confidence: ctx.readiness?.readiness_score ?? 0,
+        lineage: {
+          originating_strategy_id: ctx.unified.strategy_context.strategy_id,
+          originating_week_id: `wk${week}`,
+          originating_theme: title,
+        },
+        metadata: { resolution_sources: ctx.metadata.resolution_sources },
+      }),
       ...(content_status ? { content_status } : {}),
     };
 
