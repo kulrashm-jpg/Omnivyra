@@ -33,6 +33,11 @@ export default function AuthCallback() {
     async function handleCallback() {
       const params    = new URLSearchParams(window.location.search);
       const code      = params.get('code');
+      // Prefetch-resistant magic-link path: the email links straight here with
+      // ?token_hash=…&type=magiclink and the token is only consumed when this
+      // JS runs verifyOtp — a mail scanner's plain GET can't burn it.
+      const tokenHash = params.get('token_hash');
+      const otpType   = params.get('type');
       const errorParam = params.get('error');
       const hash = window.location.hash;
       const hashParams = hash ? new URLSearchParams(hash.substring(1)) : null;
@@ -46,7 +51,7 @@ export default function AuthCallback() {
         return;
       }
 
-      if (!code && !hasHashToken) {
+      if (!code && !hasHashToken && !tokenHash) {
         await clearServerAuthSession();
         clearBrowserAuthState({ preservePkce: false });
         router.replace('/login?error=verification_invalid_or_expired');
@@ -59,7 +64,27 @@ export default function AuthCallback() {
       let verifiedUserId: string | null = null;
       let establishedFromVerificationFlow = false;
 
-      if (code) {
+      if (tokenHash) {
+        setStatusMsg('Completing sign-in…');
+
+        const { data, error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: (otpType || 'magiclink') as 'magiclink' | 'email' | 'recovery' | 'invite',
+        });
+
+        const user = data.session?.user;
+        if (error || !data.session || !user?.id || !user.email) {
+          console.error('[auth/callback] verifyOtp failed', error?.message);
+          await clearServerAuthSession();
+          clearBrowserAuthState({ preservePkce: false });
+          router.replace('/login?error=verification_invalid_or_expired');
+          return;
+        }
+
+        accessToken = data.session.access_token;
+        verifiedUserId = user.id;
+        establishedFromVerificationFlow = true;
+      } else if (code) {
         setStatusMsg('Completing sign-in…');
 
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);

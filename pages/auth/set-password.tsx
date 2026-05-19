@@ -49,13 +49,42 @@ export default function SetPasswordPage() {
     if (flowParam === 'recovery') setFlow('recovery');
 
     async function init() {
+      const searchParams = new URLSearchParams(window.location.search);
+      const rawHash = window.location.hash.startsWith('#')
+        ? window.location.hash.substring(1)
+        : window.location.hash;
+      const hashParams = new URLSearchParams(rawHash);
+
+      // ── 0. Supabase redirected back with an explicit error ────────────────
+      // (recovery token expired / already consumed / invalid). Surface the
+      // real reason instead of a generic "Link expired" — the most common
+      // cause of a promptly-clicked link being "already used" is an email
+      // security/preview scanner doing a GET on the one-time link first.
+      const errCode =
+        searchParams.get('error_code') || hashParams.get('error_code') ||
+        searchParams.get('error')      || hashParams.get('error');
+      const errDesc =
+        searchParams.get('error_description') || hashParams.get('error_description');
+      if (errCode) {
+        console.error('[auth/set-password] supabase returned error', { errCode, errDesc });
+        clearBrowserAuthState({ preservePkce: false });
+        setError(
+          /expired|otp_expired/i.test(errCode)
+            ? 'This reset link has expired or was already used. This often happens when an email scanner opens the link before you do — request a new one and open it immediately.'
+            : (errDesc
+                ? decodeURIComponent(errDesc.replace(/\+/g, ' '))
+                : 'This reset link is invalid. Please request a new one.'),
+        );
+        setStage('error');
+        return;
+      }
+
       // ── 1. Check for hash-fragment tokens (implicit flow: #access_token=…) ──
       const hash = window.location.hash;
       if (hash && hash.includes('access_token')) {
         clearBrowserAuthState({ preservePkce: false });
-        const hp = new URLSearchParams(hash.substring(1));
-        const at = hp.get('access_token');
-        const rt = hp.get('refresh_token');
+        const at = hashParams.get('access_token');
+        const rt = hashParams.get('refresh_token');
         if (at && rt) {
           const { data, error } = await supabase.auth.setSession({ access_token: at, refresh_token: rt });
           if (!error && data.session) {
@@ -64,10 +93,11 @@ export default function SetPasswordPage() {
             setStage('form');
             return;
           }
+          console.error('[auth/set-password] setSession failed', error?.message);
         }
       }
 
-      // ── 2. PKCE code exchange (legacy/fallback) ──
+      // ── 2. PKCE code exchange ──
       if (code) {
         clearBrowserAuthState({ preservePkce: true });
         const { data, error } = await supabase.auth.exchangeCodeForSession(code);
@@ -76,6 +106,30 @@ export default function SetPasswordPage() {
           setStage('form');
           return;
         }
+        console.error('[auth/set-password] exchangeCodeForSession failed', error?.message);
+      }
+
+      // ── 2b. token_hash recovery (verifyOtp) ──────────────────────────────
+      // Supabase's prefetch-resistant pattern: the email links straight to
+      // this page with ?token_hash=…&type=recovery and the token is only
+      // consumed when this client-side JS runs verifyOtp — a scanner's plain
+      // GET cannot consume it. Requires the Recovery email template to use
+      // {{ .TokenHash }} (see notes).
+      const tokenHash = searchParams.get('token_hash');
+      const otpType = (searchParams.get('type') || flowParam || 'recovery');
+      if (tokenHash) {
+        clearBrowserAuthState({ preservePkce: false });
+        const { data, error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: otpType as 'recovery',
+        });
+        if (!error && data.session) {
+          window.history.replaceState(null, '', window.location.pathname + '?flow=recovery');
+          setUserEmail(data.session.user.email ?? '');
+          setStage('form');
+          return;
+        }
+        console.error('[auth/set-password] verifyOtp failed', error?.message);
       }
 
       // ── 3. Existing session is allowed only when /auth/callback just

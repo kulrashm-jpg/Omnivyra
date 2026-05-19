@@ -33,6 +33,19 @@ export function getSupabaseBrowser(): SupabaseClient {
       {
         auth: {
           lock: processLock,
+          // Magic-link and password-reset both round-trip a single-use PKCE
+          // code through /auth/callback and /auth/set-password, which call
+          // exchangeCodeForSession() manually (behind their own re-entrancy
+          // guards). The @supabase/ssr default detectSessionInUrl:true makes
+          // GoTrue ALSO auto-exchange that ?code= on client init — the two
+          // exchanges race, the loser hits "code already used", and the user
+          // is bounced to /login?error=verification_invalid_or_expired.
+          // Disable auto-detect so the manual, guarded exchange is the single
+          // authoritative path. flowType is pinned to pkce (current ssr
+          // default) so the manual exchangeCodeForSession path stays correct
+          // even if the library default changes.
+          flowType: 'pkce',
+          detectSessionInUrl: false,
         },
       },
     );

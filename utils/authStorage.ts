@@ -57,18 +57,28 @@ function expireCookie(name: string): void {
   }
 }
 
-function clearAuthCookies(): void {
+function clearAuthCookies(options: { preservePkce?: boolean } = {}): void {
+  const preservePkce = options.preservePkce === true;
   const cookieNames = document.cookie
     .split(';')
     .map((cookie) => cookie.split('=')[0]?.trim())
     .filter((name): name is string => Boolean(name));
 
   for (const name of cookieNames) {
+    // @supabase/ssr's browser client persists the PKCE code verifier in a
+    // cookie (sb-<ref>-auth-token-code-verifier), NOT localStorage. When a
+    // magic-link / reset exchange is in flight (preservePkce), wiping it here
+    // makes the subsequent exchangeCodeForSession() fail with a missing-
+    // verifier error and bounces the user to /login. Keep it until the
+    // exchange completes.
+    if (preservePkce && isPkceVerifierKey(name)) continue;
     if (name.startsWith('sb-') || name === 'omnivyra_session' || name.startsWith('mfa_')) {
       expireCookie(name);
     }
   }
 
+  // Legacy non-chunked session cookie names — never the PKCE verifier, safe
+  // to always expire.
   expireCookie('sb-access-token');
   expireCookie('sb-refresh-token');
   expireCookie('omnivyra_session');
@@ -84,7 +94,7 @@ export function clearSupabasePersistedSession(options: { preservePkce?: boolean 
   try { removeMatchingKeys(window.sessionStorage, shouldRemove); } catch { /* ignore */ }
 
   try {
-    clearAuthCookies();
+    clearAuthCookies({ preservePkce });
   } catch { /* ignore */ }
 }
 
