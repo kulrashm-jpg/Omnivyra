@@ -107,32 +107,42 @@ export function isVideoBriefContentType(contentType: string | null | undefined):
 }
 
 /**
- * UNIFIED creator-required detection (Round-3 item 3).
+ * SUPPORTED manual-upload set — the ONLY creator-required types Omnivyra
+ * actually supports today: reel, short, video upload. Everything else
+ * (image/carousel/text/text+image) is AI-generated and NEVER pending;
+ * podcast/webinar/audiogram/teaser/trailer/long-form/vlog/igtv and other
+ * generalized "creator" aliases are NOT supported → deliberately removed
+ * from runtime creator routing (deactivation, not deletion: the
+ * governance registry + DB enums are left intact for compatibility).
  *
- * A content type is "creator-required" when Omnivyra cannot autonomously
- * produce it and a human must produce + upload the asset → it MUST enter
- * the pending-creator flow (placeholder + calendar pending + scheduling
- * lock until completion).
- *
- * Primary signal is the governance registry (`classifyContentType`). The
- * fallback regex catches video-family ALIASES the registry doesn't
- * enumerate (long-form video, vlog, webinar, igtv, story video, reel/
- * short variants, podcast/audio clips, live replay) so a new alias can
- * never silently slip into the autonomous/text lane. Additive + pure;
- * does not mutate the registry.
+ * Tight, anchored matching only — no broad substring creep (the broad
+ * alias regex was the source of over-routing).
  */
-const CREATOR_REQUIRED_ALIAS_RE =
-  /\b(long[\s_-]?form|longform|vlog|webinar|igtv|live[\s_-]?replay|livestream|broadcast|story[\s_-]?video|video[\s_-]?story|reel|reels|short|shorts|tiktok|podcast|audiogram|video[\s_-]?clip|clip|video|movie|film|teaser|trailer|sizzle|promo[\s_-]?video|explainer[\s_-]?video|talking[\s_-]?head|ugc[\s_-]?video)\b/i;
+const SUPPORTED_MANUAL_VIDEO_RE =
+  /^(video|videos|video[\s_-]?upload|reel|reels|short|shorts|insta(gram)?[\s_-]?reel|ig[\s_-]?reel|fb[\s_-]?reel|facebook[\s_-]?reel|yt[\s_-]?short|youtube[\s_-]?short|tiktok[\s_-]?video)$/i;
 
+/**
+ * The single canonical predicate: is this a supported manual-upload
+ * VIDEO type (reel/short/video)? This is the ONLY thing that may be
+ * treated as creator-required / pending.
+ */
+export function isSupportedManualVideoUpload(
+  contentType: string | null | undefined,
+): boolean {
+  const ct = String(contentType ?? '').trim();
+  if (!ct) return false;
+  return SUPPORTED_MANUAL_VIDEO_RE.test(ct);
+}
+
+/**
+ * Creator-required detection — NARROWED to the supported manual-upload
+ * video set only. Back-compat: same exported name/signature; behavior is
+ * now restricted (no more long-form/vlog/webinar/podcast/clip aliases).
+ * AI-creatable types (image/carousel/text+image) return false → they are
+ * never pending and never counted as creator-required.
+ */
 export function isCreatorRequiredContentType(
   contentType: string | null | undefined,
 ): boolean {
-  const cls = classifyContentType(contentType);
-  if (cls.isVideoBrief) return true; // governance registry says brief
-  if (cls.mode === 'bolt_text' || cls.mode === 'creator_autonomous') return false; // Omnivyra builds it
-  // Unsupported / unknown to the registry → alias fallback so video-like
-  // strings still route to the creator-required (brief) lane.
-  const ct = String(contentType ?? '').trim();
-  if (!ct) return false;
-  return CREATOR_REQUIRED_ALIAS_RE.test(ct);
+  return isSupportedManualVideoUpload(contentType);
 }

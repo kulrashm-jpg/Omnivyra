@@ -29,7 +29,14 @@ export type PipelineEvent =
   | 'orphan.recovery'
   | 'reconciliation.summary'
   | 'migration.readiness'
-  | 'publish.health';
+  | 'publish.health'
+  | 'ai_asset.created'
+  | 'ai_asset.replaced'
+  | 'ai_asset.removed'
+  | 'ai_asset.restored'
+  | 'ai_asset.override'
+  | 'ai_asset.provenance'
+  | 'creator.routing_deactivated';
 
 const _lastEmit = new Map<string, number>();
 // Default 60s throttle window per (event|dedupeKey). Override per call.

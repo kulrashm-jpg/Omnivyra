@@ -13,7 +13,7 @@ import {
   normalizeCreatorFormat,
   CREATOR_LIFECYCLE_STATES,
 } from '../../lib/shared/creatorGovernanceRegistry';
-import { isCreatorRequiredContentType } from '../../lib/shared/contentTypeClassification';
+import { isSupportedManualVideoUpload } from '../../lib/shared/contentTypeClassification';
 import { logPipelineEvent } from '../../lib/shared/observability';
 import { applyTransition } from '../../lib/shared/creatorLifecycleStateMachine';
 
@@ -340,23 +340,31 @@ export async function runCreatorAssetGenerationRuntime(input: {
     // guidance / marketing package, skip rendering. No retry loop, no
     // renderer call. The row holds in place until a user uploads a media
     // URL via /api/activity-workspace/[id]/upload-media.
-    // Unified creator-required detection (Round-4 item 2). Registry-known
-    // attachment formats OR any video-like ALIAS (long-form/vlog/webinar/
-    // igtv/clip/…) the registry doesn't enumerate → placeholder + pending
-    // + scheduling lock. This is the SAFE activation point: it broadens
-    // ONLY the awaiting-upload lane and never touches the
-    // intent_type='creator' / capability-CHECK path, so it cannot
-    // re-introduce the daily-plans rollback.
-    const aliasRequired =
-      !isAttachmentRequiredFormat(contentType) && isCreatorRequiredContentType(contentType);
-    if (isAttachmentRequiredFormat(contentType) || aliasRequired) {
-      if (aliasRequired) {
-        logPipelineEvent('creator.routing_enforced', 'info', {
-          campaign_id: input.campaignId,
-          content_type: contentType,
-          reason: 'alias_creator_required',
-        }, { dedupeKey: contentType });
-      }
+    // Creator-required is NARROWED to the supported manual-upload video
+    // set ONLY (reel/short/video). This single canonical predicate is the
+    // sole gate into the pending/awaiting-upload placeholder lane, so
+    // "pending" can ONLY ever mean "waiting for a manual video upload".
+    //
+    // Registry Group-B formats that are NOT supported video (e.g.
+    // podcast/webinar/audiogram/teaser) are DEACTIVATED at runtime: they
+    // no longer route to a placeholder/pending state. They fall through
+    // to the non-attachment branch below (skipped → BOLT-text guidance
+    // lane). Registry + DB enums are intentionally left intact
+    // (deactivation, not deletion → migration-safe, reversible by
+    // reverting this condition). image/carousel/text+image are never
+    // creator-required and are never counted as pending.
+    const supportedVideo = isSupportedManualVideoUpload(contentType);
+    if (!supportedVideo && isAttachmentRequiredFormat(contentType)) {
+      // A registry attachment type that is NOT a supported video upload
+      // → deactivated, visibility-logged, then handled by the normal
+      // non-attachment fall-through (no dead routing, no stale pending).
+      logPipelineEvent('creator.routing_deactivated', 'info', {
+        campaign_id: input.campaignId,
+        content_type: contentType,
+        reason: 'unsupported_creator_flow_deactivated',
+      }, { dedupeKey: contentType });
+    }
+    if (supportedVideo) {
       await markAwaitingMediaUpload({ row, campaignId: input.campaignId, companyId, userId });
       awaitingUploadCount++;
       input.onProgress?.(`awaiting-upload-${contentType}`);

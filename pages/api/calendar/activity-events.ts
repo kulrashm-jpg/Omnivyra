@@ -13,6 +13,7 @@ import {
   CANONICAL_BADGE,
   CanonicalContentState,
 } from '../../../lib/shared/contentLifecycle';
+import { isSupportedManualVideoUpload } from '../../../lib/shared/contentTypeClassification';
 
 function extractTitleFromContent(content: string | null | undefined): string {
   if (!content || typeof content !== 'string') return 'Scheduled post';
@@ -205,11 +206,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           pq = pq.gte('date', start).lte('date', end);
         }
         const { data: pendingRows } = await pq.limit(2000);
-        const PENDING_GROUPS = new Set<CanonicalContentState>([
-          CanonicalContentState.PENDING_CREATOR,
-          CanonicalContentState.READY_FOR_REVIEW,
-          CanonicalContentState.READY_FOR_SCHEDULE,
-        ]);
         for (const r of pendingRows || []) {
           const dateStr = typeof r.date === 'string' ? r.date.slice(0, 10) : '';
           if (!dateStr) continue;
@@ -218,12 +214,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             content: r.content,
             scheduled_post_id: null,
           });
-          if (!PENDING_GROUPS.has(canonical)) continue; // skip planned/generating/terminal noise
+          // SEMANTIC FIX: pending visibility is ONLY for genuine manual
+          // video-upload tasks. A row is emitted as pending iff it is
+          // canonical PENDING_CREATOR *and* its content type is a
+          // supported manual video upload (reel/short/video). This makes
+          // it structurally impossible for image / carousel / text+image
+          // (AI-generated) to ever render with a [PENDING] badge — they
+          // are excluded here and surface via their own ready/scheduled
+          // state, not the pending feed. No READY_FOR_REVIEW /
+          // READY_FOR_SCHEDULE rows enter the pending feed anymore.
+          if (
+            canonical !== CanonicalContentState.PENDING_CREATOR ||
+            !isSupportedManualVideoUpload(r.content_type)
+          ) {
+            continue;
+          }
           const badge = CANONICAL_BADGE[canonical];
           events.push({
             date: dateStr,
             platform: normalizePlatform(r.platform || ''),
-            title: String(r.title || r.topic || 'Pending creator asset').trim(),
+            title: String(r.title || r.topic || 'Awaiting Video Upload').trim(),
             repurpose_index: 1,
             repurpose_total: 1,
             campaign_id: r.campaign_id || '',
@@ -232,9 +242,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             execution_id: null,
             status: 'pending',
             canonical_state: canonical,
-            canonical_badge: badge.short, // 'P' for PENDING_CREATOR
-            canonical_label: badge.label, // 'Pending creator asset'
-            canonical_group: badge.group, // 'pending'
+            canonical_badge: badge.short, // 'V' (Awaiting Video Upload)
+            canonical_label: badge.label, // 'Awaiting Video Upload'
+            canonical_group: badge.group, // 'pending' (video-upload only)
             pending: true,
             scheduled_for: null,
             is_overdue: false,

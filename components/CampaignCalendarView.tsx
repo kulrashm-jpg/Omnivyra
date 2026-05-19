@@ -25,6 +25,7 @@ import {
   getExecutionStatusBackground,
   getExecutionStatusBadgeClasses,
 } from '../utils/executionStatus';
+import { executionStatusToCanonicalGroup, canonicalBadgeView, canonicalJobBadgeView } from '../lib/shared/contentLifecycle';
 
 type StageKey = 'awareness' | 'education' | 'authority' | 'engagement' | 'conversion' | 'team_note';
 
@@ -138,7 +139,12 @@ const mapDeterministicFallbackStage = (activity: CalendarActivity): StageKey => 
   if (ct.includes('guide') || ct.includes('tutorial') || ct.includes('article') || ct.includes('blog')) return 'education';
   if (ct.includes('webinar') || ct.includes('case') || ct.includes('thought') || ct.includes('podcast')) return 'authority';
   if (ct.includes('poll') || ct.includes('qa') || ct.includes('community') || ct.includes('thread')) return 'engagement';
-  if (activity.execution_status !== 'SCHEDULED' && activity.execution_status !== 'FINALIZED') return 'engagement';
+  // Stage fallback derived via the single canonical semantic source
+  // (not a raw execution_status string check) so execution_status- and
+  // canonical-driven views share one "scheduled/terminal" definition.
+  // Behaviorally equivalent: SCHEDULED→scheduled, FINALIZED→published.
+  const canonicalGroup = executionStatusToCanonicalGroup(activity.execution_status);
+  if (canonicalGroup !== 'scheduled' && canonicalGroup !== 'published') return 'engagement';
   return 'awareness';
 };
 
@@ -202,6 +208,8 @@ const buildStageGroupsForDay = (dateKey: string, dayItems: CalendarActivity[]): 
 };
 
 import type { useCampaignCalendar } from '../hooks/useCampaignCalendar';
+// Step-21: fail-soft inline AI-asset hydration into the legacy calendar card.
+import { ActivityCardAIAsset } from './orchestration/assets/card';
 type S = ReturnType<typeof useCampaignCalendar>;
 export default function CampaignCalendarView({ d }: { d: S }) {
   const {
@@ -473,6 +481,10 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                 const rawItem = activity.raw_item && typeof activity.raw_item === 'object' ? activity.raw_item as Record<string, unknown> : {};
                                 const creatorInst = rawItem?.creator_instruction && typeof rawItem.creator_instruction === 'object' ? rawItem.creator_instruction as Record<string, unknown> : null;
                                 const creatorPreview = creatorInst?.targetAudience ? `Audience: ${String(creatorInst.targetAudience)}` : creatorInst?.objective ? `Goal: ${String(creatorInst.objective)}` : null;
+                                // Consume already-normalized canonical badge semantics
+                                // (canonical_label/group) with legacy [execution_status]
+                                // fallback. Styling reuses the existing badge system.
+                                const badgeView = canonicalBadgeView(rawItem, activity.execution_status);
                                 return (
                                   <article
                                     key={activity.execution_id}
@@ -498,8 +510,11 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                       />
                                       <div className="flex flex-wrap items-center gap-2">
                                         <span className="text-xs leading-none" title={execMode === 'AI_AUTOMATED' ? 'Fully AI executable' : (modeLabel ?? undefined)}>{execDot}</span>
-                                        <span className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(activity.execution_status)}`}>
-                                          [{activity.execution_status}]
+                                        <span
+                                          className={`text-[11px] px-2 py-1 rounded-full font-medium border ${getExecutionStatusBadgeClasses(badgeView.styleKey)}`}
+                                          title={badgeView.canonical ? badgeView.text : undefined}
+                                        >
+                                          {badgeView.text}
                                         </span>
                                         {scheduledExecIds.has(String(activity.execution_id)) && (
                                           <span className="text-[11px] px-2 py-1 rounded-full font-medium border border-emerald-200 bg-emerald-50 text-emerald-700">
@@ -516,6 +531,18 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                     {creatorPreview && (
                                       <div className="text-[10px] text-gray-500 mt-1 truncate">{creatorPreview}</div>
                                     )}
+                                    {/* Step-21: inline AI-asset hydration in
+                                        the existing card body. Fail-soft →
+                                        null for video/manual/none (legacy
+                                        card byte-identical when absent). */}
+                                    <div className="mt-1">
+                                      <ActivityCardAIAsset
+                                        campaignId={campaignId}
+                                        executionId={activity.execution_id ?? null}
+                                        inlineBlob={(activity.raw_item ?? null) as Record<string, unknown> | null}
+                                        size="sm"
+                                      />
+                                    </div>
 
                                     <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                                       <button
@@ -537,14 +564,20 @@ export default function CampaignCalendarView({ d }: { d: S }) {
                                       {activity.execution_jobs.length > 0 && (
                                         <span className="px-2 py-1 rounded border border-slate-200 bg-slate-50 text-slate-700">
                                           {activity.execution_jobs
-                                            .map((job) => (
+                                            .map((job) => {
+                                              const jobBadge = canonicalJobBadgeView(job);
+                                              return (
                                               <span key={job.job_id} className="inline-flex items-center gap-0.5 mr-1">
                                                 <PlatformIcon platform={job.platform} size={12} />
-                                                <span className={`text-[10px] px-1 rounded ${getExecutionStatusBadgeClasses(job.execution_status ?? 'PENDING')}`}>
-                                                  {job.execution_status ?? 'PENDING'}
+                                                <span
+                                                  className={`text-[10px] px-1 rounded ${getExecutionStatusBadgeClasses(jobBadge.styleKey)}`}
+                                                  title={jobBadge.canonical ? jobBadge.text : undefined}
+                                                >
+                                                  {jobBadge.text}
                                                 </span>
                                               </span>
-                                            ))}
+                                              );
+                                            })}
                                         </span>
                                       )}
                                     </div>

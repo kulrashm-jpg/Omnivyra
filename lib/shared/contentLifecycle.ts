@@ -263,13 +263,104 @@ export function assertCanonicalTransition(
   }
 }
 
-/** UI helpers (calendar item 4): compact badge + human label per state. */
-export const CANONICAL_BADGE: Record<CanonicalContentState, { short: string; label: string; group: 'pending' | 'scheduled' | 'published' | 'failed' | 'draft' }> = {
+/**
+ * Badge view-model for UI consumption (no redesign, no new style system).
+ *
+ * Prefers the already-normalized canonical semantics carried on the raw
+ * calendar event (`canonical_label` + `canonical_group`) and maps the
+ * group onto an EXISTING execution-status style bucket so the current
+ * badge classes/colors are reused verbatim. Falls back deterministically
+ * to the legacy `[execution_status]` rendering when canonical fields are
+ * absent (older payloads / other feeds) — never returns empty/null text,
+ * never changes historical rendering.
+ *
+ * `styleKey` is fed straight into the existing
+ * getExecutionStatusBadgeClasses/Background helpers.
+ */
+export function canonicalBadgeView(
+  rawItem: Record<string, unknown> | null | undefined,
+  legacyExecutionStatus: string | null | undefined,
+): { text: string; styleKey: string; canonical: boolean } {
+  const cl = rawItem && typeof rawItem === 'object' ? (rawItem as Record<string, unknown>).canonical_label : undefined;
+  const cg = rawItem && typeof rawItem === 'object' ? (rawItem as Record<string, unknown>).canonical_group : undefined;
+  if (typeof cl === 'string' && cl.trim() && typeof cg === 'string') {
+    // canonical_group → existing ExecutionStatus style bucket (reuse only).
+    const STYLE: Record<string, string> = {
+      pending: 'PENDING',     // gray — Awaiting Video Upload
+      ready: 'IN_PROGRESS',   // yellow — AI asset ready
+      scheduled: 'SCHEDULED', // purple
+      published: 'FINALIZED', // green
+      failed: 'PENDING',      // no failed color in the design system; text stays distinct ("Failed")
+      draft: 'PENDING',       // gray — planned / AI generating
+    };
+    return { text: cl.trim(), styleKey: STYLE[cg] ?? 'PENDING', canonical: true };
+  }
+  const legacy = String(legacyExecutionStatus ?? 'PENDING').trim() || 'PENDING';
+  return { text: `[${legacy}]`, styleKey: legacy, canonical: false };
+}
+
+/**
+ * Job-level badge view-model — semantic PARITY with the activity-level
+ * `canonicalBadgeView` using only fields a job object actually carries
+ * (`status: 'ready'|'blocked'`, legacy `execution_status`). No canonical
+ * label exists per-job (no content_type/canonical signal there), so we
+ * do NOT fabricate video/AI wording — we provide a consistent shared
+ * code path + the one genuinely derivable improvement: an explicit
+ * "Failed" text for `blocked` jobs (text-distinct, no new style).
+ * Everything else falls back to the deterministic legacy rendering,
+ * identical to activity-level fallback. Never empty/null.
+ */
+export function canonicalJobBadgeView(
+  job: { status?: string | null; execution_status?: string | null } | null | undefined,
+): { text: string; styleKey: string; canonical: boolean } {
+  if (job && String(job.status ?? '').trim().toLowerCase() === 'blocked') {
+    // No dedicated failed color in the design system → reuse neutral
+    // bucket; distinction is the explicit text (mandatory per spec).
+    return { text: 'Failed', styleKey: 'PENDING', canonical: true };
+  }
+  // Same fallback path as activity-level (no canonical fields on a job).
+  return canonicalBadgeView(null, job?.execution_status);
+}
+
+/**
+ * Single deterministic mapper: legacy `ExecutionStatus`
+ * (PENDING|IN_PROGRESS|FINALIZED|SCHEDULED) → canonical badge group.
+ * The ONE place that defines "is this scheduled/terminal" for counter
+ * and stage logic, so execution_status-driven views and canonical views
+ * can never drift. Legacy-safe: unknown/missing → 'draft' (never throws,
+ * never inflates pending/blocked).
+ */
+export function executionStatusToCanonicalGroup(
+  status: string | null | undefined,
+): 'pending' | 'ready' | 'scheduled' | 'published' | 'failed' | 'draft' {
+  switch (String(status ?? '').trim().toUpperCase()) {
+    case 'SCHEDULED': return 'scheduled';
+    case 'FINALIZED': return 'published';
+    case 'IN_PROGRESS': return 'draft';
+    case 'PENDING': return 'draft';
+    default: return 'draft';
+  }
+}
+
+/**
+ * UI helpers: compact badge + human label per state.
+ *
+ * Semantic alignment:
+ *  - `pending` group is RESERVED for genuine manual video-upload tasks
+ *    (PENDING_CREATOR) — label normalized to video-upload wording (no
+ *    generic "pending"/"creator pending"). The calendar API additionally
+ *    gates this on a supported manual-video content type, so AI assets
+ *    can never carry it.
+ *  - AI-generated assets that are ready use the distinct `ready` group
+ *    (NOT `pending`) so they are never counted/rendered as pending.
+ *  - `failed` = real blocker only (failed validation/dependency/publish).
+ */
+export const CANONICAL_BADGE: Record<CanonicalContentState, { short: string; label: string; group: 'pending' | 'ready' | 'scheduled' | 'published' | 'failed' | 'draft' }> = {
   [CanonicalContentState.PLANNED]: { short: '·', label: 'Planned', group: 'draft' },
-  [CanonicalContentState.AI_GENERATING]: { short: '…', label: 'Generating', group: 'draft' },
-  [CanonicalContentState.PENDING_CREATOR]: { short: 'P', label: 'Pending creator asset', group: 'pending' },
-  [CanonicalContentState.READY_FOR_REVIEW]: { short: 'R', label: 'Ready for review', group: 'pending' },
-  [CanonicalContentState.READY_FOR_SCHEDULE]: { short: 'S', label: 'Ready to schedule', group: 'pending' },
+  [CanonicalContentState.AI_GENERATING]: { short: '…', label: 'AI Generating', group: 'draft' },
+  [CanonicalContentState.PENDING_CREATOR]: { short: 'V', label: 'Awaiting Video Upload', group: 'pending' },
+  [CanonicalContentState.READY_FOR_REVIEW]: { short: 'R', label: 'AI Asset — Ready for Review', group: 'ready' },
+  [CanonicalContentState.READY_FOR_SCHEDULE]: { short: 'S', label: 'AI Asset — Ready to Schedule', group: 'ready' },
   [CanonicalContentState.SCHEDULED]: { short: '✓', label: 'Scheduled', group: 'scheduled' },
   [CanonicalContentState.PUBLISHED]: { short: '✓✓', label: 'Published', group: 'published' },
   [CanonicalContentState.FAILED]: { short: '!', label: 'Failed', group: 'failed' },
