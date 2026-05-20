@@ -118,7 +118,7 @@ export async function normalizeCmsConnections(
 
   let query = ownedDbTable('company_integrations')
     .select('id, company_id, created_by, type, name, config, non_secret_config, website_id, website_connection_id')
-    .in('type', ['wordpress', 'custom_blog_api', 'ghost', 'drupal', 'joomla', 'webflow', 'shopify']);
+    .in('type', ['wordpress', 'custom_blog_api', 'ghost', 'drupal', 'joomla', 'webflow', 'shopify', 'hubspot', 'wix', 'squarespace']);
   if (companyId) query = query.eq('company_id', companyId);
 
   const { data, error } = await query;

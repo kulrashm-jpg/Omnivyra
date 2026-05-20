@@ -30,7 +30,10 @@ type IntegrationType =
   | 'drupal'
   | 'joomla'
   | 'webflow'
-  | 'shopify';
+  | 'shopify'
+  | 'hubspot'
+  | 'wix'
+  | 'squarespace';
 type IntegrationStatus = 'connected' | 'failed' | 'pending';
 type FocusArea = 'website' | 'data';
 
@@ -200,6 +203,9 @@ const TYPE_LABELS: Record<IntegrationType, string> = {
   joomla: 'Joomla',
   webflow: 'Webflow',
   shopify: 'Shopify Blog',
+  hubspot: 'HubSpot CMS',
+  wix: 'Wix Blog',
+  squarespace: 'Squarespace (read-only)',
 };
 
 const TYPE_ICONS: Record<IntegrationType, React.ReactNode> = {
@@ -211,6 +217,9 @@ const TYPE_ICONS: Record<IntegrationType, React.ReactNode> = {
   joomla: <Files className="h-5 w-5" />,
   webflow: <Globe className="h-5 w-5" />,
   shopify: <Rss className="h-5 w-5" />,
+  hubspot: <Database className="h-5 w-5" />,
+  wix: <Globe className="h-5 w-5" />,
+  squarespace: <Files className="h-5 w-5" />,
 };
 
 const TYPE_COLORS: Record<IntegrationType, string> = {
@@ -222,6 +231,9 @@ const TYPE_COLORS: Record<IntegrationType, string> = {
   joomla: 'bg-orange-100 text-orange-700',
   webflow: 'bg-indigo-100 text-indigo-700',
   shopify: 'bg-green-100 text-green-700',
+  hubspot: 'bg-orange-100 text-orange-700',
+  wix: 'bg-pink-100 text-pink-700',
+  squarespace: 'bg-zinc-100 text-zinc-700',
 };
 
 const STATUS_BADGE: Record<IntegrationStatus, { label: string; cls: string; icon: React.ReactNode }> = {
@@ -269,6 +281,18 @@ const CONFIG_FIELDS: Record<IntegrationType, { key: string; label: string; place
     { key: 'shop_domain', label: 'Shop Domain', placeholder: 'mystore.myshopify.com' },
     { key: 'shopify_access_token', label: 'Admin API Access Token', placeholder: 'shpat_...', type: 'password', hint: 'Custom app token with write_content scope.' },
     { key: 'blog_id', label: 'Blog ID (optional)', placeholder: 'Auto-selects first blog' },
+  ],
+  hubspot: [
+    { key: 'access_token', label: 'HubSpot Access Token', placeholder: 'pat-...', type: 'password', hint: 'Private-app token OR OAuth access token (content scope).' },
+    { key: 'blog_id', label: 'HubSpot Blog ID', placeholder: 'Marketing → Website → Blog → Blog ID', hint: 'Required for publishing.' },
+  ],
+  wix: [
+    { key: 'api_key', label: 'Wix API Key', placeholder: 'wix-api-key', type: 'password', hint: 'Wix Dashboard → Settings → Headless settings → API Key.' },
+    { key: 'wix_site_id', label: 'Wix Site ID', placeholder: 'site-uuid' },
+    { key: 'wix_account_id', label: 'Wix Account ID (optional)', placeholder: 'account-uuid', hint: 'Required when using an app token (not for site tokens).' },
+  ],
+  squarespace: [
+    { key: 'site_url', label: 'Squarespace site URL', placeholder: 'https://yoursite.squarespace.com', hint: 'Reachability is validated via RSS/sitemap. Squarespace has no public write API — publishing is not supported.' },
   ],
 };
 
@@ -426,6 +450,12 @@ interface ConnectionCardProps {
 function ConnectionCard({ integration, isAdmin, onEdit, onDelete, onTest, testing }: ConnectionCardProps) {
   const badge = STATUS_BADGE[integration.status];
   const lastTested = integration.last_tested_at ? new Date(integration.last_tested_at).toLocaleString() : 'Never';
+  const testedUrl =
+    integration.config.site_url ||
+    integration.config.endpoint_url ||
+    integration.config.webhook_url ||
+    integration.config.shop_domain ||
+    '';
 
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
@@ -444,6 +474,11 @@ function ConnectionCard({ integration, isAdmin, onEdit, onDelete, onTest, testin
       </div>
 
       <div className="space-y-0.5 text-xs text-gray-500">
+        {testedUrl && (
+          <div className="truncate" title={testedUrl}>
+            Testing: {testedUrl}
+          </div>
+        )}
         <div>Last tested: {lastTested}</div>
         {integration.last_error && integration.status === 'failed' && (
           <div className="truncate text-red-600" title={integration.last_error}>
@@ -557,6 +592,8 @@ const PROVIDER_META: Record<string, { label: string; snippet?: string; localHint
   webflow: { label: 'Webflow' },
   shopify: { label: 'Shopify Blog' },
   hubspot: { label: 'HubSpot CMS' },
+  wix: { label: 'Wix Blog' },
+  squarespace: { label: 'Squarespace (read-only)', localHint: 'Squarespace has no public write API — this integration validates reachability only; publishing is not supported.' },
   custom_blog_api: { label: 'Custom Blog API' },
 };
 
@@ -1317,6 +1354,28 @@ export default function IntegrationsPage() {
   const [scriptAssistError, setScriptAssistError] = useState<string | null>(null);
   const [scriptAssistResult, setScriptAssistResult] = useState<TrackingAssistResponse | null>(null);
   const [scriptAssistForm, setScriptAssistForm] = useState({ website_url: '', platform: 'wordpress' });
+  const [providerCards, setProviderCards] = useState<Array<{
+    provider: string;
+    label: string;
+    enabled: boolean;
+    authType: string;
+    apiDiscoveryMode: string;
+    capabilities: { publish: boolean; update: boolean; delete: boolean; media: boolean; taxonomy: boolean; webhook: boolean; oauth: boolean; localDev: boolean };
+    setupHints: string[];
+    troubleshootingHints: string[];
+    rateLimitNote: string;
+    recentPublishAttempts: number;
+    recentPublishSuccesses: number;
+    recentPublishFailures: number;
+    successRate: number;
+    recentAuthFailures: number;
+    recentErrors: Array<{ at: string; eventName: string; message: string }>;
+    health: 'healthy' | 'warning' | 'degraded' | 'unused';
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+  }>>([]);
+  const [providerCardsLoading, setProviderCardsLoading] = useState(false);
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!companyId) {
@@ -1387,6 +1446,21 @@ export default function IntegrationsPage() {
     void load();
     void loadGoogleAnalyticsStatus();
   }, [load, loadGoogleAnalyticsStatus]);
+
+  useEffect(() => {
+    if (!companyId) return;
+    let cancelled = false;
+    setProviderCardsLoading(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/integrations/diagnostics?company_id=${encodeURIComponent(companyId)}`, { credentials: 'include' });
+        const data = await res.json().catch(() => null);
+        if (!cancelled && res.ok && data?.providers) setProviderCards(data.providers);
+      } catch { /* silent */ }
+      finally { if (!cancelled) setProviderCardsLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [companyId]);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -1814,7 +1888,12 @@ export default function IntegrationsPage() {
         method: 'PUT',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ company_id: companyId, name: payload.name, config: payload.config }),
+        body: JSON.stringify({
+          company_id: companyId,
+          name: payload.name,
+          config: payload.config,
+          website_id: payload.website_id,
+        }),
       });
       const data = await response.json();
       if (!response.ok) {
@@ -2206,6 +2285,87 @@ export default function IntegrationsPage() {
                         />
                       ))}
                     </div>
+                  )}
+                </section>
+
+                <section id="provider-diagnostics-section" className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-base font-semibold text-gray-900">Provider diagnostics</h2>
+                      <p className="text-xs text-gray-500">Capability matrix, recent publish health, and provider-specific troubleshooting tips.</p>
+                    </div>
+                    {providerCardsLoading && <span className="text-[11px] text-gray-500">loading…</span>}
+                  </div>
+                  {providerCards.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {providerCards.map((card) => (
+                        <div key={card.provider} className={`rounded-xl border p-3 text-xs ${
+                          card.health === 'healthy' ? 'border-emerald-200 bg-emerald-50' :
+                          card.health === 'warning' ? 'border-amber-200 bg-amber-50' :
+                          card.health === 'degraded' ? 'border-red-200 bg-red-50' :
+                          'border-gray-200 bg-gray-50'
+                        }`}>
+                          <div className="flex items-center justify-between">
+                            <strong className="text-sm">{card.label}</strong>
+                            <span className="text-[10px] uppercase tracking-wider opacity-70">{card.health}</span>
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-gray-600">Auth: <code>{card.authType}</code> · {card.apiDiscoveryMode}</p>
+                          <div className="mt-1.5 flex flex-wrap gap-1 text-[10px]">
+                            {Object.entries(card.capabilities).filter(([, v]) => v).map(([k]) => (
+                              <span key={k} className="rounded bg-white/60 px-1.5 py-0.5 font-medium text-gray-700">{k}</span>
+                            ))}
+                          </div>
+                          {card.recentPublishAttempts > 0 ? (
+                            <p className="mt-1.5 text-[11px]">
+                              7d publishes: <strong>{card.recentPublishSuccesses}</strong>/<strong>{card.recentPublishAttempts}</strong> ({(card.successRate * 100).toFixed(0)}%)
+                              {card.recentAuthFailures > 0 && <span className="ml-1 rounded bg-red-100 px-1 text-red-700">{card.recentAuthFailures} auth fail</span>}
+                            </p>
+                          ) : (
+                            <p className="mt-1.5 text-[11px] text-gray-500">No publishes in 7d.</p>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setExpandedProvider((p) => p === card.provider ? null : card.provider)}
+                            className="mt-1.5 text-[11px] font-medium text-indigo-700 underline"
+                          >
+                            {expandedProvider === card.provider ? 'Hide tips' : 'Show setup + troubleshooting'}
+                          </button>
+                          {expandedProvider === card.provider && (
+                            <div className="mt-1.5 space-y-1.5 rounded bg-white p-2 text-[11px] text-gray-700">
+                              {card.setupHints.length > 0 && (
+                                <div>
+                                  <p className="font-semibold text-gray-800">Setup hints</p>
+                                  <ul className="ml-3 list-disc">
+                                    {card.setupHints.map((h, i) => <li key={i}>{h}</li>)}
+                                  </ul>
+                                </div>
+                              )}
+                              {card.troubleshootingHints.length > 0 && (
+                                <div>
+                                  <p className="font-semibold text-gray-800">Troubleshooting</p>
+                                  <ul className="ml-3 list-disc">
+                                    {card.troubleshootingHints.map((h, i) => <li key={i}>{h}</li>)}
+                                  </ul>
+                                </div>
+                              )}
+                              <p className="text-gray-500">Rate limits: {card.rateLimitNote}</p>
+                              {card.recentErrors.length > 0 && (
+                                <div>
+                                  <p className="font-semibold text-gray-800">Recent errors</p>
+                                  <ul className="ml-3 list-disc">
+                                    {card.recentErrors.map((e, i) => (
+                                      <li key={i}><span className="text-gray-500">{new Date(e.at).toLocaleString()}</span> · {e.message}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : !providerCardsLoading && (
+                    <p className="text-xs text-gray-500">No provider data yet.</p>
                   )}
                 </section>
 

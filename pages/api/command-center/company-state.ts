@@ -85,11 +85,11 @@ export default async function handler(
 
     // Check blogs created by this user for this company
     const { data: blogData, error: blogErr } = await supabase
-      .from('posts')
+      .from('blogs')
       .select('id', { count: 'exact' })
-      .eq('created_by_user_id', user.id)
+      .eq('created_by', user.id)
       .eq('company_id', companyId)
-      .eq('type', 'article');
+      .eq('content_type', 'blog');
 
     // Check company website URL
     const { data: companyData, error: companyErr } = await supabase

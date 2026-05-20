@@ -168,7 +168,7 @@ export async function buildBetaReadinessReport(companyId: string): Promise<BetaR
 
   // Provider coverage matrix.
   const providerCoverage = (
-    ['wordpress', 'custom_blog_api', 'ghost', 'drupal', 'joomla', 'webflow', 'shopify'] as CmsProvider[]
+    ['wordpress', 'custom_blog_api', 'ghost', 'drupal', 'joomla', 'webflow', 'shopify', 'hubspot', 'wix', 'squarespace'] as CmsProvider[]
   ).map((provider) => {
     const desc = describeCmsProvider(provider);
     const conns = connections.filter((c) => c.provider === provider);

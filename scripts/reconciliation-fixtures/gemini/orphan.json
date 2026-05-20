@@ -1,0 +1,16 @@
+{
+  "provider": "gemini",
+  "providerInvoiceId": "gemini_local_2026_05_orphan_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "kind": "gcb_export",
+  "payload": {
+    "rows": [
+      { "service": { "description": "Generative Language API" },
+        "sku":     { "description": "Gemini 1.5 Flash Input Token" },
+        "usage_start_time": "2026-05-19T00:00:00Z",
+        "project": { "id": "proj-orphan" },
+        "usage":   { "amount": 100000 }, "cost": 7.50 }
+    ]
+  }
+}

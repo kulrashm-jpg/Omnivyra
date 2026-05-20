@@ -55,12 +55,12 @@ async function checkSuperAdmin(req: NextApiRequest): Promise<boolean> {
     if (error || !user) return false;
 
     const { data: profile } = await supabase
-      .from('profiles')
-      .select('is_super_admin')
+      .from('users')
+      .select('role')
       .eq('id', user.id)
       .maybeSingle();
 
-    return profile?.is_super_admin === true;
+    return String(profile?.role ?? '').toUpperCase() === 'SUPER_ADMIN';
   } catch {
     return false;
   }
@@ -118,8 +118,8 @@ export default async function handler(
 
     // Get organizations and their plans (including overrides)
     const { data: orgPlans } = await supabase
-      .from('organization_plans')
-      .select('id, organization_id, plan_id, created_at, updated_at');
+      .from('organization_plan_assignments')
+      .select('id, organization_id, plan_id, assigned_at, assigned_by');
 
     const { data: overrides } = await supabase
       .from('organization_plan_overrides')

@@ -7,6 +7,9 @@
 
 Write-Host "🚀 Starting Campaign Management Database Cleanup..." -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Green
+Write-Host "Schema governance refusal: database/campaign-management-clean-schema.sql is legacy reference SQL, not production authority." -ForegroundColor Red
+Write-Host "Promote required schema changes into timestamped files under supabase/migrations/ before applying." -ForegroundColor Yellow
+exit 1
 
 # Check if .env.local exists
 if (-not (Test-Path "../.env.local")) {

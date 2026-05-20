@@ -2,7 +2,7 @@
 -- COMPLETE 12-WEEK CAMPAIGN SYSTEM SETUP
 -- =====================================================
 -- This script combines all necessary tables and columns for the 12-week campaign system
--- Run this in Supabase SQL Editor
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 -- =====================================================
 
 -- 1. ENHANCE CAMPAIGNS TABLE - Add campaign summary fields

@@ -1,6 +1,7 @@
 import { BaseCmsAdapter } from './BaseCmsAdapter';
 import type {
   CmsAdapterContext,
+  CmsDeleteResult,
   CmsHealthResult,
   CmsMediaUploadInput,
   CmsMediaUploadResult,
@@ -225,5 +226,21 @@ export class DrupalAdapter extends BaseCmsAdapter {
 
   async getCategories(context: CmsAdapterContext): Promise<CmsTaxonomyItem[]> {
     return this.getTags(context);
+  }
+
+  async deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult> {
+    const token = this.bearer(context.config);
+    if (!context.config.site_url || !token) return { success: false, message: 'Drupal integration is missing credentials.' };
+    const base = await this.base(context);
+    const bundle = context.config.node_bundle || 'article';
+    const res = await this.fetchWithTimeout(
+      `${base}/node/${bundle}/${encodeURIComponent(externalId)}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${token}`, Accept: JSONAPI } },
+      context.timeoutMs ?? 15_000,
+    );
+    if (res.ok || res.status === 204) return { success: true, message: 'Node deleted from Drupal.' };
+    if (res.status === 404) return { success: true, message: 'Node already absent on Drupal.' };
+    if (res.status === 401 || res.status === 403) return { success: false, message: 'Drupal authentication failed during delete.' };
+    return { success: false, message: `Drupal delete returned status ${res.status}.` };
   }
 }

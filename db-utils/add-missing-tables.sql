@@ -1,6 +1,6 @@
 -- ADD MISSING TABLES TO EXISTING DATABASE
 -- This script adds only the missing tables without conflicting with existing ones
--- Run this in Supabase SQL Editor
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 
 -- ==============================================
 -- 1. SOCIAL MEDIA MANAGEMENT TABLES

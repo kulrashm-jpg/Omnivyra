@@ -1,0 +1,24 @@
+{
+  "provider": "gemini",
+  "providerInvoiceId": "gemini_local_2026_05_happy_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "kind": "gcb_export",
+  "projectOrgMap": { "proj-platform": "org-platform" },
+  "payload": {
+    "rows": [
+      { "service": { "description": "Generative Language API" },
+        "sku":     { "description": "Gemini 1.5 Flash Input Token" },
+        "usage_start_time": "2026-05-19T00:00:00Z",
+        "project": { "id": "proj-platform" },
+        "usage":   { "amount": 1000, "unit": "tokens" },
+        "cost": 0.075, "currency": "USD" },
+      { "service": { "description": "Generative Language API" },
+        "sku":     { "description": "Gemini 1.5 Flash Output Token" },
+        "usage_start_time": "2026-05-19T00:00:00Z",
+        "project": { "id": "proj-platform" },
+        "usage":   { "amount": 500, "unit": "tokens" },
+        "cost": 0.150, "currency": "USD" }
+    ]
+  }
+}

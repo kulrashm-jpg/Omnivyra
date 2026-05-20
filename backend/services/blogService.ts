@@ -9,7 +9,7 @@ import { extractBlogContext } from '../../lib/blog/blockExtractor';
 import { createPublishingJob } from './publishingJobService';
 import { isCmsProvider } from './cms/registry';
 
-export type BlogStatus = 'draft' | 'scheduled' | 'published' | 'failed';
+export type BlogStatus = 'draft' | 'scheduled' | 'published' | 'failed' | 'archived';
 
 export interface Blog {
   id:                   string;

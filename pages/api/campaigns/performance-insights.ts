@@ -84,29 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         expectation = { platformBaselines };
       }
     } else {
-      // Fallback: try account_contexts table for platform baselines
-      try {
-        const { data: acData } = await supabase
-          .from('account_contexts')
-          .select('platforms')
-          .eq('user_id', user.id)
-          .order('last_updated', { ascending: false })
-          .limit(1)
-          .single();
-
-        if (acData?.platforms && Array.isArray(acData.platforms)) {
-          platformBaselines = (acData.platforms as Array<Record<string, unknown>>)
-            .filter((p) => p?.platform && typeof p.platform === 'string')
-            .map((p) => ({
-              platform: String(p.platform).toLowerCase(),
-              avgReach: Number(p.avgReach) || 0,
-              engagementRate: Number(p.engagementRate) || 0,
-            }));
-          expectation = { platformBaselines };
-        }
-      } catch {
-        console.warn('[PLANNER][PERFORMANCE][WARN] Could not load account baselines — using absolute thresholds');
-      }
+      console.warn('[PLANNER][PERFORMANCE][WARN] Campaign context missing; using absolute thresholds');
     }
 
     // ── Normalize slot data ──────────────────────────────────────────────────

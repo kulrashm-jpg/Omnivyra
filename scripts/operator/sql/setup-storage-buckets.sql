@@ -7,8 +7,8 @@
 -- =====================================================
 -- SETUP SUPABASE STORAGE BUCKETS FOR MEDIA
 -- =====================================================
--- Run this in Supabase SQL Editor to create storage buckets
--- for images, videos, audio, and documents
+-- Operator reference only. Do not run directly against production.
+-- Storage topology must be reviewed alongside authoritative runtime configuration.
 -- =====================================================
 
 -- Note: Supabase Storage buckets are typically created via the Dashboard,

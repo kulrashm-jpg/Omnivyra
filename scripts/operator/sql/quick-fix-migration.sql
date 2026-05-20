@@ -7,8 +7,8 @@
 -- =====================================================
 -- QUICK FIX MIGRATION - Add Missing Columns/Tables
 -- =====================================================
--- Run this in Supabase SQL Editor to fix test failures
--- This adds only the missing items identified by tests
+-- Deprecated direct execution path. Do not run this in production.
+-- Promote any still-needed statement into supabase/migrations/ first.
 -- =====================================================
 
 BEGIN;

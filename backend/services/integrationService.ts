@@ -20,7 +20,10 @@ export type IntegrationType =
   | 'drupal'
   | 'joomla'
   | 'webflow'
-  | 'shopify';
+  | 'shopify'
+  | 'hubspot'
+  | 'wix'
+  | 'squarespace';
 export type IntegrationStatus = 'connected' | 'failed' | 'pending';
 
 /** Connection auth_type per CMS provider (drives website_connections.auth_type). */
@@ -31,6 +34,9 @@ const PROVIDER_AUTH_TYPE: Record<string, string> = {
   joomla: 'api_token',
   webflow: 'oauth2',
   shopify: 'api_token',
+  hubspot: 'oauth2',
+  wix: 'api_token',
+  squarespace: 'api_token',
   custom_blog_api: 'api_key',
 };
 
@@ -77,7 +83,8 @@ export async function createIntegration(
   config: Record<string, string>,
   options: { websiteId?: string | null; authType?: string } = {},
 ): Promise<Integration> {
-  const { nonSecretConfig, credentials } = splitSecretConfig(config);
+  const normalizedConfig = normalizeIntegrationConfig(type, config);
+  const { nonSecretConfig, credentials } = splitSecretConfig(normalizedConfig);
   const website = await resolveWebsiteForCompany(companyId, options.websiteId ?? null, userId);
   const connection = await createWebsiteConnection({
     websiteId: website.id,
@@ -110,17 +117,30 @@ export async function createIntegration(
 export async function updateIntegration(
   id: string,
   companyId: string,
-  updates: { name?: string; config?: Record<string, string> }
+  updates: { name?: string; config?: Record<string, string>; websiteId?: string | null }
 ): Promise<Integration> {
   const existing = await getIntegration(id, companyId);
   if (!existing) throw new Error('Integration not found');
 
   const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (updates.name) payload.name = updates.name;
+  if (updates.websiteId !== undefined) {
+    const website = await resolveWebsiteForCompany(companyId, updates.websiteId, existing.created_by);
+    payload.website_id = website.id;
+    if (existing.website_connection_id) {
+      await ownedDbTable('website_connections')
+        .update({ website_id: website.id, updated_at: new Date().toISOString() })
+        .eq('id', existing.website_connection_id);
+    }
+  }
   if (updates.config) {
-    const { nonSecretConfig, credentials } = splitSecretConfig(updates.config);
+    const normalizedConfig = normalizeIntegrationConfig(existing.type, updates.config);
+    const { nonSecretConfig, credentials } = splitSecretConfig(normalizedConfig);
     if (existing.website_connection_id) {
       await upsertConnectionCredentials(existing.website_connection_id, credentials);
+      await ownedDbTable('website_connections')
+        .update({ non_secret_config: nonSecretConfig, updated_at: new Date().toISOString() })
+        .eq('id', existing.website_connection_id);
     }
     payload.config = nonSecretConfig;
     payload.non_secret_config = nonSecretConfig;
@@ -135,6 +155,49 @@ export async function updateIntegration(
     .single();
   if (error) throw new Error(error.message);
   return hydrateIntegration(data as Integration);
+}
+
+function normalizeIntegrationConfig(
+  type: IntegrationType,
+  config: Record<string, string>,
+): Record<string, string> {
+  const normalized = Object.fromEntries(
+    Object.entries(config).map(([key, value]) => [key, String(value ?? '').trim()]),
+  ) as Record<string, string>;
+
+  if (isCmsProvider(type) && normalized.site_url) {
+    normalized.site_url = normalizeCmsSiteUrl(normalized.site_url);
+  }
+
+  return normalized;
+}
+
+function normalizeCmsSiteUrl(raw: string): string {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+
+  const withProtocol = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  try {
+    const url = new URL(withProtocol);
+    const host = url.hostname.toLowerCase();
+    const isDevelopmentHost =
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '::1' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host.endsWith('.test');
+
+    if (url.protocol === 'http:' && !isDevelopmentHost) {
+      url.protocol = 'https:';
+    }
+    url.hash = '';
+    url.search = '';
+    url.pathname = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return value;
+  }
 }
 
 export async function deleteIntegration(id: string, companyId: string): Promise<void> {
@@ -211,6 +274,24 @@ export async function validateIntegration(
 ): Promise<TestResult> {
   const integration = await getIntegration(id, companyId);
   if (!integration) return { success: false, message: 'Integration not found.' };
+  const normalizedConfig = normalizeIntegrationConfig(integration.type, integration.config);
+  if (JSON.stringify(normalizedConfig) !== JSON.stringify(integration.config)) {
+    integration.config = normalizedConfig;
+    const { nonSecretConfig } = splitSecretConfig(normalizedConfig);
+    await ownedDbTable('company_integrations')
+      .update({
+        config: nonSecretConfig,
+        non_secret_config: nonSecretConfig,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('company_id', companyId);
+    if (integration.website_connection_id) {
+      await ownedDbTable('website_connections')
+        .update({ non_secret_config: nonSecretConfig, updated_at: new Date().toISOString() })
+        .eq('id', integration.website_connection_id);
+    }
+  }
 
   // Enforcement: no CMS operation runs without a canonical connection.
   if (isCmsProvider(integration.type) && !integration.website_connection_id) {

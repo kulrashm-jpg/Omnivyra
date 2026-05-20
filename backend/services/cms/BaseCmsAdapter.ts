@@ -1,6 +1,7 @@
 import type {
   CmsAdapter,
   CmsAdapterContext,
+  CmsDeleteResult,
   CmsHealthResult,
   CmsMediaUploadInput,
   CmsMediaUploadResult,
@@ -39,6 +40,13 @@ export abstract class BaseCmsAdapter implements CmsAdapter {
 
   async updatePost(context: CmsAdapterContext, externalId: string, input: CmsPostInput): Promise<CmsPublishResult> {
     throw new CmsAdapterError(`Update is not implemented for ${externalId}.`, context.provider, 'CMS_UPDATE_UNSUPPORTED');
+  }
+
+  async deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult> {
+    return {
+      success: false,
+      message: `Remote delete is not supported for ${context.provider} (external id ${externalId}).`,
+    };
   }
 
   async uploadMedia(context: CmsAdapterContext, _input: CmsMediaUploadInput): Promise<CmsMediaUploadResult> {

@@ -9,6 +9,7 @@ import {
 } from './cmsApiBaseResolver';
 import type {
   CmsAdapterContext,
+  CmsDeleteResult,
   CmsHealthResult,
   CmsMediaUploadInput,
   CmsMediaUploadResult,
@@ -113,6 +114,26 @@ export class WordPressAdapter extends BaseCmsAdapter {
 
   async schedulePost(context: CmsAdapterContext, input: CmsPostInput): Promise<CmsPublishResult> {
     return this.upsertPost(context, undefined, { ...input, status: 'future' });
+  }
+
+  async deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult> {
+    const config = context.config;
+    if (!config.site_url || !config.username || !config.app_password) {
+      return { success: false, message: 'WordPress integration is missing credentials.' };
+    }
+    const base = await this.canonicalApiBase(context, String(config.site_url));
+    const auth = Buffer.from(`${config.username}:${config.app_password}`).toString('base64');
+    const res = await this.fetchWithTimeout(
+      `${base}/wp/v2/posts/${encodeURIComponent(externalId)}?force=true`,
+      { method: 'DELETE', headers: { Authorization: `Basic ${auth}` } },
+      context.timeoutMs ?? 15_000,
+    );
+    if (res.ok) return { success: true, message: 'Post deleted from WordPress.' };
+    if (res.status === 401 || res.status === 403) {
+      return { success: false, message: 'WordPress authentication failed during delete.' };
+    }
+    if (res.status === 404) return { success: true, message: 'Post already absent on WordPress.' };
+    return { success: false, message: `WordPress delete returned status ${res.status}.` };
   }
 
   async getCategories(context: CmsAdapterContext): Promise<CmsTaxonomyItem[]> {

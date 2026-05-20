@@ -2,7 +2,11 @@
 
 ## 📋 Overview
 
-The `complete-integration-migration.sql` script contains **ALL** required database changes for:
+> Schema governance update: this document is retained as legacy reference only.
+> Do not apply `db-utils/complete-integration-migration.sql` directly with psql, Supabase SQL Editor, or `exec_sql`.
+> Any still-needed change must be promoted into a timestamped file under `supabase/migrations/`.
+
+The `complete-integration-migration.sql` script historically contained database changes for:
 - ✅ **P0:** Queue system, scheduler, OAuth integration
 - ✅ **P1:** Media management, posting infrastructure  
 - ✅ **P2:** Analytics, templates, team collaboration, activity logging
@@ -56,7 +60,7 @@ All critical indexes for:
 
 ## 🎯 How to Apply
 
-### Option 1: Supabase SQL Editor (Recommended)
+### Deprecated direct application path
 
 1. **Open Supabase Dashboard**
    - Go to your project
@@ -64,8 +68,8 @@ All critical indexes for:
 
 2. **Create New Query**
    - Click "New Query"
-   - Copy entire contents of `db-utils/complete-integration-migration.sql`
-   - Paste into editor
+   - Do not copy `db-utils/complete-integration-migration.sql` into the SQL editor.
+   - Promote required statements into `supabase/migrations/` instead.
 
 3. **Execute**
    - Click "Run" or press `Ctrl+Enter`
@@ -75,12 +79,12 @@ All critical indexes for:
    - Check for any errors in output
    - Run verification queries (provided in script comments)
 
-### Option 2: Command Line (If Supabase CLI available)
+### Deprecated command-line path
 
 ```bash
 # Using Supabase CLI
 supabase db reset  # Only if you want to reset
-psql $DATABASE_URL -f db-utils/complete-integration-migration.sql
+echo "Refused: promote required SQL into supabase/migrations/ instead"
 ```
 
 ## ✅ Verification Steps
@@ -229,7 +233,7 @@ After successful migration:
 
 2. **Seed Test Data** (Optional)
    ```bash
-   # Run scripts/seed-demo-data.sql in Supabase SQL Editor
+   # Deprecated: seed SQL must not be applied to production directly.
    ```
 
 3. **Test API Endpoints**
@@ -248,5 +252,5 @@ After successful migration:
 
 **Migration Script:** `db-utils/complete-integration-migration.sql`  
 **Created:** Based on current schema analysis  
-**Status:** ✅ Ready for production use
+**Status:** Legacy reference only; not approved for direct production use
 

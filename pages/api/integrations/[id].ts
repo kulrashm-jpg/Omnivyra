@@ -33,10 +33,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!roleGate) return;
 
   if (req.method === 'PUT' || req.method === 'PATCH') {
-    const { name, config } = req.body || {};
-    const updates: { name?: string; config?: Record<string, string> } = {};
+    const { name, config, website_id } = req.body || {};
+    const updates: { name?: string; config?: Record<string, string>; websiteId?: string | null } = {};
     if (name && typeof name === 'string') updates.name = name.trim();
     if (config && typeof config === 'object') updates.config = config;
+    if (website_id !== undefined) {
+      updates.websiteId = typeof website_id === 'string' && website_id.trim() ? website_id.trim() : null;
+    }
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'Nothing to update' });
     }

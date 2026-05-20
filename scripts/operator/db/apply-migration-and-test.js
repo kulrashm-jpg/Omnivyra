@@ -37,6 +37,11 @@ async function applyMigrationAndTest() {
   });
   if (!safety.allowed) return;
 
+  console.error('[schema-governance] Refusing to apply db-utils/complete-integration-migration.sql.');
+  console.error('[schema-governance] Production schema changes must be promoted into timestamped files under supabase/migrations/.');
+  console.error('[schema-governance] Run tests separately after the authoritative migration chain is applied.');
+  process.exit(1);
+
   console.log('\n🚀 Applying Database Migration and Running Tests...\n');
 
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;

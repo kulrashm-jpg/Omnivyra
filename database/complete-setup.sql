@@ -1,7 +1,7 @@
 -- =====================================================
 -- COMPLETE CAMPAIGN MANAGEMENT DATABASE SETUP
 -- =====================================================
--- Run this in Supabase SQL Editor to create all required tables
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 -- =====================================================
 
 -- Drop existing tables (except users)

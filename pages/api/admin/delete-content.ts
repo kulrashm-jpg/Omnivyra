@@ -27,14 +27,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Get user role for audit
-    const { data: userRole } = await supabase
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', user.id)
-      .eq('is_active', true)
-      .single();
-
     // Get content data before deletion for audit
     const { data: contentData, error: contentError } = await supabase
       .from('content_items')
@@ -51,17 +43,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Log the deletion attempt
     const { error: logError } = await supabase
-      .from('deletion_audit_log')
+      .from('super_admin_audit_logs')
       .insert({
-        user_id: user.id,
-        user_role: userRole?.role || 'super_admin',
+        actor_user_id: user.id,
         action: 'delete_content',
-        table_name: 'content_items',
-        record_id: contentId,
-        record_data: contentData,
-        reason: reason,
-        ip_address: ipAddress || '127.0.0.1',
-        user_agent: userAgent || 'Unknown'
+        target_type: 'content_items',
+        target_id: contentId,
+        metadata: {
+          record_data: contentData,
+          reason,
+          ip_address: ipAddress || '127.0.0.1',
+          user_agent: userAgent || 'Unknown',
+        },
       });
 
     if (logError) {

@@ -16,6 +16,9 @@ const ALLOWED_TYPES: IntegrationType[] = [
   'joomla',
   'webflow',
   'shopify',
+  'hubspot',
+  'wix',
+  'squarespace',
 ];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

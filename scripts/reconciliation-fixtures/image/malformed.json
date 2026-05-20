@@ -1,0 +1,16 @@
+{
+  "provider": "image",
+  "providerInvoiceId": "image_local_2026_05_malformed_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "providerTag": "openai_image",
+  "kind": "dalle_usage",
+  "rates": { "images": { "dall-e-3": { "per_image": 0.04 } }, "defaultImage": { "per_image": 0.04 } },
+  "payload": {
+    "dalle_api_data": [
+      { "image_models": "dall-e-3", "num_images": 1 },
+      { "timestamp": 1779494400, "image_models": "dall-e-3" },
+      { "timestamp": 1779494400, "image_models": "dall-e-3", "num_images": 1 }
+    ]
+  }
+}

@@ -17,6 +17,8 @@ export const SECRET_CONFIG_KEYS = new Set([
   'api_token',
   'bearer_token',
   'shopify_access_token',
+  // HubSpot / Wix.
+  'wix_api_key',
 ]);
 
 export function splitSecretConfig(config: Record<string, unknown> | null | undefined): {

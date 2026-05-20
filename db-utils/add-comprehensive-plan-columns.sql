@@ -1,5 +1,5 @@
 -- Add missing columns to weekly_content_refinements table for comprehensive plan editor
--- Run this in Supabase SQL Editor
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 
 -- Add marketing_channels column (array of platforms)
 ALTER TABLE weekly_content_refinements 

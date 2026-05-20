@@ -1,7 +1,7 @@
 -- =====================================================
 -- QUICK FIX FOR CAMPAIGN SUMMARY VIEW
 -- =====================================================
--- Run this in Supabase SQL Editor to fix the error
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 -- =====================================================
 
 -- Drop the existing view if it exists

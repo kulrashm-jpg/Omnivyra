@@ -15,7 +15,7 @@ import { useCompanyContext } from '../components/CompanyContext';
  * no dead ends, graceful recovery, mobile-safe.
  */
 
-type ProviderId = 'wordpress' | 'shopify' | 'webflow' | 'ghost' | 'drupal' | 'joomla' | 'custom_blog_api';
+type ProviderId = 'wordpress' | 'shopify' | 'webflow' | 'ghost' | 'drupal' | 'joomla' | 'hubspot' | 'wix' | 'squarespace' | 'custom_blog_api';
 
 const PROVIDERS: Array<{ id: ProviderId; label: string; blurb: string }> = [
   { id: 'wordpress', label: 'WordPress', blurb: 'Most common. Uses an Application Password.' },
@@ -24,6 +24,9 @@ const PROVIDERS: Array<{ id: ProviderId; label: string; blurb: string }> = [
   { id: 'ghost', label: 'Ghost', blurb: 'Ghost publication. Uses an Admin API key.' },
   { id: 'drupal', label: 'Drupal', blurb: 'Drupal JSON:API. Uses a bearer token.' },
   { id: 'joomla', label: 'Joomla', blurb: 'Joomla Web Services. Uses an API token.' },
+  { id: 'hubspot', label: 'HubSpot CMS', blurb: 'HubSpot Blog Posts API. Uses an access token + blog_id.' },
+  { id: 'wix', label: 'Wix', blurb: 'Wix Blog. Uses an API key + site id.' },
+  { id: 'squarespace', label: 'Squarespace', blurb: 'Read-only — Squarespace has no public write API; publishing is not supported.' },
   { id: 'custom_blog_api', label: 'Custom website', blurb: 'Anything else — connect via a publishing API.' },
 ];
 
@@ -54,6 +57,18 @@ const PROVIDER_FIELDS: Record<ProviderId, Array<{ key: string; label: string; pa
     { key: 'endpoint_url', label: 'Publishing endpoint URL' },
     { key: 'api_key', label: 'API key', password: true },
   ],
+  hubspot: [
+    { key: 'access_token', label: 'HubSpot access token', password: true, hint: 'Private-app token OR OAuth access token (content scope).' },
+    { key: 'blog_id', label: 'HubSpot Blog ID', hint: 'Marketing → Website → Blog → Blog ID.' },
+  ],
+  wix: [
+    { key: 'api_key', label: 'Wix API key', password: true, hint: 'Wix Dashboard → Settings → Headless settings.' },
+    { key: 'wix_site_id', label: 'Wix Site ID' },
+    { key: 'wix_account_id', label: 'Wix Account ID (optional)', hint: 'Required for app tokens; leave blank for site tokens.' },
+  ],
+  squarespace: [
+    { key: 'site_url', label: 'Squarespace site URL', hint: 'Reachability validated only — publishing is NOT supported.' },
+  ],
 };
 
 // UX step → existing contract step key it completes.
@@ -62,6 +77,7 @@ const WIZARD: Array<{ key: string; title: string; subtitle: string; contractStep
   { key: 'platform', title: 'Confirm platform', subtitle: 'Tell us how your site is built so we show the right steps.', contractStep: 'select_cms' },
   { key: 'connect', title: 'Connect it', subtitle: 'Enter the credentials for your platform.', contractStep: null },
   { key: 'validate', title: 'Check publishing', subtitle: 'We verify we can actually publish before you rely on it.', contractStep: 'connect_cms' },
+  { key: 'analytics', title: 'Connect Google Analytics (GA4)', subtitle: 'Optional — lets us show per-blog views and traffic sources.', contractStep: null },
   { key: 'tracking', title: 'Visitor tracking', subtitle: 'Add one snippet so we can attribute visitors and leads.', contractStep: 'install_tracking' },
   { key: 'forms', title: 'Forms & leads', subtitle: 'Capture leads from your site.', contractStep: 'connect_forms' },
   { key: 'review', title: 'Review & activate', subtitle: 'Confirm what we detected and turn it on.', contractStep: 'summary' },
@@ -71,6 +87,9 @@ function guessProvider(url: string): ProviderId | null {
   const u = url.toLowerCase();
   if (u.includes('myshopify.com')) return 'shopify';
   if (u.includes('webflow.io')) return 'webflow';
+  if (u.includes('squarespace.com')) return 'squarespace';
+  if (u.includes('wixsite.com') || u.includes('wix.com')) return 'wix';
+  if (u.includes('hubspotpagebuilder.com') || u.includes('hubspot.com')) return 'hubspot';
   return null;
 }
 
@@ -446,6 +465,60 @@ export default function WebsiteSetupPage() {
                     </button>
                   )}
                 </div>
+                {/* Webflow: surface discovered sites + collections so operator can copy the right collection_id. */}
+                {provider === 'webflow' && validation?.success && Array.isArray((validation.diagnostics as any)?.providerResponse?.sites) && (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs">
+                    <p className="font-medium text-gray-800">Webflow sites + collections discovered</p>
+                    <p className="text-gray-500">Copy a collection ID and paste it into the integration's <code>collection_id</code> config to enable publishing.</p>
+                    <ul className="mt-1 space-y-1">
+                      {((validation.diagnostics as any).providerResponse.sites as Array<{ id: string; name: string; collections: Array<{ id: string; name: string }> }>).map((s) => (
+                        <li key={s.id}>
+                          <strong>{s.name}</strong>
+                          <ul className="ml-3 list-disc">
+                            {s.collections.map((c) => (
+                              <li key={c.id}>
+                                {c.name} — <code className="rounded bg-white px-1">{c.id}</code>
+                                <button
+                                  type="button"
+                                  className="ml-1 text-indigo-600 underline"
+                                  onClick={() => navigator.clipboard?.writeText(c.id).catch(() => undefined)}
+                                >
+                                  Copy
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {step.key === 'analytics' && (
+              <div className="space-y-3 text-sm text-gray-600">
+                <p>
+                  Connect Google Analytics 4 to see <strong>views per blog</strong> and traffic sources. This is optional — you can skip it and connect later from Integrations.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href={`/api/analytics/connect/google?company_id=${encodeURIComponent(companyId)}`}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Connect Google Analytics
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setStepIndex((i) => Math.min(i + 1, WIZARD.length - 1))}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700"
+                  >
+                    Skip for now
+                  </button>
+                </div>
+                <p className="text-[11px] text-gray-500">
+                  After connecting, you'll be redirected here. We auto-detect your GA4 properties on the Analytics page.
+                </p>
               </div>
             )}
 
@@ -465,8 +538,32 @@ export default function WebsiteSetupPage() {
             )}
 
             {step.key === 'forms' && (
-              <div className="space-y-3 text-sm text-gray-600">
-                <p>Collect leads from your existing forms, or use an Omnivyra hosted form. Supported form systems are detected automatically once the tracker is live (Contact Form 7, Gravity, Elementor, WPForms, Ninja, generic HTML).</p>
+              <div className="space-y-4 text-sm text-gray-600">
+                <p>Tell us where your leads come from. We'll save your choice so the right integrations show up on the next step.</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {[
+                    { k: 'SAME_SITE', t: 'Same-site forms' },
+                    { k: 'EXTERNAL_LANDING_PAGES', t: 'External landing pages' },
+                    { k: 'EMBEDDED_FORMS', t: 'Embedded forms' },
+                    { k: 'SPA_FUNNEL', t: 'SPA / web app' },
+                    { k: 'WEBHOOK_ONLY', t: 'Webhook-only' },
+                    { k: 'HYBRID_MULTI_SOURCE', t: 'Hybrid / multi-source' },
+                  ].map((opt) => {
+                    const on = (config.__topology_picks ?? '').split(',').filter(Boolean).includes(opt.k);
+                    return (
+                      <button key={opt.k} type="button"
+                        onClick={() => setConfig((c) => {
+                          const cur = String(c.__topology_picks ?? '').split(',').filter(Boolean);
+                          const next = cur.includes(opt.k) ? cur.filter((x) => x !== opt.k) : [...cur, opt.k];
+                          return { ...c, __topology_picks: next.join(',') };
+                        })}
+                        className={`rounded-lg border p-2 text-left text-xs ${on ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 bg-white text-gray-700'}`}>
+                        {opt.t}{on ? ' ✓' : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-gray-500">Multi-select if your setup spans more than one. You can refine this any time from <a href="/lead-capture" className="text-indigo-600">Lead Capture</a>.</p>
                 <a href="/leads?tab=forms" className="inline-block rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700">Open forms workspace</a>
               </div>
             )}
@@ -492,7 +589,26 @@ export default function WebsiteSetupPage() {
               {step.key === 'tracking' || step.key === 'forms' ? (
                 <button
                   type="button"
-                  onClick={async () => { if (step.contractStep) await markStep(step.contractStep, { skipped: false }); goNext(); }}
+                  onClick={async () => {
+                    if (step.key === 'forms') {
+                      // Persist topology picks before marking the step done. The
+                      // existing contract step state carries the choice; the new
+                      // topology endpoint records it durably for downstream
+                      // diagnostics + dynamic-option rendering.
+                      const picks = String(config.__topology_picks ?? '').split(',').filter(Boolean);
+                      if (companyId && picks.length > 0) {
+                        await fetch('/api/website-intelligence/lead-capture-topology', {
+                          method: 'POST', credentials: 'include',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ company_id: companyId, topologies: picks }),
+                        }).catch(() => undefined);
+                      }
+                      if (step.contractStep) await markStep(step.contractStep, { topologies: picks, source: 'website_setup_wizard' });
+                    } else {
+                      if (step.contractStep) await markStep(step.contractStep, { skipped: false });
+                    }
+                    goNext();
+                  }}
                   disabled={busy}
                   className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
                 >

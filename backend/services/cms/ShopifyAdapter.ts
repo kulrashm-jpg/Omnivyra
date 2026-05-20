@@ -1,7 +1,10 @@
 import { BaseCmsAdapter } from './BaseCmsAdapter';
 import type {
   CmsAdapterContext,
+  CmsDeleteResult,
   CmsHealthResult,
+  CmsMediaUploadInput,
+  CmsMediaUploadResult,
   CmsPostInput,
   CmsPublishResult,
   CmsTaxonomyItem,
@@ -181,5 +184,73 @@ export class ShopifyAdapter extends BaseCmsAdapter {
 
   async getTags(context: CmsAdapterContext): Promise<CmsTaxonomyItem[]> {
     return this.getCategories(context);
+  }
+
+  async deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult> {
+    const shop = this.shop(context.config);
+    const token = this.token(context.config);
+    if (!shop || !token) return { success: false, message: 'Shopify integration is missing credentials.' };
+    const base = this.base(context.config);
+    const blogId = await this.resolveBlogId(context, base, token);
+    if (!blogId) return { success: false, message: 'Cannot resolve Shopify blog_id for delete.' };
+    const res = await this.fetchWithTimeout(
+      `${base}/blogs/${encodeURIComponent(blogId)}/articles/${encodeURIComponent(externalId)}.json`,
+      { method: 'DELETE', headers: { 'X-Shopify-Access-Token': token } },
+      context.timeoutMs ?? 15_000,
+    );
+    if (res.ok || res.status === 204) return { success: true, message: 'Article deleted from Shopify.' };
+    if (res.status === 404) return { success: true, message: 'Article already absent on Shopify.' };
+    if (res.status === 401 || res.status === 403) return { success: false, message: 'Shopify authentication failed during delete.' };
+    return { success: false, message: `Shopify delete returned status ${res.status}.` };
+  }
+
+  async uploadMedia(context: CmsAdapterContext, input: CmsMediaUploadInput): Promise<CmsMediaUploadResult> {
+    const shop = this.shop(context.config);
+    const token = this.token(context.config);
+    if (!shop || !token) return { providerResponse: { error: 'missing_credentials' } };
+    const base = this.base(context.config);
+    try {
+      const bytes = input.body instanceof Buffer ? input.body : Buffer.from(input.body as ArrayBuffer);
+      // Shopify Files API (Admin GraphQL is the modern path; the legacy
+      // REST themes/assets endpoint isn't the right surface for blog media).
+      // We use the staged uploads → file create flow via GraphQL.
+      const stage = await this.fetchWithTimeout(
+        `${base.replace(/\/admin\/api\/.*/, '/admin/api/' + API_VERSION)}/graphql.json`,
+        {
+          method: 'POST',
+          headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: `mutation StageUpload($input: [StagedUploadInput!]!) {
+              stagedUploadsCreate(input: $input) {
+                stagedTargets { url resourceUrl parameters { name value } }
+                userErrors { message }
+              }
+            }`,
+            variables: {
+              input: [{
+                filename: input.filename,
+                mimeType: input.contentType,
+                resource: 'IMAGE',
+                fileSize: String(bytes.length),
+                httpMethod: 'POST',
+              }],
+            },
+          }),
+        },
+        context.timeoutMs ?? 30_000,
+      );
+      const stageData = await stage.json().catch(() => null);
+      const target = (stageData as any)?.data?.stagedUploadsCreate?.stagedTargets?.[0];
+      if (!target) return { providerResponse: stageData ?? { error: 'staged_upload_failed' } };
+      // Post the file to the staged URL.
+      const form = new FormData();
+      for (const p of (target.parameters as Array<{ name: string; value: string }>)) form.append(p.name, p.value);
+      form.append('file', new Blob([new Uint8Array(bytes)], { type: input.contentType }), input.filename);
+      const upload = await this.fetchWithTimeout(target.url, { method: 'POST', body: form as any }, context.timeoutMs ?? 30_000);
+      if (!upload.ok) return { providerResponse: { stagedTarget: target, uploadStatus: upload.status } };
+      return { url: target.resourceUrl, providerResponse: { stagedTarget: target } };
+    } catch (err) {
+      return { providerResponse: { error: String(err) } };
+    }
   }
 }

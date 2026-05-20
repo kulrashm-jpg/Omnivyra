@@ -2,7 +2,7 @@
 -- ADD ADAPTER CONFIGURATION TABLE
 -- =====================================================
 -- Stores user-specific content adapter configurations
--- Run this in Supabase SQL Editor
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 -- =====================================================
 
 BEGIN;

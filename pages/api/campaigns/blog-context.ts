@@ -57,9 +57,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
   if (!companyId && user) {
     const { data: membership } = await supabase
-      .from('user_companies')
+      .from('user_company_roles')
       .select('company_id')
       .eq('user_id', user.id)
+      .eq('status', 'active')
       .limit(1)
       .maybeSingle();
     companyId = membership?.company_id ?? null;

@@ -7,6 +7,9 @@ import { DrupalAdapter } from './DrupalAdapter';
 import { JoomlaAdapter } from './JoomlaAdapter';
 import { WebflowAdapter } from './WebflowAdapter';
 import { ShopifyAdapter } from './ShopifyAdapter';
+import { HubSpotCmsAdapter } from './HubSpotCmsAdapter';
+import { WixCmsAdapter } from './WixCmsAdapter';
+import { SquarespaceAdapter } from './SquarespaceAdapter';
 import { getProviderCapabilities } from './cmsEnvironmentFramework';
 
 const adapters: Record<CmsProvider, CmsAdapter> = {
@@ -17,6 +20,9 @@ const adapters: Record<CmsProvider, CmsAdapter> = {
   joomla: new JoomlaAdapter(),
   webflow: new WebflowAdapter(),
   shopify: new ShopifyAdapter(),
+  hubspot: new HubSpotCmsAdapter(),
+  wix: new WixCmsAdapter(),
+  squarespace: new SquarespaceAdapter(),
 };
 
 const ALL_CMS_PROVIDERS = Object.keys(adapters) as CmsProvider[];

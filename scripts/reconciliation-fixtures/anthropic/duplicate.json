@@ -1,0 +1,17 @@
+{
+  "provider": "anthropic",
+  "providerInvoiceId": "anthropic_local_2026_05_happy_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "kind": "billing",
+  "rates": {
+    "tokens": { "claude-3-5-sonnet-20240620": { "in_per_1k": 0.003, "out_per_1k": 0.015 } },
+    "defaultToken": { "in_per_1k": 0.001, "out_per_1k": 0.004 }
+  },
+  "payload": {
+    "line_items": [
+      { "period_day": "2026-05-19", "model": "claude-3-5-sonnet-20240620",
+        "input_tokens": 1000, "output_tokens": 500, "amount_usd": 0.0105 }
+    ]
+  }
+}

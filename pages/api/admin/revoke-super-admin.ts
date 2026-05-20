@@ -3,7 +3,7 @@
  * POST /api/admin/revoke-super-admin
  *
  * Revokes platform super-admin status from a user by:
- *  1. Setting profiles.is_super_admin = false
+ *  1. Downgrading users.role from SUPER_ADMIN to COMPANY_ADMIN
  *  2. Downgrading any SUPER_ADMIN role in user_company_roles to COMPANY_ADMIN
  *
  * Authorization: capability `identity.admin.revoke` + step-up policy
@@ -36,11 +36,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const now = new Date().toISOString();
 
-    // 1. Revoke super-admin flag on the profile
+    // 1. Revoke platform-level super-admin role
     const { error: profileErr } = await supabase
-      .from('profiles')
-      .update({ is_super_admin: false, updated_at: now })
-      .eq('id', userId);
+      .from('users')
+      .update({ role: 'COMPANY_ADMIN', updated_at: now })
+      .eq('id', userId)
+      .eq('role', 'SUPER_ADMIN');
 
     if (profileErr) {
       console.error('[revoke-super-admin] profile update failed:', profileErr.message);

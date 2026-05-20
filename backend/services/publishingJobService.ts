@@ -15,7 +15,7 @@ export interface PublishingJob {
   connection_id: string | null;
   blog_id: string | null;
   provider: CmsProvider;
-  job_type: 'publish_post' | 'update_post' | 'schedule_post' | 'sync_post' | 'upload_media';
+  job_type: 'publish_post' | 'update_post' | 'delete_post' | 'schedule_post' | 'sync_post' | 'upload_media';
   status: PublishingJobStatus;
   idempotency_key: string;
   scheduled_for: string | null;
@@ -157,19 +157,43 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
     const blog = await loadPublishingBlog(job);
     const integration = await loadPublishingIntegration(job);
     const adapter = getCmsAdapter(job.provider);
-    const result = await adapter.publishPost({
+    const ctx = {
       provider: job.provider,
       companyId: job.company_id,
       connectionId: job.connection_id,
       websiteId: job.website_id,
       config: integration.config,
       timeoutMs: Number(job.request_payload?.timeout_ms ?? 30_000),
-    }, {
-      blog,
-      htmlContent: String(job.request_payload?.html_content ?? ''),
-      scheduledFor: job.scheduled_for,
-      status: job.job_type === 'schedule_post' || job.scheduled_for ? 'future' : String(job.request_payload?.publish_status || 'publish') as any,
-    });
+    };
+    const externalId = String(job.request_payload?.external_id ?? blog.external_id ?? '');
+
+    let result: { success: boolean; message: string; externalId?: string; externalUrl?: string; providerResponse?: unknown };
+    if (job.job_type === 'delete_post') {
+      if (!externalId) {
+        result = { success: false, message: 'delete_post requires external_id on the blog row.' };
+      } else {
+        const del = await adapter.deletePost(ctx, externalId);
+        result = { success: del.success, message: del.message, providerResponse: del.providerResponse };
+      }
+    } else if (job.job_type === 'update_post') {
+      if (!externalId) {
+        result = { success: false, message: 'update_post requires external_id on the blog row.' };
+      } else {
+        result = await adapter.updatePost(ctx, externalId, {
+          blog,
+          htmlContent: String(job.request_payload?.html_content ?? ''),
+          scheduledFor: job.scheduled_for,
+          status: 'publish',
+        });
+      }
+    } else {
+      result = await adapter.publishPost(ctx, {
+        blog,
+        htmlContent: String(job.request_payload?.html_content ?? ''),
+        scheduledFor: job.scheduled_for,
+        status: job.job_type === 'schedule_post' || job.scheduled_for ? 'future' : String(job.request_payload?.publish_status || 'publish') as any,
+      });
+    }
 
     const duration = Date.now() - started;
     const category = result.success ? null : categorizeFailure(result.message);
@@ -186,15 +210,34 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
 
     if (result.success) {
       await markJobPublished(job, result, duration);
-      await ownedDbTable('blogs')
-        .update({
-          status: 'published',
-          published_at: new Date().toISOString(),
-          external_id: result.externalId ?? null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', job.blog_id)
-        .eq('company_id', job.company_id);
+      if (job.job_type === 'delete_post') {
+        await ownedDbTable('blogs')
+          .update({
+            status: 'archived',
+            external_id: null,
+            external_url: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.blog_id)
+          .eq('company_id', job.company_id);
+      } else if (job.job_type === 'update_post') {
+        await ownedDbTable('blogs')
+          .update({
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.blog_id)
+          .eq('company_id', job.company_id);
+      } else {
+        await ownedDbTable('blogs')
+          .update({
+            status: 'published',
+            published_at: new Date().toISOString(),
+            external_id: result.externalId ?? null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', job.blog_id)
+          .eq('company_id', job.company_id);
+      }
       return { success: true, message: result.message, external_id: result.externalId };
     }
 

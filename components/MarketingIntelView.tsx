@@ -1,5 +1,5 @@
 /**
- * Marketing Intelligence Command Center  — /marketing-intelligence
+ * Marketing Intelligence Command Center  — /intelligence and /marketing-intelligence
  *
  * Executive polish layer:
  *   Part 1 — Executive summary narrative (dynamic, in-memory)

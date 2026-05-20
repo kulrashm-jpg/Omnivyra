@@ -13,6 +13,8 @@ import { durableCooldownRemainingMs, recordOrchestrationEvent, newCorrelationId 
 import { runOrchestratedWorkers } from './workerOrchestrationService';
 import { recordEscalationFailure, recordEscalationReset } from './escalationCoordinationService';
 import { captureMaturitySnapshot, shouldCaptureSnapshot } from './maturitySnapshotService';
+import { captureAdaptiveSnapshot, shouldCaptureAdaptive } from './adaptiveHistoryService';
+import { captureOptimizationSnapshot, shouldCaptureOptimization } from './marketingOptimizationMemoryService';
 
 const TICK_COOLDOWN_MS = 2 * 60_000;
 const ESCALATION_SCOPE = 'worker_scheduler';
@@ -72,6 +74,20 @@ export async function runSchedulerTick(args: {
     }
   } catch {
     /* maturity capture is best-effort; never blocks the tick */
+  }
+  try {
+    if (await shouldCaptureAdaptive(companyId)) {
+      await captureAdaptiveSnapshot(companyId);
+    }
+  } catch {
+    /* adaptive capture is best-effort; never blocks the tick */
+  }
+  try {
+    if (await shouldCaptureOptimization(companyId)) {
+      await captureOptimizationSnapshot(companyId);
+    }
+  } catch {
+    /* optimization capture is best-effort; never blocks the tick */
   }
 
   await recordOrchestrationEvent({

@@ -18,7 +18,7 @@
  * The function intentionally does NOT touch `status` — that's the
  * pipeline's job. The lock is a separate, stricter signal.
  *
- * Schema: see migration `20260515b_bolt_execution_resilience.sql`
+ * Schema: lock_owner, lock_acquired_at, and lock_expires_at on bolt_execution_runs.
  * (lock_owner, lock_acquired_at, lock_expires_at on bolt_execution_runs).
  */
 

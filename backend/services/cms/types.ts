@@ -8,7 +8,10 @@ export type CmsProvider =
   | 'drupal'
   | 'joomla'
   | 'webflow'
-  | 'shopify';
+  | 'shopify'
+  | 'hubspot'
+  | 'wix'
+  | 'squarespace';
 
 export interface CmsAdapterContext {
   provider: CmsProvider;
@@ -70,11 +73,18 @@ export interface CmsSyncResult {
   providerResponse?: unknown;
 }
 
+export interface CmsDeleteResult {
+  success: boolean;
+  message: string;
+  providerResponse?: unknown;
+}
+
 export interface CmsAdapter {
   readonly provider: CmsProvider;
   validateConnection(context: CmsAdapterContext): Promise<CmsHealthResult>;
   publishPost(context: CmsAdapterContext, input: CmsPostInput): Promise<CmsPublishResult>;
   updatePost(context: CmsAdapterContext, externalId: string, input: CmsPostInput): Promise<CmsPublishResult>;
+  deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult>;
   uploadMedia(context: CmsAdapterContext, input: CmsMediaUploadInput): Promise<CmsMediaUploadResult>;
   schedulePost(context: CmsAdapterContext, input: CmsPostInput): Promise<CmsPublishResult>;
   syncPosts(context: CmsAdapterContext): Promise<CmsSyncResult>;

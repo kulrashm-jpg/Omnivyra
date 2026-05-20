@@ -1,0 +1,19 @@
+{
+  "provider": "audio",
+  "providerInvoiceId": "audio_local_2026_05_malformed_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "providerTag": "assemblyai",
+  "kind": "assemblyai_usage",
+  "rates": {
+    "audio": { "assemblyai-transcript": { "per_minute": 0.0062 } },
+    "defaultAudio": { "per_minute": 0.005 }
+  },
+  "payload": {
+    "entries": [
+      { "model": "assemblyai-transcript", "minutes": 1 },
+      { "date": "2026-05-19", "model": "assemblyai-transcript" },
+      { "date": "2026-05-19", "model": "assemblyai-transcript", "seconds": 30 }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "provider": "openai",
+  "providerInvoiceId": "openai_local_2026_05_orphan_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "rates": {
+    "tokens": { "gpt-4o-mini": { "in_per_1k": 0.00015, "out_per_1k": 0.0006 } },
+    "defaultToken": { "in_per_1k": 0.0002, "out_per_1k": 0.0008 }
+  },
+  "payload": {
+    "data": [
+      { "aggregation_timestamp": 1779494400, "snapshot_id": "gpt-4o-mini", "n_requests": 1000,
+        "n_context_tokens_total": 1000000, "n_generated_tokens_total": 200000, "operation": "completion" }
+    ]
+  }
+}

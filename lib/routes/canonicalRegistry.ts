@@ -85,7 +85,9 @@ export const CANONICAL_ROUTES: ReadonlyArray<RouteRegistryEntry> = [
   { key: 'engagement.community', path: '/community-engagement',                domain: 'engagement',   lifecycle: 'canonical',     description: 'Community engagement workflow.' },
 
   // ── Intelligence ───────────────────────────────────────────────────────
-  { key: 'intelligence.root',    path: '/intelligence',                       domain: 'intelligence', lifecycle: 'canonical',     description: 'Intelligence signals / insights surface.' },
+  { key: 'intelligence.root',    path: '/intelligence',                       domain: 'intelligence', lifecycle: 'canonical',     description: 'Company-level marketing intelligence command center backed by the intelligence snapshot API.' },
+  { key: 'intelligence.marketing_legacy', path: '/marketing-intelligence',     domain: 'intelligence', lifecycle: 'compatibility', canonicalKey: 'intelligence.root', notes: 'Same snapshot-backed command center; /intelligence is the canonical nav destination.' },
+  { key: 'intelligence.website_marketing', path: '/website-marketing-intelligence', domain: 'intelligence', lifecycle: 'experimental', description: 'Website-attribution marketing optimization console for CTA, conversion, timing, campaign, and optimization-memory diagnostics.' },
 
   // ── Integrations ───────────────────────────────────────────────────────
   { key: 'integrations.root',    path: '/integrations?focus=website',         domain: 'integrations', lifecycle: 'canonical',     description: 'Canonical integrations entry.' },

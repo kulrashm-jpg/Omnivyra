@@ -1,6 +1,6 @@
 -- CRITICAL MISSING TABLES FOR CAMPAIGN PLANNING
 -- This script adds only the most essential tables to fix "Failed to create plan" error
--- Run this in Supabase SQL Editor
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 
 -- ==============================================
 -- 1. CAMPAIGN PLANNING TABLES (CRITICAL)
@@ -239,5 +239,4 @@ CREATE INDEX IF NOT EXISTS idx_content_templates_platform ON content_templates(p
 -- ==============================================
 
 SELECT 'Critical missing tables added successfully! Campaign planning should now work.' as message;
-
 

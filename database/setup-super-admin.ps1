@@ -6,6 +6,9 @@
 
 Write-Host "🛡️  Setting up Super Admin Security System..." -ForegroundColor Red
 Write-Host "=============================================" -ForegroundColor Red
+Write-Host "Schema governance refusal: database/super-admin-security.sql is archived and not production authority." -ForegroundColor Red
+Write-Host "Promote required changes into a timestamped file under supabase/migrations/ before applying." -ForegroundColor Yellow
+exit 1
 
 # Check if .env.local exists
 if (-not (Test-Path "../.env.local")) {

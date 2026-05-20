@@ -33,6 +33,15 @@ export interface ReplayLineageReport {
     nodes: Array<{ stage: string; count: number }>;
     edges: Array<{ from: string; to: string; count: number }>;
   };
+  /** UTC-day temporal aggregation of replay activity (bounded, additive). */
+  temporal?: Array<{
+    bucket: string;
+    chains: number;
+    executed: number;
+    failed: number;
+    quarantined: number;
+    pending: number;
+  }>;
   summary: { total: number; executed: number; failed: number; pending: number; quarantined: number };
 }
 
@@ -105,11 +114,29 @@ export async function buildReplayLineage(
     }),
   };
 
+  // UTC-day temporal aggregation (bounded — last 60 days).
+  const temporalMap = new Map<string, { chains: number; executed: number; failed: number; quarantined: number; pending: number }>();
+  for (const n of nodes) {
+    const bucket = String(n.firstSeen ?? '').slice(0, 10) || 'unknown';
+    const t = temporalMap.get(bucket) ?? { chains: 0, executed: 0, failed: 0, quarantined: 0, pending: 0 };
+    t.chains += 1;
+    // 'deduped' counts as executed for the temporal view (successful no-op).
+    const key: 'executed' | 'failed' | 'quarantined' | 'pending' =
+      n.terminal === 'deduped' ? 'executed' : n.terminal;
+    t[key] += 1;
+    temporalMap.set(bucket, t);
+  }
+  const temporal = Array.from(temporalMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-60)
+    .map(([bucket, v]) => ({ bucket, ...v }));
+
   return {
     companyId,
     generatedAt: new Date().toISOString(),
     nodes: nodes.slice(0, 200),
     graph,
+    temporal,
     summary: {
       total: nodes.length,
       executed: nodes.filter((n) => n.terminal === 'executed').length,

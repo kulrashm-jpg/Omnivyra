@@ -147,7 +147,7 @@ CRON_INTERVAL_SECONDS=${envVars.CRON_INTERVAL_SECONDS}
   console.log('1. Review .env.local and verify all values');
   console.log('2. Make sure .env.local is in .gitignore');
   console.log('3. Start Redis: docker run -d -p 6379:6379 --name redis redis:7');
-  console.log('4. Apply database schema: Run db-utils/safe-database-migration.sql in Supabase SQL Editor');
+  console.log('4. Apply database schema only through timestamped files under supabase/migrations/');
   console.log('5. Start worker: npm run start:worker');
   console.log('6. Start cron: npm run start:cron\n');
   

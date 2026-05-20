@@ -1,7 +1,11 @@
 import { BaseCmsAdapter } from './BaseCmsAdapter';
+import crypto from 'crypto';
 import type {
   CmsAdapterContext,
+  CmsDeleteResult,
   CmsHealthResult,
+  CmsMediaUploadInput,
+  CmsMediaUploadResult,
   CmsPostInput,
   CmsPublishResult,
   CmsTaxonomyItem,
@@ -162,5 +166,59 @@ export class WebflowAdapter extends BaseCmsAdapter {
 
   private slugify(v: string): string {
     return v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+  }
+
+  async deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult> {
+    const token = this.token(context.config);
+    const collectionId = context.config.collection_id;
+    if (!token) return { success: false, message: 'Webflow integration is missing an access token.' };
+    if (!collectionId) return { success: false, message: 'Webflow delete requires collection_id.' };
+    const res = await this.fetchWithTimeout(
+      `${WEBFLOW_API}/collections/${encodeURIComponent(collectionId)}/items/${encodeURIComponent(externalId)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}`, 'accept-version': '2.0.0' },
+      },
+      context.timeoutMs ?? 15_000,
+    );
+    if (res.ok || res.status === 204) return { success: true, message: 'Item deleted from Webflow (publish the site to apply).' };
+    if (res.status === 404) return { success: true, message: 'Item already absent on Webflow.' };
+    if (res.status === 401 || res.status === 403) return { success: false, message: 'Webflow authentication failed during delete.' };
+    return { success: false, message: `Webflow delete returned status ${res.status}.` };
+  }
+
+  async uploadMedia(context: CmsAdapterContext, input: CmsMediaUploadInput): Promise<CmsMediaUploadResult> {
+    const token = this.token(context.config);
+    const siteId = context.config.site_id || context.config.webflow_site_id;
+    if (!token || !siteId) return { providerResponse: { error: 'missing_credentials_or_site_id' } };
+    try {
+      const bytes = input.body instanceof Buffer ? input.body : Buffer.from(input.body as ArrayBuffer);
+      const fileHash = crypto.createHash('md5').update(bytes).digest('hex');
+      // Webflow asset upload: POST /sites/{site_id}/assets → S3 form upload.
+      const step1 = await this.fetchWithTimeout(
+        `${WEBFLOW_API}/sites/${encodeURIComponent(siteId)}/assets`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'accept-version': '2.0.0' },
+          body: JSON.stringify({ fileName: input.filename, fileHash }),
+        },
+        context.timeoutMs ?? 15_000,
+      );
+      const step1Data = await step1.json().catch(() => null);
+      const uploadUrl = (step1Data as any)?.uploadUrl;
+      const uploadDetails = (step1Data as any)?.uploadDetails;
+      const assetUrl = (step1Data as any)?.hostedUrl ?? (step1Data as any)?.url;
+      if (!uploadUrl) return { providerResponse: step1Data ?? { error: 'asset_create_failed' } };
+      const form = new FormData();
+      if (uploadDetails && typeof uploadDetails === 'object') {
+        for (const [k, v] of Object.entries(uploadDetails)) form.append(k, String(v as string));
+      }
+      form.append('file', new Blob([new Uint8Array(bytes)], { type: input.contentType }), input.filename);
+      const put = await this.fetchWithTimeout(uploadUrl, { method: 'POST', body: form as any }, context.timeoutMs ?? 30_000);
+      if (!put.ok && put.status !== 204) return { providerResponse: { status: put.status, step1: step1Data } };
+      return { id: (step1Data as any)?.id ? String((step1Data as any).id) : undefined, url: assetUrl, providerResponse: step1Data };
+    } catch (err) {
+      return { providerResponse: { error: String(err) } };
+    }
   }
 }

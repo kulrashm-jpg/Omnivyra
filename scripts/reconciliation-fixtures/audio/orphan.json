@@ -1,0 +1,14 @@
+{
+  "provider": "audio",
+  "providerInvoiceId": "audio_local_2026_05_orphan_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "providerTag": "openai_audio",
+  "kind": "whisper_usage",
+  "rates": { "audio": { "whisper-1": { "per_minute": 0.006 } }, "defaultAudio": { "per_minute": 0.006 } },
+  "payload": {
+    "whisper_api_data": [
+      { "timestamp": 1779494400, "model_id": "whisper-1", "num_seconds": 36000 }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "provider": "stripe",
+  "providerInvoiceId": "stripe_local_2026_05_orphan_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "kind": "balance",
+  "payload": {
+    "balance_transactions": [
+      { "id": "txn_orphan", "type": "charge", "amount": 50000, "fee": 1500, "net": 48500,
+        "currency": "usd", "created": 1779494400,
+        "source": { "id": "ch_orphan" } }
+    ]
+  }
+}

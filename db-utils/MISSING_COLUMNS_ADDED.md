@@ -73,6 +73,8 @@ All backend services now have required columns:
 
 **File:** `db-utils/complete-integration-migration.sql`
 
+Schema governance status: legacy reference only. Do not apply this SQL file directly; promote required statements into `supabase/migrations/`.
+
 **Status:** ✅ **Complete** - All required columns and tables included
 
 **Total Tables:** 15 (was 14, now includes `notifications`)

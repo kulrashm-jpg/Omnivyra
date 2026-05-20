@@ -140,6 +140,8 @@ export type CmsProviderId =
   | 'webflow'
   | 'shopify'
   | 'hubspot'
+  | 'wix'
+  | 'squarespace'
   | 'custom_blog_api';
 
 export type CmsAuthType =
@@ -322,6 +324,36 @@ export const CMS_PROVIDER_CAPABILITIES: Record<CmsProviderId, CmsProviderCapabil
     graphqlSupport: false,
     webhookSupport: true,
     oauthSupport: true,
+    appPasswordSupport: false,
+    localDevSupport: false,
+    localDevGuidance: null,
+  },
+  wix: {
+    provider: 'wix',
+    label: 'Wix Blog',
+    requiresHttpsInProduction: true,
+    supportsHttpDevelopment: false,
+    authType: 'api_token',
+    apiDiscoveryMode: 'central_api',
+    restRootPatterns: [],
+    graphqlSupport: false,
+    webhookSupport: true,
+    oauthSupport: true,
+    appPasswordSupport: false,
+    localDevSupport: false,
+    localDevGuidance: null,
+  },
+  squarespace: {
+    provider: 'squarespace',
+    label: 'Squarespace (read-only)',
+    requiresHttpsInProduction: true,
+    supportsHttpDevelopment: false,
+    authType: 'api_token', // unused — Squarespace has no public write API
+    apiDiscoveryMode: 'central_api',
+    restRootPatterns: [],
+    graphqlSupport: false,
+    webhookSupport: false,
+    oauthSupport: false,
     appPasswordSupport: false,
     localDevSupport: false,
     localDevGuidance: null,

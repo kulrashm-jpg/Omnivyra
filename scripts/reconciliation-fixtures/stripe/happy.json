@@ -1,0 +1,15 @@
+{
+  "provider": "stripe",
+  "providerInvoiceId": "stripe_local_2026_05_happy_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "kind": "balance",
+  "payload": {
+    "balance_transactions": [
+      { "id": "txn_local_1", "type": "charge", "amount": 10000, "fee": 320, "net": 9680,
+        "currency": "usd", "created": 1779494400,
+        "source": { "id": "ch_local_1", "payment_intent": "pi_local_1" },
+        "metadata": { "organization_id": "org-platform" } }
+    ]
+  }
+}

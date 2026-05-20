@@ -1,7 +1,10 @@
 import { BaseCmsAdapter } from './BaseCmsAdapter';
 import type {
   CmsAdapterContext,
+  CmsDeleteResult,
   CmsHealthResult,
+  CmsMediaUploadInput,
+  CmsMediaUploadResult,
   CmsPostInput,
   CmsPublishResult,
   CmsTaxonomyItem,
@@ -160,5 +163,52 @@ export class JoomlaAdapter extends BaseCmsAdapter {
 
   async getTags(context: CmsAdapterContext): Promise<CmsTaxonomyItem[]> {
     return this.getCategories(context);
+  }
+
+  async deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult> {
+    const { site_url, api_token } = context.config;
+    if (!site_url || !api_token) return { success: false, message: 'Joomla integration is missing credentials.' };
+    const base = await this.base(context);
+    const res = await this.fetchWithTimeout(
+      `${base}/content/articles/${encodeURIComponent(externalId)}`,
+      { method: 'DELETE', headers: this.headers(api_token) },
+      context.timeoutMs ?? 15_000,
+    );
+    if (res.ok || res.status === 204) return { success: true, message: 'Article deleted from Joomla.' };
+    if (res.status === 404) return { success: true, message: 'Article already absent on Joomla.' };
+    if (res.status === 401 || res.status === 403) return { success: false, message: 'Joomla authentication failed during delete.' };
+    return { success: false, message: `Joomla delete returned status ${res.status}.` };
+  }
+
+  async uploadMedia(context: CmsAdapterContext, input: CmsMediaUploadInput): Promise<CmsMediaUploadResult> {
+    const { site_url, api_token } = context.config;
+    if (!site_url || !api_token) return { providerResponse: { error: 'missing_credentials' } };
+    const base = await this.base(context);
+    try {
+      const bytes = input.body instanceof Buffer ? input.body : Buffer.from(input.body as ArrayBuffer);
+      // Joomla 4+/5 media manager: POST /media/files (path query, base64 body).
+      const path = context.config.media_path || 'images';
+      const res = await this.fetchWithTimeout(
+        `${base}/media/files/${encodeURIComponent(path)}`,
+        {
+          method: 'POST',
+          headers: this.headers(api_token),
+          body: JSON.stringify({
+            path: `${path}/${input.filename}`,
+            content: bytes.toString('base64'),
+          }),
+        },
+        context.timeoutMs ?? 30_000,
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) return { providerResponse: data ?? { status: res.status } };
+      const file = (data as any)?.data;
+      const url = file?.attributes?.url || file?.attributes?.path
+        ? `${String(site_url).replace(/\/+$/, '')}/${file?.attributes?.path ?? ''}`
+        : undefined;
+      return { id: file?.id ? String(file.id) : undefined, url, providerResponse: data };
+    } catch (err) {
+      return { providerResponse: { error: String(err) } };
+    }
   }
 }

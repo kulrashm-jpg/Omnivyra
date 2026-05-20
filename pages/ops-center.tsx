@@ -12,7 +12,7 @@ import { useCompanyContext } from '../components/CompanyContext';
  *   - /api/website-intelligence/intelligence-diagnostics
  * Role-aware (company context), tenant-safe (company_id scoped), mobile-safe.
  */
-type Tab = 'operations' | 'replay' | 'security' | 'publishing' | 'load' | 'workers' | 'credentials' | 'lineage' | 'maturity' | 'liveness' | 'predictions';
+type Tab = 'operations' | 'replay' | 'security' | 'publishing' | 'load' | 'workers' | 'credentials' | 'lineage' | 'maturity' | 'liveness' | 'predictions' | 'remediation' | 'adaptive';
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'operations', label: 'Operations' },
@@ -26,6 +26,8 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'maturity', label: 'Maturity Trend' },
   { id: 'liveness', label: 'Liveness' },
   { id: 'predictions', label: 'Predictions' },
+  { id: 'remediation', label: 'Remediation' },
+  { id: 'adaptive', label: 'Adaptive Evolution' },
 ];
 
 export default function OpsCenterPage() {
@@ -48,6 +50,8 @@ export default function OpsCenterPage() {
     maturity: { url: `/api/website-intelligence/maturity-history?company_id=${encodeURIComponent(companyId)}` },
     liveness: { url: `/api/website-intelligence/worker-liveness?company_id=${encodeURIComponent(companyId)}` },
     predictions: { url: `/api/website-intelligence/predictive-ops?company_id=${encodeURIComponent(companyId)}` },
+    remediation: { url: `/api/website-intelligence/remediation?company_id=${encodeURIComponent(companyId)}` },
+    adaptive: { url: `/api/website-intelligence/adaptive-history?company_id=${encodeURIComponent(companyId)}` },
   };
 
   const exportJson = () => {
@@ -351,6 +355,59 @@ export default function OpsCenterPage() {
                 </span>
               </div>
             ))}
+          </section>
+        )}
+
+        {!loading && cur && tab === 'remediation' && (
+          <section className="space-y-2 rounded-xl border border-gray-200 bg-white p-4 text-sm">
+            <div className="flex items-center justify-between">
+              <p>Advisories: <strong>{(cur.advisories ?? []).length}</strong> · queue <strong>{(cur.queue ?? []).length}</strong></p>
+              <button
+                onClick={async () => {
+                  await fetch('/api/website-intelligence/remediation', {
+                    method: 'POST', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ company_id: companyId, action: 'generate' }),
+                  });
+                  void load('remediation');
+                }}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Refresh advisories
+              </button>
+            </div>
+            <ul className="space-y-1 text-xs">
+              {(cur.advisories ?? []).slice(0, 30).map((a: any) => (
+                <li key={a.advisoryId} className="rounded border border-gray-100 p-2">
+                  <div className="flex justify-between">
+                    <span className="font-medium">{a.title}</span>
+                    <span className="text-gray-500">{a.state}</span>
+                  </div>
+                  <div className="text-gray-500">{a.rationale}</div>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[11px] text-gray-400">{cur.capabilityNote}</p>
+          </section>
+        )}
+
+        {!loading && cur && tab === 'adaptive' && (
+          <section className="space-y-2 rounded-xl border border-gray-200 bg-white p-4 text-sm">
+            <p>
+              Trend: <strong>{cur.trend}</strong> · drift{' '}
+              <strong className={cur.driftEffectiveness >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                {cur.driftEffectiveness}
+              </strong>{' '}
+              · volatility <strong>{cur.volatility}</strong>
+            </p>
+            <ul className="space-y-1 text-xs">
+              {(cur.snapshots ?? []).slice(-30).map((s: any, i: number) => (
+                <li key={i} className="flex justify-between border-b border-gray-100 py-1">
+                  <span>{new Date(s.capturedAt).toLocaleString()}</span>
+                  <span>{s.overallEffectiveness}</span>
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 

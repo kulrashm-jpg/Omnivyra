@@ -5,7 +5,7 @@
 -- REQUIRES_EXPLICIT_OPERATOR_INTENT: YES
 
 -- Demo Data Seeding Script for P0 Testing
--- Run this in Supabase SQL Editor to create test scheduled_post and social_account
+-- Test-only seed. Do not run against production.
 -- 
 -- After running, note the IDs returned and use them for testing
 

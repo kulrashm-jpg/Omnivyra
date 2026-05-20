@@ -25,6 +25,18 @@ export function useBlogManage() {
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [ga4Views, setGa4Views] = useState<Record<string, number>>({});
+  const [deleteAlsoRemote, setDeleteAlsoRemote] = useState(false);
+  const [analyticsSummary, setAnalyticsSummary] = useState<{
+    trending: Array<{ blogId: string; title: string; views28d: number; deltaPct14d: number }>;
+    trafficSources: Array<{ sourceMedium: string; views: number }>;
+    topCategories: Array<{ category: string; views: number; posts: number }>;
+    publishSuccessRate: number;
+    publishAttempts: number;
+    publishSuccesses: number;
+    lastAnalyticsRefreshAt: string | null;
+    lowPerformingBlogs: Array<{ blogId: string; title: string; views28d: number }>;
+  } | null>(null);
 
   const canManage = ['COMPANY_ADMIN', 'SUPER_ADMIN'].includes((userRole || '').toUpperCase());
 
@@ -49,6 +61,39 @@ export function useBlogManage() {
   useEffect(() => {
     void loadBlogs();
   }, [loadBlogs]);
+
+  // Hydrate GA4 28d views in a single batch call.
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/blogs/analytics/top?company_id=${encodeURIComponent(selectedCompanyId)}&limit=50`,
+          { credentials: 'include' },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !Array.isArray(data?.rows)) return;
+        const map: Record<string, number> = {};
+        for (const r of data.rows) {
+          if (r?.blogId) map[String(r.blogId)] = Number(r.views28d ?? 0);
+        }
+        setGa4Views(map);
+      } catch { /* silent — GA4 may not be connected */ }
+    })();
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/blogs/analytics/summary?company_id=${encodeURIComponent(selectedCompanyId)}`,
+          { credentials: 'include' },
+        );
+        const data = await res.json().catch(() => null);
+        if (cancelled || !res.ok || !data) return;
+        setAnalyticsSummary(data);
+      } catch { /* silent */ }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedCompanyId, blogs.length]);
 
   const filteredBlogs = useMemo(() => {
     if (filter === 'all') return blogs;
@@ -78,7 +123,8 @@ export function useBlogManage() {
     setDeleting(true);
     setError('');
     try {
-      const res = await fetch(`/api/blogs/${encodeURIComponent(deleteId)}?company_id=${encodeURIComponent(selectedCompanyId)}`, {
+      const sync = deleteAlsoRemote ? '&sync=remote' : '';
+      const res = await fetch(`/api/blogs/${encodeURIComponent(deleteId)}?company_id=${encodeURIComponent(selectedCompanyId)}${sync}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -86,12 +132,13 @@ export function useBlogManage() {
       if (!res.ok) throw new Error(data?.error || 'Failed to delete blog');
       setBlogs((current) => current.filter((blog) => blog.id !== deleteId));
       setDeleteId(null);
+      setDeleteAlsoRemote(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete blog');
     } finally {
       setDeleting(false);
     }
-  }, [deleteId, selectedCompanyId]);
+  }, [deleteId, selectedCompanyId, deleteAlsoRemote]);
 
   return {
     blogs,
@@ -103,6 +150,10 @@ export function useBlogManage() {
     filteredBlogs,
     loading,
     metrics,
+    ga4Views,
+    analyticsSummary,
+    deleteAlsoRemote,
+    setDeleteAlsoRemote,
     setDeleteId,
     setFilter,
     startCreate,

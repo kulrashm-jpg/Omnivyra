@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { BaseCmsAdapter } from './BaseCmsAdapter';
 import type {
   CmsAdapterContext,
+  CmsDeleteResult,
   CmsHealthResult,
   CmsMediaUploadInput,
   CmsMediaUploadResult,
@@ -99,6 +100,21 @@ export class GhostAdapter extends BaseCmsAdapter {
 
   async schedulePost(context: CmsAdapterContext, input: CmsPostInput): Promise<CmsPublishResult> {
     return this.upsert(context, undefined, { ...input, status: 'future' });
+  }
+
+  async deletePost(context: CmsAdapterContext, externalId: string): Promise<CmsDeleteResult> {
+    const { site_url, admin_api_key } = context.config;
+    if (!site_url || !admin_api_key) return { success: false, message: 'Ghost integration is missing credentials.' };
+    const base = await this.resolveBase(context);
+    const res = await this.fetchWithTimeout(
+      `${base}/posts/${encodeURIComponent(externalId)}/`,
+      { method: 'DELETE', headers: this.authHeaders(admin_api_key) },
+      context.timeoutMs ?? 15_000,
+    );
+    if (res.ok || res.status === 204) return { success: true, message: 'Post deleted from Ghost.' };
+    if (res.status === 404) return { success: true, message: 'Post already absent on Ghost.' };
+    if (res.status === 401 || res.status === 403) return { success: false, message: 'Ghost authentication failed during delete.' };
+    return { success: false, message: `Ghost delete returned status ${res.status}.` };
   }
 
   private async upsert(

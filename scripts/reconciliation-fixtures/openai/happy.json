@@ -1,0 +1,27 @@
+{
+  "provider": "openai",
+  "providerInvoiceId": "openai_local_2026_05_happy_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "rates": {
+    "tokens": {
+      "gpt-4o-mini": { "in_per_1k": 0.00015, "out_per_1k": 0.0006 },
+      "gpt-4o":      { "in_per_1k": 0.0025,  "out_per_1k": 0.01 }
+    },
+    "defaultToken": { "in_per_1k": 0.0002, "out_per_1k": 0.0008 },
+    "images":  { "dall-e-3": { "per_image": 0.04 } },
+    "defaultImage": { "per_image": 0.04 },
+    "audio":   { "whisper-1": { "per_minute": 0.006 } },
+    "defaultAudio": { "per_minute": 0.006 }
+  },
+  "payload": {
+    "data": [
+      { "aggregation_timestamp": 1779494400, "snapshot_id": "gpt-4o-mini", "n_requests": 10,
+        "n_context_tokens_total": 12000, "n_generated_tokens_total": 4000, "operation": "completion",
+        "organization_id": "org-platform" }
+    ],
+    "embeddings_data": [],
+    "dalle_api_data":  [],
+    "whisper_api_data":[]
+  }
+}

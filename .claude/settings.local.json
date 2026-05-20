@@ -252,7 +252,9 @@
       "Bash(echo \"TC_EXIT=$?\")",
       "Bash(echo \"LINT_EXIT=$?\")",
       "PowerShell(Test-NetConnection *)",
-      "Bash(echo \"PID=$!\")"
+      "Bash(echo \"PID=$!\")",
+      "Bash(git rev-list *)",
+      "Bash(git tag *)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

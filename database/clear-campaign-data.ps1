@@ -6,6 +6,9 @@
 
 Write-Host "🗑️  Clearing Campaign Data..." -ForegroundColor Red
 Write-Host "=================================" -ForegroundColor Red
+Write-Host "Operator governance refusal: this legacy script executes inline SQL through rpc/exec_sql." -ForegroundColor Red
+Write-Host "Use a reviewed operator task or an authoritative migration-backed maintenance procedure instead." -ForegroundColor Yellow
+exit 1
 
 # Load environment variables
 if (Test-Path "../.env.local") {

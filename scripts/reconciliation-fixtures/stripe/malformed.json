@@ -1,0 +1,15 @@
+{
+  "provider": "stripe",
+  "providerInvoiceId": "stripe_local_2026_05_malformed_v1",
+  "periodStart": "2026-05-19T00:00:00Z",
+  "periodEnd":   "2026-05-20T00:00:00Z",
+  "kind": "balance",
+  "payload": {
+    "balance_transactions": [
+      { "type": "charge", "amount": 100, "created": 1779494400 },
+      { "id": "txn_x", "type": "mystery", "amount": 100, "created": 1779494400 },
+      { "id": "txn_y", "type": "charge", "amount": 100 },
+      { "id": "txn_z", "type": "charge", "amount": 100, "fee": 5, "net": 95, "created": 1779494400, "source": { "id": "ch_z" } }
+    ]
+  }
+}

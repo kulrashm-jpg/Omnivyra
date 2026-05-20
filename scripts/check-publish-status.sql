@@ -1,5 +1,11 @@
+-- SCRIPT_CLASSIFICATION: OPERATOR
+-- MUTATION_LEVEL: READ_ONLY
+-- SAFE_FOR_CI: NO
+-- SAFE_FOR_PRODUCTION: CAUTION
+-- REQUIRES_EXPLICIT_OPERATOR_INTENT: YES
+
 -- Check Publish Status Script
--- Run this after worker processes jobs to verify publishing worked
+-- Operator-only diagnostic query. Not schema authority.
 
 -- 1. Check scheduled posts status
 SELECT 

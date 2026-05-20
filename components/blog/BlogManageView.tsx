@@ -55,6 +55,49 @@ export default function BlogManageView({ d }: Props) {
           ))}
         </div>
 
+        {d.analyticsSummary && (
+          <div className="mb-6 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Trending (14d Δ)</p>
+              <ul className="mt-2 space-y-1 text-xs">
+                {(d.analyticsSummary.trending ?? []).slice(0, 5).map((t) => (
+                  <li key={t.blogId} className="flex items-center justify-between gap-2">
+                    <span className="truncate text-gray-800">{t.title}</span>
+                    <span className={t.deltaPct14d > 0 ? 'whitespace-nowrap text-emerald-700' : 'whitespace-nowrap text-gray-500'}>
+                      {t.deltaPct14d > 0 ? '↑' : t.deltaPct14d < 0 ? '↓' : '—'} {Math.abs(t.deltaPct14d * 100).toFixed(0)}%
+                    </span>
+                  </li>
+                ))}
+                {(d.analyticsSummary.trending ?? []).length === 0 && <li className="text-gray-500">No trending data yet.</li>}
+              </ul>
+            </div>
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Traffic sources (28d)</p>
+              <ul className="mt-2 space-y-1 text-xs">
+                {(d.analyticsSummary.trafficSources ?? []).slice(0, 5).map((s, i) => (
+                  <li key={i} className="flex justify-between">
+                    <span className="text-gray-800">{s.sourceMedium}</span>
+                    <span className="text-gray-600">{s.views.toLocaleString()}</span>
+                  </li>
+                ))}
+                {(d.analyticsSummary.trafficSources ?? []).length === 0 && <li className="text-gray-500">No GA4 views yet.</li>}
+              </ul>
+            </div>
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Publish health</p>
+              <p className="mt-2 text-2xl font-bold text-gray-900">{(d.analyticsSummary.publishSuccessRate * 100).toFixed(0)}%</p>
+              <p className="text-[11px] text-gray-500">
+                {d.analyticsSummary.publishSuccesses}/{d.analyticsSummary.publishAttempts} jobs succeeded
+              </p>
+              {d.analyticsSummary.lastAnalyticsRefreshAt && (
+                <p className="mt-1 text-[10px] text-gray-400">
+                  GA4 refreshed {new Date(d.analyticsSummary.lastAnalyticsRefreshAt).toLocaleString()}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-2">
             {(['all', 'draft', 'published'] as const).map((tab) => (
@@ -129,10 +172,14 @@ export default function BlogManageView({ d }: Props) {
                   </span>
                 </div>
 
-                <div className="mt-4 grid grid-cols-3 gap-3">
+                <div className="mt-4 grid grid-cols-4 gap-3">
                   <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Views</p>
                     <p className="mt-1 text-sm font-semibold text-gray-900">{(blog.views_count || 0).toLocaleString()}</p>
+                  </div>
+                  <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">GA4 28d</p>
+                    <p className="mt-1 text-sm font-semibold text-gray-900">{((d.ga4Views?.[blog.id]) || 0).toLocaleString()}</p>
                   </div>
                   <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Likes</p>
@@ -182,9 +229,21 @@ export default function BlogManageView({ d }: Props) {
             <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
               <h2 className="text-lg font-bold text-gray-900">Delete blog?</h2>
               <p className="mt-2 text-sm text-gray-600">This blog will be permanently removed from your company workspace.</p>
+              <label className="mt-4 flex items-start gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={!!d.deleteAlsoRemote}
+                  onChange={(e) => d.setDeleteAlsoRemote?.(e.target.checked)}
+                />
+                <span>
+                  Also delete from the live site
+                  <span className="ml-1 text-[11px] text-gray-500">(if previously published via an integration; Squarespace not supported)</span>
+                </span>
+              </label>
               <div className="mt-5 flex justify-end gap-2">
                 <button
-                  onClick={() => d.setDeleteId(null)}
+                  onClick={() => { d.setDeleteId(null); d.setDeleteAlsoRemote?.(false); }}
                   className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-200"
                 >
                   Cancel

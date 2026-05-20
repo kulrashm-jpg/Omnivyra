@@ -2,7 +2,7 @@
 -- CAMPAIGN SUMMARY & WEEKLY PERFORMANCE ENHANCEMENT
 -- =====================================================
 -- Add columns to existing tables for campaign summaries and weekly tracking
--- Run this in Supabase SQL Editor
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 -- =====================================================
 
 -- 1. ENHANCE CAMPAIGNS TABLE - Add campaign summary fields

@@ -2,6 +2,10 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 import { enforceRole, Role } from '../../../backend/services/rbacService';
 import { getBlog, updateBlog, deleteBlog, type UpdateBlogInput } from '../../../backend/services/blogService';
+import { createPublishingJob } from '../../../backend/services/publishingJobService';
+import { getActiveIntegration, getIntegration } from '../../../backend/services/integrationService';
+import { isCmsProvider } from '../../../backend/services/cms/registry';
+import type { CmsProvider } from '../../../backend/services/cms/types';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const id = typeof req.query.id === 'string' ? req.query.id : null;
@@ -49,7 +53,37 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'Nothing to update' });
     try {
       const blog = await updateBlog(id, companyId, updates);
-      return res.status(200).json({ blog });
+      // ?sync=remote: if the blog has an external_id, queue an update_post job
+      // so the worker re-publishes the change via the existing adapter path.
+      let syncQueued: { jobId: string | null; reason?: string } = { jobId: null };
+      if (req.query.sync === 'remote' && blog.external_id) {
+        const integration = blog.integration_id
+          ? await getIntegration(blog.integration_id, companyId).catch(() => null)
+          : (await getActiveIntegration(companyId, 'wordpress').catch(() => null))
+            ?? (await getActiveIntegration(companyId, 'custom_blog_api').catch(() => null));
+        if (!integration || !isCmsProvider(integration.type)) {
+          syncQueued.reason = 'no CMS integration found for this blog';
+        } else {
+          const job = await createPublishingJob({
+            companyId,
+            websiteId: blog.website_id ?? integration.website_id ?? null,
+            connectionId: integration.website_connection_id ?? null,
+            blogId: blog.id,
+            provider: integration.type as CmsProvider,
+            jobType: 'update_post',
+            idempotencyKey: `blog:${blog.id}:update:${integration.id}:${new Date().toISOString().slice(0, 16)}`,
+            requestPayload: {
+              external_id: blog.external_id,
+              html_content: blog.content ?? '',
+              title: blog.title,
+              slug: blog.slug,
+            },
+            createdBy: roleGate.userId,
+          });
+          syncQueued = { jobId: job.id };
+        }
+      }
+      return res.status(200).json({ blog, sync: syncQueued });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'Update failed' });
     }
@@ -57,8 +91,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === 'DELETE') {
     try {
+      // Optionally queue a remote delete BEFORE removing the local row, so the
+      // worker can still read external_id + integration linkage.
+      let syncQueued: { jobId: string | null; reason?: string } = { jobId: null };
+      if (req.query.sync === 'remote') {
+        const blog = await getBlog(id, companyId);
+        if (blog?.external_id) {
+          const integration = blog.integration_id
+            ? await getIntegration(blog.integration_id, companyId).catch(() => null)
+            : (await getActiveIntegration(companyId, 'wordpress').catch(() => null))
+              ?? (await getActiveIntegration(companyId, 'custom_blog_api').catch(() => null));
+          if (!integration || !isCmsProvider(integration.type)) {
+            syncQueued.reason = 'no CMS integration found for this blog';
+          } else if (integration.type === 'squarespace') {
+            syncQueued.reason = 'remote delete not supported by Squarespace (no public write API)';
+          } else {
+            const job = await createPublishingJob({
+              companyId,
+              websiteId: blog.website_id ?? integration.website_id ?? null,
+              connectionId: integration.website_connection_id ?? null,
+              blogId: blog.id,
+              provider: integration.type as CmsProvider,
+              jobType: 'delete_post',
+              idempotencyKey: `blog:${blog.id}:delete:${integration.id}`,
+              requestPayload: { external_id: blog.external_id },
+              createdBy: roleGate.userId,
+            });
+            syncQueued = { jobId: job.id };
+          }
+        } else {
+          syncQueued.reason = 'blog has no external_id (never published remotely)';
+        }
+      }
       await deleteBlog(id, companyId);
-      return res.status(200).json({ status: 'deleted' });
+      return res.status(200).json({ status: 'deleted', sync: syncQueued });
     } catch (err) {
       return res.status(500).json({ error: err instanceof Error ? err.message : 'Delete failed' });
     }

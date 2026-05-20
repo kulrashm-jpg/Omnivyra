@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Apply 20260515b_bolt_execution_resilience.sql via direct pg
- * connection. Same pattern as apply-bolt-error-instrumentation.js.
+ * Deprecated direct-apply path for archived 20260515b_bolt_execution_resilience.sql.
+ * Direct execution is disabled by schema governance.
  * Idempotent — safe to re-run.
  */
 
@@ -13,10 +13,15 @@ require('dotenv').config({ path: path.join(__dirname, '../.env.local') });
 
 const MIGRATION_FILE = path.join(
   __dirname,
-  '../supabase/migrations/20260515b_bolt_execution_resilience.sql'
+  '../database/_archive/skipped-migrations/20260515b_bolt_execution_resilience.sql'
 );
 
 async function main() {
+  console.error('[schema-governance] Refusing direct application of 20260515b_bolt_execution_resilience.sql.');
+  console.error('[schema-governance] Supabase skips this filename, so direct execution would bypass migration history.');
+  console.error('[schema-governance] Promote the SQL into a valid timestamped file under supabase/migrations/ before applying it.');
+  process.exit(1);
+
   const connectionString = process.env.SUPABASE_DB_URL;
   if (!connectionString) {
     console.error('SUPABASE_DB_URL missing from environment');

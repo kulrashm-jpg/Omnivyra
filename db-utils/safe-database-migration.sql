@@ -3,7 +3,7 @@
 -- =====================================================
 -- This script safely adds all missing tables, columns, and constraints
 -- Can be run multiple times without errors (idempotent)
--- Run this in Supabase SQL Editor
+-- Legacy reference only. Do not run directly; promote required SQL into supabase/migrations/.
 -- =====================================================
 
 -- ==============================================

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-05-13T14:34:15.112Z",
+  "generated_at": "2026-05-20T10:20:00.763Z",
   "manifest_hash": "a870a80a849344183b2841a04125c601b343719630944f489eb87b438508e6bc",
   "watched_tables": [
     "companies",
@@ -84,7 +84,7 @@
       "source_migration": "20260321_company_website_domain.sql",
       "first_consumer": {
         "file": "backend\\services\\googleProviderReadinessService.ts",
-        "line": 91
+        "line": 96
       },
       "lifecycle_critical": false
     },
@@ -120,8 +120,8 @@
       "column": "email",
       "source_migration": "20260325_activity_cost_test_data.sql",
       "first_consumer": {
-        "file": "backend\\services\\creditDeductionService.ts",
-        "line": 243
+        "file": "backend\\services\\claimedDomainNotifyService.ts",
+        "line": 67
       },
       "lifecycle_critical": false
     },
@@ -167,8 +167,8 @@
       "column": "name",
       "source_migration": "20260323_apply_all_pending.sql",
       "first_consumer": {
-        "file": "backend\\services\\invitationService.ts",
-        "line": 165
+        "file": "backend\\services\\claimedDomainNotifyService.ts",
+        "line": 67
       },
       "lifecycle_critical": false
     },

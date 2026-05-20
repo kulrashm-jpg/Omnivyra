@@ -8,6 +8,9 @@
 
 echo "🚀 Starting Campaign Management Database Cleanup..."
 echo "=================================================="
+echo "Schema governance refusal: database/campaign-management-clean-schema.sql is legacy reference SQL, not production authority."
+echo "Promote required schema changes into timestamped files under supabase/migrations/ before applying."
+exit 1
 
 # Check if .env.local exists
 if [ ! -f "../.env.local" ]; then

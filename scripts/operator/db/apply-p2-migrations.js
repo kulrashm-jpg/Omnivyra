@@ -33,6 +33,11 @@ async function applyMigrations() {
   });
   if (!safety.allowed) return;
 
+  console.error('[schema-governance] Refusing to apply db-utils/p2-migrations.sql.');
+  console.error('[schema-governance] Production schema changes must be promoted into timestamped files under supabase/migrations/.');
+  console.error('[schema-governance] This legacy operator path is intentionally disabled to avoid duplicate or out-of-order schema execution.');
+  process.exit(1);
+
   const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
