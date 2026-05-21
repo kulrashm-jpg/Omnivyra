@@ -22,6 +22,7 @@
  */
 
 import IORedis from 'ioredis';
+import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import { isCronJobAllowedByUsage } from '../../lib/redis/usageProtection';
 import {
   getIntentGate,
@@ -42,7 +43,8 @@ function getClient(): IORedis {
     connectTimeout:       2_000,
     commandTimeout:       1_000,
     lazyConnect:          true,
-    retryStrategy:        () => null,
+    retryStrategy:        circuitBreakerRetryStrategy,
+    reconnectOnError,
   });
   _client.on('error', () => {});
   _client.connect().catch(() => {});

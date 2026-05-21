@@ -23,6 +23,7 @@
 import IORedis from 'ioredis';
 import { config } from '@/config';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 
 const REDIS_KEY  = 'omnivyra:cron:last_run_state';
 const LOCK_KEY   = 'omnivyra:cron:lock';
@@ -44,7 +45,8 @@ export class CronGuard {
       const raw = new IORedis(url, {
         enableReadyCheck: false,
         maxRetriesPerRequest: 1,
-        retryStrategy: () => null,
+        retryStrategy: circuitBreakerRetryStrategy,
+        reconnectOnError,
         lazyConnect: true,
         tls: host.includes('upstash.io') ? {} : undefined,
       });

@@ -19,6 +19,7 @@ import { promisify } from 'util';
 import { recordCacheExactHit, recordCacheNearHit, recordCacheMiss } from './metricsCollector';
 import { hotGet, hotSet, recordAccess as hotRecordAccess } from './hotKeyCache';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 
 const gzipAsync   = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -92,7 +93,8 @@ function getClient(): IORedis | null {
     const raw = new IORedis(url, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 1,
-      retryStrategy: () => null,
+      retryStrategy: circuitBreakerRetryStrategy,
+      reconnectOnError,
       lazyConnect: true,
       // Upstash requires TLS; a plain redis:// connection TCP-connects but
       // never answers RESP commands, so client.get() hangs forever. Mirrors

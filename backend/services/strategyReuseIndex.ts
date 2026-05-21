@@ -13,6 +13,7 @@
  */
 
 import IORedis from 'ioredis';
+import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import { createHash } from 'crypto';
 import type { CampaignStrategy } from './campaignStrategyEngine';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
@@ -33,7 +34,8 @@ function getClient(): IORedis | null {
     const raw = new IORedis(REDIS_URL, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 1,
-      retryStrategy: () => null,
+      retryStrategy: circuitBreakerRetryStrategy,
+      reconnectOnError,
       lazyConnect: true,
     });
     raw.connect().catch(() => {});

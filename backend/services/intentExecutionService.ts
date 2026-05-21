@@ -45,6 +45,7 @@
  */
 
 import IORedis from 'ioredis';
+import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import {
   defaultCompanyExecutionFlags,
   readAllCompanyExecutionFlags,
@@ -280,7 +281,8 @@ function getRedis(): IORedis {
     connectTimeout:       2_000,
     commandTimeout:       1_500,
     lazyConnect:          true,
-    retryStrategy:        () => null,
+    retryStrategy:        circuitBreakerRetryStrategy,
+    reconnectOnError,
   });
   _redis.on('error', () => {});
   _redis.connect().catch(() => {});

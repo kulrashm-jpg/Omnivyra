@@ -24,6 +24,7 @@ import { hostname } from 'os';
 import IORedis        from 'ioredis';
 import { config } from '@/config';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 
 // ── Identity ───────────────────────────────────────────────────────────────────
 
@@ -105,7 +106,8 @@ export class CronInstrumentation {
       const raw = new IORedis(url, {
         enableReadyCheck:     false,
         maxRetriesPerRequest: 1,
-        retryStrategy:        () => null,
+        retryStrategy:        circuitBreakerRetryStrategy,
+        reconnectOnError,
         lazyConnect:          true,
       });
       raw.on('error', () => {});

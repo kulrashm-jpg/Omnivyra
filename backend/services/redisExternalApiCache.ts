@@ -5,6 +5,7 @@
  */
 
 import IORedis from 'ioredis';
+import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import { createInstrumentedClient } from '../../lib/redis/instrumentation';
 
 const PREFIX = 'virality:ext_api';
@@ -70,7 +71,8 @@ function getRedisClient(): IORedis | null {
     const raw = new IORedis(url, {
       enableReadyCheck: false,
       maxRetriesPerRequest: 3,
-      retryStrategy: () => null,
+      retryStrategy: circuitBreakerRetryStrategy,
+      reconnectOnError,
       lazyConnect: true,
     });
     raw.on('error', () => {

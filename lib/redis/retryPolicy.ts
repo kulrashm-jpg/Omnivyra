@@ -32,6 +32,29 @@ export function boundedRetryStrategy(times: number): number {
   return Math.round(capped / 2 + Math.random() * (capped / 2));
 }
 
+/**
+ * Standalone (non-BullMQ) clients open the circuit after this many consecutive
+ * failed reconnects. ~15 attempts of bounded backoff spans ~5-6 minutes —
+ * enough to ride out a transient blip, after which a cache client should fail
+ * fast to its in-memory fallback rather than hold an indefinite reconnect loop.
+ */
+export const MAX_STANDALONE_RECONNECT_ATTEMPTS = 15;
+
+/**
+ * ioredis `retryStrategy` for standalone clients (caches, cron guard/instr,
+ * admin config, intent service). Same bounded backoff as boundedRetryStrategy,
+ * but returns null (opens the circuit — ioredis stops reconnecting) after
+ * MAX_STANDALONE_RECONNECT_ATTEMPTS. This is fail-fast on repeated failure.
+ *
+ * BullMQ connections must NOT use this — a worker that stops reconnecting
+ * stops consuming jobs forever. They use boundedRetryStrategy, which never
+ * gives up.
+ */
+export function circuitBreakerRetryStrategy(times: number): number | null {
+  if (times > MAX_STANDALONE_RECONNECT_ATTEMPTS) return null;
+  return boundedRetryStrategy(times);
+}
+
 /** Errors that a reconnect cannot fix — reconnecting only burns another AUTH. */
 const NON_RECOVERABLE =
   /max requests limit exceeded|WRONGPASS|NOAUTH|invalid username-password|user is disabled/i;
