@@ -1,5 +1,6 @@
 import IORedis from 'ioredis';
 import { isRedisUrlTLS } from '../../lib/redis/sanitizer';
+import { boundedRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 
 function parseUrl(url: string) {
   // Strip any accidental redis-cli command prefix (e.g. "redis-cli --tls -u redis://...")
@@ -34,6 +35,10 @@ export const redis = new IORedis({
   // Bounded connect/command behavior (non-blocking standalone client).
   connectTimeout:   10_000,
   commandTimeout:   10_000,
+  // Bounded reconnect — caps the reconnect+AUTH rate at ~once/30s with jitter
+  // instead of ioredis's default <=2s-forever storm during an outage.
+  retryStrategy:    boundedRetryStrategy,
+  reconnectOnError,
 });
 
 // Suppress unhandled error events (e.g. Upstash rate-limit errors).

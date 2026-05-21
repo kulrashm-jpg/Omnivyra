@@ -23,6 +23,7 @@ import { getMetricsReport } from '../../lib/redis/instrumentation';
 import IORedis from 'ioredis';
 import { createHash } from 'crypto';
 import { isRedisUrlTLS } from '../../lib/redis/sanitizer';
+import { boundedRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import {
   createInstrumentedClient,
   startInstrumentation,
@@ -119,6 +120,13 @@ export function getConnectionConfig() {
     // job fetch and silently stop consumption. (Non-blocking standalone
     // clients enforce commandTimeout in lib/redis/client.ts & queue/redis.ts.)
     connectTimeout: 10_000,
+    // Bounded reconnect: ioredis default reconnects every <=2s forever, which
+    // under an Upstash outage is a reconnect+AUTH storm (each AUTH is billed).
+    // boundedRetryStrategy caps reconnect spacing at 30s with jitter; still
+    // recovers within seconds of a brief blip. reconnectOnError skips
+    // reconnects on quota/credential errors a reconnect cannot fix.
+    retryStrategy: boundedRetryStrategy,
+    reconnectOnError,
   };
 }
 
