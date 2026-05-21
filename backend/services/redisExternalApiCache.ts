@@ -5,8 +5,10 @@
  */
 
 import IORedis from 'ioredis';
-import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
-import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import {
+  getInstrumentedStandaloneRedisClient,
+  isSharedStandaloneRedisAvailable,
+} from '../queue/standaloneRedisClient';
 
 const PREFIX = 'virality:ext_api';
 const CACHE_TTL_SEC = 720;
@@ -58,7 +60,6 @@ if (_evictionTimer.unref) _evictionTimer.unref();
 /** Disconnect the Redis client (for graceful shutdown). */
 export function shutdownRedisExternalApiCache(): void {
   if (redisClient) {
-    redisClient.quit().catch(() => {});
     redisClient = null;
     redisAvailable = false;
   }
@@ -66,28 +67,9 @@ export function shutdownRedisExternalApiCache(): void {
 
 function getRedisClient(): IORedis | null {
   if (redisClient) return redisClient;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
   try {
-    const raw = new IORedis(url, {
-      enableReadyCheck: false,
-      maxRetriesPerRequest: 3,
-      retryStrategy: circuitBreakerRetryStrategy,
-      reconnectOnError,
-      lazyConnect: true,
-    });
-    raw.on('error', () => {
-      redisAvailable = false;
-    });
-    raw.on('connect', () => {
-      redisAvailable = true;
-    });
-    raw.connect().then(() => {
-      redisAvailable = true;
-    }).catch(() => {
-      redisAvailable = false;
-      console.warn('[redisExternalApiCache] Redis unavailable, falling back to in-memory');
-    });
-    redisClient = createInstrumentedClient(raw, 'external_api_cache') as IORedis;
+    redisClient = getInstrumentedStandaloneRedisClient('external_api_cache');
+    redisAvailable = isSharedStandaloneRedisAvailable();
     return redisClient;
   } catch {
     console.warn('[redisExternalApiCache] Redis unavailable, falling back to in-memory');
@@ -99,6 +81,7 @@ function isRedisOk(): boolean {
   // Use the connection-event-tracked flag instead of pinging on every call.
   // The `redisAvailable` flag is set to true/false by the 'connect' and 'error'
   // listeners in getRedisClient(), so no extra round-trip is needed.
+  redisAvailable = isSharedStandaloneRedisAvailable();
   return redisAvailable && redisClient !== null;
 }
 

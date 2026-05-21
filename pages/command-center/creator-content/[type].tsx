@@ -2266,7 +2266,7 @@ export default function CreatorTypeWorkflowPage() {
             hashtags: writerSource.hashtags,
           } : null,
           asset: {
-            creatorType: type,
+            creatorType: writerAssetType ?? (type === 'image' ? 'supporting_image' : type),
             title: templateName,
             url: typeof mediaBundle.url === 'string' ? mediaBundle.url : undefined,
             files: Array.isArray(mediaBundle.files) ? mediaBundle.files : undefined,
@@ -2275,6 +2275,7 @@ export default function CreatorTypeWorkflowPage() {
             renderIdentityHash: persistedRendererMetadata.renderIdentityHash,
             metadata: {
               ...rendererMetadata,
+              creatorContentAssetType: type,
               savedBlockReference: templateId ? buildBlockReference(templateId) : null,
               blockTemplateId: templateId || null,
             },

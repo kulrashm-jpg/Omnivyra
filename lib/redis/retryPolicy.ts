@@ -59,6 +59,10 @@ export function circuitBreakerRetryStrategy(times: number): number | null {
 const NON_RECOVERABLE =
   /max requests limit exceeded|WRONGPASS|NOAUTH|invalid username-password|user is disabled/i;
 
+export function isNonRecoverableRedisError(err: unknown): boolean {
+  return NON_RECOVERABLE.test(((err as Error)?.message) || '');
+}
+
 /**
  * ioredis `reconnectOnError`. Decides whether an error *reply* should force a
  * reconnect. A quota/credential error is not fixable by reconnecting, so we
@@ -66,5 +70,5 @@ const NON_RECOVERABLE =
  * a reconnect+AUTH cycle.
  */
 export function reconnectOnError(err: Error): boolean {
-  return !NON_RECOVERABLE.test((err && err.message) || '');
+  return !isNonRecoverableRedisError(err);
 }

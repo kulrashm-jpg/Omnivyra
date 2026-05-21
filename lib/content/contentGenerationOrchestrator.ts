@@ -18,6 +18,54 @@ import { getSEOIntelligence, type SEOIntelligenceResult } from '../blog/seoIntel
 import { getFeedbackOptimization, type FeedbackOptimizationResult } from '../blog/feedbackOptimizationEngine';
 import { getTrendIntelligence, type TrendIntelligenceResult, type TrendSignal } from '../blog/trendIntelligenceEngine';
 import { getStructureRules, type StructureRules, type BlogFormatType, isValidBlogFormat } from '../blog/blogStructureTemplates';
+import {
+  assimilateCompanyEditorialPrimitives,
+  type AssimilatedEditorialPrimitives,
+  type CompanyAssimilationInput,
+} from './companyAssimilationMiddleware';
+import {
+  resolveOmnivyraDoctrineGenerationContext,
+  type OmnivyraDoctrineGenerationContext,
+} from './omnivyraEditorialDoctrine';
+import {
+  buildNarrativePlanningPrimitives,
+  type NarrativePlanningOutput,
+} from './narrativePlanningEngine';
+import {
+  buildGenerationGuidanceContract,
+  type GenerationGuidanceContract,
+} from './generationGuidanceContracts';
+import {
+  buildEditorialDepthIntelligence,
+  type EditorialDepthIntelligence,
+} from './editorialDepthIntelligence';
+import {
+  buildEditorialAuthorityIntelligence,
+  type EditorialAuthorityIntelligence,
+} from './editorialAuthorityIntelligence';
+import {
+  buildAudienceMaturityIntelligence,
+  type AudienceMaturityIntelligence,
+} from './audienceMaturityIntelligence';
+import {
+  assembleUnifiedEditorialBrief,
+  type UnifiedEditorialBrief,
+} from './unifiedEditorialBriefAssembler';
+import {
+  prioritizeEditorialRuntimeContext,
+  serializeEditorialRuntimeContext,
+  type EditorialRuntimeContext,
+} from './editorialRuntimeContextPrioritizer';
+import {
+  buildGeneratorRuntimeAlignment,
+  serializeGeneratorRuntimeAlignment,
+  type GeneratorRuntimeAlignment,
+} from './generatorRuntimeAlignment';
+import {
+  buildGeneratorBehavioralSteering,
+  serializeGeneratorBehavioralSteering,
+  type GeneratorBehavioralSteering,
+} from './generatorBehavioralSteering';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,6 +90,11 @@ export interface OrchestratorInput {
   audience?:      string;
   formatType?:    string;
   targetWordCount?: number;
+  companyContext?: CompanyAssimilationInput;
+  searchIntent?: string;
+  keywords?: readonly string[];
+  seoContext?: string | null;
+  sectionCount?: number;
 
   /** Pre-aggregated trend signals — skips DB fetch if provided */
   trendSignals?:  TrendSignal[];
@@ -52,6 +105,17 @@ export interface OrchestratorResult {
   feedback:   FeedbackOptimizationResult | null;
   trends:     TrendIntelligenceResult | null;
   structure:  StructureRules | null;
+  doctrine:   OmnivyraDoctrineGenerationContext;
+  assimilation: AssimilatedEditorialPrimitives;
+  narrativePlanning: NarrativePlanningOutput;
+  generationGuidance: GenerationGuidanceContract;
+  editorialDepth: EditorialDepthIntelligence;
+  editorialAuthority: EditorialAuthorityIntelligence;
+  audienceMaturity: AudienceMaturityIntelligence;
+  unifiedEditorialBrief: UnifiedEditorialBrief;
+  editorialRuntimeContext: EditorialRuntimeContext;
+  generatorRuntimeAlignment: GeneratorRuntimeAlignment;
+  generatorBehavioralSteering: GeneratorBehavioralSteering;
 }
 
 // ── Safe call wrapper ────────────────────────────────────────────────────────
@@ -87,6 +151,11 @@ export async function buildGenerationContext(
     trendSignals,
     formatType,
     targetWordCount = 1200,
+    companyContext,
+    searchIntent,
+    keywords,
+    seoContext,
+    sectionCount,
   } = input;
 
   const [seo, feedback, trends] = await Promise.all([
@@ -98,8 +167,76 @@ export async function buildGenerationContext(
   // Structure rules are synchronous — no need for safeCall
   const validFormat: BlogFormatType = isValidBlogFormat(formatType) ? formatType : 'standard';
   const structure = getStructureRules(validFormat, targetWordCount);
+  const doctrine = resolveOmnivyraDoctrineGenerationContext();
+  const assimilation = assimilateCompanyEditorialPrimitives(companyContext);
+  const narrativePlanning = buildNarrativePlanningPrimitives({
+    topic,
+    contentType,
+    searchIntent,
+    keywords,
+    seoContext,
+    doctrine,
+    assimilation,
+    sectionCount,
+  });
+  const generationGuidance = buildGenerationGuidanceContract({
+    doctrine,
+    assimilation,
+    narrativePlanning,
+  });
+  const editorialDepth = buildEditorialDepthIntelligence({
+    doctrine,
+    assimilation,
+    narrativePlanning,
+    generationGuidance,
+  });
+  const editorialAuthority = buildEditorialAuthorityIntelligence({
+    doctrine,
+    assimilation,
+    narrativePlanning,
+    generationGuidance,
+    editorialDepth,
+  });
+  const audienceMaturity = buildAudienceMaturityIntelligence({
+    doctrine,
+    assimilation,
+    narrativePlanning,
+    generationGuidance,
+    editorialDepth,
+    editorialAuthority,
+  });
+  const unifiedEditorialBrief = assembleUnifiedEditorialBrief({
+    doctrine,
+    assimilation,
+    narrativePlanning,
+    generationGuidance,
+    editorialDepth,
+    editorialAuthority,
+    audienceMaturity,
+  });
+  const editorialRuntimeContext = prioritizeEditorialRuntimeContext({
+    unifiedEditorialBrief,
+    doctrine,
+    assimilation,
+    narrativePlanning,
+    generationGuidance,
+    editorialDepth,
+    editorialAuthority,
+    audienceMaturity,
+  });
+  const generatorRuntimeAlignment = buildGeneratorRuntimeAlignment({
+    editorialRuntimeContext,
+    unifiedEditorialBrief,
+    narrativePlanning,
+    generationGuidance,
+  });
+  const generatorBehavioralSteering = buildGeneratorBehavioralSteering({
+    generatorRuntimeAlignment,
+    editorialRuntimeContext,
+    unifiedEditorialBrief,
+  });
 
-  return { seo, feedback, trends, structure };
+  return { seo, feedback, trends, structure, doctrine, assimilation, narrativePlanning, generationGuidance, editorialDepth, editorialAuthority, audienceMaturity, unifiedEditorialBrief, editorialRuntimeContext, generatorRuntimeAlignment, generatorBehavioralSteering };
 }
 
 // ── Unified prompt context builder ───────────────────────────────────────────
@@ -110,6 +247,10 @@ export async function buildGenerationContext(
  */
 export function buildUnifiedPromptContext(ctx: OrchestratorResult): string {
   const parts: string[] = [];
+
+  parts.push(serializeEditorialRuntimeContext(ctx.editorialRuntimeContext));
+  parts.push(serializeGeneratorRuntimeAlignment(ctx.generatorRuntimeAlignment));
+  parts.push(serializeGeneratorBehavioralSteering(ctx.generatorBehavioralSteering));
 
   if (ctx.feedback?.performance_learnings_prompt) {
     parts.push(ctx.feedback.performance_learnings_prompt);

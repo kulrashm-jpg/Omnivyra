@@ -191,6 +191,26 @@ export interface ColumnsBlock extends BlockBase {
   columns: ColumnCell[];  // length === columnCount
 }
 
+export type CreatorAssetBlockType =
+  | 'supporting_image'
+  | 'banner'
+  | 'infographic'
+  | 'carousel'
+  | 'brand_card';
+
+export interface CreatorAssetBlock extends BlockBase {
+  type: 'creator_asset';
+  assetId?: string;
+  creatorType?: CreatorAssetBlockType;
+  title?: string;
+  url?: string;
+  files?: string[];
+  previewKind?: string;
+  caption?: string;
+  blockTemplateId?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // ── Union ─────────────────────────────────────────────────────────────────────
 
 export type ContentBlock =
@@ -206,7 +226,8 @@ export type ContentBlock =
   | ReferencesBlock
   | InternalLinkBlock
   | SummaryBlock
-  | ColumnsBlock;
+  | ColumnsBlock
+  | CreatorAssetBlock;
 
 export type BlockType = ContentBlock['type'];
 
@@ -226,7 +247,7 @@ export const BLOCK_GROUPS: { label: string; types: BlockType[] }[] = [
   },
   {
     label: 'Media',
-    types: ['image', 'media'],
+    types: ['image', 'media', 'creator_asset'],
   },
   {
     label: 'Enrichment',
@@ -248,6 +269,7 @@ export const BLOCK_LABELS: Record<BlockType, string> = {
   internal_link: 'Internal Link',
   summary:       'Article Summary',
   columns:       'Columns',
+  creator_asset: 'Asset',
 };
 
 export const BLOCK_DESCRIPTIONS: Record<BlockType, string> = {
@@ -264,4 +286,5 @@ export const BLOCK_DESCRIPTIONS: Record<BlockType, string> = {
   internal_link: 'Link card to another Omnivyra article.',
   summary:       'End-of-article synthesis and key points.',
   columns:       '1, 2, or 3-column layout container.',
+  creator_asset: 'Embed a saved Creator Content asset.',
 };

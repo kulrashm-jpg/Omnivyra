@@ -40,6 +40,8 @@ function blockPreview(block: ContentBlock): string {
       const total = block.columns.reduce((n, c) => n + c.blocks.length, 0);
       return `${block.columnCount}-column layout (${total} inner block${total !== 1 ? 's' : ''})`;
     }
+    case 'creator_asset':
+      return block.title || block.creatorType || '(no asset selected)';
   }
 }
 
@@ -57,6 +59,7 @@ const VARIANT_BADGE: Record<string, string> = {
   internal_link: 'bg-sky-100 text-sky-700',
   summary:       'bg-[#0A66C2]/10 text-[#0A66C2]',
   columns:       'bg-cyan-100 text-cyan-700',
+  creator_asset: 'bg-violet-100 text-violet-700',
 };
 
 export function BlockWrapper({

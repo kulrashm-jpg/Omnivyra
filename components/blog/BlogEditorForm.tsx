@@ -57,8 +57,10 @@ import {
   InternalLinkBlockEditor,
   SummaryBlockEditor,
   ColumnsBlockEditor,
+  CreatorAssetBlockEditor,
   ImageStockSearchPopover,
 } from '../content/blocks';
+import { useCompanyContext } from '../CompanyContext';
 import { isEnrichable, buildBlockContext, enrichBlock } from '../../lib/blog/blockEnrichService';
 import type {
   ParagraphBlock,
@@ -74,6 +76,7 @@ import type {
   InternalLinkBlock,
   SummaryBlock,
   ColumnsBlock,
+  CreatorAssetBlock,
 } from '../../lib/blog/blockTypes';
 
 const CATEGORY_OPTIONS = [
@@ -183,9 +186,11 @@ type Props = {
 function BlockEditor({
   block,
   onChange,
+  companyId,
 }: {
   block: ContentBlock;
   onChange: (b: ContentBlock) => void;
+  companyId?: string;
 }) {
   switch (block.type) {
     case 'paragraph':
@@ -218,10 +223,12 @@ function BlockEditor({
           block={block as ColumnsBlock}
           onChange={(b) => onChange(b)}
           renderBlock={(innerBlock, innerOnChange) => (
-            <BlockEditor block={innerBlock} onChange={innerOnChange} />
+            <BlockEditor block={innerBlock} onChange={innerOnChange} companyId={companyId} />
           )}
         />
       );
+    case 'creator_asset':
+      return <CreatorAssetBlockEditor block={block as CreatorAssetBlock} companyId={companyId} onChange={(b) => onChange(b)} />;
   }
 }
 
@@ -528,6 +535,30 @@ function PreviewBlock({ block }: { block: ContentBlock }) {
       );
     }
 
+    case 'creator_asset': {
+      const b = block as CreatorAssetBlock;
+      const assetUrl = b.url || b.files?.find(Boolean) || '';
+      if (!b.assetId && !assetUrl) return null;
+      return (
+        <figure className={getFormattedBlockClass(b, 'my-8 rounded-xl border border-violet-100 bg-violet-50/50 p-4')}>
+          {assetUrl ? (
+            <img src={assetUrl} alt={b.title || 'Creator asset'} className="w-full rounded-lg object-cover" />
+          ) : (
+            <div className="flex h-44 items-center justify-center rounded-lg bg-white text-sm font-semibold text-violet-600">
+              Creator asset
+            </div>
+          )}
+          {(b.title || b.caption) && (
+            <figcaption className="mt-3 text-sm text-gray-600">
+              {b.title && <span className="font-semibold text-gray-900">{b.title}</span>}
+              {b.title && b.caption && <span> - </span>}
+              {b.caption}
+            </figcaption>
+          )}
+        </figure>
+      );
+    }
+
     default:
       return null;
   }
@@ -545,6 +576,8 @@ export function BlogEditorForm({
   externalPatch,
   companyId,
 }: Props) {
+  const { selectedCompanyId } = useCompanyContext();
+  const effectiveCompanyId = companyId || selectedCompanyId || undefined;
   const [state, setState] = useState<BlogFormState>({
     ...defaultState,
     ...initial,
@@ -686,7 +719,7 @@ export function BlogEditorForm({
   };
 
   const handleEnrichBlock = async (idx: number) => {
-    if (!companyId) return;
+    if (!effectiveCompanyId) return;
     const block = state.content_blocks[idx];
     if (!isEnrichable(block.type)) return;
 
@@ -694,7 +727,7 @@ export function BlogEditorForm({
     try {
       const { block: targetBlock, contextBlocks } = buildBlockContext(state.content_blocks, idx);
       const result = await enrichBlock({
-        companyId,
+        companyId: effectiveCompanyId,
         block: targetBlock,
         contextBlocks,
         blogMeta: {
@@ -720,7 +753,7 @@ export function BlogEditorForm({
         aiActionLoading: false,
       };
     }
-    if (isEnrichable(block.type) && companyId) {
+    if (isEnrichable(block.type) && effectiveCompanyId) {
       return {
         onAiAction: () => handleEnrichBlock(idx),
         aiActionLabel: 'Enrich with AI',
@@ -1079,7 +1112,7 @@ export function BlogEditorForm({
                         )}
                       </>
                     ) : (
-                      <BlockEditor block={block} onChange={(b) => updateBlock(i, b)} />
+                      <BlockEditor block={block} onChange={(b) => updateBlock(i, b)} companyId={effectiveCompanyId} />
                     )}
                   </BlockWrapper>
                   {/* "Add block" between / after each block */}
@@ -1106,7 +1139,7 @@ export function BlogEditorForm({
                     onDelete={() => {}}
                     onDuplicate={() => {}}
                   >
-                    <BlockEditor block={dragged} onChange={() => {}} />
+                    <BlockEditor block={dragged} onChange={() => {}} companyId={effectiveCompanyId} />
                   </BlockWrapper>
                 </div>
               );

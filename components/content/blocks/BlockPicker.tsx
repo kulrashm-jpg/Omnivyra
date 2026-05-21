@@ -24,6 +24,7 @@ const BLOCK_ICONS: Record<BlockType, string> = {
   internal_link: '🔗',
   summary:       '✦',
   columns:       '▥',
+  creator_asset: 'A',
 };
 
 // ── AI keyword → block type map ───────────────────────────────────────────────
@@ -31,6 +32,11 @@ const BLOCK_ICONS: Record<BlockType, string> = {
 type AISuggestion = { type: BlockType; icon: string; hint: string };
 
 const AI_KEYWORD_MAP: { keywords: string[]; type: BlockType; hint: string }[] = [
+  {
+    keywords: ['asset', 'creator asset', 'creator content', 'banner asset', 'infographic asset', 'carousel asset', 'brand card'],
+    type: 'creator_asset',
+    hint: 'Embed a saved Creator Content asset',
+  },
   {
     keywords: ['image', 'photo', 'picture', 'screenshot', 'visual', 'graphic', 'figure', 'illustration', 'banner'],
     type: 'image',

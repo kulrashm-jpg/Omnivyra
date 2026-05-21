@@ -26,6 +26,7 @@ import { isRedisUrlTLS } from './sanitizer';
 import type { RedisFeature } from './instrumentation';
 import { createInstrumentedClient } from './instrumentation';
 import { initializeHealthMetrics, recordTerminalStateDetection } from './healthMetrics';
+import { boundedRetryStrategy, reconnectOnError } from './retryPolicy';
 
 /**
  * Shared connection (singleton per process)
@@ -61,11 +62,8 @@ export function getRedisConnectionConfig() {
       // Timeouts
       connectTimeout: 5000,
       commandTimeout: 5000,
-      // Retry on connection failure — never stop retrying so the connection
-      // never enters the permanent 'end' state. Delay caps at 30 s.
-      retryStrategy: (times: number) => {
-        return Math.min(times * 200, 30_000);
-      },
+      retryStrategy: boundedRetryStrategy,
+      reconnectOnError,
     };
   } catch (error) {
     console.error('[redis.client] Failed to parse REDIS_URL', {

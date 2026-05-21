@@ -1,4 +1,5 @@
--- =============================================================================
+ 
+ SA-- =============================================================================
 -- Atomic orchestration leases + fencing (DESIGN ARTIFACT / OPTIONAL)
 --
 -- WHY: hardened distributed locking needs row-level CAS. This table provides

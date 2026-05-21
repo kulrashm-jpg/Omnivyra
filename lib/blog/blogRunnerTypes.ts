@@ -11,6 +11,7 @@ import type { AngleEffectivenessEntry } from './feedbackOptimizationEngine';
 import type { SEOIntelligenceResult } from './seoIntelligenceEngine';
 import type { TrendIntelligenceResult } from './trendIntelligenceEngine';
 import type { HookAssessment } from './hookAssessment';
+import type { EditorialDiagnosticReport } from '../content/editorialDiagnosticObserver';
 import type {
   BlogFormatType,
   ArticleFormatType,
@@ -114,4 +115,5 @@ export type BlogGenerationResult =
       template_used?:      boolean;
       seo_intelligence?: SEOIntelligenceResult;
       trend_intelligence?: TrendIntelligenceResult;
+      editorial_diagnostics?: EditorialDiagnosticReport;
     };

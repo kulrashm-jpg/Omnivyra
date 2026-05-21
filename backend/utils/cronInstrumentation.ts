@@ -22,9 +22,7 @@
 
 import { hostname } from 'os';
 import IORedis        from 'ioredis';
-import { config } from '@/config';
-import { createInstrumentedClient } from '../../lib/redis/instrumentation';
-import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
+import { getInstrumentedStandaloneRedisClient } from '../queue/standaloneRedisClient';
 
 // ── Identity ───────────────────────────────────────────────────────────────────
 
@@ -101,18 +99,8 @@ export class CronInstrumentation {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    const url = config.REDIS_URL;
     try {
-      const raw = new IORedis(url, {
-        enableReadyCheck:     false,
-        maxRetriesPerRequest: 1,
-        retryStrategy:        circuitBreakerRetryStrategy,
-        reconnectOnError,
-        lazyConnect:          true,
-      });
-      raw.on('error', () => {});
-      raw.connect().catch(() => {});
-      this.redis = createInstrumentedClient(raw, 'cron') as IORedis;
+      this.redis = getInstrumentedStandaloneRedisClient('cron');
     } catch {
       this.redis = null;
     }
@@ -290,7 +278,6 @@ export class CronInstrumentation {
       this.heartbeatTimer = null;
     }
     if (this.redis) {
-      this.redis.quit().catch(() => {});
       this.redis = null;
     }
   }

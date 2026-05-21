@@ -5,6 +5,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { ArrowLeft, ArrowRight, Loader2, Sparkles, Check, RefreshCw } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import GenerationProgressTracker from '../../components/content/GenerationProgressTracker';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 
@@ -153,9 +154,8 @@ export default function BlogSuggestionsPage() {
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch('/api/company/blog/brief-suggestions', {
+      const resp = await fetchWithAuth('/api/company/blog/brief-suggestions', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: companyId,
@@ -194,9 +194,8 @@ export default function BlogSuggestionsPage() {
     setGenerating(true);
 
     try {
-      const resp = await fetch('/api/blogs/generate', {
+      const resp = await fetchWithAuth('/api/blogs/generate', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: companyId,

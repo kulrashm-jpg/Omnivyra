@@ -53,6 +53,28 @@ import {
   buildUnifiedPromptContext,
   type OrchestratorResult,
 } from '../content/contentGenerationOrchestrator';
+import { assimilateCompanyEditorialPrimitives } from '../content/companyAssimilationMiddleware';
+import { buildAudienceMaturityIntelligence } from '../content/audienceMaturityIntelligence';
+import { buildEditorialAuthorityIntelligence } from '../content/editorialAuthorityIntelligence';
+import { buildEditorialDepthIntelligence } from '../content/editorialDepthIntelligence';
+import { buildGenerationGuidanceContract } from '../content/generationGuidanceContracts';
+import { buildNarrativePlanningPrimitives } from '../content/narrativePlanningEngine';
+import { resolveOmnivyraDoctrineGenerationContext } from '../content/omnivyraEditorialDoctrine';
+import { observeBehavioralAdherenceDiagnostics } from '../content/behavioralAdherenceDiagnostics';
+import { observeEditorialDiagnostics } from '../content/editorialDiagnosticObserver';
+import { buildEditorialQualityReadiness } from '../content/editorialQualityReadiness';
+import { buildEditorialQualitySignals } from '../content/editorialQualitySignals';
+import { buildEditorialRemediationHints } from '../content/editorialRemediationHints';
+import { assembleEditorialRemediationPlan } from '../content/editorialRemediationPlanAssembler';
+import { selectRegenerationCandidates } from '../content/regenerationCandidateSelector';
+import { buildRegenerationExecutionManifest } from '../content/regenerationExecutionManifest';
+import { buildRegenerationReadinessContract } from '../content/regenerationReadinessContracts';
+import { planRecoveryExecutionDryRun } from '../content/recoveryExecutionDryRunPlanner';
+import { buildRecoveryExecutorContracts } from '../content/recoveryExecutorContracts';
+import { assembleUnifiedEditorialBrief } from '../content/unifiedEditorialBriefAssembler';
+import { prioritizeEditorialRuntimeContext } from '../content/editorialRuntimeContextPrioritizer';
+import { buildGeneratorRuntimeAlignment } from '../content/generatorRuntimeAlignment';
+import { buildGeneratorBehavioralSteering } from '../content/generatorBehavioralSteering';
 import { getDefaultBlogTemplates, instantiateBlogTemplate } from './defaultBlogTemplates';
 import { deriveTemplateDepthGuidance } from './runBlogGenerationPureHelpers';
 import { type CompanyIdentity } from '../content/companyContextBlock';
@@ -66,6 +88,112 @@ import type { CompanyContext, BlogGenerationRequest, BlogGenerationResult } from
 export type { CompanyContext, BlogGenerationRequest, BlogGenerationResult } from './blogRunnerTypes';
 import { runStandardHtmlBlogGeneration } from './runStandardBlogGeneration';
 import { runTemplateBlogGenerationPath } from './runTemplateBlogGeneration';
+
+type FullBlogGenerationResult = Extract<
+  BlogGenerationResult,
+  { needs_clarification: false; mode: 'full' }
+>;
+
+function isFullBlogGenerationResult(
+  result: BlogGenerationResult,
+): result is FullBlogGenerationResult {
+  return result.needs_clarification === false && result.mode === 'full';
+}
+
+function attachEditorialDiagnostics(
+  result: BlogGenerationResult,
+  ctx: OrchestratorResult | null,
+): BlogGenerationResult {
+  if (!isFullBlogGenerationResult(result) || !ctx) return result;
+  try {
+    const editorialDiagnostics = observeEditorialDiagnostics({
+      generatedContent: result.result,
+      doctrine: ctx.doctrine,
+      assimilation: ctx.assimilation,
+      narrativePlanning: ctx.narrativePlanning,
+      generationGuidance: ctx.generationGuidance,
+    });
+    const behavioralAdherence = observeBehavioralAdherenceDiagnostics({
+      generatedContent: result.result,
+      generatorBehavioralSteering: ctx.generatorBehavioralSteering,
+      generatorRuntimeAlignment: ctx.generatorRuntimeAlignment,
+      unifiedEditorialBrief: ctx.unifiedEditorialBrief,
+      editorialRuntimeContext: ctx.editorialRuntimeContext,
+    });
+    const qualitySignals = buildEditorialQualitySignals({
+      editorialDiagnostics,
+      behavioralAdherenceDiagnostics: behavioralAdherence,
+      generatorBehavioralSteering: ctx.generatorBehavioralSteering,
+      generatorRuntimeAlignment: ctx.generatorRuntimeAlignment,
+    });
+    const qualityReadiness = buildEditorialQualityReadiness({
+      editorialQualitySignals: qualitySignals,
+      behavioralAdherenceDiagnostics: behavioralAdherence,
+      editorialDiagnostics,
+      generatorRuntimeAlignment: ctx.generatorRuntimeAlignment,
+    });
+    const remediationHints = buildEditorialRemediationHints({
+      editorialQualityReadiness: qualityReadiness,
+      editorialQualitySignals: qualitySignals,
+      behavioralAdherenceDiagnostics: behavioralAdherence,
+      editorialDiagnostics,
+    });
+    const remediationPlan = assembleEditorialRemediationPlan({
+      editorialRemediationHints: remediationHints,
+      editorialQualityReadiness: qualityReadiness,
+      editorialQualitySignals: qualitySignals,
+      behavioralAdherenceDiagnostics: behavioralAdherence,
+    });
+    const regenerationReadinessContract = buildRegenerationReadinessContract({
+      editorialRemediationPlan: remediationPlan,
+      editorialRemediationHints: remediationHints,
+      editorialQualityReadiness: qualityReadiness,
+      behavioralAdherenceDiagnostics: behavioralAdherence,
+    });
+    const regenerationCandidateSelection = selectRegenerationCandidates({
+      regenerationReadinessContract,
+      editorialRemediationPlan: remediationPlan,
+      editorialQualityReadiness: qualityReadiness,
+      behavioralAdherenceDiagnostics: behavioralAdherence,
+    });
+    const regenerationExecutionManifest = buildRegenerationExecutionManifest({
+      regenerationCandidateSelection,
+      regenerationReadinessContract,
+      editorialRemediationPlan: remediationPlan,
+      editorialQualityReadiness: qualityReadiness,
+    });
+    const recoveryExecutionDryRun = planRecoveryExecutionDryRun({
+      regenerationExecutionManifest,
+      regenerationCandidateSelection,
+      regenerationReadinessContract,
+      editorialRemediationPlan: remediationPlan,
+    });
+    const recoveryExecutorContracts = buildRecoveryExecutorContracts({
+      recoveryExecutionDryRun,
+      regenerationExecutionManifest,
+      regenerationCandidateSelection,
+      regenerationReadinessContract,
+    });
+    return {
+      ...result,
+      editorial_diagnostics: {
+        ...editorialDiagnostics,
+        behavioralAdherence,
+        qualitySignals,
+        qualityReadiness,
+        remediationHints,
+        remediationPlan,
+        regenerationReadinessContract,
+        regenerationCandidateSelection,
+        regenerationExecutionManifest,
+        recoveryExecutionDryRun,
+        recoveryExecutorContracts,
+      },
+    };
+  } catch {
+    return result;
+  }
+}
 
 // ── Main function ─────────────────────────────────────────────────────────────
 
@@ -390,7 +518,90 @@ export async function runBlogGeneration(
     formatType, targetWordCount: baseInput.answers?.target_word_count
       ? parseInt(String(baseInput.answers.target_word_count), 10) || 1200
       : 1200,
-  }).catch((): OrchestratorResult => ({ seo: null, feedback: null, trends: null, structure: null }));
+    companyContext,
+  }).catch((): OrchestratorResult => {
+    const doctrine = resolveOmnivyraDoctrineGenerationContext();
+    const assimilation = assimilateCompanyEditorialPrimitives(companyContext);
+    const narrativePlanning = buildNarrativePlanningPrimitives({
+      topic: topic.trim(),
+      contentType,
+      doctrine,
+      assimilation,
+    });
+    const generationGuidance = buildGenerationGuidanceContract({
+      doctrine,
+      assimilation,
+      narrativePlanning,
+    });
+    const editorialDepth = buildEditorialDepthIntelligence({
+      doctrine,
+      assimilation,
+      narrativePlanning,
+      generationGuidance,
+    });
+    const editorialAuthority = buildEditorialAuthorityIntelligence({
+      doctrine,
+      assimilation,
+      narrativePlanning,
+      generationGuidance,
+      editorialDepth,
+    });
+    const audienceMaturity = buildAudienceMaturityIntelligence({
+      doctrine,
+      assimilation,
+      narrativePlanning,
+      generationGuidance,
+      editorialDepth,
+      editorialAuthority,
+    });
+    const unifiedEditorialBrief = assembleUnifiedEditorialBrief({
+      doctrine,
+      assimilation,
+      narrativePlanning,
+      generationGuidance,
+      editorialDepth,
+      editorialAuthority,
+      audienceMaturity,
+    });
+    const editorialRuntimeContext = prioritizeEditorialRuntimeContext({
+      unifiedEditorialBrief,
+      doctrine,
+      assimilation,
+      narrativePlanning,
+      generationGuidance,
+      editorialDepth,
+      editorialAuthority,
+      audienceMaturity,
+    });
+    const generatorRuntimeAlignment = buildGeneratorRuntimeAlignment({
+      editorialRuntimeContext,
+      unifiedEditorialBrief,
+      narrativePlanning,
+      generationGuidance,
+    });
+    const generatorBehavioralSteering = buildGeneratorBehavioralSteering({
+      generatorRuntimeAlignment,
+      editorialRuntimeContext,
+      unifiedEditorialBrief,
+    });
+    return {
+      seo: null,
+      feedback: null,
+      trends: null,
+      structure: null,
+      doctrine,
+      assimilation,
+      narrativePlanning,
+      generationGuidance,
+      editorialDepth,
+      editorialAuthority,
+      audienceMaturity,
+      unifiedEditorialBrief,
+      editorialRuntimeContext,
+      generatorRuntimeAlignment,
+      generatorBehavioralSteering,
+    };
+  });
 
   const unifiedPromptContext = buildUnifiedPromptContext(ctx);
 
@@ -459,10 +670,10 @@ export async function runBlogGeneration(
         generationInput, ctx, confidence, selected_angle: selected_angle as BlogAngle | undefined,
         companyIdentity,
       });
-      if (templateResult !== null) return templateResult;
+      if (templateResult !== null) return attachEditorialDiagnostics(templateResult, ctx);
     }
 
-    return await runStandardHtmlBlogGeneration({
+    const standardResult = await runStandardHtmlBlogGeneration({
       company_id,
       topic,
       blogTable,
@@ -477,6 +688,7 @@ export async function runBlogGeneration(
       ctx,
       companyIdentity,
     });
+    return attachEditorialDiagnostics(standardResult, ctx);
 
   } catch (err) {
     // C3: CompanyContextEnforcementError must propagate to the API route so
@@ -497,12 +709,12 @@ export async function runBlogGeneration(
       blogTable,
     );
 
-    return {
+    return attachEditorialDiagnostics({
       needs_clarification: false,
       mode:                'full',
       confidence:          'medium',
       result:              { ...fallback, content_blocks },
       hook_assessment:     { strength: 'moderate', note: 'Review before publishing.' },
-    };
+    }, ctx);
   }
 }

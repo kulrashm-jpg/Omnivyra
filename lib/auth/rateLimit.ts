@@ -45,9 +45,8 @@
 
 import IORedis from 'ioredis';
 import { recordAnomalyEvent } from './anomalyDetector';
-import { createInstrumentedClient } from '../redis/instrumentation';
 import { logger } from '../../backend/services/logger';
-import { config as appConfig } from '@/config';
+import { getInstrumentedStandaloneRedisClient } from '../../backend/queue/standaloneRedisClient';
 
 // ── In-memory fallback limiter ────────────────────────────────────────────────
 // Used ONLY when Redis is unavailable (fail-open path).
@@ -77,25 +76,13 @@ let _rl: IORedis | null = null;
 
 function getRlRedis(): IORedis {
   if (_rl) return _rl;
-  const url = appConfig.REDIS_URL || 'redis://localhost:6379';
-  const raw = new IORedis(url, {
-    enableReadyCheck: false,
-    maxRetriesPerRequest: 1,         // fail fast; rate limiting is non-critical
-    connectTimeout: 1_000,           // 1 s connect timeout
-    commandTimeout: 500,             // 500 ms per command
-    lazyConnect: true,
-  });
-  raw.on('error', () => {
-    // Suppress unhandled error events — failures are handled per-call below
-  });
-  _rl = createInstrumentedClient(raw, 'rate_limit') as IORedis;
+  _rl = getInstrumentedStandaloneRedisClient('rate_limit');
   return _rl;
 }
 
 /** Disconnect the rate-limit Redis client (for graceful shutdown). */
 export function shutdownRateLimitRedis(): void {
   if (_rl) {
-    _rl.quit().catch(() => {});
     _rl = null;
   }
 }

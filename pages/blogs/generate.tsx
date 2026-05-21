@@ -7,6 +7,7 @@ import { useRouter } from 'next/router';
 import { Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import BlogGenerateModal from '../../components/blog/BlogGenerateModal';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import type { BlogGenerationOutput } from '../../lib/blog/blogGenerationEngine';
 import { BLOG_FORMAT_OPTIONS, isValidBlogFormat, type BlogFormatType } from '../../lib/blog/blogStructureTemplates';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
@@ -238,9 +239,8 @@ export default function BlogGeneratePage() {
     setSuggestionError(null);
 
     try {
-      const resp = await fetch('/api/company/blog/brief-suggestions', {
+      const resp = await fetchWithAuth('/api/company/blog/brief-suggestions', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: selectedCompanyId,

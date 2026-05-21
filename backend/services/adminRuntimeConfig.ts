@@ -22,7 +22,7 @@
  */
 
 import IORedis from 'ioredis';
-import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
+import { getInstrumentedStandaloneRedisClient } from '../queue/standaloneRedisClient';
 import { isCronJobAllowedByUsage } from '../../lib/redis/usageProtection';
 import {
   getIntentGate,
@@ -36,25 +36,13 @@ let _client: IORedis | null = null;
 
 function getClient(): IORedis {
   if (_client) return _client;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
-  _client = new IORedis(url, {
-    enableReadyCheck:     false,
-    maxRetriesPerRequest: 1,
-    connectTimeout:       2_000,
-    commandTimeout:       1_000,
-    lazyConnect:          true,
-    retryStrategy:        circuitBreakerRetryStrategy,
-    reconnectOnError,
-  });
-  _client.on('error', () => {});
-  _client.connect().catch(() => {});
+  _client = getInstrumentedStandaloneRedisClient('cron');
   return _client;
 }
 
 /** Disconnect the Redis client (for graceful shutdown). */
 export function shutdownAdminRuntimeConfig(): void {
   if (_client) {
-    _client.quit().catch(() => {});
     _client = null;
   }
 }

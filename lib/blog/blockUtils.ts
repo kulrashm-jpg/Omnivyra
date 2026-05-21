@@ -80,6 +80,9 @@ export function createBlock(type: BlockType): ContentBlock {
           { id: newId(), blocks: [] },
         ],
       };
+
+    case 'creator_asset':
+      return { id, type: 'creator_asset', title: '', files: [] };
   }
 }
 
@@ -125,6 +128,8 @@ export function extractTextFromBlock(block: ContentBlock): string {
       return '';
     case 'columns':
       return block.columns.flatMap((col) => col.blocks.map(extractTextFromBlock)).join(' ');
+    case 'creator_asset':
+      return [block.title ?? '', block.caption ?? '', block.creatorType ?? ''].join(' ');
   }
 }
 

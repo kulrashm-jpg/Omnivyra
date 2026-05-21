@@ -18,6 +18,7 @@ import type {
   InternalLinkBlock,
   SummaryBlock,
   ColumnsBlock,
+  CreatorAssetBlock,
 } from '../../lib/blog/blockTypes';
 import { BlogMediaBlock } from './BlogMediaBlock';
 import type { MediaBlockItem } from './BlogMediaBlock';
@@ -187,6 +188,34 @@ function RenderMedia({ block }: { block: MediaBlock }) {
   );
 }
 
+function RenderCreatorAsset({ block }: { block: CreatorAssetBlock }) {
+  const assetUrl = block.url || block.files?.find(Boolean) || '';
+  if (!block.assetId && !assetUrl) return null;
+  return (
+    <figure className={getFormattedBlockClass(block, 'my-10 overflow-hidden rounded-2xl border border-violet-100 bg-violet-50/50 p-4')}>
+      {assetUrl ? (
+        <img
+          src={assetUrl}
+          alt={block.title || 'Creator asset'}
+          loading="lazy"
+          className="w-full rounded-xl object-cover shadow-sm"
+        />
+      ) : (
+        <div className="flex h-56 items-center justify-center rounded-xl bg-white text-sm font-semibold text-violet-600">
+          Creator asset
+        </div>
+      )}
+      {(block.title || block.caption) && (
+        <figcaption className="mt-3 text-sm text-[#6B7C93]">
+          {block.title && <span className="font-semibold text-[#0B1F33]">{block.title}</span>}
+          {block.title && block.caption && <span> - </span>}
+          {block.caption}
+        </figcaption>
+      )}
+    </figure>
+  );
+}
+
 function RenderDivider({ block }: { block: DividerBlock }) {
   if (block.variant === 'subtle') {
     return <hr className={getFormattedBlockClass(block, 'my-8 border-t border-gray-200')} />;
@@ -313,6 +342,7 @@ function renderBlock(block: ContentBlock): React.ReactNode {
     case 'references':    return <RenderReferences    key={block.id} block={block} />;
     case 'internal_link': return <RenderInternalLink  key={block.id} block={block} />;
     case 'summary':       return <RenderSummary       key={block.id} block={block} />;
+    case 'creator_asset': return <RenderCreatorAsset  key={block.id} block={block} />;
     case 'columns': {
       const gridClass = block.columnCount === 3 ? 'grid-cols-1 md:grid-cols-3'
         : block.columnCount === 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1';

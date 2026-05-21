@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { enforceCompanyAccess } from '@/backend/services/userContextService';
-import { upsertCreatorAssetRecord } from '@/backend/services/creatorAssetPersistenceService';
+import { listCreatorAssets, upsertCreatorAssetRecord } from '@/backend/services/creatorAssetPersistenceService';
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -11,14 +11,62 @@ function asSourceType(value: unknown): 'post' | 'thread' | null {
   return normalized === 'post' || normalized === 'thread' ? normalized : null;
 }
 
+function creatorTypeAliases(value: unknown): string[] {
+  const normalized = String(value || '').trim().toLowerCase();
+  const map: Record<string, string[]> = {
+    supporting_image: ['supporting_image', 'image'],
+    banner: ['banner'],
+    infographic: ['infographic'],
+    carousel: ['carousel'],
+    brand_card: ['brand_card', 'image'],
+  };
+  return map[normalized] || [];
+}
+
+function mapAsset(row: Record<string, unknown>) {
+  const metadata = asObject(row.metadata);
+  return {
+    id: String(row.id || ''),
+    creatorType: String(row.creator_type || ''),
+    title: String(row.title || 'Creator asset'),
+    url: typeof row.url === 'string' ? row.url : undefined,
+    files: Array.isArray(row.files) ? row.files : undefined,
+    previewKind: typeof row.preview_kind === 'string' ? row.preview_kind : undefined,
+    platformContext: typeof row.platform_context === 'string' ? row.platform_context : undefined,
+    renderIdentityHash: typeof row.render_identity_hash === 'string' ? row.render_identity_hash : undefined,
+    blockTemplateId: typeof row.block_template_id === 'string' ? row.block_template_id : typeof metadata.blockTemplateId === 'string' ? metadata.blockTemplateId : undefined,
+    metadata,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : new Date().toISOString(),
+  };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
+  if (req.method !== 'POST' && req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const companyId = String(req.body?.company_id || '').trim();
+  const companyId = String(req.body?.company_id || req.query.company_id || '').trim();
   const access = await enforceCompanyAccess({ req, res, companyId });
   if (!access) return;
+
+  if (req.method === 'GET') {
+    try {
+      const aliases = creatorTypeAliases(req.query.creator_type || req.query.type);
+      const rows = await listCreatorAssets({
+        companyId,
+        userId: access.userId,
+        creatorTypes: aliases.length > 0 ? aliases : undefined,
+        limit: Number.isFinite(Number(req.query.limit)) ? Number(req.query.limit) : 48,
+      });
+      return res.status(200).json({ assets: rows.map(mapAsset) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load creator assets';
+      return res.status(message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE') ? 503 : 500).json({
+        error: message,
+        persistence_available: !message.startsWith('CREATOR_PERSISTENCE_UNAVAILABLE'),
+      });
+    }
+  }
 
   const asset = asObject(req.body?.asset);
   const creatorType = String(asset.creatorType || asset.creator_type || asset.asset_type || '').trim();

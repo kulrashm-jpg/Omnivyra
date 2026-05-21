@@ -16,9 +16,10 @@
  * import this adapter and dispatch on `provider`.
  */
 
+import crypto from 'crypto';
 import { logger } from '../../logger';
 
-export type SupportedProvider = 'razorpay' | 'stripe';
+export type SupportedProvider = 'razorpay' | 'stripe' | 'cashfree' | 'phonepe';
 
 export interface CheckoutSessionRequest {
   provider:           SupportedProvider;
@@ -31,6 +32,8 @@ export interface CheckoutSessionRequest {
   cancelUrl?:         string;
   creditPackageId?:   string;
   initiatedByUserId:  string;
+  /** ISO-3166-1 alpha-2 — optional; consulted by the governance pre-check. */
+  country?:           string;
 }
 
 export interface CheckoutSessionResult {
@@ -90,8 +93,34 @@ export async function dispatchCheckout(req: CheckoutSessionRequest): Promise<Che
       error: `Provider ${req.provider} not registered`, code: 'NOT_IMPLEMENTED',
     };
   }
+
+  // Additive governance pre-check (migration 20260714). The resolver is
+  // default-preserving: when payment_provider_config is absent it returns
+  // compiled defaults, so behavior is unchanged where the table is unapplied.
+  const { isProviderAvailableForCheckout } = await import('./paymentProviderPolicyResolver');
+  const gate = await isProviderAvailableForCheckout(req.provider, {
+    country: req.country ?? null,
+    currency: req.currency ?? null,
+  });
+  if (!gate.ok) {
+    const reason = (gate as { ok: false; reason: string }).reason;
+    return {
+      ok: false, provider: req.provider, amount: req.amount, currency: req.currency,
+      error: `Provider ${req.provider} unavailable: ${reason}`, code: 'VALIDATION',
+    };
+  }
+
   return adapter.createCheckoutSession(req);
 }
+
+/**
+ * Backend-authoritative checkout provider list. The (future) checkout UI MUST
+ * call this rather than hardcoding providers — frontend never decides
+ * availability/enablement. Re-exported from the policy resolver so callers
+ * have one orchestration entry point. Carries NO pricing data.
+ */
+export { resolveAvailableProviders } from './paymentProviderPolicyResolver';
+export type { ResolvedProviderList, ResolvedCheckoutProvider } from './paymentProviderPolicyResolver';
 
 export async function dispatchWebhook(input: WebhookEventInput): Promise<WebhookProcessingResult> {
   const adapter = getProviderAdapter(input.provider);
@@ -167,3 +196,40 @@ registerProviderAdapter('razorpay', {
     }
   },
 });
+
+// ── Cashfree + PhonePe — SANDBOX-ONLY adapters ──────────────────────────────
+// These adapters implement the provider contract for governance/orchestration
+// integration. createCheckoutSession produces a DETERMINISTIC sandbox session
+// LOCALLY — no network call, no live order, no settlement. handleWebhook is
+// inert (webhook settlement is NOT activated). describe().mode is 'test'.
+function makeSandboxAdapter(name: SupportedProvider, sandboxHost: string): PaymentProviderAdapter {
+  return {
+    describe: () => ({ name, mode: 'test', capabilities: ['checkout', 'sandbox-only'] }),
+    createCheckoutSession: async (req) => {
+      // Deterministic sandbox reference — same (org, package, amount) → same
+      // ref, so a retried checkout reuses the sandbox session (idempotent).
+      const ref = `${name}_sbx_${crypto
+        .createHash('sha1')
+        .update([req.organizationId, req.creditPackageId ?? '', String(req.amount)].join('|'))
+        .digest('hex')
+        .slice(0, 24)}`;
+      return {
+        ok: true,
+        provider: name,
+        amount: req.amount,
+        currency: req.currency,
+        sessionId: ref,
+        redirectUrl: `https://${sandboxHost}/checkout/${ref}`,
+        raw: { mode: 'sandbox', note: `${name} sandbox adapter — no live settlement` },
+      };
+    },
+    handleWebhook: async () => ({
+      ok: false,
+      status: 'ignored',
+      message: `${name} sandbox adapter — webhook settlement not activated`,
+    }),
+  };
+}
+
+registerProviderAdapter('cashfree', makeSandboxAdapter('cashfree', 'sandbox.cashfree.com'));
+registerProviderAdapter('phonepe',  makeSandboxAdapter('phonepe',  'sandbox.phonepe.com'));

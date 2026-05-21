@@ -6,9 +6,11 @@
  */
 
 import IORedis from 'ioredis';
-import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import type { CompanyIntelligenceInsights } from './companyIntelligenceAggregator';
-import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import {
+  getInstrumentedStandaloneRedisClient,
+  isSharedStandaloneRedisAvailable,
+} from '../queue/standaloneRedisClient';
 
 const PREFIX = 'virality:company';
 const TTL_SEC = 300;
@@ -21,22 +23,8 @@ const inMemoryCache = new Map<
 
 function getRedisClient(): IORedis | null {
   if (redisClient) return redisClient;
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
   try {
-    const raw = new IORedis(url, {
-      enableReadyCheck: false,
-      maxRetriesPerRequest: 3,
-      retryStrategy: circuitBreakerRetryStrategy,
-      reconnectOnError,
-      lazyConnect: true,
-    });
-    raw.on('error', () => {
-      console.warn('[companyIntelligenceCache] Redis error');
-    });
-    raw.connect().catch(() => {
-      console.warn('[companyIntelligenceCache] Redis unavailable, falling back to in-memory');
-    });
-    redisClient = createInstrumentedClient(raw, 'intelligence_cache') as IORedis;
+    redisClient = getInstrumentedStandaloneRedisClient('intelligence_cache');
     return redisClient;
   } catch {
     console.warn('[companyIntelligenceCache] Redis unavailable, falling back to in-memory');
@@ -47,7 +35,6 @@ function getRedisClient(): IORedis | null {
 /** Disconnect the Redis client (for graceful shutdown). */
 export function shutdownCompanyIntelligenceCache(): void {
   if (redisClient) {
-    redisClient.quit().catch(() => {});
     redisClient = null;
   }
 }
@@ -55,12 +42,7 @@ export function shutdownCompanyIntelligenceCache(): void {
 async function isRedisOk(): Promise<boolean> {
   const client = getRedisClient();
   if (!client) return false;
-  try {
-    const pong = await client.ping();
-    return pong === 'PONG';
-  } catch {
-    return false;
-  }
+  return isSharedStandaloneRedisAvailable();
 }
 
 export const buildInsightsKey = (companyId: string): string =>

@@ -13,12 +13,10 @@
  */
 
 import IORedis from 'ioredis';
-import { circuitBreakerRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
 import { createHash } from 'crypto';
 import type { CampaignStrategy } from './campaignStrategyEngine';
-import { createInstrumentedClient } from '../../lib/redis/instrumentation';
+import { getInstrumentedStandaloneRedisClient } from '../queue/standaloneRedisClient';
 
-const REDIS_URL      = process.env.REDIS_URL || 'redis://localhost:6379';
 const PREFIX         = 'omnivyra:strategy_idx:v1';
 const MAX_ENTRIES    = 200;
 const ENTRY_TTL_SECS = 7 * 24 * 3600;   // 7 days
@@ -31,15 +29,7 @@ let _client: IORedis | null = null;
 function getClient(): IORedis | null {
   if (_client) return _client;
   try {
-    const raw = new IORedis(REDIS_URL, {
-      enableReadyCheck: false,
-      maxRetriesPerRequest: 1,
-      retryStrategy: circuitBreakerRetryStrategy,
-      reconnectOnError,
-      lazyConnect: true,
-    });
-    raw.connect().catch(() => {});
-    _client = createInstrumentedClient(raw, 'strategy_index') as IORedis;
+    _client = getInstrumentedStandaloneRedisClient('strategy_index');
     return _client;
   } catch {
     return null;
@@ -49,7 +39,6 @@ function getClient(): IORedis | null {
 /** Disconnect the Redis client (for graceful shutdown). */
 export function shutdownStrategyReuseIndex(): void {
   if (_client) {
-    _client.quit().catch(() => {});
     _client = null;
   }
 }

@@ -5,6 +5,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { ArrowRight, Check, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
+import { fetchWithAuth } from '../../components/community-ai/fetchWithAuth';
 import GenerationProgressTracker from '../../components/content/GenerationProgressTracker';
 import type { ContentBlock } from '../../lib/blog/blockTypes';
 import { getNewsletterEngineConfig, isValidNewsletterDepth } from '../../lib/newsletter/newsletterContentEngine';
@@ -142,9 +143,8 @@ export default function NewsletterSuggestionsPage() {
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch('/api/company/blog/brief-suggestions', {
+      const resp = await fetchWithAuth('/api/company/blog/brief-suggestions', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: companyId,
@@ -180,9 +180,8 @@ export default function NewsletterSuggestionsPage() {
     setGenerating(true);
     setError(null);
     try {
-      const resp = await fetch('/api/newsletters/generate', {
+      const resp = await fetchWithAuth('/api/newsletters/generate', {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company_id: companyId,

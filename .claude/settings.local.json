@@ -254,7 +254,8 @@
       "PowerShell(Test-NetConnection *)",
       "Bash(echo \"PID=$!\")",
       "Bash(git rev-list *)",
-      "Bash(git tag *)"
+      "Bash(git tag *)",
+      "Bash(docker info *)"
     ],
     "additionalDirectories": [
       "c:\\virality\\pages\\api\\blog\\[slug]",

@@ -75,6 +75,8 @@ import { runDailyIntelligence } from '../schedulers/intelligenceScheduler';
 import { sweepStaleExecutions } from '../services/queueHealth';
 import { runReconciliationPass } from '../services/operationalReconciler';
 import { runIntelligenceEventCleanup } from '../jobs/intelligenceEventCleanup';
+import { runSettlementExpirySweepJob } from '../jobs/settlementExpirySweepJob';
+import { runSettlementMetricsRetention, pruneRolledSettlementMetrics } from '../services/billing/payments/settlementMetricsRetention';
 import { runWeeklyPricingAnalysis } from '../jobs/weeklyPricingAnalysisJob';
 import { runSocialAccountTokenRefreshJob } from '../jobs/socialAccountTokenRefreshJob';
 import { runIngestionForAllCompanies } from '../services/ingestionScheduler';
@@ -140,6 +142,13 @@ const PERFORMANCE_AGGREGATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const CAMPAIGN_HEALTH_EVALUATION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const DAILY_INTELLIGENCE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 3 AM daily (0 3 * * *)
 const INTELLIGENCE_EVENT_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
+// Sandbox settlement-expiry sweep — transition stale created/pending checkout
+// sessions to `expired`. Deterministic + idempotent (re-entrancy lock + the
+// append-only event ledger), so a frequent interval is safe.
+const SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS = 10 * 60 * 1000; // every 10 minutes
+// Settlement metrics rollup — compact closed time buckets of the append-only
+// operational metrics ledger. Deterministic + idempotent.
+const SETTLEMENT_METRICS_RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const WEEKLY_PRICING_ANALYSIS_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // weekly
 const ENGAGEMENT_DIGEST_INTERVAL_MS = 24 * 60 * 60 * 1000; // once per day
 const ENGAGEMENT_SIGNAL_SCHEDULER_INTERVAL_MS = 15 * 60 * 1000; // every 15 minutes
@@ -262,6 +271,8 @@ let lastPerformanceAggregationRun = 0;
 let lastCampaignHealthEvaluationRun = 0;
 let lastDailyIntelligenceRun = 0;
 let lastIntelligenceEventCleanupRun = 0;
+let lastSettlementExpirySweepRun = 0;
+let lastSettlementMetricsRetentionRun = 0;
 let lastWeeklyPricingAnalysisRun = 0;
 let lastEngagementDigestRun = 0;
 let lastEngagementSignalSchedulerRun = 0;
@@ -1137,6 +1148,50 @@ async function runSchedulerCycle() {
       }
     } catch (error: unknown) {
       console.error('❌ Intelligence event cleanup error:', formatCaughtError(error));
+    }
+  }
+
+  // Sandbox settlement-expiry sweep — stale created/pending checkout sessions
+  // → expired. The job carries its own re-entrancy lock; CronGuard already
+  // guarantees single-instance cron execution. Deterministic + idempotent.
+  if (shouldRunCronJob("settlementExpirySweep", SETTLEMENT_EXPIRY_SWEEP_INTERVAL_MS, lastSettlementExpirySweepRun)) {
+    lastSettlementExpirySweepRun = Date.now();
+    try {
+      const result = await runSettlementExpirySweepJob();
+      if (result.ran && (result.expired > 0 || result.duplicateSuppressed > 0)) {
+        console.log(
+          `✅ Settlement expiry sweep: ${result.expired} expired, ${result.duplicateSuppressed} duplicate-suppressed (${result.candidates} scanned)`
+        );
+      }
+    } catch (error: unknown) {
+      console.error('❌ Settlement expiry sweep error:', formatCaughtError(error));
+    }
+  }
+
+  // Settlement metrics rollup — compact closed buckets of the append-only
+  // settlement_operational_metrics ledger. Deterministic + idempotent (an
+  // already-rolled bucket is skipped); the open period is never touched.
+  if (shouldRunCronJob("settlementMetricsRetention", SETTLEMENT_METRICS_RETENTION_INTERVAL_MS, lastSettlementMetricsRetentionRun)) {
+    lastSettlementMetricsRetentionRun = Date.now();
+    try {
+      const result = await runSettlementMetricsRetention();
+      if (result.rollupRowsWritten > 0) {
+        console.log(
+          `✅ Settlement metrics retention: ${result.rollupRowsWritten} rollup row(s) across ${result.periodsRolledUp} period(s), ${result.rawRowsCompacted} raw row(s) compacted`
+        );
+      }
+      // Rollup-gated prune — retire raw rows for fully rolled-up periods via
+      // the sanctioned RPC. Deterministic + idempotent (a re-run prunes 0).
+      const pruned = await pruneRolledSettlementMetrics();
+      if (pruned.prunedRows > 0 || pruned.rejectedPartial > 0 || pruned.rejectedCorrupt > 0) {
+        console.log(
+          `✅ Settlement metrics prune: ${pruned.prunedRows} raw row(s) retired across ${pruned.eligiblePeriods} period(s)` +
+          (pruned.rejectedPartial > 0 ? `; ${pruned.rejectedPartial} partial rejected` : '') +
+          (pruned.rejectedCorrupt > 0 ? `; ${pruned.rejectedCorrupt} corrupt rejected` : '')
+        );
+      }
+    } catch (error: unknown) {
+      console.error('❌ Settlement metrics retention error:', formatCaughtError(error));
     }
   }
 

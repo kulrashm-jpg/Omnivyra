@@ -23,7 +23,11 @@ import { getMetricsReport } from '../../lib/redis/instrumentation';
 import IORedis from 'ioredis';
 import { createHash } from 'crypto';
 import { isRedisUrlTLS } from '../../lib/redis/sanitizer';
-import { boundedRetryStrategy, reconnectOnError } from '../../lib/redis/retryPolicy';
+import {
+  boundedRetryStrategy,
+  isNonRecoverableRedisError,
+  reconnectOnError,
+} from '../../lib/redis/retryPolicy';
 import {
   createInstrumentedClient,
   startInstrumentation,
@@ -137,6 +141,7 @@ let usageProtectionReadyPromise: Promise<void> = Promise.resolve();
 let redisUnavailable = false;
 let lastRedisErrorLogAt = 0;
 let redisConsecutiveFailures = 0;
+let redisNonRecoverableFailures = 0;
 
 function logRedisErrorOnce(err: unknown): void {
   const now = Date.now();
@@ -170,6 +175,18 @@ function getRedisConnection(): IORedis {
     redisConnection = new IORedis(getConnectionConfig());
 
     redisConnection.on('error', (err) => {
+      if (isNonRecoverableRedisError(err)) {
+        redisNonRecoverableFailures++;
+        if (redisNonRecoverableFailures >= 2) {
+          console.error(JSON.stringify({
+            level: 'ERROR',
+            event: 'redis_non_recoverable_connection_error',
+            host: redisConfig.host,
+            message: (err as Error)?.message,
+          }));
+          redisConnection?.disconnect(false);
+        }
+      }
       if (IS_OPTIONAL_LOCAL_REDIS) {
         redisUnavailable = true;
       } else {
@@ -195,6 +212,7 @@ function getRedisConnection(): IORedis {
       console.log('✅ Redis connected');
       redisUnavailable = false;
       redisConsecutiveFailures = 0;
+      redisNonRecoverableFailures = 0;
       ensureRedisInfraStarted();
     });
 
@@ -446,7 +464,6 @@ export function getAiHeavyQueue(): Queue {
  */
 export function getEngagementPollingQueue(): Queue {
   if (!engagementPollingQueue) {
-    const connection = getRedisConnection();
     engagementPollingQueue = new Queue('engagement-polling', {
       connection: getRedisConnection(),
       defaultJobOptions: {
@@ -520,7 +537,6 @@ export function getConversationMemoryRebuildQueue(): Queue {
  */
 export function getQueue(): Queue {
   if (!publishQueue) {
-    const connection = getRedisConnection();
     const queueName = 'publish';
     
     publishQueue = new Queue(queueName, {
@@ -654,8 +670,6 @@ export async function closeConnections(): Promise<void> {
  * @returns Queue instance (BullMQ v5+ handles delayed jobs automatically)
  */
 export function createQueue(name: string): Queue {
-  const connection = getRedisConnection();
-  
   // Note: BullMQ v5+ handles delayed jobs automatically, no QueueScheduler needed
   
   const q = new Queue(name, {
@@ -686,7 +700,6 @@ export function createWorker(
   processorPathOrFn: string | ((job: any) => Promise<void>),
   opts?: { concurrency?: number }
 ): Worker {
-  const connection = getRedisConnection();
   const concurrency = opts?.concurrency ?? 5;
   
   if (typeof processorPathOrFn !== 'function') {

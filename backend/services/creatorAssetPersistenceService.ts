@@ -539,6 +539,29 @@ export async function listCreatorAssetAttachments(input: {
   return (data || []) as Record<string, unknown>[];
 }
 
+export async function listCreatorAssets(input: {
+  companyId: string;
+  userId: string;
+  creatorTypes?: string[];
+  limit?: number;
+}): Promise<Record<string, unknown>[]> {
+  const availability = await checkCreatorPersistenceAvailability();
+  if (!availability.available) {
+    throw new Error(`CREATOR_PERSISTENCE_UNAVAILABLE:${availability.missingTables.join(',')}`);
+  }
+  let query = ownedDbTable('creator_assets')
+    .select('*')
+    .eq('company_id', input.companyId)
+    .order('created_at', { ascending: false })
+    .limit(input.limit ?? 48);
+  if (input.creatorTypes && input.creatorTypes.length > 0) {
+    query = query.in('creator_type', Array.from(new Set(input.creatorTypes)));
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to load creator assets: ${error.message}`);
+  return (data || []) as Record<string, unknown>[];
+}
+
 export async function validatePersistedCreatorAsset(input: {
   companyId: string;
   userId: string;

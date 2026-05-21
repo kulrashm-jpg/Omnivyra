@@ -33,6 +33,7 @@ const MINI_COLORS: Record<BlockType, string> = {
   internal_link: 'bg-sky-300',
   summary:       'bg-blue-300',
   columns:       'bg-cyan-300',
+  creator_asset: 'bg-violet-300',
 };
 
 const LEGEND_ITEMS: { type: BlockType; label: string }[] = [
@@ -40,6 +41,7 @@ const LEGEND_ITEMS: { type: BlockType; label: string }[] = [
   { type: 'paragraph',    label: 'Text' },
   { type: 'key_insights', label: 'Key Insights' },
   { type: 'image',        label: 'Image' },
+  { type: 'creator_asset', label: 'Asset' },
   { type: 'list',         label: 'List' },
   { type: 'callout',      label: 'Callout' },
   { type: 'quote',        label: 'Quote' },
@@ -201,6 +203,7 @@ const PREVIEW_STYLE: Record<BlockType, { bg: string; text: string; icon: string 
   internal_link: { bg: 'bg-sky-50 border-sky-200',       text: 'text-sky-700',    icon: '⇢' },
   summary:       { bg: 'bg-blue-50 border-blue-200',     text: 'text-blue-700',   icon: '✦' },
   columns:       { bg: 'bg-cyan-50 border-cyan-200',     text: 'text-cyan-700',   icon: '▥' },
+  creator_asset: { bg: 'bg-violet-50 border-violet-200', text: 'text-violet-700', icon: 'A' },
 };
 
 function BlockPreviewRow({ block, depth = 0, index }: { block: ContentBlock; depth?: number; index?: number }) {
