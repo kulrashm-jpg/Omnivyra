@@ -126,6 +126,13 @@ export function getReadinessRecommendations(
         [FeatureKey.CAMPAIGN_PUBLISHED]: 'Publish or send your first campaign to your audience',
         [FeatureKey.CHROME_EXTENSION_INSTALLED]: 'Install the Chrome extension for real-time engagement notifications',
         [FeatureKey.API_CONFIGURED]: 'Configure API keys for campaign automation',
+        [FeatureKey.CONTENT_WRITER]: 'Write your first long-form piece to unlock writer features',
+        [FeatureKey.CONTENT_SHORT_FORMAT]: 'Create a post, tweet, or poll to unlock short-format content',
+        [FeatureKey.CONTENT_CREATOR]: 'Produce a reel, video, short, or story to unlock creator content',
+        [FeatureKey.CONTENT_WRITER_ASSET]: 'Attach a visual asset to your content to unlock rich-format publishing',
+        [FeatureKey.MARKET_PULSE_USED]: 'Run Market Pulse to unlock competitive intelligence',
+        [FeatureKey.ACTIVE_LEADS_USED]: 'Use Active Leads to unlock lead intelligence',
+        [FeatureKey.FREE_CREDITS_USED]: 'Use your free credits to explore premium features',
       };
 
       return {
