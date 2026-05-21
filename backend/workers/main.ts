@@ -179,7 +179,31 @@ async function ensureRedisReady(): Promise<void> {
   }
 }
 
+/**
+ * Deployment provenance — logged once at boot so the deployed runtime
+ * identity (commit, deploy, environment, Redis target) is immediately
+ * visible in Railway logs without any telemetry platform.
+ */
+function logBootProvenance(): void {
+  const env = process.env;
+  let redisHost = 'unknown';
+  try {
+    redisHost = new URL(config.REDIS_URL || env.REDIS_URL || '').hostname || 'unknown';
+  } catch { /* unparseable — leave 'unknown' */ }
+  console.info('[provenance] worker boot', {
+    marker:        'omnivyra-worker',
+    gitSha:        env.RAILWAY_GIT_COMMIT_SHA || 'unknown',
+    gitBranch:     env.RAILWAY_GIT_BRANCH || 'unknown',
+    deploymentId:  env.RAILWAY_DEPLOYMENT_ID || 'unknown',
+    bootAt:        new Date().toISOString(),
+    runtimeEnv:    env.RAILWAY_ENVIRONMENT_NAME || env.NODE_ENV || 'unknown',
+    redisHost,
+    pid:           process.pid,
+  });
+}
+
 async function main(): Promise<void> {
+  logBootProvenance();
   // Redis readiness gate — before any queue processing begins
   await ensureRedisReady();
 
