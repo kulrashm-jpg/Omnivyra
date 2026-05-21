@@ -15,11 +15,18 @@ const TTL_MS = 5 * 60 * 1000;
 
 // Keep Playwright as a runtime-only dependency so production web builds
 // can compile even when the RPA runtime is not installed.
+/** Set by loadPlaywright() when the import throws — surfaced in the probe reason. */
+let _lastImportError = '';
+
 async function loadPlaywright(): Promise<any | null> {
   try {
     const importer = new Function('specifier', 'return import(specifier);') as (specifier: string) => Promise<any>;
     return await importer('playwright');
-  } catch {
+  } catch (err) {
+    // Previously swallowed — the opaque PLAYWRIGHT_MODULE_MISSING_CHROMIUM
+    // reason gave no way to tell a missing module from a load-time failure.
+    _lastImportError = (err as Error)?.message || String(err);
+    console.warn('[rpaEnv] playwright import failed:', _lastImportError);
     return null;
   }
 }
@@ -32,7 +39,12 @@ export async function rpaEnvReady(): Promise<ProbeResult> {
   try {
     const pw = await loadPlaywright();
     if (!pw?.chromium?.launch) {
-      result = { ok: false, reason: 'PLAYWRIGHT_MODULE_MISSING_CHROMIUM' };
+      result = {
+        ok: false,
+        reason: _lastImportError
+          ? `PLAYWRIGHT_MODULE_MISSING_CHROMIUM: ${_lastImportError}`
+          : 'PLAYWRIGHT_MODULE_MISSING_CHROMIUM',
+      };
     } else {
       let browser: any = null;
       try {
