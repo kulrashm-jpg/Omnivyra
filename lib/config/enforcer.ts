@@ -161,8 +161,15 @@ export function initEnforcer() {
       },
 
       deleteProperty(target: any, prop: string) {
-        console.warn(`[WARN] Attempted to delete process.env.${prop}`);
-        return false; // Prevent deletion
+        // A `deleteProperty` trap that returns falsish makes `delete
+        // process.env.X` throw a TypeError ("trap returned falsish") in strict
+        // mode. Libraries legitimately delete env vars at import time — e.g.
+        // playwright clears process.env.DEBUG — and the throw aborted
+        // `import('playwright')` entirely, surfacing as
+        // PLAYWRIGHT_MODULE_MISSING_CHROMIUM. Perform the delete and report
+        // success; env-write governance is enforced via the `set` trap.
+        delete target[prop];
+        return true;
       },
 
       ownKeys(target: any) {
