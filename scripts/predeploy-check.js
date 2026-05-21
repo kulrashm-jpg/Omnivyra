@@ -74,8 +74,54 @@ if (sha !== originMain) {
   process.exit(1);
 }
 
+// ── Worker build gate ────────────────────────────────────────────────────────
+// The Railway worker image runs `tsc -p tsconfig.worker.json` at build time;
+// a type error there fails the deploy AFTER the image push. Catch it here so a
+// bad commit never reaches either Vercel or Railway. (Root cause of a prior
+// incident: lib/blog/runBlogGeneration.ts type errors from in-progress WIP.)
+process.stdout.write(`Running worker typecheck (tsc -p tsconfig.worker.json)...\n`);
+try {
+  execSync('npx tsc -p tsconfig.worker.json --noEmit', { stdio: 'pipe', encoding: 'utf8' });
+  process.stdout.write(`  worker typecheck: OK\n`);
+} catch (e) {
+  const out = `${e.stdout || ''}${e.stderr || ''}`.trim();
+  const errs = out.split('\n').filter((l) => l.includes('error TS'));
+  process.stdout.write(
+    `RESULT: BLOCKED — worker typecheck failed (${errs.length} error(s)):\n` +
+    `${errs.slice(0, 20).join('\n')}\n\n` +
+    `The Railway worker build would fail. Fix or isolate these before deploying.\n`,
+  );
+  process.exit(1);
+}
+
+// ── Critical env gate ────────────────────────────────────────────────────────
+// Block a deploy whose local .env.local is missing a runtime-critical var —
+// the most common are empty after an env pull / merge.
+const fs = require('fs');
+const path = require('path');
+const CRITICAL_ENV = [
+  'REDIS_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'ENCRYPTION_KEY',
+];
+const envPath = path.join(process.cwd(), '.env.local');
+if (fs.existsSync(envPath)) {
+  const envText = fs.readFileSync(envPath, 'utf8');
+  const missing = CRITICAL_ENV.filter((k) => {
+    const m = envText.match(new RegExp(`^${k}=(.*)$`, 'm'));
+    return !m || m[1].trim().replace(/^["']|["']$/g, '') === '';
+  });
+  if (missing.length > 0) {
+    process.stdout.write(
+      `RESULT: BLOCKED — .env.local missing/empty critical var(s): ${missing.join(', ')}\n`,
+    );
+    process.exit(1);
+  }
+  process.stdout.write(`  critical env: OK (${CRITICAL_ENV.length} vars present)\n`);
+} else {
+  process.stdout.write(`  critical env: SKIPPED (no .env.local)\n`);
+}
+
 process.stdout.write(
-  `RESULT: OK — clean tree at ${shortSha} (== origin/main).\n\n` +
+  `\nRESULT: OK — clean tree at ${shortSha} (== origin/main), worker typecheck + env OK.\n\n` +
   `Manual deploy is your action (not automated here). AFTER a verified\n` +
   `successful 'vercel --prod' deploy of omnivyra, record traceability:\n\n` +
   `  git tag -a ${tag} ${shortSha} -m "omnivyra prod deploy ${stamp}"\n` +
