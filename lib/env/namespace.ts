@@ -105,25 +105,27 @@ export function checkEnvIsolation(): IsolationWarning[] {
  * Run the isolation check at most once per process. Called from server-side
  * client constructors so it fires once on cold start without imposing import
  * cycles on script callers.
+ *
+ * Cache-flag invariant: `_ranIsolationCheck` flips to `true` ONLY after
+ * `enforceEnvIsolationFatal()` returns successfully. The previous order
+ * (flag-flip BEFORE the throw) turned the hard-block into a one-shot —
+ * request 1 received 500, request 2+ silently bypassed the guard until
+ * the next module reload. Now the throw re-fires on every call until
+ * the topology is actually safe.
  */
 let _ranIsolationCheck = false;
 export function checkEnvIsolationOnce(): void {
   if (_ranIsolationCheck) return;
-  _ranIsolationCheck = true;
   try {
     checkEnvIsolation();
   } catch (err) {
     // Strictly warn-only; never block startup.
     console.warn('[env-isolation] check failed:', err);
   }
-  try {
-    enforceEnvIsolationFatal();
-  } catch (err) {
-    // Fatal-check is intended to throw on the dangerous combination;
-    // re-throw so server bootstrap halts. Distinct from the warn-only
-    // check above.
-    throw err;
-  }
+  // Fatal-check is intended to throw on the dangerous combination.
+  // We do NOT set `_ranIsolationCheck = true` until it returns clean.
+  enforceEnvIsolationFatal();
+  _ranIsolationCheck = true;
 }
 
 /**
@@ -150,12 +152,20 @@ export function checkEnvIsolationOnce(): void {
  *   - Remote Supabase + remote Redis (full deployed stack, including
  *     dev-against-prod-everything which is a documented pattern)
  */
+let _loggedOverrideOnce = false;
 export function enforceEnvIsolationFatal(): void {
   if (process.env.ALLOW_PROD_DB_WITH_LOCAL_REDIS === '1') {
-    console.warn(
-      '[env-isolation] ALLOW_PROD_DB_WITH_LOCAL_REDIS=1 set — bypassing prod-DB/local-Redis hard block. ' +
-      'Unset this env var immediately after the emergency debug session.',
-    );
+    // Log once per process, not per request, so production logs aren't
+    // spammed if the flag ever leaks into a non-local environment.
+    // Restricted to runtimes that aren't Vercel/preview/production-build.
+    const env = getRuntimeEnv();
+    if (!_loggedOverrideOnce && (env === 'development' || env === 'test')) {
+      _loggedOverrideOnce = true;
+      console.warn(
+        '[env-isolation] ALLOW_PROD_DB_WITH_LOCAL_REDIS=1 active — prod-DB/local-Redis hard block bypassed. ' +
+        'Local dev only. Unset before deploying.',
+      );
+    }
     return;
   }
   const supabaseUrl =
