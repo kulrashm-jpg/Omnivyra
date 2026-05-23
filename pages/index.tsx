@@ -3,6 +3,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { clearBrowserAuthState } from '../utils/authStorage';
+import { apiFetch } from '../lib/apiFetch';
 import MarketingLandingPage, { LANDING_FAQS } from '../components/landing/MarketingLandingPage';
 
 export default function Home() {
@@ -34,9 +35,7 @@ export default function Home() {
       // manifest" hot-reload error. Linear backoff (0.4s, 0.8s) gives dev
       // enough time to compile.
       const fetchRoute = async (): Promise<Response> => {
-        return fetch('/api/auth/post-login-route', {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        return apiFetch('/api/auth/post-login-route');
       };
 
       const pinnedHome = (): string => {

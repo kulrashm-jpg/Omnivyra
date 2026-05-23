@@ -6,8 +6,8 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Server, Edit3, Check, X, Plus, Trash2, RefreshCw, Cpu } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
-import { safeFetchJson } from '@/lib/utils/safeFetchJson';
+import { apiFetch } from '@/lib/apiFetch';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 
 const STORAGE_KEY = 'virality_infra_costs_v1';
 const STARTER_PLAN_USD = 29;
@@ -104,14 +104,8 @@ export default function InfraConsumptionPanel({ onTotalChange }: Props) {
     setSysLoading(true);
     setSysError(null);
     try {
-      const token = await getAuthToken();
-      const result = await safeFetchJson(
-        '/api/admin/consumption/infra-estimate',
-        {
-          credentials: 'include',
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        },
-      );
+      const res = await apiFetch('/api/admin/consumption/infra-estimate');
+      const result = await parseJsonResponse(res, '/api/admin/consumption/infra-estimate');
       if (result.ok !== true) throw new Error(result.message || 'Failed');
       setSysEst(result.data as any);
     } catch (e: any) {

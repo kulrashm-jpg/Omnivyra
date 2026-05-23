@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 
 interface ProgressData {
   percentage: number;
@@ -30,10 +30,7 @@ const CampaignProgressBar: React.FC<CampaignProgressBarProps> = ({ campaignId, c
           return;
         }
         const progressUrl = `/api/campaigns/${campaignId}/progress?companyId=${companyId}`;
-        const token = await getAuthToken();
-        const response = await fetch(progressUrl, {
-          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        });
+        const response = await apiFetch(progressUrl);
         if (!response.ok) { setIsLoadingProgress(false); return; }
         const progressData = await response.json();
         if (progressData.success && progressData.data?.progress) {

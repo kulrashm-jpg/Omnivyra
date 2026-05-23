@@ -8,7 +8,7 @@ import { Calendar, Clock, Send, AlertCircle, CheckCircle, Plus, Settings, Sparkl
 import PreviewCard from "../components/PreviewCard";
 import ContentRenderer from "../components/ContentRenderer";
 import { PLATFORM_CONFIGS, getPlatformConfig } from "../lib/platforms";
-import { getAuthToken } from "../utils/getAuthToken";
+import { apiFetch } from "../lib/apiFetch";
 
 interface ScheduledPost {
   id: string;
@@ -99,8 +99,7 @@ export default function SchedulerPage() {
 
   async function loadSchedPrefs() {
     try {
-      const headers = await getAuthHeaders();
-      const res = await fetch('/api/settings/scheduler-prefs', { headers });
+      const res = await apiFetch('/api/settings/scheduler-prefs');
       if (res.ok) setSchedPrefs(await res.json());
     } catch { /* use defaults */ }
   }
@@ -108,10 +107,9 @@ export default function SchedulerPage() {
   async function saveSchedPrefs() {
     setSchedPrefsSaving(true);
     try {
-      const headers = await getAuthHeaders();
-      const res = await fetch('/api/settings/scheduler-prefs', {
+      const res = await apiFetch('/api/settings/scheduler-prefs', {
         method: 'PUT',
-        headers: { ...headers, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(schedPrefs),
       });
       if (res.ok) notify('success', 'Scheduler preferences saved');
@@ -134,15 +132,9 @@ export default function SchedulerPage() {
     }
   }, [router.query]);
 
-  const getAuthHeaders = async (): Promise<Record<string, string>> => {
-    const token = await getAuthToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
-
   const loadScheduledPosts = async () => {
     try {
-      const headers = await getAuthHeaders();
-      const response = await fetch('/api/scheduler/posts', { headers });
+      const response = await apiFetch('/api/scheduler/posts');
       if (!response.ok) return;
       const data = await response.json();
       setScheduledPosts(Array.isArray(data) ? data : []);
@@ -153,8 +145,7 @@ export default function SchedulerPage() {
 
   const loadConnectedAccounts = async () => {
     try {
-      const headers = await getAuthHeaders();
-      const response = await fetch('/api/accounts', { headers });
+      const response = await apiFetch('/api/accounts');
       if (!response.ok) return;
       const data = await response.json();
       setConnectedAccounts(Array.isArray(data) ? data : []);
@@ -187,17 +178,15 @@ export default function SchedulerPage() {
     
     try {
       const scheduledFor = new Date(`${formData.scheduledDate}T${formData.scheduledTime}`);
-      
-      const authHeaders = await getAuthHeaders();
 
       // Schedule for each selected platform
       const promises = formData.platforms.map(async (platform) => {
         const account = connectedAccounts.find(a => a.platform === platform && a.is_active);
         if (!account) throw new Error(`No active account found for ${platform}`);
 
-        const response = await fetch('/api/scheduler/schedule', {
+        const response = await apiFetch('/api/scheduler/schedule', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             title: formData.title,
             content: formData.body,

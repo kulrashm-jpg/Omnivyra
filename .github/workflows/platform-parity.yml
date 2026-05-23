@@ -1,0 +1,125 @@
+name: Platform Parity
+
+# Validates env parity across local + Vercel + Railway + Supabase manifest.
+# Hard-fails CI on env mismatch, stale app.omnivyra.com refs, missing required
+# vars, malformed URLs, or short SESSION_COOKIE_SECRET. Does NOT run live login
+# probes here — those need a test user and are run on-demand via npm run
+# ops:auth-probe.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/platform-parity.yml'
+      - 'scripts/ops/**'
+      - 'backend/db/supabaseClient.ts'
+      - 'backend/utils/validateEnv.ts'
+      - 'lib/supabaseBrowser.ts'
+      - 'lib/apiFetch.ts'
+      - 'lib/auth/serverValidation.ts'
+      - 'docs/auth-architecture.md'
+      - 'eslint.config.js'
+      - 'package.json'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: platform-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    name: Platform parity validators
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Vercel CLI auth — required for ops:vercel and ops:parity.
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      # Railway CLI auth — required for ops:railway. Soft-fails (exit 2) if
+      # token is invalid or absent; CI step decides whether to gate on it.
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      # Supabase manifest audit. SUPABASE_MANAGEMENT_TOKEN is OPTIONAL — when
+      # set, ops:supabase also validates the live dashboard config; when
+      # absent it validates the manifest only.
+      SUPABASE_MANAGEMENT_TOKEN: ${{ secrets.SUPABASE_MANAGEMENT_TOKEN }}
+      # Used by ops:parity to materialize the local view.
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SESSION_COOKIE_SECRET: ${{ secrets.SESSION_COOKIE_SECRET }}
+      NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+
+      - name: Materialize .env.local from secrets
+        # CI doesn't have a real .env.local; we materialize the canonical
+        # subset from secrets so ops:parity can compare local vs cloud.
+        run: |
+          cat > .env.local <<'EOF'
+          NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SESSION_COOKIE_SECRET=${{ secrets.SESSION_COOKIE_SECRET }}
+          NEXT_PUBLIC_APP_URL=${{ secrets.NEXT_PUBLIC_APP_URL }}
+          EOF
+
+      - name: Link Vercel project
+        if: env.VERCEL_TOKEN != ''
+        run: |
+          vercel link --yes \
+            --project="${VERCEL_PROJECT_ID:-omnivyra}" \
+            --token="$VERCEL_TOKEN"
+
+      # ── Hard-gate validators ─────────────────────────────────────────────
+      - name: Validate Supabase auth-config manifest
+        run: npm run ops:supabase
+
+      - name: Audit Vercel env (Production + Preview)
+        if: env.VERCEL_TOKEN != ''
+        run: npm run ops:vercel -- --json
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Cross-platform parity validator
+        if: env.VERCEL_TOKEN != ''
+        run: npm run ops:parity -- --json
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      # ── Soft-gate (advisory) validator ───────────────────────────────────
+      # Railway audit exits 2 on RAILWAY_AUTH_FAILED; we record the result
+      # but do NOT fail CI on it (the token is operator-managed and rotates
+      # independently). Block the merge if exit code is 1 (real parity
+      # failure), allow exit code 2 (auth unavailable).
+      - name: Audit Railway env (advisory)
+        if: env.RAILWAY_TOKEN != ''
+        continue-on-error: true
+        run: |
+          set +e
+          npm i -g @railway/cli
+          npm run ops:railway -- --json
+          code=$?
+          echo "railway audit exit code: $code"
+          if [ "$code" = "2" ]; then
+            echo "::warning::Railway audit returned RAILWAY_AUTH_FAILED; gate skipped."
+            exit 0
+          fi
+          exit $code

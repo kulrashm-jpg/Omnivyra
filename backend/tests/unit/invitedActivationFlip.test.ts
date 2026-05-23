@@ -35,8 +35,12 @@ jest.mock('../../../backend/services/requestContext', () => ({
   seedRequestContextFromRequest: jest.fn(),
 }));
 jest.mock('../../../lib/auth/serverValidation', () => ({
-  verifySupabaseAuthHeader: jest.fn(),
   validateWorkEmail: jest.fn(() => true),
+}));
+jest.mock('../../../backend/services/authResolver', () => ({
+  extractAccessToken: jest.fn(),
+  validateAuthToken: jest.fn(),
+  resolveAuthenticatedUser: jest.fn(),
 }));
 jest.mock('../../../lib/auth/auditLog', () => ({ logAuthEvent: jest.fn() }));
 jest.mock('../../../lib/auth/anomalyDetector', () => ({ recordAnomalyEvent: jest.fn() }));

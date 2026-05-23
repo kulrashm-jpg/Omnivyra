@@ -7,7 +7,7 @@
  * costs (usage_events with no organization_id).
  */
 import React, { useEffect, useState, useCallback } from 'react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 import { RefreshCw, AlertCircle, Building2, ChevronDown, ChevronUp, Settings } from 'lucide-react';
 
 interface OrgRow {
@@ -69,13 +69,10 @@ export default function AllOrgsConsumptionTable({ year, month, onSelectOrg, infr
     if (year)  params.set('year',  String(year));
     if (month) params.set('month', String(month));
     try {
-      const token = await getAuthToken();
-      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-
       // Fetch org rows and system costs in parallel
       const [orgResp, sysResp] = await Promise.all([
-        fetch(`/api/admin/consumption/llm?${params}`,               { credentials: 'include', headers }),
-        fetch(`/api/admin/consumption/activity-breakdown?${params}`, { credentials: 'include', headers }),
+        apiFetch(`/api/admin/consumption/llm?${params}`),
+        apiFetch(`/api/admin/consumption/activity-breakdown?${params}`),
       ]);
 
       if (!orgResp.ok) throw new Error((await orgResp.json()).error ?? 'Failed to load org data');

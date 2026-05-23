@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Brain, AlertCircle, ChevronDown, ChevronUp, RefreshCw, Layers, AlertTriangle } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 
 // 1 credit = $0.01 USD (platform default credit rate)
 const CREDIT_RATE = 0.01;
@@ -111,11 +111,7 @@ export default function LLMConsumptionPanel({ tier, companyId, year, month }: Pr
     if (year) params.set('year', String(year));
     if (month) params.set('month', String(month));
     try {
-      const token = await getAuthToken();
-      const resp = await fetch(`/api/admin/consumption/llm?${params}`, {
-        credentials: 'include',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const resp = await apiFetch(`/api/admin/consumption/llm?${params}`);
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();
       setData(json.data);

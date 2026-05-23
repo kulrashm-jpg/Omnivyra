@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../components/CompanyContext';
 import Header from '../components/Header';
-import { supabase } from '../utils/supabaseClient';
 import { fetchWithAuth } from '../components/community-ai/fetchWithAuth';
 import VoiceNotesComponent from '../components/VoiceNotesComponent';
 import {

@@ -9,7 +9,10 @@ describe('stability/auth user sync and company context contract', () => {
       'ok: true',
       'mfa_required?: true',
       "factors?: ReadonlyArray<'totp' | 'webauthn'>",
-      'verifySupabaseAuthHeader',
+      // Auth source is now the canonical Bearer+Cookie validator pair from
+      // backend/services/authResolver (Phase 1 + Phase 3 standardization).
+      'extractAccessToken',
+      'validateAuthToken',
       '.eq(\'supabase_uid\', supabaseUid)',
       'supabase_uid',
       'has_password',

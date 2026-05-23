@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useCompanyContext } from '../../components/CompanyContext';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 
 type RecommendationAnalytics = {
   totals: {
@@ -30,12 +30,8 @@ export default function RecommendationsAnalyticsPage() {
       setIsLoading(true);
       setErrorMessage(null);
       try {
-        const token = await getAuthToken();
-        const response = await fetch(
+        const response = await apiFetch(
           `/api/recommendations/analytics?companyId=${encodeURIComponent(selectedCompanyId)}`,
-          {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          }
         );
         if (!response.ok) {
           const data = await response.json().catch(() => null);

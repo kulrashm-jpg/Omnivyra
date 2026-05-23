@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import { getAuthToken } from '../../../utils/getAuthToken';
+import { apiFetch } from '../../../lib/apiFetch';
 
 export type ApiSourceAccess = {
   id: string;
@@ -102,12 +102,9 @@ export function useExternalApisAccess(selectedCompanyId: string | null | undefin
   const [companyDefaultApis, setCompanyDefaultApis] = useState<string[]>([]);
 
   const fetchWithAuth = useCallback(async (input: RequestInfo, init?: RequestInit) => {
-    const token = await getAuthToken();
-    if (!token) throw new Error('Not authenticated');
-    return fetch(input, {
-      ...init,
-      headers: { ...(init?.headers || {}), Authorization: `Bearer ${token}` },
-    });
+    // Delegate to canonical apiFetch wrapper (attaches Bearer + credentials).
+    const url = typeof input === 'string' ? input : input.url;
+    return apiFetch(url, init);
   }, []);
 
   const updateDraft = useCallback((id: string, updates: Partial<AccessDraft>) => {

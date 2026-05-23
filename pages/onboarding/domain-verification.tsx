@@ -30,6 +30,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 
 const DOMAIN_TOKEN_KEY = 'domain_verification_token_v1';
 const RETRY_INTERVALS_MS = [30_000, 60_000, 120_000];
@@ -63,14 +64,9 @@ async function trackEvent(event: string, opts?: {
   metadata?: Record<string, unknown>;
 }) {
   try {
-    const token = await getAuthToken();
-    if (!token) return;
-    await fetch('/api/domain/track-event', {
+    await apiFetch('/api/domain/track-event', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         event,
         final_domain: opts?.final_domain ?? null,
@@ -114,9 +110,8 @@ export default function DomainVerificationPage() {
         const carried = readCarriedToken();
         if (!cancelled && carried) setCarriedToken(carried.token);
 
-        const res = await fetch('/api/domain/verification-status', {
+        const res = await apiFetch('/api/domain/verification-status', {
           method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
         });
         if (cancelled) return;
         if (res.status === 404) {
@@ -184,17 +179,9 @@ export default function DomainVerificationPage() {
       void trackEvent('CLICK_VERIFY', { final_domain: status.final_domain });
     }
     try {
-      const token = await getAuthToken();
-      if (!token) {
-        setVerifyResult({ kind: 'failure', details: 'Session expired.' });
-        return false;
-      }
-      const res = await fetch('/api/domain/verify', {
+      const res = await apiFetch('/api/domain/verify', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain: status.final_domain }),
       });
       const body = await res.json().catch(() => ({}));
@@ -294,17 +281,9 @@ export default function DomainVerificationPage() {
     setRegenerating(true);
     setRegenError(null);
     try {
-      const token = await getAuthToken();
-      if (!token) {
-        setRegenError('Session expired. Please sign in again.');
-        return;
-      }
-      const res = await fetch('/api/domain/regenerate-token', {
+      const res = await apiFetch('/api/domain/regenerate-token', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain: status.final_domain }),
       });
       const body = await res.json().catch(() => ({}));

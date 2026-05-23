@@ -1,7 +1,7 @@
 import Head from 'next/head';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { getAuthToken } from '@/utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 import {
   type ReportData,
   getFilenameFromContentDisposition,
@@ -35,11 +35,7 @@ export default function ReportViewPage() {
 
     async function fetchReport() {
       try {
-        const token = await getAuthToken().catch(() => null);
-        const res = await fetch(`/api/reports/${reportId}?type=${type ?? 'snapshot'}`, {
-          credentials: 'include',
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
+        const res = await apiFetch(`/api/reports/${reportId}?type=${type ?? 'snapshot'}`);
 
         if (cancelled) return;
 
@@ -80,12 +76,8 @@ export default function ReportViewPage() {
           setPerformanceHtmlDocument(null);
           setPerformanceHtmlLoading(false);
           try {
-            const htmlRes = await fetch(
+            const htmlRes = await apiFetch(
               `/api/reports/${reportId}?type=${data.reportType}&format=html`,
-              {
-                credentials: 'include',
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-              },
             );
             if (!cancelled && htmlRes.ok) {
               const rawHtml = await htmlRes.text();
@@ -111,12 +103,8 @@ export default function ReportViewPage() {
           setSnapshotHtmlStyles('');
           setSnapshotHtmlLoading(false);
           try {
-            const htmlRes = await fetch(
+            const htmlRes = await apiFetch(
               `/api/reports/${reportId}?type=performance&format=html`,
-              {
-                credentials: 'include',
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-              },
             );
             if (!cancelled && htmlRes.ok) {
               setPerformanceHtmlDocument(await htmlRes.text());
@@ -159,13 +147,8 @@ export default function ReportViewPage() {
 
     setIsDownloading(true);
     try {
-      const token = await getAuthToken().catch(() => null);
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/reports/${reportData.reportId}?type=${reportData.reportType}&format=pdf`,
-        {
-          credentials: 'include',
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        },
       );
 
       if (!res.ok) {
@@ -205,7 +188,6 @@ export default function ReportViewPage() {
     setFetchError(null);
 
     try {
-      const token = await getAuthToken().catch(() => null);
       const reportCategory =
         reportData.reportType === 'growth'
           ? 'growth'
@@ -213,13 +195,9 @@ export default function ReportViewPage() {
             ? 'performance'
             : 'snapshot';
 
-      const res = await fetch('/api/reports/generate', {
+      const res = await apiFetch('/api/reports/generate', {
         method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           companyId: reportData.companyId,
           domain: reportData.domain,

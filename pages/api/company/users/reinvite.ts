@@ -2,21 +2,17 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '@/backend/db/supabaseClient';
 import { requireCompanyContext } from '@/backend/services/companyContextGuardService';
 import { sendInvite } from '@/backend/services/emailService';
-import { verifySupabaseAuthHeader } from '../../../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '@/backend/services/authResolver';
 import { randomBytes, createHash } from 'crypto';
 
 async function getActorUserId(req: NextApiRequest): Promise<string | null> {
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    const { data } = await supabaseAdmin
-      .from('users')
-      .select('id')
-      .or(`supabase_uid.eq.${verified.id},email.eq.${verified.email.toLowerCase()}`)
-      .maybeSingle();
-    return (data as any)?.id ?? null;
-  } catch {
-    return null;
-  }
+  // resolveAuthenticatedUser already returns public.users.id after joining
+  // public.users by supabase_uid (with email fallback + supabase_uid back-fill).
+  // No additional .or() lookup is needed — and the previous raw-string .or()
+  // was unsafe with emails containing '@'/'.'.
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) return null;
+  return authResult.user.id;
 }
 
 async function isActorAuthorized(actorId: string, companyId: string): Promise<boolean> {

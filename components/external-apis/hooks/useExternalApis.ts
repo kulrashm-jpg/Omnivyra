@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { getAuthToken } from '../../../utils/getAuthToken';
+import { apiFetch } from '../../../lib/apiFetch';
 
 export type ProviderAccount = {
   id: string;
@@ -117,15 +117,9 @@ export function useExternalApis(
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const fetchWithAuth = useCallback(async (input: RequestInfo, init?: RequestInit) => {
-    const token = await getAuthToken();
-    return fetch(input, {
-      ...init,
-      credentials: 'include',
-      headers: {
-        ...(init?.headers || {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    });
+    // Delegate to canonical apiFetch wrapper (attaches Bearer + credentials).
+    const url = typeof input === 'string' ? input : input.url;
+    return apiFetch(url, init);
   }, []);
 
   const resetMessages = useCallback(() => {

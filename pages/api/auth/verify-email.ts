@@ -16,7 +16,11 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import {
+  extractAccessToken,
+  validateAuthToken,
+  resolveAuthenticatedUser,
+} from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
@@ -31,13 +35,21 @@ export default async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
 
-  // ── 1. Verify Bearer token & resolve user ─────────────────────────────────
-  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-  if (user) seedRequestContextFromRequest(req, { userId: user.id });
+  // ── 1. Verify Bearer header or Supabase auth cookie & resolve user ────────
+  // resolveAuthenticatedUser returns USER_NOT_FOUND when the public.users
+  // row does not exist yet (first-time verify). For that case we re-extract
+  // the access token and validate it via the canonical authResolver path,
+  // then INSERT the public.users row from the auth.users identity. ACCOUNT_*
+  // errors fail with the legacy contract; INVALID_TOKEN / NO_TOKEN fall
+  // through to a generic 401 below for the new-user path.
+  const authResult = await resolveAuthenticatedUser(req);
 
-  if (userErr === 'ACCOUNT_DELETED') {
+  if (authResult.error === 'ACCOUNT_DELETED') {
     return res.status(403).json({ error: 'Account has been deactivated.', code: 'ACCOUNT_DELETED' });
   }
+
+  const user = authResult.user;
+  if (user) seedRequestContextFromRequest(req, { userId: user.id });
 
   const now = new Date().toISOString();
 
@@ -47,18 +59,23 @@ export default async function handler(
   let resolvedEmail:  string | null;
 
   if (!user) {
-    // Re-verify token directly to confirm it is valid (not just missing from DB)
-    const rawToken = (req.headers.authorization ?? '').replace('Bearer ', '').trim();
-    const { data: { user: authUser }, error: authErr } = await supabase.auth.getUser(rawToken);
-    if (authErr || !authUser) {
+    // No public.users row yet — re-validate the auth identity via the
+    // canonical resolver (Bearer header OR Supabase cookie) so we can
+    // insert the row using auth.users.id + email.
+    const token = extractAccessToken(req);
+    if (!token) {
+      return res.status(401).json({ error: 'Invalid or expired session', code: 'INVALID_SESSION' });
+    }
+    const identity = await validateAuthToken(token);
+    if (!identity) {
       return res.status(401).json({ error: 'Invalid or expired session', code: 'INVALID_SESSION' });
     }
 
-    const email = authUser.email?.toLowerCase() ?? '';
+    const email = identity.email?.toLowerCase() ?? '';
 
     const insertResult = await supabase
       .from('users')
-      .insert({ supabase_uid: authUser.id, email, is_email_verified: true })
+      .insert({ supabase_uid: identity.supabaseUid, email, is_email_verified: true })
       .select('id')
       .maybeSingle();
 

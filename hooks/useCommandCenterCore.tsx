@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import { getVisibleCards, CommandCenterCard, Requirement, CardState } from '../config/commandCenterCards';
 import { useCompanyContext } from '../components/CompanyContext';
-import { getAuthToken } from '../utils/getAuthToken';
+import { apiFetch } from '../lib/apiFetch';
 import {
   fetchReadinessData,
   getCardStateFromFeatures,
@@ -249,12 +249,11 @@ export function useCommandCenter() {
 
     const fetchReportStatus = async (): Promise<'free_available' | 'generating' | 'used' | null> => {
       try {
-        const token = await getAuthToken();
-        if (!token || cancelled) return null;
+        if (cancelled) return null;
 
-        const response = await fetch(`/api/reports?company_id=${selectedCompanyId}`, {
+        const response = await apiFetch(`/api/reports?company_id=${selectedCompanyId}`, {
           method: 'GET',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          headers: { 'Content-Type': 'application/json' },
         });
 
         if (!response.ok || cancelled) return null;

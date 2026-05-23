@@ -8,9 +8,11 @@ describe('stability/auth login contract', () => {
     expectContainsAll(page, [
       "fetch('/api/auth/login'",
       'signInWithPassword',
-      "fetch('/api/auth/sync-supabase-user'",
-      "fetch('/api/auth/post-login-route'",
-      'data.session.access_token',
+      // Post-login sync and routing now go through apiFetch (Phase 3
+      // standardization). The wrapper attaches Bearer via the canonical
+      // browser Supabase singleton.
+      "apiFetch('/api/auth/sync-supabase-user'",
+      "apiFetch('/api/auth/post-login-route'",
       'mfa_required',
       'factors',
       'Incorrect email or password.',

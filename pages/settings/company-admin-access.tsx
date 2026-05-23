@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
 import { useCompanyContext } from '@/components/CompanyContext';
-import { getAuthToken } from '@/utils/getAuthToken';
-import { safeFetchJson } from '@/lib/utils/safeFetchJson';
+import { apiFetch } from '@/lib/apiFetch';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 import { ChevronDown, ChevronRight, Building2, Brain, Activity, Save } from 'lucide-react';
 
 type AccessResponse = {
@@ -105,23 +105,16 @@ export default function CompanyAdminAccessPage() {
     return groups;
   }, [data]);
 
-  async function getHeaders(): Promise<Record<string, string>> {
-    const token = await getAuthToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }
-
   async function loadAccess(currentMode: 'global' | 'company' = mode, companyId?: string | null) {
     setLoading(true);
     setError(null);
-    const headers = await getHeaders();
     const search = new URLSearchParams({ mode: currentMode });
     if (currentMode === 'company' && companyId) {
       search.set('companyId', companyId);
     }
-    const result = await safeFetchJson<AccessResponse>(
-      `/api/settings/intelligence-access?${search.toString()}`,
-      { headers, credentials: 'same-origin' },
-    );
+    const url = `/api/settings/intelligence-access?${search.toString()}`;
+    const res = await apiFetch(url);
+    const result = await parseJsonResponse<AccessResponse>(res, url);
     if (result.ok === true) {
       setData(result.data);
       if (result.data.companyId) {
@@ -154,20 +147,16 @@ export default function CompanyAdminAccessPage() {
     setError(null);
 
     const previous = data;
-    const headers = await getHeaders();
-    const result = await safeFetchJson<AccessResponse>('/api/settings/intelligence-access', {
+    const res = await apiFetch('/api/settings/intelligence-access', {
       method: 'PUT',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
-      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...payload,
         mode,
         ...(mode === 'company' && selectedCompanyId ? { companyId: selectedCompanyId } : {}),
       }),
     });
+    const result = await parseJsonResponse<AccessResponse>(res, '/api/settings/intelligence-access');
     if (result.ok === true) {
       setData(result.data);
       setNotice('Settings saved');

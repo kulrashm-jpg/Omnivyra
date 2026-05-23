@@ -24,7 +24,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase as supabaseAdmin } from '../../../backend/db/supabaseClient';
-import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { checkDomainEligibility } from '../../../backend/services/domainEligibilityService';
 import {
   grantInitialFreeCredit,
@@ -43,15 +43,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Please try again later.' });
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  let supabaseUid: string;
-  let authEmail:   string;
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    supabaseUid = verified.id;
-    authEmail   = verified.email;
-  } catch {
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) {
     return res.status(401).json({ error: 'Invalid or expired session' });
   }
+  const supabaseUid: string = authResult.user.supabaseUid;
+  const authEmail:   string = authResult.user.email;
 
   // ── Post-auth UID rate limit ──────────────────────────────────────────────
   const rlUid = await checkRateLimit(supabaseUid, ONBOARDING_UID_LIMIT);

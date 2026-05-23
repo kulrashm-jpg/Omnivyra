@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 
 type Step = 'loading' | 'send' | 'otp' | 'error';
 
@@ -49,9 +50,7 @@ export default function VerifyPhonePage() {
         return;
       }
       try {
-        const res = await fetch('/api/auth/get-stored-phone', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await apiFetch('/api/auth/get-stored-phone');
         const json = await res.json() as { phone: string | null; maskedPhone: string | null; error?: string };
 
         if (!res.ok || json.error) throw new Error(json.error ?? 'Could not load phone');

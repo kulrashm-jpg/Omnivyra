@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { checkRateLimit, LOGIN_LIMIT, INVITE_UID_LIMIT } from '../../../lib/auth/rateLimit';
 import { createAndSendInvitation } from '../../../backend/services/invitationService';
 import { withIdempotency } from '../../../backend/middleware/withIdempotency';
@@ -25,13 +25,11 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     return res.status(429).json({ error: 'Too many invite requests. Try again later.' });
   }
 
-  let callerUid: string;
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    callerUid = verified.id;
-  } catch {
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
+  const callerUid: string = authResult.user.supabaseUid;
 
   const rlUid = await checkRateLimit(callerUid, INVITE_UID_LIMIT);
   if (!rlUid.allowed) {

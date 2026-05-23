@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
+import { apiFetch } from '../../lib/apiFetch';
 import { clearBrowserAuthState } from '../../utils/authStorage';
 import { assertCallbackIdentitySource } from '../../utils/authIntegrityGuards';
 
@@ -152,15 +153,15 @@ export default function AuthCallback() {
 
       setStatusMsg('Syncing your account…');
       const mode = params.get('mode') ?? '';
-      const authHeaders = {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      };
+      // apiFetch attaches Bearer via the canonical browser singleton, which
+      // already holds the session we just established above with
+      // verifyOtp / exchangeCodeForSession / setSession.
+      const jsonHeaders = { 'Content-Type': 'application/json' };
 
       try {
-        const syncRes = await fetch('/api/auth/sync-supabase-user', {
+        const syncRes = await apiFetch('/api/auth/sync-supabase-user', {
           method: 'POST',
-          headers: authHeaders,
+          headers: jsonHeaders,
         });
 
         if (syncRes.status === 403) {
@@ -217,9 +218,9 @@ export default function AuthCallback() {
         }
 
         setStatusMsg('Verifying your account…');
-        const verifyRes = await fetch('/api/auth/verify-email', {
+        const verifyRes = await apiFetch('/api/auth/verify-email', {
           method: 'POST',
-          headers: authHeaders,
+          headers: jsonHeaders,
           body: JSON.stringify({ mode }),
         });
 
@@ -274,9 +275,9 @@ export default function AuthCallback() {
         }
 
         setStatusMsg('Loading your workspace…');
-        const routeRes = await fetch('/api/auth/post-login-route', {
+        const routeRes = await apiFetch('/api/auth/post-login-route', {
           method: 'GET',
-          headers: authHeaders,
+          headers: jsonHeaders,
         });
 
         if (routeRes.status === 403) {

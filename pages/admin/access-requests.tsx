@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { getAuthToken } from '@/utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 import { CheckCircle, XCircle, Trash2, RefreshCw, Search } from 'lucide-react';
 
 type RequestStatus = 'pending' | 'approved' | 'rejected' | 'deleted' | 'all';
@@ -64,9 +65,7 @@ export default function AccessRequestsPage() {
     if (!token) { router.push('/login'); return; }
 
     const params = new URLSearchParams({ status: statusFilter, limit: '100' });
-    const res = await fetch(`/api/admin/access-requests/list?${params}`, {
-      headers: { Authorization: `Bearer ${token ?? ''}` },
-    });
+    const res = await apiFetch(`/api/admin/access-requests/list?${params}`);
     if (res.status === 403) { router.push('/'); return; }
     const json = await res.json();
     setRequests(json.requests ?? []);
@@ -76,20 +75,14 @@ export default function AccessRequestsPage() {
 
   useEffect(() => { void fetchRequests(); }, [fetchRequests]);
 
-  async function authHeader() {
-    const token = await getAuthToken();
-    return { Authorization: `Bearer ${token ?? ''}` };
-  }
-
   function closeModal() { setSelected(null); setModal(null); setAdminNote(''); setRejectReason(''); }
 
   async function handleApprove() {
     if (!selected) return;
     setActionLoading(true);
-    const headers = await authHeader();
-    await fetch('/api/admin/access-requests/approve', {
+    await apiFetch('/api/admin/access-requests/approve', {
       method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         requestId: selected.id,
         creditsToGrant: approveCredits,
@@ -105,10 +98,9 @@ export default function AccessRequestsPage() {
   async function handleReject() {
     if (!selected || !rejectReason.trim()) return;
     setActionLoading(true);
-    const headers = await authHeader();
-    await fetch('/api/admin/access-requests/reject', {
+    await apiFetch('/api/admin/access-requests/reject', {
       method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ requestId: selected.id, reason: rejectReason }),
     });
     closeModal();
@@ -118,10 +110,9 @@ export default function AccessRequestsPage() {
 
   async function handleDelete(id: string) {
     if (!confirm('Soft-delete this request?')) return;
-    const headers = await authHeader();
-    await fetch('/api/admin/access-requests/delete', {
+    await apiFetch('/api/admin/access-requests/delete', {
       method: 'DELETE',
-      headers: { ...headers, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ requestId: id }),
     });
     void fetchRequests();

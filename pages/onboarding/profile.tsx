@@ -15,6 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { userScopedStorageKey } from '../../utils/authStorage';
+import { apiFetch } from '../../lib/apiFetch';
 
 const INDUSTRIES = [
   'Technology & Software',
@@ -106,12 +107,9 @@ export default function ProfilePage() {
     setErrorMsg(null);
 
     try {
-      const resp = await fetch('/api/onboarding/profile', {
+      const resp = await apiFetch('/api/onboarding/profile', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization:  `Bearer ${accessToken}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name:     fullName.trim(),
           jobTitle: jobTitle.trim(),

@@ -14,6 +14,7 @@
  * from the server itself and are unaffected.
  */
 import { getAuthToken } from '../utils/getAuthToken';
+import { getSupabaseBrowser } from './supabaseBrowser';
 
 export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
   let token: string | undefined;
@@ -22,6 +23,20 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
     if (t) token = t;
   } catch {
     // Unauthenticated — proceed without Authorization header
+  }
+  // ONE-SHOT recovery: getSession() can transiently return null under
+  // processLock contention or when the in-memory access_token has just been
+  // rotated. Force-refresh once and re-read before giving up on the Bearer
+  // header. No retry loop — a single attempt is enough; persistent failure
+  // means the user really isn't signed in.
+  if (!token) {
+    try {
+      await getSupabaseBrowser().auth.refreshSession();
+      const t2 = await getAuthToken();
+      if (t2) token = t2;
+    } catch {
+      // Refresh unavailable — proceed without Authorization header
+    }
   }
   try {
     return await fetch(input, {

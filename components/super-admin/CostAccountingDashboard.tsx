@@ -18,8 +18,8 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
-import { safeFetchJson } from '@/lib/utils/safeFetchJson';
+import { apiFetch } from '@/lib/apiFetch';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -279,12 +279,9 @@ export default function CostAccountingDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const token = await getAuthToken();
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const result = await safeFetchJson(
-        `/api/admin/cost-accounting?period=${period}&compare=true`,
-        { headers, credentials: 'include' },
-      );
+      const url = `/api/admin/cost-accounting?period=${period}&compare=true`;
+      const res = await apiFetch(url);
+      const result = await parseJsonResponse(res, url);
       if (result.ok !== true) throw new Error(result.message || 'Failed to fetch cost data');
       setData(result.data as any);
     } catch (e: any) {

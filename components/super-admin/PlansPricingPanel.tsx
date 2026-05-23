@@ -5,8 +5,8 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { RefreshCw, AlertCircle, CheckCircle, Pencil, X, Save } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
-import { safeFetchJson } from '@/lib/utils/safeFetchJson';
+import { apiFetch } from '@/lib/apiFetch';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
 
 interface Plan {
   id: string;
@@ -57,12 +57,8 @@ export default function PlansPricingPanel() {
     setLoading(true);
     setError(null);
     try {
-      const token = await getAuthToken();
-      const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
-      const result = await safeFetchJson<{ plans?: Plan[]; limitsByPlan?: Record<string, { monthly_credits?: number | null }> }>(
-        '/api/super-admin/plans/list',
-        { credentials: 'include', headers: authHeader },
-      );
+      const res = await apiFetch('/api/super-admin/plans/list');
+      const result = await parseJsonResponse<{ plans?: Plan[]; limitsByPlan?: Record<string, { monthly_credits?: number | null }> }>(res, '/api/super-admin/plans/list');
       if (result.ok !== true) throw new Error(result.message || 'Failed to load plans');
       const json = result.data;
       const fetched: PlanWithLimits[] = (json.plans ?? []).map((p: Plan) => ({
@@ -105,16 +101,11 @@ export default function PlansPricingPanel() {
     setError(null);
     setSuccess(null);
     try {
-      const token = await getAuthToken();
-      const result = await safeFetchJson(
+      const res = await apiFetch(
         '/api/super-admin/plans/create',
         {
           method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             plan_key: plan.plan_key,
             name: editForm.name.trim() || plan.name,
@@ -126,6 +117,7 @@ export default function PlansPricingPanel() {
           }),
         },
       );
+      const result = await parseJsonResponse(res, '/api/super-admin/plans/create');
       if (result.ok !== true) throw new Error(result.message || 'Save failed');
       setSuccess(`"${editForm.name}" saved successfully.`);
       setEditingKey(null);

@@ -13,7 +13,7 @@ import {
   X, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Calendar,
   AlertTriangle, TrendingUp, CheckCircle, Info,
 } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 
 // ── External types (subset of IntelligenceData) ────────────────────────────────
 
@@ -557,10 +557,8 @@ export default function OrgServiceDrilldown({
     setLoading(true);
     setError(null);
     try {
-      const token   = await getAuthToken();
-      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
       const params  = new URLSearchParams({ year: String(year), month: String(month) });
-      const resp    = await fetch(`/api/admin/consumption/org-activity-breakdown?${params}`, { credentials: 'include', headers });
+      const resp    = await apiFetch(`/api/admin/consumption/org-activity-breakdown?${params}`);
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       setData(await resp.json());
     } catch (e: any) {

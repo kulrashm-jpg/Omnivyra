@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { clearBrowserAuthState } from '../../utils/authStorage';
+import { apiFetch } from '../../lib/apiFetch';
 
 type Stage = 'loading' | 'form' | 'success' | 'error';
 const AUTH_FLOW_SESSION_MARKER = 'auth_flow_session_established_v1';
@@ -170,12 +171,9 @@ export default function SetPasswordPage() {
     try {
       const { data } = await getSupabaseBrowser().auth.getSession();
       if (data.session?.access_token) {
-        const spRes = await fetch('/api/auth/set-password', {
+        const spRes = await apiFetch('/api/auth/set-password', {
           method:  'POST',
-          headers: {
-            Authorization: `Bearer ${data.session.access_token}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password, flow }),
         });
         const json = await spRes.json().catch(() => ({})) as { route?: string; error?: string };

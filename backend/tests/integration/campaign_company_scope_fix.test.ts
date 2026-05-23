@@ -1,10 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { createApiRequestMock, createMockRes } from '../utils';
 
-jest.mock('../../../utils/supabaseClient', () => ({
-  supabase: { from: jest.fn() },
-}));
-
 jest.mock('../../../backend/db/supabaseClient', () => ({
   supabase: { from: jest.fn() },
 }));

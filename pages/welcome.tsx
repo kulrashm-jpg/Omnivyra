@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
 import { getAuthToken } from '../utils/getAuthToken';
+import { apiFetch } from '../lib/apiFetch';
 
 type WelcomeState = 'loading' | 'ready' | 'error';
 
@@ -39,9 +40,8 @@ export default function WelcomePage() {
       }
 
       try {
-        const res = await fetch('/api/auth/post-login-route', {
+        const res = await apiFetch('/api/auth/post-login-route', {
           method: 'GET',
-          headers: { Authorization: `Bearer ${token}` },
         });
 
         if (!res.ok) {

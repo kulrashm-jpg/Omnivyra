@@ -11,7 +11,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { verifySupabaseAuthHeader, validateWorkEmail } from '../../../lib/auth/serverValidation';
+import { validateWorkEmail } from '../../../lib/auth/serverValidation';
+import { extractAccessToken, validateAuthToken } from '../../../backend/services/authResolver';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
 import { logger } from '../../../backend/services/logger';
@@ -91,18 +92,26 @@ export default async function handler(
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
 
-  // ── 1. Verify Supabase token ──────────────────────────────────────────────
+  // ── 1. Verify Supabase token (Bearer header OR Supabase auth cookie) ─────
+  // Accepts both transports so the route works for password sign-in (Bearer)
+  // and cookie-only paths (page refresh, SSR). public.users is NOT required
+  // here — this endpoint is what CREATES that row, so we validate the auth
+  // identity only (auth.users.id + email).
   let supabaseUid: string;
   let email: string;
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    supabaseUid = verified.id;
-    email       = verified.email;
-    seedRequestContextFromRequest(req, { userId: supabaseUid });
-  } catch {
+  const token = extractAccessToken(req);
+  if (!token) {
     sendAuthError(res, AUTH_ERROR_CODE.INVALID_SESSION);
     return;
   }
+  const identity = await validateAuthToken(token);
+  if (!identity || !identity.email) {
+    sendAuthError(res, AUTH_ERROR_CODE.INVALID_SESSION);
+    return;
+  }
+  supabaseUid = identity.supabaseUid;
+  email       = identity.email;
+  seedRequestContextFromRequest(req, { userId: supabaseUid });
 
   // Extract client IP once — used to rate-limit domain canonical resolution.
   const clientIp = String(

@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
 import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 import { useCompanyContext } from '../../components/CompanyContext';
 import { userScopedStorageKey } from '../../utils/authStorage';
 
@@ -157,9 +158,7 @@ export default function CompanySetupPage() {
       }
 
       // If user already has a company, go straight to the current workspace
-      const listRes = await fetch('/api/company-profile?mode=list', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const listRes = await apiFetch('/api/company-profile?mode=list');
       if (listRes.ok) {
         const json = await listRes.json().catch(() => null);
         if (json?.companies?.length) {
@@ -176,9 +175,7 @@ export default function CompanySetupPage() {
       // Check if the user's email domain matches an existing company.
       // If so, they can't self-register — show admin contact info instead.
       try {
-        const checkRes = await fetch('/api/onboarding/company-domain-check', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const checkRes = await apiFetch('/api/onboarding/company-domain-check');
         if (checkRes.ok) {
           const check = await checkRes.json() as
             | { matched: true; companyId: string; companyName: string; adminName: string | null }
@@ -253,13 +250,9 @@ export default function CompanySetupPage() {
     setStep('saving');
 
     try {
-      const token = await getAuthToken();
-      const res = await fetch('/api/onboarding/setup-company', {
+      const res = await apiFetch('/api/onboarding/setup-company', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           companyName: companyName.trim(),
           website:     websiteInput,

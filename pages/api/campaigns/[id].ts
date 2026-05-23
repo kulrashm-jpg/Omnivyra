@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { supabase } from '../../../utils/supabaseClient.js';
+import { supabase } from '../../../backend/db/supabaseClient';
 import { evaluateCampaignReadiness } from '../../../backend/services/campaignReadinessService';
 import { enforceCompanyAccess } from '../../../backend/services/userContextService';
 

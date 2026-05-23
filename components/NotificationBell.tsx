@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, X, CheckCheck, Users } from 'lucide-react';
-import { getAuthToken } from '../utils/getAuthToken';
+import { apiFetch } from '../lib/apiFetch';
 import { runSharedPoll } from '../utils/pollingGuards';
 
 type AppNotification = {
@@ -46,11 +46,7 @@ export function NotificationBell() {
     if (fetchInFlightRef.current) return fetchInFlightRef.current;
     fetchInFlightRef.current = runSharedPoll<void>('notifications:list', async () => {
       try {
-        const token = await getAuthToken();
-        if (!token) return;
-        const res = await fetch('/api/notifications', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await apiFetch('/api/notifications');
         if (!res.ok) return;
         const json = await res.json();
         setNotifications(json.notifications ?? []);
@@ -85,15 +81,10 @@ export function NotificationBell() {
   }, [open]);
 
   async function markRead(id?: string) {
-    const token = await getAuthToken();
-    if (!token) return;
     setLoading(true);
     try {
       const url = id ? `/api/notifications?id=${id}` : '/api/notifications';
-      await fetch(url, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await apiFetch(url, { method: 'PATCH' });
       setNotifications((prev) =>
         prev.map((n) => (!id || n.id === id) ? { ...n, is_read: true } : n)
       );

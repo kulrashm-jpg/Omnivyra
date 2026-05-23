@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { getSupabaseUserFromRequest } from '../../../backend/services/supabaseAuthService';
+import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { seedRequestContextFromRequest } from '../../../backend/services/requestContext';
 import { getPostLoginRoute as getUserPreferenceRoute } from '../../../backend/services/userPreferencesService';
@@ -29,18 +29,18 @@ export default async function handler(
     return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
   }
 
-  const { user, error: userErr } = await getSupabaseUserFromRequest(req);
-  if (userErr || !user) {
+  // resolveAuthenticatedUser returns BOTH public.users.id (user.id) and
+  // auth.users.id (user.supabaseUid), so we no longer need a second manual
+  // Bearer parse + supabase.auth.getUser() round-trip to discover the auth uid.
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) {
+    const userErr = authResult.error;
     const status = userErr === 'ACCOUNT_DELETED' ? 403 : 401;
     return res.status(status).json({ error: userErr ?? 'Invalid session', code: userErr ?? undefined });
   }
+  const user = authResult.user;
+  const authUserId = authResult.user.supabaseUid;
   seedRequestContextFromRequest(req, { userId: user.id });
-
-  const rawToken = (req.headers.authorization ?? '').replace('Bearer ', '').trim();
-  const { data: authUserData, error: authUserError } = await supabase.auth.getUser(rawToken);
-  if (authUserError || !authUserData.user) {
-    return res.status(401).json({ error: 'Invalid or expired session', code: 'INVALID_SESSION' });
-  }
 
   const { data: currentUser } = await supabase
     .from('users')
@@ -56,7 +56,7 @@ export default async function handler(
     return res.status(400).json({ error: 'Signup password flow is invalid for this account.', code: 'INVALID_SIGNUP_FLOW' });
   }
 
-  const { error: passwordUpdateError } = await supabase.auth.admin.updateUserById(authUserData.user.id, {
+  const { error: passwordUpdateError } = await supabase.auth.admin.updateUserById(authUserId, {
     password,
   });
   if (passwordUpdateError) {

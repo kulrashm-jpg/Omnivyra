@@ -13,6 +13,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../lib/supabaseBrowser';
+import { apiFetch } from '../lib/apiFetch';
 import { clearBrowserAuthState } from '../utils/authStorage';
 
 type Mode = 'password' | 'forgot' | 'magic-link';
@@ -115,9 +116,7 @@ export default function LoginPage() {
       // Validate against the server — if the session is stale/ghost, let the
       // user sign in again instead of bouncing them into a broken workspace.
       try {
-        const res = await fetch('/api/auth/post-login-route', {
-          headers: { Authorization: `Bearer ${session.access_token}` },
-        });
+        const res = await apiFetch('/api/auth/post-login-route');
         if (res.status === 401 || res.status === 403) {
           await supabase.auth.signOut();
           clearBrowserAuthState({ preservePkce: false });
@@ -210,14 +209,12 @@ export default function LoginPage() {
 
     if (data.session) {
       try {
-        const authHeaders = {
-          Authorization: `Bearer ${data.session.access_token}`,
-          'Content-Type': 'application/json',
-        };
-
-        const syncRes = await fetch('/api/auth/sync-supabase-user', {
+        // apiFetch attaches Bearer via getAuthToken() against the canonical
+        // browser singleton (lib/supabaseBrowser.ts). The session that
+        // signInWithPassword just established is the one apiFetch reads.
+        const syncRes = await apiFetch('/api/auth/sync-supabase-user', {
           method: 'POST',
-          headers: authHeaders,
+          headers: { 'Content-Type': 'application/json' },
         });
 
         if (syncRes.status === 403) {
@@ -242,9 +239,9 @@ export default function LoginPage() {
           return;
         }
 
-        const routeRes = await fetch('/api/auth/post-login-route', {
+        const routeRes = await apiFetch('/api/auth/post-login-route', {
           method: 'GET',
-          headers: authHeaders,
+          headers: { 'Content-Type': 'application/json' },
         });
 
         if (routeRes.status === 403 || routeRes.status === 401) {

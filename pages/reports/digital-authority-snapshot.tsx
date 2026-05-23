@@ -11,7 +11,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { CheckCircle2, Loader2, Zap } from 'lucide-react';
 import { useCompanyContext } from '@/components/CompanyContext';
-import { getAuthToken } from '@/utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 import StepTracker, { type StepDef } from '@/components/progress/StepTracker';
 
 const SNAPSHOT_GEN_STAGES: StepDef[] = [
@@ -171,12 +171,7 @@ export default function DigitalAuthoritySnapshotPage() {
     async function loadCompanyProfile() {
       if (!selectedCompanyId) return;
 
-      const token = await getAuthToken().catch(() => null);
-      const res = await fetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}`, {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      }).catch(() => null);
+      const res = await apiFetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}`).catch(() => null);
 
       if (!active || !res?.ok) return;
 
@@ -242,7 +237,6 @@ export default function DigitalAuthoritySnapshotPage() {
     setApiError(null);
 
     try {
-      const token = await getAuthToken();
       const body = {
         domain: formData.domain.replace(/^https?:\/\//, '').replace(/^www\./, ''),
         companyId: selectedCompanyId,
@@ -260,12 +254,9 @@ export default function DigitalAuthoritySnapshotPage() {
         },
       };
 
-      const res = await fetch('/api/reports/generate', {
+      const res = await apiFetch('/api/reports/generate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
 

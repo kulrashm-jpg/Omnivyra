@@ -8,6 +8,7 @@
 
 import { useState } from 'react';
 import { getAuthToken } from '@/utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 import { Building2, Briefcase, FileText, Globe, CheckCircle, Clock } from 'lucide-react';
 
 interface Props {
@@ -41,12 +42,9 @@ export default function RequestAccessForm({ email, domain, domainReason, onSubmi
     const token = await getAuthToken();
     if (!token) { setError('Session expired. Please sign in again.'); setLoading(false); return; }
 
-    const res = await fetch('/api/access/request', {
+    const res = await apiFetch('/api/access/request', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ companyName, jobTitle, useCase, websiteUrl: websiteUrl || undefined }),
     });
 

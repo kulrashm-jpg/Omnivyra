@@ -30,11 +30,17 @@ function ensureServerEnvLoaded(): void {
 function getSupabaseConfig(): { url: string; key: string } {
   ensureServerEnvLoaded();
 
-  const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+  // Server clients MUST read SUPABASE_URL explicitly. The previous
+  // `?? NEXT_PUBLIC_SUPABASE_URL` fallback hid env-drift: a deploy where
+  // SUPABASE_URL was unset would silently validate tokens against the
+  // public URL, which works only as long as both point to the same project.
+  // Fail fast instead — a missing SUPABASE_URL is a deploy bug, not a
+  // recoverable runtime state.
+  const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url) {
-    throw new Error('SUPABASE_URL is missing in environment variables. Set SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL in .env.local');
+    throw new Error('SUPABASE_URL is missing in environment variables. Set SUPABASE_URL (not NEXT_PUBLIC_SUPABASE_URL) in your deployment env (Vercel/Railway Settings → Environment Variables).');
   }
   if (!key) {
     throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing. Add it to your deployment environment variables (Vercel/Railway Settings → Environment Variables).');

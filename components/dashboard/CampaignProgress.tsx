@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 import type { CampaignProgressData } from '../DashboardPage.types';
 
 const CampaignProgress: React.FC<{ campaignId: string; companyId?: string | null }> = ({
@@ -21,10 +21,7 @@ const CampaignProgress: React.FC<{ campaignId: string; companyId?: string | null
           setIsLoadingProgress(false);
           return;
         }
-        const token = await getAuthToken();
-        const response = await fetch(`/api/campaigns/${campaignId}/progress?companyId=${companyId}`, {
-          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        });
+        const response = await apiFetch(`/api/campaigns/${campaignId}/progress?companyId=${companyId}`);
         if (!response.ok) { setIsLoadingProgress(false); return; }
         const progressData = await response.json();
         if (progressData.success && progressData.data?.progress) {

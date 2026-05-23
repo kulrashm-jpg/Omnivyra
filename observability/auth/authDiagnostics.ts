@@ -88,7 +88,8 @@ export function collectAuthDiagnostics(): DiagnosticCheck[] {
       'device',
     ]),
     requiredTokensCheck('auth.user_sync_contract', 'pages/api/auth/sync-supabase-user.ts', [
-      'verifySupabaseAuthHeader',
+      'extractAccessToken',
+      'validateAuthToken',
       'supabase_uid',
       'ensureSessionForUser',
       'mfa_required',

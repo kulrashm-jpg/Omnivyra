@@ -19,7 +19,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { extractDomain, isFreeEmailDomain } from '../../../backend/services/companyMatchService';
 
 type MatchedResponse = {
@@ -38,16 +38,13 @@ export default async function handler(
 ) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  // ── 1. Verify Supabase token ──────────────────────────────────────────────
-  let supabaseUid: string;
-  let email: string;
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    supabaseUid = verified.id;
-    email       = verified.email;
-  } catch {
+  // ── 1. Verify Supabase token (Bearer header OR Supabase auth cookie) ─────
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  const supabaseUid: string = authResult.user.supabaseUid;
+  const email: string = authResult.user.email;
 
   // ── 2. Skip free / public email domains ───────────────────────────────────
   const emailDomain = extractDomain(email);

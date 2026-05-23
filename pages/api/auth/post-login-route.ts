@@ -14,7 +14,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logAuthEvent } from '../../../lib/auth/auditLog';
 import { recordAnomalyEvent } from '../../../lib/auth/anomalyDetector';
 import { getPostLoginRoute as getUserPreferenceRoute, upsertUserPreferences } from '../../../backend/services/userPreferencesService';
@@ -32,35 +32,51 @@ export default async function handler(
 ) {
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  // ── 1. Verify Supabase token ──────────────────────────────────────────────
-  let supabaseUid: string;
-  let email: string;
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    supabaseUid = verified.id;
-    email       = verified.email;
-  } catch {
+  // ── 1. Verify Supabase token (Bearer header OR Supabase auth cookie) ─────
+  // resolveAuthenticatedUser joins public.users and enforces lifecycle, so we
+  // get the application user id back here in one round-trip — no separate .or()
+  // lookup is needed below.
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) {
+    if (authResult.error === 'USER_NOT_FOUND') {
+      // Ghost session: valid token but no DB row — sync endpoint wasn't called yet.
+      console.warn('[post-login-route] ghost_session_detected', {});
+      recordAnomalyEvent('ghost_session_detected');
+      void logAuthEvent('ghost_session_detected', {
+        metadata: { reason: 'user_not_found_in_db', endpoint: 'post-login-route' },
+      });
+      sendAuthError(res, AUTH_ERROR_CODE.USER_NOT_FOUND, {
+        details: 'Your session is valid but your profile is not synced yet.',
+      });
+      return;
+    }
+    if (authResult.error === 'ACCOUNT_DELETED') {
+      recordAnomalyEvent('ghost_session_detected');
+      void logAuthEvent('ghost_session_detected', {
+        metadata: { reason: 'user_is_soft_deleted', endpoint: 'post-login-route' },
+      });
+      sendAuthError(res, AUTH_ERROR_CODE.ACCOUNT_DELETED);
+      return;
+    }
     sendAuthError(res, AUTH_ERROR_CODE.INVALID_SESSION);
     return;
   }
+  const email: string = authResult.user.email;
+  const userId: string = authResult.user.id;
 
-  // ── 2. Look up user row ───────────────────────────────────────────────────
-  // Note: we no longer SELECT users.company_id / users.role — both are
-  // deprecated identity authorities. Active org and role are derived from
-  // user_company_roles below.
+  // ── 2. Look up user-row fields needed for routing ─────────────────────────
+  // Safe lookup by primary key (id is the uuid resolved above) — no .or() with
+  // raw email/uid string interpolation.
   const { data: userRow } = await supabase
     .from('users')
     .select('id, name, last_sign_in_at, is_deleted, onboarding_state, has_password')
-    .or(`supabase_uid.eq.${supabaseUid},email.eq.${email.toLowerCase()}`)
+    .eq('id', userId)
     .maybeSingle();
 
   if (!userRow) {
-    // Ghost session: valid token but no DB row — sync endpoint wasn't called yet.
-    console.warn('[post-login-route] ghost_session_detected', { supabaseUid });
-    recordAnomalyEvent('ghost_session_detected');
-    void logAuthEvent('ghost_session_detected', {
-      metadata: { reason: 'user_not_found_in_db', endpoint: 'post-login-route' },
-    });
+    // Defensive — the resolver already returned the row at line above. If
+    // this fires the row was deleted between resolution and this select.
+    console.warn('[post-login-route] user_row_missing_after_resolve', { userId });
     sendAuthError(res, AUTH_ERROR_CODE.USER_NOT_FOUND, {
       details: 'Your session is valid but your profile is not synced yet.',
     });
@@ -70,14 +86,13 @@ export default async function handler(
   if ((userRow as any).is_deleted) {
     recordAnomalyEvent('ghost_session_detected');
     void logAuthEvent('ghost_session_detected', {
-      userId:   (userRow as any).id,
+      userId,
       metadata: { reason: 'user_is_soft_deleted', endpoint: 'post-login-route' },
     });
     sendAuthError(res, AUTH_ERROR_CODE.ACCOUNT_DELETED);
     return;
   }
 
-  const userId: string = (userRow as any).id;
   const onboardingState = String((userRow as any).onboarding_state ?? '');
   const hasPassword = (userRow as any).has_password === true;
 

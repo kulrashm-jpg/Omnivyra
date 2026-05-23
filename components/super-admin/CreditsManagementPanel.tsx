@@ -4,7 +4,7 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { Coins, Plus, Settings, AlertCircle, RefreshCw, CheckCircle } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface CreditTransaction {
   id: string;
@@ -52,12 +52,7 @@ export default function CreditsManagementPanel({ companyId, isSuperAdmin }: Prop
     setLoading(true);
     setError(null);
     try {
-      const token = await getAuthToken();
-      const authHeader = token ? { Authorization: `Bearer ${token}` } : {};
-      const resp = await fetch(`/api/admin/credits?companyId=${encodeURIComponent(companyId)}`, {
-        credentials: 'include',
-        headers: authHeader,
-      });
+      const resp = await apiFetch(`/api/admin/credits?companyId=${encodeURIComponent(companyId)}`);
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();
       setSummary(json.credits);
@@ -89,14 +84,9 @@ export default function CreditsManagementPanel({ companyId, isSuperAdmin }: Prop
     }
 
     try {
-      const token = await getAuthToken();
-      const resp = await fetch('/api/admin/credits', {
+      const resp = await apiFetch('/api/admin/credits', {
         method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       const json = await resp.json();

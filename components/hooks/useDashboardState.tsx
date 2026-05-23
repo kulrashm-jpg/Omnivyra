@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import { useCompanyContext } from '../CompanyContext';
 import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 import { getStageLabelWithDuration } from '../../lib/shared/CampaignStage';
 import { navigateToCampaign, buildResumeUrl, loadCampaignResume } from '../../lib/campaignResumeStore';
 import type { CollaborationMessage } from '../collaboration/FloatingChatPanel';
@@ -48,9 +49,7 @@ export function useDashboardState() {
     getAuthToken().then(async (token) => {
       if (!token) { router.replace('/login'); return; }
       try {
-        const res = await fetch('/api/auth/post-login-route', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await apiFetch('/api/auth/post-login-route');
         if (res.ok) {
           const { route } = await res.json() as { route: string };
           router.replace(route ?? '/onboarding/company');
@@ -177,14 +176,11 @@ export function useDashboardState() {
       });
 
   const fetchWithAuth = async (input: RequestInfo, init?: RequestInit) => {
-    const token = await getAuthToken();
-    return fetch(input, {
-      ...init,
-      headers: {
-        ...(init?.headers || {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    });
+    // Delegate to canonical apiFetch wrapper. apiFetch only accepts string
+    // URLs, so coerce Request objects to their .url. All call sites in this
+    // file pass plain strings.
+    const url = typeof input === 'string' ? input : input.url;
+    return apiFetch(url, init);
   };
 
   useEffect(() => {

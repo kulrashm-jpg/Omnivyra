@@ -27,7 +27,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { createHash } from 'crypto';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { insertAuditLogStrict, SYSTEM_USER_ID } from '../../../backend/services/auditActorService';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -36,15 +36,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // ── 1. Authenticate caller ────────────────────────────────────────────────
-  let callerUid: string;
-  let callerEmail: string;
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    callerUid   = verified.id;
-    callerEmail = verified.email;
-  } catch {
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
+  const callerUid: string   = authResult.user.supabaseUid;
+  const callerEmail: string = authResult.user.email;
 
   // ── 2. Extract and hash the raw token ────────────────────────────────────
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;

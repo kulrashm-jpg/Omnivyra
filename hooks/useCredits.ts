@@ -12,11 +12,11 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/utils/supabaseClient';
+import { getSupabaseBrowser } from '@/lib/supabaseBrowser';
 import type { CategoryUsage } from '@/components/ui/CreditMeter';
 import { getFeatureDisplayGroup } from '@/shared/monetization/featureRegistry';
 import { runSharedPoll } from '@/utils/pollingGuards';
-import { getAuthToken } from '@/utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 
 /**
  * Explicit lifecycle states — each renders distinctly so a fetch failure can
@@ -128,18 +128,13 @@ export function useCredits(companyId: string | null | undefined): CreditsState &
     await runSharedPoll(`credits:${companyId}`, async () => {
       setState(s => ({ ...s, status: 'loading', loading: true, error: null }));
       try {
-        // Explicit auth propagation — identical to the app's other
-        // authenticated API calls (see CompanyContext.refreshCompanies):
-        // canonical Bearer token via getAuthToken() + credentials:'include'
-        // so cookie-based sessions also work. Without this the request
-        // authenticated as anonymous and the badge silently fell back to 0.
-        const token = await getAuthToken();
-        const res = await window.fetch(
+        // Explicit auth propagation — canonical apiFetch wrapper attaches
+        // Bearer token from the Supabase browser singleton and falls back
+        // to refreshSession() if the token is null. Without this the
+        // request authenticated as anonymous and the badge silently fell
+        // back to 0.
+        const res = await apiFetch(
           `/api/admin/credits?companyId=${encodeURIComponent(companyId)}`,
-          {
-            credentials: 'include',
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          },
         );
 
         // ── Non-200 → explicit error state (auth vs other) ──────────────────
@@ -225,6 +220,7 @@ export function useCredits(companyId: string | null | undefined): CreditsState &
     const pollId = setInterval(fetch, 5 * 60 * 1000);
 
     // Realtime: refetch instantly whenever a credit transaction is inserted for this org
+    const supabase = getSupabaseBrowser();
     const channel = supabase
       .channel(`credit_balance_${companyId}`)
       .on(

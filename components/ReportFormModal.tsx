@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { X } from 'lucide-react';
-import { getAuthToken } from '../utils/getAuthToken';
+import { apiFetch } from '../lib/apiFetch';
 import { useCompanyContext } from '@/components/CompanyContext';
 import StepTracker, { type StepDef, type StepTrackerAccent } from '@/components/progress/StepTracker';
 import { parseJsonResponse, type SafeFetchJsonResult } from '@/lib/utils/safeFetchJson';
@@ -260,12 +260,7 @@ export default function ReportFormModal({
     async function loadCompanyProfile() {
       if (!isOpen || !selectedCompanyId) return;
 
-      const token = await getAuthToken().catch(() => null);
-      const res = await fetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}`, {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      }).catch(() => null);
+      const res = await apiFetch(`/api/company-profile?companyId=${encodeURIComponent(selectedCompanyId)}`).catch(() => null);
 
       if (!active || !res?.ok) return;
 
@@ -351,13 +346,9 @@ export default function ReportFormModal({
     }
 
     try {
-      const token = await getAuthToken();
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       const result = await parseJsonResponse<GenerateReportResponse>(res, endpoint);

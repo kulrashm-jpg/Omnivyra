@@ -471,8 +471,8 @@ export function useSocialPlatforms() {
   const handleConnect = async (p: PlatformStatus) => {
     const params = new URLSearchParams({ returnTo: '/social-platforms' });
     try {
-      const { supabase: sbClient } = await import('../utils/supabaseClient');
-      const { data } = await sbClient.auth.getSession();
+      const { getSupabaseBrowser } = await import('../lib/supabaseBrowser');
+      const { data } = await getSupabaseBrowser().auth.getSession();
       if (data.session?.user?.id) params.set('userId', data.session.user.id);
     } catch { /* non-fatal */ }
 

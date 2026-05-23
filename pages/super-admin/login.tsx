@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/router';
 import { getSupabaseBrowser } from '../../lib/supabaseBrowser';
+import { apiFetch } from '../../lib/apiFetch';
 
 type LoginMode = 'super_admin' | 'content_architect';
 
@@ -71,12 +72,9 @@ export default function SuperAdminLoginPage() {
       // Run the canonical sync flow so public.users + auth_sessions get
       // touched the same way as a regular /login. This is what mints the
       // omnivyra_session cookie via ensureSessionForUser.
-      const syncRes = await fetch('/api/auth/sync-supabase-user', {
+      const syncRes = await apiFetch('/api/auth/sync-supabase-user', {
         method:  'POST',
-        headers: {
-          Authorization: `Bearer ${data.session.access_token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
       });
 
       if (syncRes.status === 403) {

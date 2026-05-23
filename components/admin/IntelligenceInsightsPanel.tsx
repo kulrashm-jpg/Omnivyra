@@ -12,7 +12,8 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { safeFetchJson } from '@/lib/utils/safeFetchJson';
+import { parseJsonResponse } from '@/lib/utils/safeFetchJson';
+import { apiFetch } from '@/lib/apiFetch';
 import { Brain, TrendingUp, TrendingDown, ArrowRight, Lightbulb, Target, RefreshCw, ChevronDown, ChevronRight, Zap, BarChart3, AlertCircle } from 'lucide-react';
 
 type Insight = {
@@ -63,24 +64,22 @@ interface Props {
   token: string;
 }
 
-export default function IntelligenceInsightsPanel({ companyId, token }: Props) {
+export default function IntelligenceInsightsPanel({ companyId, token: _token }: Props) {
   const [data, setData]           = useState<Insight | null>(null);
   const [loading, setLoading]     = useState(true);
   const [activeSection, setActive] = useState<string | null>('why');
-  const headers = { Authorization: `Bearer ${token}` };
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await safeFetchJson<{ success?: boolean; data?: any }>(
-        `/api/companies/${companyId}/intelligence`,
-        { headers, credentials: 'same-origin' },
-      );
+      const url = `/api/companies/${companyId}/intelligence`;
+      const res = await apiFetch(url);
+      const result = await parseJsonResponse<{ success?: boolean; data?: any }>(res, url);
       if (result.ok === true && result.data.success) setData(result.data.data);
     } finally {
       setLoading(false);
     }
-  }, [companyId, token]);
+  }, [companyId]);
 
   useEffect(() => { load(); }, [load]);
 

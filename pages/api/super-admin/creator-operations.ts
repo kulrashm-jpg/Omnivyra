@@ -19,6 +19,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { extractAccessToken } from '../../../backend/services/authResolver';
 import { aggregateCreatorMetrics, classifyWorkflowStatus } from '../../../backend/services/creatorObservabilityService';
 import { listDeadLetterJobs } from '../../../backend/services/creatorQueueReliabilityService';
 import { getQueuePressure } from '../../../backend/services/creatorScalabilityHarnessService';
@@ -28,12 +29,11 @@ import type { ObservabilityWindow } from '../../../backend/services/creatorObser
 const VALID_WINDOWS: ObservabilityWindow[] = ['1h', '24h', '7d', '30d'];
 
 async function isSuperAdmin(req: NextApiRequest): Promise<boolean> {
-  // Reuse existing super-admin gating. The repo has multiple flavors; we
-  // check for a Bearer JWT marking a super-admin role. If your codebase
-  // exposes `enforceSuperAdmin`, prefer that; this guard is intentionally
-  // conservative so a misconfig blocks rather than exposes.
-  const header = req.headers.authorization ?? '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  // Token source: Bearer header OR Supabase auth cookie (via extractAccessToken).
+  // We still need user_metadata.is_super_admin / role from auth.users, so the
+  // final lookup goes through supabase.auth.getUser(token). The previous
+  // implementation only accepted Bearer.
+  const token = extractAccessToken(req);
   if (!token) return false;
   try {
     const { data, error } = await supabase.auth.getUser(token);

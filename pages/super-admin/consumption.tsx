@@ -13,7 +13,7 @@ import { useRouter } from 'next/router';
 import Link from 'next/link';
 import { ArrowLeft, Brain, Zap, Coins, Building2, Calendar, Globe2, RefreshCw, Tag, Server, Database, BarChart, SlidersHorizontal } from 'lucide-react';
 import { useCompanyContext } from '../../components/CompanyContext';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '../../lib/apiFetch';
 import LLMConsumptionPanel from '../../components/super-admin/LLMConsumptionPanel';
 import ApiConsumptionPanel from '../../components/super-admin/ApiConsumptionPanel';
 import CreditsManagementPanel from '../../components/super-admin/CreditsManagementPanel';
@@ -113,11 +113,7 @@ export default function ConsumptionPage() {
     if (!effectiveCompanyId) return;
     setLoadingExternalApis(true);
     try {
-      const token = await getAuthToken();
-      const res = await fetch(`/api/external-apis?companyId=${effectiveCompanyId}`, {
-        credentials: 'include',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await apiFetch(`/api/external-apis?companyId=${effectiveCompanyId}`);
       if (res.ok) { const d = await res.json(); setExternalApis(d.apis || []); }
     } catch { /* non-fatal */ }
     finally { setLoadingExternalApis(false); }

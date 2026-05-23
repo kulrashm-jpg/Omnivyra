@@ -24,7 +24,7 @@
 
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
-import { verifySupabaseAuthHeader } from '../../../lib/auth/serverValidation';
+import { resolveAuthenticatedUser } from '../../../backend/services/authResolver';
 import { logger } from '../../../backend/services/logger';
 import { checkRateLimit } from '../../../lib/auth/rateLimit';
 import { normalizeDomain } from '../../../backend/services/domainCanonicalService';
@@ -76,13 +76,11 @@ export default async function handler(
     return res.status(429).json({ status: 'failed', code: 'RATE_LIMITED' });
   }
 
-  let supabaseUid: string;
-  try {
-    const verified = await verifySupabaseAuthHeader(req.headers.authorization);
-    supabaseUid = verified.id;
-  } catch {
+  const authResult = await resolveAuthenticatedUser(req);
+  if (authResult.error || !authResult.user) {
     return res.status(401).json({ status: 'failed', code: 'UNAUTHENTICATED' });
   }
+  const supabaseUid: string = authResult.user.supabaseUid;
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const rawDomain = (body?.domain ?? '') as string;

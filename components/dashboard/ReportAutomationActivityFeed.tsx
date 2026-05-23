@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getAuthToken } from '@/utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 import { Bell, RefreshCw, ArrowRight, CircleCheck, Clock3, AlertTriangle } from 'lucide-react';
 
 type HighlightTone = 'good' | 'warn' | 'neutral';
@@ -96,11 +96,7 @@ export default function ReportAutomationActivityFeed({ companyId }: { companyId:
     async function load() {
       setLoading(true);
       try {
-        const token = await getAuthToken();
-        if (!token) return;
-        const response = await fetch(`/api/reports/automation-activity?company_id=${encodeURIComponent(companyId)}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const response = await apiFetch(`/api/reports/automation-activity?company_id=${encodeURIComponent(companyId)}`);
         if (!response.ok) return;
         const json = (await response.json()) as FeedResponse;
         if (cancelled) return;

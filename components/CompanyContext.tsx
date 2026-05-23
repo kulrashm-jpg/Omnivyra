@@ -22,6 +22,7 @@ import {
   type AuthFsmState,
 } from '../utils/authStateMachine';
 import { singleFlight } from '../lib/auth/singleFlightRefresh';
+import { apiFetch } from '../lib/apiFetch';
 
 /**
  * Retry-guard configuration for the /api/company-profile?mode=list probe.
@@ -285,17 +286,18 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return;
       }
 
-      // getAuthToken may transiently return null when multiple components
-      // race for the Supabase auth lock. Retry once with a short delay
-      // before treating it as a true "no token" state — otherwise we'd
-      // wrongly clear `user` to null and leave the spinner stuck even
-      // though a valid session is present.
-      let fbToken = await getAuthToken();
-      if (!fbToken) {
+      // Session-presence gate ONLY. We deliberately do NOT capture this
+      // token for later use — apiFetch re-reads the freshest session at
+      // fetch time inside the singleFlight closure (and force-refreshes
+      // once if needed). The outer check exists purely to detect "no
+      // Supabase session at all → fall through to the architect cookie
+      // path" without firing a Bearer-less /api/company-profile call.
+      let hasSession = !!(await getAuthToken());
+      if (!hasSession) {
         await new Promise((r) => setTimeout(r, 250));
-        fbToken = await getAuthToken();
+        hasSession = !!(await getAuthToken());
       }
-      if (!fbToken) {
+      if (!hasSession) {
         // No bearer token — may be content-architect cookie path. Cookie-
         // based Supabase sessions are also handled by the API route via
         // `credentials: 'include'`, but we only reach this branch after
@@ -325,7 +327,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), ms);
         try {
-          return await fetch(url, { ...init, signal: ctrl.signal });
+          return await apiFetch(url, { ...init, signal: ctrl.signal });
         } finally {
           clearTimeout(t);
         }
@@ -339,6 +341,10 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       //      5xx handling. The retryPolicy module is available for
       //      callers that want exponential backoff; this loop is the
       //      lightweight in-context variant.
+      //
+      // Token acquisition happens INSIDE apiFetch on every attempt, so we
+      // never serve a stale closure-captured token even if the SDK rotates
+      // the access_token mid-flight between attempts.
       const listRes = await singleFlight<Response | null>(
         'company-profile-list',
         async () => {
@@ -347,10 +353,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             try {
               attemptRes = await fetchWithTimeout(
                 '/api/company-profile?mode=list',
-                {
-                  credentials: 'include',
-                  headers: { Authorization: `Bearer ${fbToken}` },
-                },
+                {},
                 8000,
               );
             } catch {
@@ -465,17 +468,23 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const companyIds = list.map((c) => c.company_id);
       const firstRole = Object.values(rolesMap)[0] || 'COMPANY_ADMIN';
 
-      // Resolve display name from API response or Supabase user
+      // Resolve display name from API response or Supabase user.
+      // Also captures the Supabase auth user id as the userId fallback
+      // (used below when the API did not return one). Previously the JWT
+      // string was used as a sentinel; the auth user id is more correct
+      // and avoids a stale-closure dependency on the outer Bearer token.
       let resolvedName = listData?.userName || '';
-      if (!resolvedName) {
-        try {
-          const { data: { user } } = await getSupabaseBrowser().auth.getUser();
+      let authUserId: string | null = null;
+      try {
+        const { data: { user } } = await getSupabaseBrowser().auth.getUser();
+        authUserId = user?.id ?? null;
+        if (!resolvedName) {
           resolvedName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'User';
-        } catch { resolvedName = 'User'; }
-      }
+        }
+      } catch { if (!resolvedName) resolvedName = 'User'; }
       setUserName(resolvedName);
 
-      const resolvedUserId = listData?.userId || fbToken;
+      const resolvedUserId = listData?.userId || authUserId || '';
       const nextUser: UserContext = {
         userId: resolvedUserId, // prefer DB id if returned by API
         role: firstRole === 'SUPER_ADMIN' || firstRole === 'COMPANY_ADMIN' ? 'admin' : 'user',
@@ -596,9 +605,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (event === 'INITIAL_SESSION' && !isAuthBootstrapPage) {
           probeInFlight = true;
           try {
-            const probe = await fetch('/api/auth/post-login-route', {
-              headers: { Authorization: `Bearer ${session.access_token}` },
-            });
+            const probe = await apiFetch('/api/auth/post-login-route');
             if (probe.status === 401) {
               await supabase.auth.signOut();
               setIsAuthenticated(false);

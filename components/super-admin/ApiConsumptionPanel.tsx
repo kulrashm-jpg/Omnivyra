@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Zap, AlertCircle, RefreshCw } from 'lucide-react';
-import { getAuthToken } from '../../utils/getAuthToken';
+import { apiFetch } from '@/lib/apiFetch';
 
 // 1 credit = $0.01 USD; Starter plan = $29/mo = 1,000 credits/mo
 const CREDIT_RATE = 0.01;
@@ -56,11 +56,7 @@ export default function ApiConsumptionPanel({ tier, companyId, year, month }: Pr
     if (year) params.set('year', String(year));
     if (month) params.set('month', String(month));
     try {
-      const token = await getAuthToken();
-      const resp = await fetch(`/api/admin/consumption/apis?${params}`, {
-        credentials: 'include',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const resp = await apiFetch(`/api/admin/consumption/apis?${params}`);
       if (!resp.ok) throw new Error((await resp.json()).error ?? 'Failed');
       const json = await resp.json();
       setData(json.data);

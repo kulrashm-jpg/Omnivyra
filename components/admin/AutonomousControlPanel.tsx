@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 import { Bot, Shield, Zap, AlertTriangle, CheckCircle, XCircle, Clock, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 
 type RiskTolerance = 'aggressive' | 'balanced' | 'conservative';
@@ -73,7 +74,7 @@ interface Props {
   token: string;
 }
 
-export default function AutonomousControlPanel({ companyId, token }: Props) {
+export default function AutonomousControlPanel({ companyId, token: _token }: Props) {
   const [settings, setSettings]       = useState<AutonomousSettings | null>(null);
   const [pending, setPending]         = useState<PendingCampaign[]>([]);
   const [decisions, setDecisions]     = useState<DecisionLog[]>([]);
@@ -83,15 +84,13 @@ export default function AutonomousControlPanel({ companyId, token }: Props) {
   const [expandedDecision, setExpandedDecision] = useState<string | null>(null);
   const [activeTab, setActiveTab]     = useState<'settings' | 'pending' | 'log'>('settings');
 
-  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
       const [settingsRes, pendingRes, decisionsRes] = await Promise.all([
-        fetch(`/api/admin/autonomous?company_id=${companyId}`, { headers }),
-        fetch(`/api/campaigns/pending?company_id=${companyId}`, { headers }),
-        fetch(`/api/admin/autonomous/decisions?company_id=${companyId}&limit=30`, { headers }),
+        apiFetch(`/api/admin/autonomous?company_id=${companyId}`),
+        apiFetch(`/api/campaigns/pending?company_id=${companyId}`),
+        apiFetch(`/api/admin/autonomous/decisions?company_id=${companyId}&limit=30`),
       ]);
       const [s, p, d] = await Promise.all([settingsRes.json(), pendingRes.json(), decisionsRes.json()]);
       if (s.success) setSettings(s.data);
@@ -100,7 +99,7 @@ export default function AutonomousControlPanel({ companyId, token }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [companyId, token]);
+  }, [companyId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -110,9 +109,9 @@ export default function AutonomousControlPanel({ companyId, token }: Props) {
     const next = { ...settings, ...updates };
     setSettings(next);
     try {
-      await fetch('/api/admin/autonomous', {
+      await apiFetch('/api/admin/autonomous', {
         method: 'POST',
-        headers,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_id: companyId, ...next }),
       });
     } finally {
@@ -123,7 +122,10 @@ export default function AutonomousControlPanel({ companyId, token }: Props) {
   async function handlePendingAction(pendingId: string, action: 'approve' | 'reject') {
     setApprovingId(pendingId);
     try {
-      await fetch(`/api/campaigns/pending/${pendingId}/${action}`, { method: 'POST', headers });
+      await apiFetch(`/api/campaigns/pending/${pendingId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
       await loadAll();
     } finally {
       setApprovingId(null);
