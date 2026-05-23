@@ -14,9 +14,14 @@
  * STRICTLY sandbox/test mode:
  *   - Secrets are read from SETTLEMENT_WEBHOOK_SANDBOX_SECRET_<PROVIDER> (the
  *     PhonePe value is the salt key). NO live/production signing keys are wired.
- *   - When a provider has no sandbox secret configured the webhook is accepted
- *     `unverified_sandbox` — the sandbox foundation posture (a live-mode
- *     adapter is rejected upstream, before this layer is reached).
+ *   - When a provider has no sandbox secret configured the webhook is REJECTED
+ *     with reason `secret_not_configured`. The previous fall-open behaviour
+ *     ("accept unverified") let any actor with a known checkout session
+ *     reference drive the settlement state machine through
+ *     pending→authorized→succeeded by POSTing to the endpoint.
+ *   - An operator can opt back into the legacy unverified-accept behaviour
+ *     for local dev by setting SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX=true.
+ *     This MUST NOT be set in any shared/production-like environment.
  *   - Verification is pure + deterministic + constant-time; `nowMs` is
  *     injectable so the replay-window behaviour is unit-testable.
  *
@@ -31,7 +36,8 @@ export type WebhookVerificationReason =
   | 'missing_signature'
   | 'malformed_signature'
   | 'signature_mismatch'
-  | 'stale_timestamp';
+  | 'stale_timestamp'
+  | 'secret_not_configured';
 
 export interface WebhookVerificationResult {
   ok: boolean;
@@ -175,15 +181,31 @@ function verifyPhonepe(input: WebhookVerificationInput, saltKey: string): Webhoo
 }
 
 /**
+ * Operator opt-in for the legacy unverified-accept behaviour. Only honour the
+ * flag when it is explicitly set to the string `'true'` — any other value
+ * (unset, empty, `'1'`, `'false'`) keeps the secure default.
+ */
+function isUnverifiedSandboxExplicitlyAllowed(): boolean {
+  return process.env.SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX === 'true';
+}
+
+/**
  * Verify a sandbox provider webhook. Deterministic, constant-time, side-effect
- * free. When no sandbox secret is configured the webhook is accepted
- * `unverified_sandbox` (sandbox foundation posture).
+ * free. When no sandbox secret is configured the webhook is REJECTED with
+ * reason `secret_not_configured` — the operator must either provision the
+ * provider's `SETTLEMENT_WEBHOOK_SANDBOX_SECRET_*` env var or explicitly
+ * opt into unverified acceptance via `SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX`.
  */
 export function verifyProviderWebhookSignature(
   input: WebhookVerificationInput,
 ): WebhookVerificationResult {
   const secret = sandboxSecret(input.provider);
-  if (!secret) return { ok: true, mode: 'unverified_sandbox' };
+  if (!secret) {
+    if (isUnverifiedSandboxExplicitlyAllowed()) {
+      return { ok: true, mode: 'unverified_sandbox' };
+    }
+    return FAIL('secret_not_configured');
+  }
 
   switch (input.provider) {
     case 'razorpay': return verifyRazorpay(input, secret);

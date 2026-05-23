@@ -93,7 +93,7 @@ export default async function handler(
       // Send a fresh magic-link / verification email. This same Supabase
       // primitive is used by signup + accept-invite, so the SMTP delivery
       // path is uniform.
-      const origin = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+      const origin = getCanonicalAppUrl();
       const { error: otpError } = await supabase.auth.signInWithOtp({
         email,
         options: {

@@ -95,7 +95,7 @@ export default async function handler(
   // the SMTP configured at the project level (your SES sender). This used
   // to wrap generateLink+SES SMTP in a custom transactional pipeline; that
   // is now redundant since Supabase SMTP handles delivery directly.
-  const origin = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const origin = getCanonicalAppUrl();
   const { error: otpError } = await supabase.auth.signInWithOtp({
     email: (invitation as any).email,
     options: {

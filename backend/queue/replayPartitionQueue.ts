@@ -8,7 +8,7 @@
  */
 
 import { Queue, type JobsOptions } from 'bullmq';
-import { getRedisConfig } from './bullmqClient';
+import { getRedisConfig, getQueuePrefix } from './bullmqClient';
 import { REPLAY_PARTITION_QUEUE_NAME } from '../types/replayPartition';
 
 export { REPLAY_PARTITION_QUEUE_NAME };
@@ -22,6 +22,7 @@ export const replayPartitionDefaults: JobsOptions = {
 
 export const replayPartitionQueue = new Queue(REPLAY_PARTITION_QUEUE_NAME, {
   connection: getRedisConfig(),
+  prefix: getQueuePrefix(),
   defaultJobOptions: replayPartitionDefaults,
 });
 

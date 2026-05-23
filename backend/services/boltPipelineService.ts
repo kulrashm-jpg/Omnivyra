@@ -1,3 +1,4 @@
+import { WORKER_PROVENANCE } from '../../observability/runtime/workerProvenance';
 import { ownedDbTable } from '../db/writeOwner';
 /**
  * BOLT Pipeline Service
@@ -460,11 +461,21 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   };
 
   const defaultDistribution = distributeAcrossPlatforms(Math.max(1, parsedFreq), configuredPlatforms.length);
-  const defaultPlatformRequests = configuredPlatforms.map((p, idx) => ({
-    platform: p,
-    content_type: getPrimaryContentType(p),
-    count_per_week: Math.max(1, defaultDistribution[idx] ?? 1),
-  }));
+  // Honor "BOLT Frequency is Total" — N total posts/week across platforms,
+  // not N×platform_count. The previous Math.max(1, ...) floor forced every
+  // platform to ≥1 even when distribute() correctly returned 0 for tail
+  // platforms (e.g. freq=1 + 3 platforms → distribute=[1,0,0]). That floor
+  // inflated the per-week demand and pushed the capacity validator into
+  // deficit, producing "AI plan did not return a valid plan with weeks"
+  // for any user picking frequency lower than connected-platform count.
+  // Filter zero rows so they don't reach the planner as no-op requests.
+  const defaultPlatformRequests = configuredPlatforms
+    .map((p, idx) => ({
+      platform: p,
+      content_type: getPrimaryContentType(p),
+      count_per_week: defaultDistribution[idx] ?? 0,
+    }))
+    .filter((r) => r.count_per_week > 0);
   // When format_frequency is provided (multi-format BOLT: e.g. 3 posts + 3 articles),
   // expand into one entry per (platform × content_type) so all selected formats appear
   // as separate execution items instead of collapsing to the primary type only.
@@ -489,12 +500,39 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     return [...platforms].sort((a, b) => rank(a) - rank(b));
   };
 
+  // Format-platform exclusivity. Some content formats are intrinsically tied
+  // to a single platform — e.g. "tweet" only makes sense on X/Twitter, not on
+  // Facebook or LinkedIn (even though those platforms support generic 'text'
+  // content). Without this gate, CONTENT_PLATFORM_AFFINITY['tweet'] resolves
+  // to every text-capable platform and distributeAcrossPlatforms fans the
+  // tweet count across them, producing nonsense like "tweet → LinkedIn".
+  // Mirrors the UI binding in components/BoltStrategyView.tsx
+  // (FORMAT_REQUIRED_PLATFORMS) so the planner enforces the same rule.
+  //
+  // Both 'x' and 'twitter' are listed because the codebase has two competing
+  // canonicalizations: backend/utils/platformEligibility.ts normalizes to
+  // 'x', while lib/shared/platforms.ts normalizes to 'twitter'. Matching
+  // either avoids a false-negative regardless of which side produced the row.
+  const FORMAT_EXCLUSIVE_PLATFORMS: Record<string, string[]> = {
+    tweet: ['x', 'twitter'],
+  };
+  const restrictPlatformsForFormat = (platforms: string[], contentType: string): string[] => {
+    const exclusive = FORMAT_EXCLUSIVE_PLATFORMS[String(contentType).toLowerCase()];
+    if (!exclusive) return platforms;
+    return platforms.filter((p) => exclusive.includes(String(p).toLowerCase()));
+  };
+
   const formatDerivedRequests: Array<{ platform?: string; content_type?: string; count_per_week?: number }> | null =
     !execConfig.platform_content_requests && formatFreqMap && Object.keys(formatFreqMap).length > 0
       ? Object.entries(formatFreqMap)
           .filter(([, cnt]) => Number(cnt) > 0)
           .flatMap(([ct, cnt]) => {
-            const orderedPlatforms = sortPlatformsByAffinity(configuredPlatforms, ct);
+            const allowedPlatforms = restrictPlatformsForFormat(configuredPlatforms, ct);
+            // If the format's only valid platform isn't connected, drop the
+            // format from this campaign rather than misrouting it. The UI
+            // should have prevented this state, but defense in depth.
+            if (allowedPlatforms.length === 0) return [];
+            const orderedPlatforms = sortPlatformsByAffinity(allowedPlatforms, ct);
             const perPlatform = distributeAcrossPlatforms(Number(cnt), orderedPlatforms.length);
             return orderedPlatforms
               .map((p, i) => ({ platform: p, content_type: ct, count_per_week: perPlatform[i] ?? 0 }))
@@ -505,6 +543,15 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
   const boltPlatformRequests = rawPlatformRequests
     // Text BOLT excludes video-first platforms; creator and combined campaigns keep them all
     .filter((r) => r && r.platform && (requiresMediaFlow || isCombined || !['youtube', 'tiktok'].includes(String(r.platform).toLowerCase())))
+    // Defensive exclusivity gate. Even when platform_content_requests is
+    // supplied directly by the caller (bypassing formatDerivedRequests), any
+    // {platform: 'facebook', content_type: 'tweet'} pairing is invalid and
+    // gets dropped here so it never reaches the planner.
+    .filter((r) => {
+      const exclusive = FORMAT_EXCLUSIVE_PLATFORMS[String(r.content_type ?? '').toLowerCase()];
+      if (!exclusive) return true;
+      return exclusive.includes(String(r.platform).toLowerCase());
+    })
     .map((r) => ({
       platform: r.platform,
       content_type: !requiresMediaFlow && !isCombined && ['video', 'reel', 'carousel', 'slider', 'image', 'banner'].includes(String(r.content_type ?? '').toLowerCase())
@@ -522,10 +569,26 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     execution_config: execConfig,
     ...payload.sourceStrategicTheme,
     ...execConfig,
-    // QA-required keys: use execConfig value if present, else default
-    // When format_frequency is set (multi-format BOLT), mirror it as capacity so the per-type
-    // capacity validator doesn't flag article/blog/etc. demand as exceeding 0 capacity.
-    available_content: execConfig.available_content ?? 'No',
+    // QA-required keys: use execConfig value if present, else default.
+    // available_content / weekly_capacity / content_capacity are passed
+    // through here in their RAW form (record or empty); the canonical
+    // normalization happens once at the orchestrator chokepoint
+    // (preparePrefilledPlanningState → normalizePlannerCapacityInputs).
+    // We no longer default available_content to the string 'No' — that
+    // was a contract violation (string in a numeric inventory field)
+    // that worked only because the downstream normalizer learned to
+    // interpret it. Pass undefined and let the normalizer derive
+    // has_existing_content=false + empty inventory canonically.
+    //
+    // BOLT users genuinely have no pre-existing content inventory when
+    // generating a fresh campaign — the canonical answer is {} (empty
+    // inventory record), NOT the legacy 'No' string. Setting it
+    // explicitly here so the orchestrator doesn't have to infer.
+    available_content: execConfig.available_content ?? {},
+    has_existing_content:
+      typeof execConfig.has_existing_content === 'boolean'
+        ? execConfig.has_existing_content
+        : false,
     weekly_capacity: execConfig.weekly_capacity ?? execConfig.content_capacity ?? (formatFreqMap && Object.keys(formatFreqMap).length > 0 ? { ...formatFreqMap } : { post: Math.max(1, parsedFreq) }),
     content_capacity: execConfig.content_capacity ?? execConfig.weekly_capacity ?? (formatFreqMap && Object.keys(formatFreqMap).length > 0 ? { ...formatFreqMap } : { post: Math.max(1, parsedFreq) }),
     action_expectation: execConfig.action_expectation ?? (themeTitle ? `Learn about ${String(themeTitle).slice(0, 80)}` : 'Learn and engage'),
@@ -572,8 +635,15 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
 
   // Diagnostic: log what we're sending so failures are traceable. Brief
   // fields are included so we can correlate AI plan quality against which
-  // optional inputs the user supplied.
+  // optional inputs the user supplied. Correlation fields (run_id,
+  // deployment_id, worker_pid, stage) are stamped so the planner lifecycle
+  // can be reconstructed from logs alone across worker instances.
   console.log('[bolt/plan-input]', JSON.stringify({
+    run_id: runId,
+    campaign_id: campaignId,
+    stage: 'ai/plan',
+    deployment_id: WORKER_PROVENANCE.deploymentId,
+    worker_pid: WORKER_PROVENANCE.workerPid,
     platform_content_requests: collectedPlanningContext.platform_content_requests,
     weekly_capacity: collectedPlanningContext.weekly_capacity,
     content_capacity: collectedPlanningContext.content_capacity,
@@ -587,6 +657,27 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     },
     format_frequency: collectedPlanningContext.format_frequency,
   }));
+
+  // Sub-stage observer — pushes intra-stage progress into the BOLT run row so
+  // the UI's progress panel can show "Drafting weekly themes…" / "Scoring
+  // alignment…" instead of sitting on the bare "Creating week plan" label
+  // for the full 60–120s window. Fire-and-forget; failures are swallowed so
+  // logging never breaks the plan run. We also nudge progress_percentage
+  // forward (interpolating between getProgress(ai/plan)=16 and the next
+  // stage at 33) so the bar moves visibly during this stage.
+  const SUBSTAGE_PROGRESS: Record<string, number> = {
+    context:  17,
+    drafting: 22,
+    scoring:  28,
+    refining: 31,
+  };
+  const onAiPlanSubStage = (sub: string): void => {
+    const pct = SUBSTAGE_PROGRESS[sub];
+    void updateRun(runId, {
+      current_stage: `ai/plan:${sub}`,
+      ...(typeof pct === 'number' ? { progress_percentage: pct } : {}),
+    }).catch(() => { /* advisory only */ });
+  };
 
   // Single retry on ai/plan. Each attempt is bounded by AI_PLAN_TIMEOUT_MS (120s); 3 retries
   // turned a slow OpenAI call into ~8 min of wall time, blowing past the UI polling deadline
@@ -604,6 +695,7 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
           recommendationContext,
           collectedPlanningContext,
           variantMetadata: withBoltMetadata({}, { runId }).variantMetadata,
+          onSubStage: onAiPlanSubStage,
         }),
         AI_PLAN_TIMEOUT_MS,
         'ai/plan'
@@ -611,8 +703,15 @@ async function runAiPlan(runId: string, campaignId: string, companyId: string, p
     { maxRetries: 1, initialDelayMs: 2000 }
   );
 
-  // Diagnostic: log what came back so we can tell if it's a capacity block, QA block, or AI failure
+  // Diagnostic: log what came back so we can tell if it's a capacity block,
+  // QA block, or AI failure. Correlation fields stamped for cross-instance
+  // reconstruction (pair with [bolt/plan-input] above on run_id).
   console.log('[bolt/plan-result]', JSON.stringify({
+    run_id: runId,
+    campaign_id: campaignId,
+    stage: 'ai/plan',
+    deployment_id: WORKER_PROVENANCE.deploymentId,
+    worker_pid: WORKER_PROVENANCE.workerPid,
     has_plan: !!result?.plan,
     has_weeks: Array.isArray(result?.plan?.weeks),
     week_count: Array.isArray(result?.plan?.weeks) ? result.plan.weeks.length : null,
@@ -1424,6 +1523,28 @@ async function executeBoltPipelineRuntime(runId: string): Promise<void> {
       actual_posts_published: scheduledPostsCreated,
       ...aiMetrics,
     });
+
+    // Success completion event. Closes the lifecycle correlation arc
+    // started at `bolt_worker_pickup`: a single run_id can now be
+    // traced from enqueue → pickup → plan-input → plan-result →
+    // completed across logs without DB polling. Single emission per
+    // run; minimal payload.
+    {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { emitStructuredEvent } = require('../../observability/runtime/structuredTelemetry') as typeof import('../../observability/runtime/structuredTelemetry');
+      emitStructuredEvent(
+        'bolt_run_completed',
+        'info',
+        { run_id: runId, planner_stage: 'completed' },
+        {
+          campaign_id: campaignId ?? null,
+          duration_ms: Date.now() - runStartedAt,
+          weeks_generated: weeksGenerated,
+          daily_slots_created: dailySlotsCreated,
+          scheduled_posts_created: scheduledPostsCreated,
+        },
+      );
+    }
 
     // Success path — release the lock so the row's lock columns
     // reflect "no live worker holds this" and downstream operators

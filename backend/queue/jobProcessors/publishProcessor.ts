@@ -191,6 +191,31 @@ async function processPublishJobInner(params: {
       return;
     }
 
+    // Replay-window suppression. If the queue_job is already 'processing'
+    // and that status was set recently, a previous worker is either still
+    // alive OR died between the platform-call success and the scheduled_post
+    // status write. In either case, re-running the platform call risks
+    // duplicate posts (LinkedIn/X both accept identical content twice). We
+    // suppress for a 5-minute window — longer than any healthy publish
+    // takes — after which the lock is presumed stale and the retry can
+    // proceed. updated_at is maintained by updateQueueJobStatus so this
+    // uses already-tracked state (zero new persistence). On terminal
+    // failure paths, status flips to 'failed' before the suppression
+    // window closes, so legitimate retries are unaffected.
+    if (queueJob.status === 'processing' && queueJob.updated_at) {
+      const PUBLISH_SUPPRESSION_WINDOW_MS = 5 * 60 * 1000;
+      const ageMs = Date.now() - new Date(queueJob.updated_at).getTime();
+      if (Number.isFinite(ageMs) && ageMs < PUBLISH_SUPPRESSION_WINDOW_MS) {
+        console.warn(
+          `⚠️ Job ${jobId} is already 'processing' from a recent attempt ` +
+          `(${Math.round(ageMs / 1000)}s ago, suppression window ${PUBLISH_SUPPRESSION_WINDOW_MS / 1000}s). ` +
+          `Suppressing duplicate publish — platform-side duplicate posts are the higher risk than a missed retry. ` +
+          `If the prior attempt died mid-publish, the next retry after the window expires will proceed.`,
+        );
+        return;
+      }
+    }
+
     // Step 2: Check if scheduled_post already published (additional idempotency check)
     const scheduledPost = await getScheduledPost(scheduled_post_id);
     if (!scheduledPost) {

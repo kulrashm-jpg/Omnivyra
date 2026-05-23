@@ -13,7 +13,7 @@
  */
 
 import { Queue, Worker } from 'bullmq';
-import { getConnectionConfig } from './bullmqClient';
+import { getConnectionConfig, getQueuePrefix } from './bullmqClient';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUEUE CONFIGURATION
@@ -232,6 +232,7 @@ export function getContentQueue(queueName: string): Queue {
   if (!queues.has(normalizedQueueName)) {
     const queue = new Queue(normalizedQueueName, {
       connection: getConnectionConfig(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: CONTENT_QUEUE_CONFIG[normalizedQueueName]?.attempts || 2,
         backoff: CONTENT_QUEUE_CONFIG[normalizedQueueName]?.defaultBackoff || {
@@ -281,6 +282,7 @@ export async function startContentWorkers(processor: (job: any) => Promise<any>)
   for (const [queueName, config] of Object.entries(CONTENT_QUEUE_CONFIG)) {
     const worker = new Worker(queueName, processor, {
       connection: getConnectionConfig(),
+      prefix: getQueuePrefix(),
       concurrency: config.concurrency,
     });
 
@@ -325,6 +327,7 @@ export async function startCreatorContentWorkers(processor: (job: any) => Promis
 
     const worker = new Worker(queueName, processor, {
       connection: getConnectionConfig(),
+      prefix: getQueuePrefix(),
       concurrency: config.concurrency,
     });
 
@@ -360,6 +363,7 @@ export async function startBoltContentWorkers(processor: (job: any) => Promise<a
   const config = CONTENT_QUEUE_CONFIG['bolt-content-jobs']!;
   const worker = new Worker('bolt-content-jobs', processor, {
     connection: getConnectionConfig(),
+    prefix: getQueuePrefix(),
     concurrency: config.concurrency,
   });
 
@@ -385,6 +389,7 @@ export async function startWhatsAppBroadcastWorker(processor: (job: any) => Prom
   const config = CONTENT_QUEUE_CONFIG['whatsapp-broadcast']!;
   const worker = new Worker('whatsapp-broadcast', processor, {
     connection: getConnectionConfig(),
+    prefix: getQueuePrefix(),
     concurrency: config.concurrency,
   });
 
@@ -406,6 +411,7 @@ export async function startWhatsAppWebhookWorker(processor: (job: any) => Promis
   const config = CONTENT_QUEUE_CONFIG['whatsapp-webhook']!;
   const worker = new Worker('whatsapp-webhook', processor, {
     connection: getConnectionConfig(),
+    prefix: getQueuePrefix(),
     concurrency: config.concurrency,
   });
   worker.on('completed', (job) => {
@@ -433,6 +439,7 @@ export async function startAnalyticsIngestionWorker(processor: (job: any) => Pro
   try {
     worker = new Worker('analytics-ingestion', processor, {
       connection: getConnectionConfig(),
+      prefix: getQueuePrefix(),
       concurrency: config.concurrency,
     });
     _diag('startAnalyticsIngestionWorker:worker-constructed', { concurrency: config.concurrency });

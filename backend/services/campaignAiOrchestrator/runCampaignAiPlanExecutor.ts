@@ -165,7 +165,12 @@ export async function executeRunCampaignAiPlan(
         input.mode === 'generate_plan' && !deterministicSkeleton
           ? buildDeterministicPlanSkeleton({
               durationWeeks: resolvedDurationWeeks,
-              contentCapacity: (prefilledPlanning as any)?.content_capacity,
+              // Canonical: read weekly_capacity post-normalization. The
+              // legacy content_capacity mirror is still emitted by the
+              // chokepoint for UI-side consumers, but internal planner
+              // code must consume the canonical field. See
+              // [[planner-capacity-contract]].
+              contentCapacity: (prefilledPlanning as any)?.weekly_capacity,
             })
           : null,
       qaState: qaState

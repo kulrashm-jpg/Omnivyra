@@ -2538,6 +2538,29 @@ async function createLegacyScheduledPostRuntime(input: {
   }
 
   const now = new Date().toISOString();
+  // Deterministic idempotency key for the legacy ad-hoc social-post
+  // path. The canonical batchInsertScheduledPosts uses
+  // makeScheduledPostIdempotencyKey from campaign-shape inputs
+  // (campaignId, week, day, …) which don't exist here. The legacy
+  // path's dedup tuple is (user, social_account, platform,
+  // content_type, scheduled_for, content) — if a network retry resends
+  // the same /api/schedule/posts request, this produces an identical
+  // key and the partial unique index uidx_scheduled_posts_idempotency_key
+  // rejects the duplicate via 23505 instead of silently inserting a
+  // second row. The `legacy:` prefix keeps these keys non-colliding
+  // with BOLT-generated keys in the same column.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createHash } = require('crypto') as typeof import('crypto');
+  const legacyIdempotencyKey = createHash('sha256').update(JSON.stringify([
+    'legacy',
+    String(input.userId),
+    String(socialAccountId),
+    String(dbPlatform).toLowerCase(),
+    String(normalizedContentType).toLowerCase(),
+    scheduledFor.toISOString(),
+    String(input.content || ''),
+  ])).digest('hex').slice(0, 32);
+
   const payload: any = {
     user_id: input.userId,
     social_account_id: socialAccountId,
@@ -2553,10 +2576,27 @@ async function createLegacyScheduledPostRuntime(input: {
     repurpose_total: 1,
     created_at: now,
     updated_at: now,
+    idempotency_key: legacyIdempotencyKey,
   };
 
   const { data, error } = await ownedDbTable('scheduled_posts').insert(payload).select('*').single();
-  if (error) throw new Error(`Failed to schedule post: ${error.message}`);
+  if (error) {
+    // Recover from 23505 (the unique index from migration 20260725)
+    // by looking up the existing row by the deterministic key. Matches
+    // the recovery pattern in creatorExecutionEngine and the bolt
+    // schedule block processor — surfaces the prior row instead of
+    // double-erroring on a legitimate retry.
+    if ((error as any)?.code === '23505') {
+      const { data: existing, error: existingError } = await ownedDbTable('scheduled_posts')
+        .select('*')
+        .eq('idempotency_key', legacyIdempotencyKey)
+        .maybeSingle();
+      if (!existingError && existing) {
+        return mapDbRowToLegacyScheduledPost(existing);
+      }
+    }
+    throw new Error(`Failed to schedule post: ${error.message}`);
+  }
   return mapDbRowToLegacyScheduledPost(data);
 }
 

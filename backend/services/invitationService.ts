@@ -5,11 +5,12 @@ import { ownedDbTable } from '../db/writeOwner';
 import { enqueueEmailJob } from './emailJobsService';
 import { logger } from './logger';
 import { config } from '@/config';
+import { getCanonicalAppUrl } from '../config/getCanonicalAppUrl';
 
 const INVITE_EXPIRY_DAYS = 7;
 
 function getAppUrl(): string {
-  return (config.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  return getCanonicalAppUrl();
 }
 
 function getInvitationSecret(): string {

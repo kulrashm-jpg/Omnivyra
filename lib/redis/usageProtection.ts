@@ -57,6 +57,7 @@ import IORedis from 'ioredis';
 import * as fs from 'fs';
 import * as path from 'path';
 import { recordPollingMetricsUpdate } from '@/lib/redis/healthMetrics';
+import { config, envIsExplicit } from '@/config';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -324,7 +325,9 @@ const POLL_ERROR_LOG_COOLDOWN_MS = 60_000;  // rate limit: log max once per minu
 function resolveMaxBytes(infoMax: number): number {
   if (infoMax > 0) return infoMax;
   if (_adminMaxMemBytes > 0) return _adminMaxMemBytes;
-  const envMax = parseInt(process.env.REDIS_MAX_BYTES ?? '0', 10);
+  // Schema applies the 256 MB default when REDIS_MAX_BYTES is unset, so this
+  // returns the same final value as the inline fallback below either way.
+  const envMax = config.REDIS_MAX_BYTES;
   if (envMax > 0) return envMax;
   return 256 * 1024 * 1024;  // 256 MB — Upstash free-tier ceiling
 }
@@ -916,13 +919,15 @@ export function startUsageProtection(getRedis: () => IORedis): Promise<void> {
 
   // BUG#24 fix: warn loudly at startup if critical env vars are missing so
   // operators don't rely on wrong defaults that cause premature throttling.
-  if (!process.env.REDIS_MAX_BYTES && !process.env.UPSTASH_DAILY_REQUEST_LIMIT) {
+  // `envIsExplicit` checks RAW process.env presence so the schema defaults
+  // on these keys do not silence the warnings.
+  if (!envIsExplicit('REDIS_MAX_BYTES') && !envIsExplicit('UPSTASH_DAILY_REQUEST_LIMIT')) {
     process.stderr.write(
       `⚠️  [redis][usageProtection] Neither REDIS_MAX_BYTES nor UPSTASH_DAILY_REQUEST_LIMIT\n` +
       `   is set. Using defaults: 256 MB memory cap, 25,000 commands/day.\n` +
       `   Set these in .env to match your actual Redis tier.\n`,
     );
-  } else if (!process.env.REDIS_MAX_BYTES) {
+  } else if (!envIsExplicit('REDIS_MAX_BYTES')) {
     process.stderr.write(
       `⚠️  [redis][usageProtection] REDIS_MAX_BYTES is not set.\n` +
       `   Memory cap defaults to 256 MB. Set REDIS_MAX_BYTES=<bytes> to match your tier.\n`,

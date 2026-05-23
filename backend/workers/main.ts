@@ -18,7 +18,7 @@
 
 import { config } from '@/config';
 import { validateWorkerEnv } from '../utils/validateEnv';
-import { startHealthServer }  from './healthServer';
+import { startHealthServer, setCronStatus }  from './healthServer';
 
 // Start health server immediately — before anything else so Railway healthchecks
 // always get a response even if Redis/workers fail to initialise.
@@ -29,7 +29,7 @@ validateWorkerEnv();
 
 import os from 'os';
 import { Worker }                    from 'bullmq';
-import { getWorker, closeConnections, getSharedRedisClient, withHeavyJobSlot } from '../queue/bullmqClient';
+import { getWorker, closeConnections, getSharedRedisClient, withHeavyJobSlot, getQueuePrefix } from '../queue/bullmqClient';
 import { instrumentWorker }          from '../queue/queueInstrumentation';
 import { processPublishJob }         from '../queue/jobProcessors/publishProcessor';
 import { processEngagementPollingJob } from '../queue/jobProcessors/engagementPollingProcessor';
@@ -52,7 +52,7 @@ const boltConcurrency   = (() => {
   // Deterministic, env-overridable. Default preserves prior behavior
   // (min(4, cpus)); BOLT_WORKER_CONCURRENCY (1–16) takes precedence so
   // local and Railway are not subject to host CPU-count variance.
-  const o = Number(process.env.BOLT_WORKER_CONCURRENCY);
+  const o = Number(config.BOLT_WORKER_CONCURRENCY);
   return Number.isInteger(o) && o >= 1 && o <= 16
     ? o
     : Math.min(4, Math.max(1, os.cpus().length));
@@ -77,7 +77,7 @@ creatorRenderWorker.on('error', (err) =>
 const leadThreadRecomputeWorker = new Worker(
   'lead-thread-recompute',
   async () => { await runLeadThreadRecomputeWorker(); },
-  { connection: getSharedRedisClient(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
+  { connection: getSharedRedisClient(), prefix: getQueuePrefix(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
 leadThreadRecomputeWorker.on('failed', (job, err) =>
   console.error('[lead-thread-recompute] job failed', { jobId: job?.id, error: err.message }));
@@ -88,7 +88,7 @@ instrumentWorker(leadThreadRecomputeWorker);
 const conversationMemoryRebuildWorker = new Worker(
   'conversation-memory-rebuild',
   async () => { await runConversationMemoryWorker(); },
-  { connection: getSharedRedisClient(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
+  { connection: getSharedRedisClient(), prefix: getQueuePrefix(), concurrency: 1, drainDelay: 300, stalledInterval: 1_800_000 },
 );
 conversationMemoryRebuildWorker.on('failed', (job, err) =>
   console.error('[conversation-memory-rebuild] job failed', { jobId: job?.id, error: err.message }));
@@ -113,11 +113,12 @@ const engineWorker = new Worker(
   },
   {
     connection: getSharedRedisClient(),
+    prefix: getQueuePrefix(),
     // Was implicit BullMQ default (1) → LEAD and MARKET_PULSE were fully
     // serialized. Small bounded value; env-overridable (1–8). No ordering
     // guarantee exists between job types, so >1 is semantically safe.
     concurrency: (() => {
-      const o = Number(process.env.ENGINE_JOBS_CONCURRENCY);
+      const o = Number(config.ENGINE_JOBS_CONCURRENCY);
       return Number.isInteger(o) && o >= 1 && o <= 8 ? o : 2;
     })(),
     drainDelay: 300,
@@ -130,6 +131,24 @@ engineWorker.on('error', (err) => console.error('[engine-worker] error:', err));
 const campaignWorker = new Worker<CampaignPlanningJobPayload>(
   'ai-heavy',
   async (job) => {
+    // Soak-only opt-in branch (additive; gated by WORKER_SOAK_MODE === '1'
+    // AND job.data.__soak === true). Exercises the ai-heavy queue runtime,
+    // withHeavyJobSlot concurrency cap, async-execution timing, and
+    // (optionally) the retry path — WITHOUT OpenAI calls, DB writes, or
+    // provider invocations. Dead code when WORKER_SOAK_MODE is unset.
+    if (config.WORKER_SOAK_MODE === '1' && (job.data as { __soak?: boolean } | null)?.__soak === true) {
+      return await withHeavyJobSlot(async () => {
+        const t0 = Date.now();
+        // Real async heavy-job slot held for ~600ms — proves the shared
+        // HEAVY_JOB_CONCURRENCY cap participates and that BullMQ ack/retry
+        // accounting works under the slot. No external work performed.
+        await new Promise((r) => setTimeout(r, 600));
+        if (config.SOAK_FORCE_THROW === '1') {
+          throw new Error('SOAK_FORCE_THROW: deterministic ai-heavy retry-path exercise');
+        }
+        return { soak: true, lane: 'ai-heavy', heldMs: Date.now() - t0, jobId: String(job.id) };
+      });
+    }
     if (job.name !== 'campaign-planning') return; // other job types skip
     // Heavy-job slot acquired AFTER the skip check so skipped jobs never
     // hold a slot. Shared cap across ai-heavy + creator-render.
@@ -137,6 +156,7 @@ const campaignWorker = new Worker<CampaignPlanningJobPayload>(
   },
   {
     connection:     getSharedRedisClient(),
+    prefix:         getQueuePrefix(),
     concurrency:    3,
     limiter:        { max: 5, duration: 1_000 },
     drainDelay:     300,
@@ -183,6 +203,14 @@ async function ensureRedisReady(): Promise<void> {
  * Deployment provenance — logged once at boot so the deployed runtime
  * identity (commit, deploy, environment, Redis target) is immediately
  * visible in Railway logs without any telemetry platform.
+ *
+ * Also emits a canonical `deployment_integrity_snapshot` event under
+ * the structured-telemetry envelope so dashboards can immediately
+ * surface the deploy posture. The worker-boot variant has no live
+ * schema check (that's the verifier CLI's job, run pre-deploy) — it
+ * just reports provenance + the cached runtime view. If schema parity
+ * has diverged since deploy, the predeploy snapshot would already
+ * have caught it.
  */
 function logBootProvenance(): void {
   const env = process.env;
@@ -200,6 +228,35 @@ function logBootProvenance(): void {
     redisHost,
     pid:           process.pid,
   });
+  // Lazy import — the structured-telemetry helper imports
+  // WORKER_PROVENANCE which reads env at first import; this keeps the
+  // provenance log usable even in environments where structured
+  // telemetry isn't initialised (e.g. minimal test harnesses).
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { emitStructuredEvent } = require('../../observability/runtime/structuredTelemetry') as typeof import('../../observability/runtime/structuredTelemetry');
+    emitStructuredEvent(
+      'deployment_integrity_snapshot',
+      'info',
+      { run_id: null, planner_stage: 'worker-boot-integrity-snapshot' },
+      {
+        // Worker boot doesn't run a live schema check — that's the
+        // verifier's responsibility pre-deploy. We emit 'unknown' for
+        // schema fields here; dashboards that need a live verdict
+        // should consume the verifier's predeploy emission.
+        schema_parity: 'unknown',
+        ledger_desync_detected: null,
+        blocking_missing_columns: null,
+        warn_missing_columns: null,
+        runtime_env: env.RAILWAY_ENVIRONMENT_NAME || env.NODE_ENV || null,
+        redis_host: redisHost,
+        boot_marker: 'omnivyra-worker',
+      },
+    );
+  } catch (err) {
+    // Telemetry must never break worker boot. Swallow + log.
+    console.warn('[provenance] integrity snapshot emit failed (non-fatal):', (err as Error)?.message);
+  }
 }
 
 async function main(): Promise<void> {
@@ -216,8 +273,21 @@ async function main(): Promise<void> {
   // process so a single Railway service (Dockerfile.worker CMD = main.js)
   // covers both queues AND scheduled refresh. Non-fatal: a scheduler
   // failure must not stop queue workers from running.
-  startCron().catch((err) =>
-    console.error('[main] startCron failed (non-fatal — token refresh/crons will NOT run):', err?.message));
+  startCron()
+    .then(() => {
+      // Cron successfully initialized — flip health to ok.
+      setCronStatus('ok');
+    })
+    .catch((err) => {
+      // Cron init failure was previously SILENT — workers continued
+      // running but token-refresh stopped, posts started failing 2h
+      // later with no operator signal. Surface the degraded state in
+      // the health endpoint so it's immediately visible without
+      // crash-looping the pod (workers themselves are unaffected).
+      const reason = (err && (err.message ?? String(err))) || 'unknown';
+      setCronStatus('degraded', reason);
+      console.error('[main] startCron failed (non-fatal — token refresh/crons will NOT run):', reason);
+    });
 
   // Autoscaling monitor — fires signal when queue depth > 500 or latency > 10s
   let _cachedLatency = 0;

@@ -59,8 +59,8 @@ async function sendSlack(anomaly: AnomalyNotification): Promise<void> {
   if (!webhookUrl) return; // no Slack configured — log-only mode
 
   const emoji   = SEVERITY_EMOJI[anomaly.severity] ?? '🔔';
-  const appUrl  = process.env.NEXT_PUBLIC_APP_URL ?? '';
-  const dashUrl = `${appUrl}/super-admin/system-health`;
+  const { getCanonicalAppUrl } = await import('../../backend/config/getCanonicalAppUrl');
+  const dashUrl = `${getCanonicalAppUrl()}/super-admin/system-health`;
 
   const text = [
     `${emoji} *${anomaly.severity} ANOMALY DETECTED*`,

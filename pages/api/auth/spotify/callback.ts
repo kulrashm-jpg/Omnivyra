@@ -29,7 +29,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'spotify';
-    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+    const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
+    if (!valid) {
+      return res.status(401).json({ error: 'invalid_oauth_state' });
+    }
 
     const oauthCredentials = await getOAuthCredentialsForPlatform('spotify');
     if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {
@@ -99,13 +102,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
     const encryptedCols = encryptTokenColumns(tokenObj);
 
-    const { data: existingAccount } = await supabase
-      .from('social_accounts')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('platform', 'spotify')
-      .eq('platform_user_id', userInfo.id)
-      .single();
+    const companyIdUuid = companyId && /^[0-9a-f-]{36}$/i.test(companyId) ? companyId : null;
+    let existingAccount: { id: string } | null = null;
+    if (companyIdUuid) {
+      const { data: tenantRow } = await supabase
+        .from('social_accounts')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('company_id', companyIdUuid)
+        .eq('platform', 'spotify')
+        .eq('platform_user_id', userInfo.id)
+        .maybeSingle();
+      if (tenantRow) existingAccount = tenantRow;
+    }
 
     let accountId: string;
 
@@ -122,6 +131,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           token_expires_at: expiresAt,
           last_sync_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+          ...(companyIdUuid ? { company_id: companyIdUuid } : {}),
         })
         .eq('id', accountId);
 
@@ -134,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from('social_accounts')
         .insert({
           user_id: userId,
-          company_id: companyId || null,
+          company_id: companyIdUuid,
           platform: 'spotify',
           platform_user_id: userInfo.id,
           account_name: accountName,

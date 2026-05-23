@@ -44,8 +44,76 @@ import {
 import { startMetricsPersistence } from '../../lib/instrumentation/metricsPersistence';
 import { getSystemMetrics }        from '../../lib/instrumentation/systemMetrics';
 import { estimateCost }            from '../../lib/instrumentation/costEngine';
+import { config }                  from '@/config';
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const REDIS_URL = config.REDIS_URL;
+
+/**
+ * Environment isolation for BullMQ key namespace.
+ *
+ * Without a per-environment prefix, every BullMQ instance pointed at the
+ * same Redis (e.g. production Upstash) shares a single keyspace. A laptop
+ * running `npm run dev:full` against the production REDIS_URL — which
+ * `.env.local` resolves to in this project — would otherwise process and
+ * emit jobs on the same queues as the Railway production worker.
+ *
+ * Cloud platforms set their own env signals (VERCEL_ENV, RAILWAY_ENVIRONMENT)
+ * that we trust as authoritative. Absent both, we resolve to `local`
+ * regardless of OMNIVYRA_ENV — the whole point of this guard is that
+ * `.env.local` cannot be trusted to distinguish a laptop from production.
+ */
+function getRuntimeEnv(): string {
+  if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV;
+  if (process.env.RAILWAY_ENVIRONMENT) {
+    return process.env.RAILWAY_ENVIRONMENT === 'production'
+      ? 'production'
+      : `railway-${process.env.RAILWAY_ENVIRONMENT}`;
+  }
+  if (process.env.NODE_ENV === 'test') return 'test';
+  return 'local';
+}
+
+let _queuePrefix: string | null = null;
+
+/**
+ * Migration safety flag. When DISABLED (default), getQueuePrefix() returns
+ * BullMQ's default `'bull'` prefix so a deploy of the prefix-enabled code
+ * keeps consuming jobs from the legacy keyspace — no in-flight production
+ * work gets orphaned on rollout.
+ *
+ * Per-environment cutover protocol:
+ *   1. Deploy with the flag UNSET — verifies the prefix code path compiles
+ *      and ships without any behavior change.
+ *   2. Stop enqueueing (or wait until queue depths reach zero) so the
+ *      legacy `bull:*` keyspace is drained.
+ *   3. Set OMNIVYRA_QUEUE_PREFIX_ENABLED=true on the producer (Vercel) and
+ *      consumer (Railway worker) and restart both. All new jobs land in
+ *      `omnivyra:<env>::*` and are isolated from other environments.
+ *   4. The legacy `bull:*` keyspace becomes inert and TTL-expires.
+ *
+ * The flag is read once per process and memoized via `_queuePrefix` so an
+ * accidental mid-process toggle cannot split traffic across two keyspaces.
+ */
+function isQueuePrefixEnabled(): boolean {
+  return process.env.OMNIVYRA_QUEUE_PREFIX_ENABLED === 'true';
+}
+
+/**
+ * Returns the BullMQ `prefix` value that every Queue / Worker / QueueEvents /
+ * FlowProducer instance in this codebase MUST pass. Memoized so the resolved
+ * env is stable for the lifetime of the process.
+ *
+ * Returns BullMQ's default `'bull'` when the migration flag is OFF, so call
+ * sites are identical regardless of rollout phase.
+ */
+export function getQueuePrefix(): string {
+  if (_queuePrefix === null) {
+    _queuePrefix = isQueuePrefixEnabled()
+      ? `omnivyra:${getRuntimeEnv()}:`
+      : 'bull';
+  }
+  return _queuePrefix;
+}
 
 // Parse Redis connection options — includes TLS for Upstash hosts
 function parseRedisUrl(url: string) {
@@ -253,7 +321,7 @@ export function getSharedRedisClient(): IORedis {
 // only bounds the *union* of opted-in heavy processors. Not a system-wide
 // serializer (light queues never call this).
 const HEAVY_JOB_CONCURRENCY = (() => {
-  const o = Number(process.env.HEAVY_JOB_CONCURRENCY);
+  const o = Number(config.HEAVY_JOB_CONCURRENCY);
   return Number.isInteger(o) && o >= 1 && o <= 8 ? o : 3;
 })();
 let _heavyActive = 0;
@@ -416,6 +484,7 @@ export function getPostingQueue(): Queue {
   if (!postingQueue) {
     postingQueue = new Queue('posting', {
       connection: getRedisConnection(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: 3,
         backoff: { type: 'exponential', delay: 5_000 },
@@ -441,6 +510,7 @@ export function getAiHeavyQueue(): Queue {
   if (!aiHeavyQueue) {
     aiHeavyQueue = new Queue('ai-heavy', {
       connection: getRedisConnection(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: 2,
         backoff: { type: 'exponential', delay: 30_000 },
@@ -466,8 +536,19 @@ export function getEngagementPollingQueue(): Queue {
   if (!engagementPollingQueue) {
     engagementPollingQueue = new Queue('engagement-polling', {
       connection: getRedisConnection(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
-        attempts: 1,
+        // Retry transient API failures (platform pagination timeout,
+        // brief 502 / 429 from social platform APIs). attempts=1 was
+        // silent-data-loss for the polling window: a single transient
+        // error dropped the entire hour's batch with no recovery.
+        // 3 attempts × exponential backoff (30s, 60s, 120s) = ~210s
+        // worst-case wall time, safely under the hourly cron interval
+        // — no overlap, no retry storm. ingestComments is idempotent
+        // (dedups by platform comment id), so replay cannot duplicate
+        // ingestion state.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 30_000 },
         removeOnComplete: true,
         removeOnFail: true,
       },
@@ -491,6 +572,7 @@ export function getLeadThreadRecomputeQueue(): Queue {
   if (!leadThreadRecomputeQueue) {
     leadThreadRecomputeQueue = new Queue('lead-thread-recompute', {
       connection: getRedisConnection(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: true,
@@ -516,6 +598,7 @@ export function getConversationMemoryRebuildQueue(): Queue {
   if (!conversationMemoryRebuildQueue) {
     conversationMemoryRebuildQueue = new Queue('conversation-memory-rebuild', {
       connection: getRedisConnection(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: true,
@@ -541,6 +624,7 @@ export function getQueue(): Queue {
     
     publishQueue = new Queue(queueName, {
       connection: getRedisConnection(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: {
@@ -577,6 +661,7 @@ export function getWorker(
   const concurrency = opts?.concurrency ?? 5;
   const worker = new Worker(queueName, processor, {
     connection: getRedisConnection(),
+    prefix: getQueuePrefix(),
     concurrency,
     limiter: {
       max: 10,
@@ -617,6 +702,7 @@ export function getEngagementPollingWorker(): Worker {
     },
     {
       connection: getRedisConnection(),
+      prefix: getQueuePrefix(),
       concurrency: 1,
     }
   );
@@ -674,6 +760,7 @@ export function createQueue(name: string): Queue {
   
   const q = new Queue(name, {
     connection: getRedisConnection(),
+    prefix: getQueuePrefix(),
     defaultJobOptions: {
       attempts: 3,
       backoff: {
@@ -712,6 +799,7 @@ export function createWorker(
   
   const worker = new Worker(name, processor as any, {
     connection: getRedisConnection(),
+    prefix: getQueuePrefix(),
     concurrency,
     limiter: {
       max: 10,

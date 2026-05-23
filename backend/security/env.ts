@@ -36,7 +36,7 @@ function readEnv(): SecurityEnv {
   }
 
   if (!rpOrigin) {
-    errors.push('WEBAUTHN_RP_ORIGIN is required (e.g. "https://app.omnivyra.com").');
+    errors.push('WEBAUTHN_RP_ORIGIN is required (e.g. "https://www.omnivyra.com").');
   } else if (!/^https?:\/\//.test(rpOrigin)) {
     errors.push('WEBAUTHN_RP_ORIGIN must include a scheme (https:// or http://).');
   }

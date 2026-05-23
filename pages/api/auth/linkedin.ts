@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getOAuthCredentialsForPlatform } from '../../../backend/auth/oauthCredentialResolver';
-import { getBaseUrl } from '../../../backend/auth/getBaseUrl';
+import { getCanonicalOAuthRedirectUri } from '../../../backend/auth/getCanonicalOAuthRedirectUri';
 import { encodeOAuthState } from '../../../backend/auth/oauthState';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -28,7 +28,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const state = encodeOAuthState({ companyId, userId, returnTo });
 
-    const redirectUri = `${getBaseUrl(req)}/api/auth/linkedin/callback`;
+    const redirectUri = getCanonicalOAuthRedirectUri('linkedin', req);
     console.log('[LinkedIn OAuth] ── credentials source:', credentials?.source);
     console.log('[LinkedIn OAuth] ── client_id:', clientId);
     console.log('[LinkedIn OAuth] ── redirect_uri:', redirectUri);

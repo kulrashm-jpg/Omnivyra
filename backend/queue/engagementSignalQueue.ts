@@ -5,7 +5,7 @@
  */
 
 import { Queue } from 'bullmq';
-import { getConnectionConfig, applyQueueProtection } from './bullmqClient';
+import { getConnectionConfig, applyQueueProtection, getQueuePrefix } from './bullmqClient';
 import { instrumentQueue } from './queueInstrumentation';
 import { calculateEngagementScore } from '../services/engagementScoreService';
 import { supabase } from '../db/supabaseClient';
@@ -19,6 +19,7 @@ export function getEngagementSignalQueue(): Queue {
   if (!engagementSignalQueue) {
     engagementSignalQueue = new Queue(QUEUE_NAME, {
       connection: getConnectionConfig(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: 2,
         removeOnComplete: { count: 1000 },

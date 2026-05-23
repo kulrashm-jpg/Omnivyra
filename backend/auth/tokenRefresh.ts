@@ -564,8 +564,13 @@ export async function refreshSpotifyToken(
     return null;
   }
 
-  const clientId = process.env.SPOTIFY_CLIENT_ID;
-  const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
+  // Resolve via the same single source of truth used by the foreground OAuth
+  // callbacks: DB-stored platform_oauth_configs first, then env fallback.
+  // Reading process.env directly here would silently skip credentials added
+  // via the Super Admin UI, leaving the cron refresh job returning null.
+  const credentials = await getOAuthCredentialsForPlatform('spotify');
+  const clientId = credentials?.client_id;
+  const clientSecret = credentials?.client_secret;
 
   if (!clientId || !clientSecret) {
     console.error('❌ Spotify credentials not configured');
@@ -627,8 +632,13 @@ export async function refreshTikTokToken(
     return null;
   }
 
-  const clientKey = process.env.TIKTOK_CLIENT_ID;
-  const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
+  // Resolve via the same single source of truth used by the foreground OAuth
+  // callbacks (DB-stored platform_oauth_configs → env fallback). Direct
+  // process.env reads here would silently skip Super-Admin-configured
+  // credentials and let tokens drift to expiry.
+  const credentials = await getOAuthCredentialsForPlatform('tiktok');
+  const clientKey = credentials?.client_id;
+  const clientSecret = credentials?.client_secret;
 
   if (!clientKey || !clientSecret) {
     console.error('❌ TikTok credentials not configured');
@@ -696,8 +706,11 @@ export async function refreshRedditToken(
     return null;
   }
 
-  const clientId = process.env.REDDIT_CLIENT_ID;
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET;
+  // Resolve via the same single source of truth used by the foreground OAuth
+  // callbacks (DB-stored platform_oauth_configs → env fallback).
+  const credentials = await getOAuthCredentialsForPlatform('reddit');
+  const clientId = credentials?.client_id;
+  const clientSecret = credentials?.client_secret;
 
   if (!clientId || !clientSecret) {
     console.error('❌ Reddit credentials not configured');
@@ -765,8 +778,12 @@ export async function refreshPinterestToken(
     return null;
   }
 
-  const appId = process.env.PINTEREST_APP_ID;
-  const appSecret = process.env.PINTEREST_APP_SECRET;
+  // Resolve via the same single source of truth used by the foreground OAuth
+  // callbacks (DB-stored platform_oauth_configs → env fallback). The resolver
+  // maps 'pinterest' → PINTEREST_APP_ID/PINTEREST_APP_SECRET internally.
+  const credentials = await getOAuthCredentialsForPlatform('pinterest');
+  const appId = credentials?.client_id;
+  const appSecret = credentials?.client_secret;
 
   if (!appId || !appSecret) {
     console.error('❌ Pinterest credentials not configured');

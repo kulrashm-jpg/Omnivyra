@@ -1,9 +1,11 @@
 import { Queue, Worker, QueueEvents, type JobsOptions, type Job } from 'bullmq';
 import IORedis from 'ioredis';
-import { getSharedRedisClient } from '../queue/bullmqClient';
+import { getSharedRedisClient, getQueuePrefix } from '../queue/bullmqClient';
 import { createRenderJobId, type RenderJobStatus } from './creatorRenderQueue';
 import { recordCreatorRenderMetric } from './creatorRenderObservability';
 import { persistCreatorRenderJobState } from './creatorRenderPersistence';
+import { config, envIsExplicit } from '@/config';
+import { withSanctionedEnvAccess } from '@/lib/config/enforcer';
 
 export type CreatorDurableRenderJobName = 'infographic' | 'carousel' | 'pdf' | 'slider' | 'multi_slide_export';
 
@@ -31,7 +33,22 @@ let deadLetterQueue: Queue<CreatorDurableRenderJobData> | null = null;
 let queueEvents: QueueEvents | null = null;
 
 function redisUrl(): string | null {
-  return process.env.CREATOR_RENDER_REDIS_URL || process.env.REDIS_URL || null;
+  // Presence-toggled feature gate — durable queue is "configured" iff an
+  // operator explicitly set CREATOR_RENDER_REDIS_URL or REDIS_URL. The raw
+  // presence check is required here because `config.REDIS_URL` carries a
+  // schema default (redis://localhost:6379) that would always flip the gate
+  // on. The actual URL value is not used by callers (connection() uses the
+  // shared client) — only the null/non-null shape is.
+  if (!envIsExplicit('CREATOR_RENDER_REDIS_URL') && !envIsExplicit('REDIS_URL')) {
+    return null;
+  }
+  // Sanctioned read — `redisUrl()` is the canonical presence-gated URL
+  // resolver for the creator-render durable queue. Wrapping suppresses the
+  // misleading "should use @/config" warning (the @/config value carries a
+  // schema default which is exactly what we need to bypass here).
+  return withSanctionedEnvAccess(() =>
+    process.env.CREATOR_RENDER_REDIS_URL || process.env.REDIS_URL || null,
+  );
 }
 
 export function isDurableCreatorRenderQueueConfigured(): boolean {
@@ -50,17 +67,17 @@ function connection(): IORedis {
 }
 
 export function getCreatorRenderQueue(): Queue<CreatorDurableRenderJobData> {
-  if (!queue) queue = new Queue<CreatorDurableRenderJobData>(QUEUE_NAME, { connection: connection() });
+  if (!queue) queue = new Queue<CreatorDurableRenderJobData>(QUEUE_NAME, { connection: connection(), prefix: getQueuePrefix() });
   return queue;
 }
 
 export function getCreatorRenderDeadLetterQueue(): Queue<CreatorDurableRenderJobData> {
-  if (!deadLetterQueue) deadLetterQueue = new Queue<CreatorDurableRenderJobData>(DLQ_NAME, { connection: connection() });
+  if (!deadLetterQueue) deadLetterQueue = new Queue<CreatorDurableRenderJobData>(DLQ_NAME, { connection: connection(), prefix: getQueuePrefix() });
   return deadLetterQueue;
 }
 
 export function getCreatorRenderQueueEvents(): QueueEvents {
-  if (!queueEvents) queueEvents = new QueueEvents(QUEUE_NAME, { connection: connection() });
+  if (!queueEvents) queueEvents = new QueueEvents(QUEUE_NAME, { connection: connection(), prefix: getQueuePrefix() });
   return queueEvents;
 }
 
@@ -173,15 +190,49 @@ export async function cancelDurableCreatorRenderJob(jobId: string): Promise<Crea
   return { id: jobId, status: 'cancelled', progress: Number(job.progress || 0), attemptsMade: job.attemptsMade };
 }
 
+/**
+ * Soak-only branch: real Chromium launch with NO persistence, NO storage upload,
+ * NO DB writes, NO settlement mutation, NO OpenAI / provider call.
+ *
+ * Gated by `config.WORKER_SOAK_MODE === '1'` AND `job.data.__soak === true`.
+ * When the env flag is unset, this code path is unreachable.
+ *
+ * `SOAK_FORCE_THROW=1` makes the branch throw after the launch to exercise the
+ * BullMQ retry/DLQ path under controlled conditions.
+ */
+async function runCreatorRenderSoak(job: Job<unknown>): Promise<{ soak: true; chromiumMs: number; jobId: string; forcedThrow: boolean }> {
+  const t0 = Date.now();
+  const { chromium } = await import('playwright');
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.goto('about:blank');
+    await new Promise((r) => setTimeout(r, 800));
+    const chromiumMs = Date.now() - t0;
+    if (config.SOAK_FORCE_THROW === '1') {
+      throw new Error('SOAK_FORCE_THROW: deterministic retry/DLQ-path exercise');
+    }
+    return { soak: true, chromiumMs, jobId: String(job.id), forcedThrow: false };
+  } finally {
+    try { await browser?.close(); } catch { /* best-effort cleanup */ }
+  }
+}
+
 export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRenderJobData>) => Promise<unknown>): Worker<CreatorDurableRenderJobData> {
   return new Worker<CreatorDurableRenderJobData>(QUEUE_NAME, async (job) => {
+    // Soak-only opt-in branch — double-gated (env flag + per-job marker) so
+    // production is dead code when WORKER_SOAK_MODE is unset.
+    if (config.WORKER_SOAK_MODE === '1' && (job.data as { __soak?: boolean } | null)?.__soak === true) {
+      return runCreatorRenderSoak(job as Job<unknown>);
+    }
     const started = Date.now();
     const abortController = new AbortController();
     // Expose a cancellation signal to the render pipeline WITHOUT changing
     // processor signatures (additive; honored where the renderer checks it).
     (job as Job<CreatorDurableRenderJobData> & { signal?: AbortSignal }).signal = abortController.signal;
     try {
-      const timeoutMs = Number(job.data.timeoutMs ?? process.env.CREATOR_RENDER_JOB_TIMEOUT_MS ?? 180_000) || 180_000;
+      const timeoutMs = Number(job.data.timeoutMs ?? config.CREATOR_RENDER_JOB_TIMEOUT_MS ?? 180_000) || 180_000;
       const result = await withRenderTimeout(processor(job), timeoutMs, async () => {
         recordCreatorRenderMetric({
           name: 'render_timeout',
@@ -237,7 +288,7 @@ export function createCreatorRenderWorker(processor: (job: Job<CreatorDurableRen
     }
   }, {
     connection: connection(),
-    concurrency: Number(process.env.CREATOR_RENDER_WORKER_CONCURRENCY ?? 3) || 3,
+    concurrency: Number(config.CREATOR_RENDER_WORKER_CONCURRENCY ?? 3) || 3,
     // Explicit conservative stalled detection. creator-render was on the
     // BullMQ default (30s); pinned to 60s — fast crash recovery for this
     // crash-prone (sharp/pdf OOM) queue without increasing Redis poll cost

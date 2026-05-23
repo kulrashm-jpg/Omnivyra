@@ -26,7 +26,7 @@
 import { validateEnv, type EnvConfig } from './env.schema';
 import { maskRedisUrl } from '@/lib/redis/sanitizer';
 import { protectConfig } from '@/lib/config/deepFreeze';
-import { initEnforcer } from '@/lib/config/enforcer';
+import { initEnforcer, withSanctionedEnvAccess } from '@/lib/config/enforcer';
 
 /**
  * Module-level singleton
@@ -228,6 +228,30 @@ export function getConfigState() {
     }
   }
 })();
+
+/**
+ * Explicit-presence check on the raw process environment.
+ *
+ * Returns true ONLY when the env var was explicitly set to a non-empty string.
+ * It deliberately bypasses the validated/defaulted `config` object so callers
+ * can distinguish "operator explicitly set this" from "schema applied a
+ * default". Used for operator-warning presence checks and presence-toggled
+ * feature gates that must NOT be flipped on by schema defaults.
+ *
+ * Pure, side-effect free, no Zod, no validation — reads process.env at call
+ * time. Safe to import anywhere (no circular dependency risk).
+ */
+export function envIsExplicit(key: string): boolean {
+  // Wrapped in `withSanctionedEnvAccess` so the enforcer's GET-trap warning
+  // does not misattribute this canonical read to the CALLER (which is using
+  // @/config correctly by calling envIsExplicit). Semantics unchanged: still
+  // reads raw process.env, still bypasses schema/defaulting; only the
+  // misleading "should use @/config" warning is gated.
+  return withSanctionedEnvAccess(() => {
+    const v = process.env[key];
+    return typeof v === 'string' && v.length > 0;
+  });
+}
 
 /**
  * For testing: reset config state

@@ -120,6 +120,62 @@ if (fs.existsSync(envPath)) {
   process.stdout.write(`  critical env: SKIPPED (no .env.local)\n`);
 }
 
+// ── Schema parity gate ───────────────────────────────────────────────────────
+// Verify that the production database has every column the runtime writes.
+// Catches the migration-ledger-desync case where code expects a column that
+// hasn't been applied yet. Strict mode (PREDEPLOY_STRICT_SCHEMA=1) blocks
+// the deploy on any missing column; default mode warns but continues so the
+// gate stays usable when SUPABASE creds aren't in the predeploy shell.
+//
+// See scripts/verify-schema-parity.js for the column manifest and
+// docs/migration-discipline.md for the application protocol.
+process.stdout.write(`Verifying schema parity against production DB...\n`);
+const strictSchema = process.env.PREDEPLOY_STRICT_SCHEMA === '1';
+try {
+  execSync('node scripts/verify-schema-parity.js', { stdio: 'inherit' });
+  process.stdout.write(`  schema parity: OK\n`);
+} catch (e) {
+  const code = (e && typeof e.status === 'number') ? e.status : 1;
+  // Exit-code contract (see scripts/verify-schema-parity.js):
+  //   0 — all clean (no throw)
+  //   1 — BLOCKING: at least one runtime-critical column missing
+  //   2 — environmental failure (missing creds, network)
+  //   3 — WARN: only non-critical columns missing or ledger desync
+  if (code === 2) {
+    process.stdout.write(
+      `  schema parity: SKIPPED (env unavailable). Set PREDEPLOY_STRICT_SCHEMA=1 to require this gate.\n`,
+    );
+  } else if (code === 1) {
+    // BLOCKING-severity missing column. Block deploy unconditionally —
+    // strict-mode toggle doesn't apply to blocking issues; those are
+    // always deploy-fatal regardless of the strict flag.
+    process.stdout.write(
+      `RESULT: BLOCKED — schema parity check failed with BLOCKING severity.\n` +
+      `Apply missing migrations via Supabase SQL editor before deploying.\n` +
+      `See docs/migration-discipline.md.\n`,
+    );
+    process.exit(1);
+  } else if (code === 3) {
+    if (strictSchema) {
+      process.stdout.write(
+        `RESULT: BLOCKED — schema parity reported WARN (non-critical columns missing\n` +
+        `or UNSAFE_MIGRATION_LEDGER_STATE). PREDEPLOY_STRICT_SCHEMA=1 is set, so blocking.\n`,
+      );
+      process.exit(1);
+    }
+    process.stdout.write(
+      `  schema parity: WARN — non-critical columns missing or UNSAFE_MIGRATION_LEDGER_STATE.\n` +
+      `  Review structured output above. Continuing in non-strict mode. *** DO NOT run\n` +
+      `  'supabase db push' to remediate *** — see docs/migration-discipline.md.\n`,
+    );
+  } else {
+    // Unknown exit code — surface as warning, don't block.
+    process.stdout.write(
+      `  schema parity: WARN — verifier exited ${code} (unrecognized). Continuing.\n`,
+    );
+  }
+}
+
 process.stdout.write(
   `\nRESULT: OK — clean tree at ${shortSha} (== origin/main), worker typecheck + env OK.\n\n` +
   `Manual deploy is your action (not automated here). AFTER a verified\n` +

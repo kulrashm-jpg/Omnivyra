@@ -6,6 +6,8 @@
  * trends, and follower growth are always current.
  */
 
+import { getCanonicalAppUrl } from '../config/getCanonicalAppUrl';
+
 export type AccountContextRefreshResult = {
   account_id: string;
   refreshed: boolean;
@@ -18,7 +20,7 @@ export type AccountContextRefreshResult = {
  */
 export async function refreshAccountContext(accountId: string): Promise<AccountContextRefreshResult> {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
+    const baseUrl = getCanonicalAppUrl();
     const url = `${baseUrl}/api/account-context/analyze?companyId=${encodeURIComponent(accountId)}&refresh=1`;
 
     const response = await fetch(url, {

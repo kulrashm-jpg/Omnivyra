@@ -887,12 +887,12 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
       }
 
       const now = new Date().toISOString();
-      const insertPayload = buildScheduledPostInsertPayload({
+      const builtPayload = buildScheduledPostInsertPayload({
         output: renderedOutput,
         row,
         createdAtIso: now,
       });
-      const mediaUrls = insertPayload.media_urls;
+      const mediaUrls = builtPayload.media_urls;
       const assetHash = buildAssetHash(renderedOutput);
       const campaignId = String(renderedOutput.metadata.campaign_id || '');
       const idempotencyKey = `${row.dailyPlanId}:${campaignId}:${row.dbPlatform}:${assetHash}`;
@@ -901,6 +901,15 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
         dailyPlanId: row.dailyPlanId,
         timestamp: row.scheduledForIso,
       });
+      // Activate the uniqueness guarantee from migration 20260725's
+      // partial unique index uidx_scheduled_posts_idempotency_key. The
+      // key was historically computed but never written to the row,
+      // leaving idempotency_key NULL — the partial index (WHERE NOT
+      // NULL) didn't enforce uniqueness on NULL rows, so retries
+      // produced duplicate scheduled_posts. Wiring the key here closes
+      // the duplicate path; the existing 23505 collision handler below
+      // continues to recover from the now-real conflict.
+      const insertPayload = { ...builtPayload, idempotency_key: idempotencyKey };
 
       const { data: inserted, error } = await ownedDbTable('scheduled_posts')
         .insert(insertPayload)
@@ -910,9 +919,16 @@ export function createCreatorExecutionEngine(): CreatorExecutionEngine {
       if (error) {
         const failureType = classifyScheduleFailure(error.message);
         if ((error as any)?.code === '23505') {
+          // 23505 from our partial unique index — recover by looking up
+          // the existing row via idempotency_key (the actual colliding
+          // value). The prior code looked up by `inserted.id`, but
+          // `inserted` is null when the INSERT errored, so it always
+          // resolved to .eq('id', '') and returned nothing. With the
+          // idempotency_key now populated on every INSERT, this lookup
+          // returns the previously-inserted row reliably.
           const { data: existing, error: existingError } = await ownedDbTable('scheduled_posts')
             .select('id, platform_post_id')
-            .eq('id', String((inserted as any)?.id || ''))
+            .eq('idempotency_key', idempotencyKey)
             .maybeSingle();
           if (existingError) {
             return {

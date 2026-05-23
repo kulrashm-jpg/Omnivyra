@@ -40,6 +40,19 @@ const CONTENT_FORMATS: { value: ContentFormat; label: string; icon: string }[] =
   { value: 'poll',        label: 'Poll Post',   icon: '📊' },
 ];
 
+// Tweet is intrinsically bound to X/Twitter — if X isn't connected we hide
+// the chip entirely so users can't pick a format with no destination.
+// Other formats are platform-agnostic text and remain visible.
+//
+// Both keys ('x' and 'twitter') are listed because the codebase has two
+// competing canonicalizations: lib/shared/social/platformCapabilities.ts
+// resolves to 'x' (what BoltPlatformPicker emits via useBoltPlatformPicker),
+// while lib/shared/platforms.ts resolves to 'twitter'. Matching either
+// avoids a false-negative regardless of which side ships the platform key.
+const FORMAT_REQUIRED_PLATFORMS: Partial<Record<ContentFormat, string[]>> = {
+  tweet: ['x', 'twitter'],
+};
+
 const DURATION_OPTIONS = [
   { value: 1, label: '1 Week' },
   { value: 2, label: '2 Weeks' },
@@ -185,10 +198,34 @@ function stageIndex(stage: string | undefined): number {
   if (!stage) return -1;
   const exact = BOLT_PIPELINE.findIndex((s) => s.stage === stage);
   if (exact !== -1) return exact;
+  // ai/plan:<substage> — internal milestone inside "Creating week plan"
+  if (stage.startsWith('ai/plan:')) return 1;
   // sub-stages like generate-weekly-structure-week-1
   if (stage.startsWith('generate-weekly-structure')) return 3;
   return -1;
 }
+
+// Fallback rotating reassurance lines shown under "Creating week plan" when
+// the backend hasn't yet pushed an ai/plan:<substage> (e.g. first ~1s before
+// the orchestrator reaches its first emit). Each entry rotates every ~6s so
+// the panel never looks frozen. Kept generic since order of arrival of
+// backend substages is the ground truth — these only fill the gap.
+const AI_PLAN_FALLBACK_TIPS = [
+  'Still working — drafting your weekly arc…',
+  'Building a narrative that flows across all weeks…',
+  'Cross-checking against your audience and goals…',
+  'Optimizing the mix for your connected platforms…',
+];
+
+// Sub-stage display copy. Must mirror the keys emitted by the orchestrator
+// (campaignAiOrchestrator.runWithContext → emitSubStage). Anything the
+// backend emits that's not in this map falls back to the rotating tip below.
+const AI_PLAN_SUBSTAGE_TIPS: Record<string, string> = {
+  context: 'Gathering campaign context — pulling your brief, audience, and goals…',
+  drafting: 'Drafting weekly themes — generating the strategic arc across all weeks…',
+  scoring: 'Scoring strategic alignment — making sure each week ladders to your goals…',
+  refining: 'Refining language and tone — polishing copy to match your brand voice…',
+};
 
 function formatElapsed(ms: number): string {
   const sec = Math.floor(ms / 1000);
@@ -203,6 +240,45 @@ type ContentJobProgress = {
   posts_scheduled: number; estimated_seconds_remaining: number | null;
   is_complete: boolean;
 };
+
+/* ─── Sub-stage detail line shown under "Creating week plan" ────────────── */
+function AiPlanSubStageLine({ substage, substageLabel, elapsedMs }: {
+  substage?: string;
+  substageLabel?: string;
+  elapsedMs: number;
+}) {
+  // Backend-supplied substage wins. While it's still pending (first ~1s
+  // before the orchestrator reaches its first emit, or after a fallback
+  // path that skips emits), rotate through the generic reassurance lines
+  // so the panel never looks frozen.
+  const [tipIdx, setTipIdx] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTipIdx((i) => (i + 1) % AI_PLAN_FALLBACK_TIPS.length), 6000);
+    return () => clearInterval(id);
+  }, []);
+
+  const detail =
+    (substage && AI_PLAN_SUBSTAGE_TIPS[substage]) ||
+    substageLabel ||
+    AI_PLAN_FALLBACK_TIPS[tipIdx];
+
+  // After ~90s with no completion, hint at remaining time so users don't
+  // assume the job hung. Cap the message — we don't want to alarm.
+  const slowHint =
+    elapsedMs > 90_000 ? 'Plans this rich sometimes take 2+ minutes — still on track.' : null;
+
+  return (
+    <div className="ml-6 -mt-0.5 mb-1">
+      <p className="text-[10.5px] leading-snug text-amber-700">
+        <span className="inline-block w-1 h-1 rounded-full bg-amber-400 mr-1.5 align-middle animate-pulse" />
+        {detail}
+      </p>
+      {slowHint && (
+        <p className="mt-0.5 text-[10px] leading-snug text-gray-400">{slowHint}</p>
+      )}
+    </div>
+  );
+}
 
 /* ─── Inline BOLT progress tracker (shown inside the card) ──────────────── */
 function CardBoltProgress({ progress, theme, startedAt, contentJobs }: {
@@ -251,25 +327,38 @@ function CardBoltProgress({ progress, theme, startedAt, contentJobs }: {
         {BOLT_PIPELINE.map((step, i) => {
           const isDone    = currentIdx > i;
           const isCurrent = !isCompleted && currentIdx === i;
+          // ai/plan typically takes 60–120s — surface the orchestrator's
+          // internal milestone (or a rotating fallback) directly under the
+          // active step so the user knows the system is still progressing.
+          const showAiPlanDetail = isCurrent && step.stage === 'ai/plan';
           return (
-            <div key={step.stage} className="flex items-center gap-2">
-              {/* dot */}
-              <div className={`flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold
-                ${isDone    ? `${theme.weekDot} text-white`
-                : isCurrent ? 'border-2 border-amber-400 bg-amber-50'
-                : 'border border-gray-200 bg-gray-50'}`}>
-                {isDone ? '✓' : isCurrent
-                  ? <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-                  : null}
+            <React.Fragment key={step.stage}>
+              <div className="flex items-center gap-2">
+                {/* dot */}
+                <div className={`flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold
+                  ${isDone    ? `${theme.weekDot} text-white`
+                  : isCurrent ? 'border-2 border-amber-400 bg-amber-50'
+                  : 'border border-gray-200 bg-gray-50'}`}>
+                  {isDone ? '✓' : isCurrent
+                    ? <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    : null}
+                </div>
+                {/* label */}
+                <span className={`text-[11px] leading-tight
+                  ${isDone    ? 'text-gray-400 line-through'
+                  : isCurrent ? 'text-gray-900 font-semibold'
+                  : 'text-gray-300'}`}>
+                  {step.label}
+                </span>
               </div>
-              {/* label */}
-              <span className={`text-[11px] leading-tight
-                ${isDone    ? 'text-gray-400 line-through'
-                : isCurrent ? 'text-gray-900 font-semibold'
-                : 'text-gray-300'}`}>
-                {step.label}
-              </span>
-            </div>
+              {showAiPlanDetail && (
+                <AiPlanSubStageLine
+                  substage={progress.ai_plan_substage}
+                  substageLabel={progress.ai_plan_substage_label}
+                  elapsedMs={elapsedMs}
+                />
+              )}
+            </React.Fragment>
           );
         })}
       </div>
@@ -949,7 +1038,26 @@ export default function BoltStrategyView({ d }: { d: S }) {
                   Content Format <span className="font-normal text-gray-400">(select up to 2)</span>
                 </label>
                 <div className="grid grid-cols-2 gap-1.5 mt-2">
-                  {CONTENT_FORMATS.map((fmt) => {
+                  {CONTENT_FORMATS.filter((fmt) => {
+                    // While platforms are still loading, render the full list
+                    // so the chips don't flicker. Once loaded, hide formats
+                    // whose required platform isn't in the effective campaign
+                    // platform set — e.g. Tweet disappears unless X is going
+                    // to be used for this campaign.
+                    //
+                    // Effective set = user's explicit selection. If the user
+                    // hasn't picked any platform yet (selectedPlatforms empty
+                    // → planner falls back to all supported, see the warning
+                    // banner in BoltPlatformPicker), we treat the connected
+                    // set as effective so Tweet shows whenever X is connected.
+                    if (platformsLoading) return true;
+                    const required = FORMAT_REQUIRED_PLATFORMS[fmt.value];
+                    if (!required) return true;
+                    const effective = selectedPlatforms.length > 0
+                      ? selectedPlatforms
+                      : availablePlatforms;
+                    return required.some((p) => effective.includes(p));
+                  }).map((fmt) => {
                     const selected = contentFormats.includes(fmt.value);
                     const freq = formatFrequency[fmt.value] ?? 3;
                     return (

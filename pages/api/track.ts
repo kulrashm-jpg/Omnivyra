@@ -67,14 +67,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { data: company } = await supabase.from('company_profiles').select('company_id').eq('company_id', accountId).maybeSingle();
   if (!company) return res.status(204).end();
 
-  // Domain validation
+  // Domain validation — REQUIRED. When a tenant has no allowed_domain
+  // configured, reject the event silently (204). The previous behaviour
+  // ("skip the domain check") combined with CORS `*` let any browser POST
+  // events under any known company_id; since company_ids leak through client
+  // URLs throughout the app, that was an unauthenticated cross-tenant write
+  // vector into blog_analytics.
   const { data: settings } = await supabase.from('blog_intelligence_settings').select('allowed_domain, allow_subdomains').eq('company_id', accountId).maybeSingle();
-  if (settings?.allowed_domain) {
-    const origin  = String(req.headers.origin  ?? '');
-    const referer = String(req.headers.referer ?? '');
-    if (!domainAllowed(origin, referer, settings.allowed_domain, !!settings.allow_subdomains)) {
-      return res.status(204).end();
-    }
+  if (!settings?.allowed_domain) {
+    return res.status(204).end();
+  }
+  const origin  = String(req.headers.origin  ?? '');
+  const referer = String(req.headers.referer ?? '');
+  if (!domainAllowed(origin, referer, settings.allowed_domain, !!settings.allow_subdomains)) {
+    return res.status(204).end();
   }
 
   const ALLOWED_INTENT_TYPES = new Set(['pageview', 'pageleave', 'scroll_milestone', 'cta_click', 'link_click', 'copy', 'form_interaction']);

@@ -21,6 +21,7 @@
  */
 
 import { validateCronEnv } from '../utils/validateEnv';
+import { config } from '@/config';
 import { CronGuard } from '../utils/cronGuard';
 import { cronInstr } from '../utils/cronInstrumentation';
 import { shutdownAdminRuntimeConfig, getCronAdminConfig, shouldRunCronJob } from '../services/adminRuntimeConfig';
@@ -97,7 +98,7 @@ import { runInfluencerLearningWorker } from '../workers/influencerLearningWorker
 import { runInsightLearningWorker } from '../workers/insightLearningWorker';
 import { runBuyerIntentLearningWorker } from '../workers/buyerIntentLearningWorker';
 
-const CRON_INTERVAL_MS = parseInt(process.env.CRON_INTERVAL_SECONDS || '900') * 1000; // default 15 min
+const CRON_INTERVAL_MS = (config.CRON_INTERVAL_SECONDS ?? 900) * 1000; // default 15 min
 const LEAD_THREAD_QUEUE_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 // Safety-net enqueue intervals — cron fires a BullMQ drain job periodically as
 // a fallback for any rows that the event-driven path missed (e.g. Redis hiccup).

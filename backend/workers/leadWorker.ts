@@ -16,6 +16,7 @@ import { Worker } from 'bullmq';
 import { supabase } from '../db/supabaseClient';
 import { processLeadJobV1 } from '../services/leadJobProcessor';
 import { leadQueueConnection } from '../queue/leadQueue';
+import { getQueuePrefix } from '../queue/bullmqClient';
 
 const TIMEOUT_RECOVERY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const STUCK_JOB_AGE_MINUTES = 15;
@@ -53,6 +54,7 @@ const worker = new Worker(
   },
   {
     connection: leadQueueConnection,
+    prefix: getQueuePrefix(),
     concurrency: 1,
   }
 );

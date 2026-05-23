@@ -46,6 +46,14 @@ export interface CampaignAiPlanInput {
     performance_insights?: import('./../../lib/performance/performanceAnalyzer').PerformanceInsight | null;
     captured_at?: string | null;
   } | null;
+  /**
+   * Optional progress observer invoked at key internal milestones during
+   * generate_plan. Fired only on the happy path so callers (BOLT pipeline)
+   * can surface intra-stage progress to the UI — purely advisory, errors
+   * thrown inside the callback are swallowed by the orchestrator. Known
+   * substage keys: 'context' | 'drafting' | 'scoring' | 'refining'.
+   */
+  onSubStage?: (substage: string) => void;
 }
 
 export interface CampaignAiPlanResult {

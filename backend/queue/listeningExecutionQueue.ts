@@ -18,7 +18,7 @@
  */
 
 import { Queue, type JobsOptions } from 'bullmq';
-import { getRedisConfig } from './bullmqClient';
+import { getRedisConfig, getQueuePrefix } from './bullmqClient';
 
 export const LISTENING_EXECUTION_QUEUE_NAME = 'listening-executions' as const;
 
@@ -31,6 +31,7 @@ export const listeningExecutionDefaults: JobsOptions = {
 
 export const listeningExecutionQueue = new Queue(LISTENING_EXECUTION_QUEUE_NAME, {
   connection: getRedisConfig(),
+  prefix: getQueuePrefix(),
   defaultJobOptions: listeningExecutionDefaults,
 });
 

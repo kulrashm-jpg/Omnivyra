@@ -45,6 +45,41 @@ const RUNTIME_INTERNAL_ENV = new Set([
 ]);
 
 /**
+ * Re-entrancy/sanctioned-access flag. Set briefly during `envIsExplicit()`
+ * (the canonical helper for raw-presence checks exported by `@/config`) so
+ * the proxy GET trap does not emit a misleading "should use @/config"
+ * warning when the read IS happening through @/config. No semantic change:
+ * the read still returns the same value; only warning emission is gated.
+ */
+let _sanctionedDepth = 0;
+
+/**
+ * Run `fn` with sanctioned-access semantics — process.env reads inside
+ * will not emit the enforcer warning. Stack-walker attribution and audit
+ * logging are unaffected. Designed for the very small set of canonical
+ * helpers (currently: `envIsExplicit` in `@/config`) whose entire purpose
+ * is to read raw process.env without schema/defaulting.
+ */
+export function withSanctionedEnvAccess<T>(fn: () => T): T {
+  _sanctionedDepth++;
+  try {
+    return fn();
+  } finally {
+    _sanctionedDepth--;
+  }
+}
+
+/**
+ * Per-(caller, var) dedup for warnings. The same direct-env read happens
+ * repeatedly per request/job/poll, generating hundreds of identical lines
+ * per minute that drown out signal. We emit each (caller, var) tuple at
+ * most once per process; the audit log still records every access (so the
+ * full attribution trail is preserved for `getBypassSummary()` / health
+ * endpoints). No semantic change to detection or read behavior.
+ */
+const _warnedCallerVar = new Set<string>();
+
+/**
  * Module access log (for audit trail)
  */
 interface AccessRecord {
@@ -135,11 +170,15 @@ export function initEnforcer() {
 
           logAccess([prop], allowed);
 
-          if (!allowed && !RUNTIME_INTERNAL_ENV.has(prop)) {
-            console.warn(`[WARN] Direct process.env.${prop} access from ${caller} (should use @/config)`, {
-              caller,
-              varName: prop,
-            });
+          if (!allowed && !RUNTIME_INTERNAL_ENV.has(prop) && _sanctionedDepth === 0) {
+            const key = `${caller}\x00${prop}`;
+            if (!_warnedCallerVar.has(key)) {
+              _warnedCallerVar.add(key);
+              console.warn(`[WARN] Direct process.env.${prop} access from ${caller} (should use @/config)`, {
+                caller,
+                varName: prop,
+              });
+            }
           }
 
           return target[prop];

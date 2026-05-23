@@ -4,7 +4,7 @@
  */
 
 import { Queue } from 'bullmq';
-import { getConnectionConfig } from './bullmqClient';
+import { getConnectionConfig, getQueuePrefix } from './bullmqClient';
 
 let boltQueue: Queue | null = null;
 
@@ -12,6 +12,7 @@ export function getBoltQueue(): Queue {
   if (!boltQueue) {
     boltQueue = new Queue('bolt-execution', {
       connection: getConnectionConfig(),
+      prefix: getQueuePrefix(),
       defaultJobOptions: {
         attempts: 1,
         removeOnComplete: { age: 86400, count: 500 },

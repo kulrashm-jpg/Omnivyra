@@ -40,6 +40,11 @@ services:
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
       PORT: "8080"
+      # Soak-only opt-in flags. Default empty → production-equivalent behavior
+      # (the creator-render soak branch in creatorRenderDurableQueue.ts is dead
+      # code unless WORKER_SOAK_MODE=1 is explicitly set in the calling shell).
+      WORKER_SOAK_MODE: ${WORKER_SOAK_MODE:-}
+      SOAK_FORCE_THROW: ${SOAK_FORCE_THROW:-}
     ports:
       - "8080:8080"
 

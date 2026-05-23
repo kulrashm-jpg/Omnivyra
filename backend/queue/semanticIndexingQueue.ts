@@ -13,7 +13,7 @@
  */
 
 import { Queue, type JobsOptions } from 'bullmq';
-import { getRedisConfig } from './bullmqClient';
+import { getRedisConfig, getQueuePrefix } from './bullmqClient';
 import { SEMANTIC_PARTITION_QUEUE_NAME } from '../types/semanticIndexingPartition';
 
 export { SEMANTIC_PARTITION_QUEUE_NAME };
@@ -27,6 +27,7 @@ export const semanticIndexingDefaults: JobsOptions = {
 
 export const semanticIndexingQueue = new Queue(SEMANTIC_PARTITION_QUEUE_NAME, {
   connection: getRedisConfig(),
+  prefix: getQueuePrefix(),
   defaultJobOptions: semanticIndexingDefaults,
 });
 

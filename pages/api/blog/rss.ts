@@ -1,10 +1,12 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
 
-const SITE_URL =
-  process.env.NEXT_PUBLIC_APP_URL ||
-  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-  'https://omnivera.com';
+// RSS `<guid isPermaLink="true">` values are meant to be immutable — once a
+// reader has cached a GUID, changing it shows the same post as new. A preview
+// VERCEL_URL leak or the typo 'omnivera.com' fallback could permanently
+// poison subscribers' caches. Resolve through the single canonical helper.
+const SITE_URL = getCanonicalAppUrl();
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {

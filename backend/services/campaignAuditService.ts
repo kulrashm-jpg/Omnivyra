@@ -289,8 +289,6 @@ export async function generateCampaignAuditReport(
   const externalApiSnapshot = await getExternalApiRuntimeSnapshot(
     enabledApis.map((api) => api.id)
   );
-  console.log('EXTERNAL_API_COMPANY_SCOPE', resolvedCompanyId);
-  console.log('EXTERNAL_API_SOURCES_USED', enabledApis.map((api) => api.id));
   const learningStatus = getLearningStatus(campaignId ?? null);
   const omnivyraHealth = getOmnivyraHealthReport();
   const omnivyraMeta = getLastMeta();

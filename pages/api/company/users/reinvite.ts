@@ -145,7 +145,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const rawToken = await createInvitationToken(userId, normalizedEmail, companyId, actorId);
-    const inviteUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invite?token=${rawToken}`;
+    const inviteUrl = `${getCanonicalAppUrl()}/accept-invite?token=${rawToken}`;
 
     // Send the invite via SES through the email_jobs queue. Idempotency
     // key bound to (user, company) so back-to-back reinvite requests

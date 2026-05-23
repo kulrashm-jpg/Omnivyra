@@ -347,7 +347,6 @@ export async function getEnabledApis(companyId?: string | null): Promise<Externa
 
 export async function getAvailableApis(companyId?: string | null): Promise<ExternalApiSource[]> {
   if (!companyId) return [];
-  console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   const baseQuery = () =>
     ownedDbTable('external_api_sources').select('*').eq('is_active', true).order('created_at', { ascending: true });
 

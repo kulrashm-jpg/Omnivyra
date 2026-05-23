@@ -25,6 +25,7 @@
 
 import { supabase } from '../db/supabaseClient';
 import { logger } from './logger';
+import { getCanonicalAppUrl } from '../config/getCanonicalAppUrl';
 
 export interface SendDomainVerificationReminderInput {
   user_email: string;
@@ -32,11 +33,7 @@ export interface SendDomainVerificationReminderInput {
 }
 
 function appUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_APP_URL
-    || process.env.APP_URL
-    || 'https://omnivyra.com'
-  ).replace(/\/+$/, '');
+  return getCanonicalAppUrl();
 }
 
 export async function sendDomainVerificationReminder(

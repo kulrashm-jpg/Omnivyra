@@ -8,6 +8,7 @@ import { getIntegration, getActiveIntegration, type Integration } from './integr
 import { extractBlogContext } from '../../lib/blog/blockExtractor';
 import { createPublishingJob } from './publishingJobService';
 import { isCmsProvider } from './cms/registry';
+import { captureBlogPublishSnapshotSafely } from './publishSnapshotCaptureService';
 
 export type BlogStatus = 'draft' | 'scheduled' | 'published' | 'failed' | 'archived';
 
@@ -354,6 +355,19 @@ export async function publishBlogPost(
     integration_id: usedIntegrationId,
     updated_at:     new Date().toISOString(),
   }).eq('id', id).eq('company_id', companyId);
+
+  // Non-executing publish-snapshot capture at the scheduling/finalization
+  // boundary. Off by default; gated behind PUBLISH_SNAPSHOT_CAPTURE_ENABLED.
+  // Best-effort and non-throwing — it never affects the publish result.
+  if (process.env.PUBLISH_SNAPSHOT_CAPTURE_ENABLED === 'true' && result.success) {
+    await captureBlogPublishSnapshotSafely({
+      blog: blog as unknown as Record<string, unknown>,
+      renderedHtml: htmlContent,
+      integrationType: integration?.type ?? null,
+      lifecyclePhase: blog.scheduled_publish_at ? 'scheduling' : 'finalization',
+      captureSource: 'blog_publish_lifecycle',
+    });
+  }
 
   return result;
 }

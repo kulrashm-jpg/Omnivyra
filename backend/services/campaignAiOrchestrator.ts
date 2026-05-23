@@ -141,6 +141,15 @@ async function runWithContext(
   let validationReasons: string[] = [];
   let alignmentScoreForDebug: number | null = null;
 
+  // Defensive sub-stage emitter — advisory only, never blocks the plan run.
+  // Fires only for generate_plan so refine_day / platform_customize stay quiet.
+  const emitSubStage = (substage: string) => {
+    if (input.mode !== 'generate_plan') return;
+    try { input.onSubStage?.(substage); } catch { /* observer errors are swallowed */ }
+  };
+
+  emitSubStage('context');
+
   const {
     platformContentTypePrefs,
     effectivePrefilledPlanning,
@@ -189,6 +198,7 @@ async function runWithContext(
     await refreshAccountContext(ctx.companyId).catch(() => { /* non-blocking */ });
   }
 
+  emitSubStage('drafting');
   const { rawOutput } = await generateCampaignPlanAI(planningInput);
 
   let raw = rawOutput || '';
@@ -325,6 +335,7 @@ async function runWithContext(
 
   let alignmentResult: AlignmentEvaluation | null = null;
   if (input.mode === 'generate_plan') {
+    emitSubStage('scoring');
     try {
       alignmentResult = await evaluateWeeklyAlignment({
         campaignId: input.campaignId,
@@ -408,6 +419,7 @@ async function runWithContext(
   // Apply strategy mapping, momentum recovery, and language refinement BEFORE save
   // so the database stores refined weekly plan text (Weekly Plan → refined → Daily Distribution → BOLT)
   if (input.mode === 'generate_plan' && Array.isArray(structured?.weeks) && structured.weeks.length > 0) {
+    emitSubStage('refining');
     structured = await postProcessGeneratedPlan({
       structured,
       campaignId: input.campaignId,

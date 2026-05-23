@@ -25,6 +25,7 @@
 import { Queue, type JobsOptions } from 'bullmq';
 import { createHash } from 'crypto';
 import { leadQueueConnection } from './leadQueue';
+import { getQueuePrefix } from './bullmqClient';
 
 const LEAD_QUEUE_ATTEMPTS = Math.max(
   1,
@@ -55,6 +56,7 @@ export const leadQueueHardenedDefaults: JobsOptions = {
 
 export const leadDeadLetterQueue = new Queue(LEAD_DLQ_NAME, {
   connection: leadQueueConnection,
+  prefix: getQueuePrefix(),
   defaultJobOptions: {
     attempts: 1,
     removeOnComplete: { age: 30 * 24 * 3600 },

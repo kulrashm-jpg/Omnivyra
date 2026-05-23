@@ -6,7 +6,7 @@
  */
 
 import { Queue } from 'bullmq';
-import { applyQueueProtection } from './bullmqClient';
+import { applyQueueProtection, getQueuePrefix } from './bullmqClient';
 import { instrumentQueue } from './queueInstrumentation';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
@@ -60,6 +60,7 @@ export function getIntelligencePollingQueue(): Queue {
     const connection = getConnection();
     intelligencePollingQueue = new Queue(QUEUE_NAME, {
       connection,
+      prefix: getQueuePrefix(),
       defaultJobOptions: DEFAULT_JOB_OPTIONS,
     });
     intelligencePollingQueue.on('error', (err) => {

@@ -3,21 +3,12 @@ import { supabase } from '../../../../backend/db/supabaseClient';
 import { setToken, encryptTokenColumns, TokenObject } from '../../../../backend/auth/tokenStore';
 import { getOAuthCredentialsForPlatform } from '../../../../backend/auth/oauthCredentialResolver';
 import { getSupabaseUserFromRequest } from '../../../../backend/services/supabaseAuthService';
-import { getBaseUrl } from '../../../../backend/auth/getBaseUrl';
+import { getCanonicalOAuthRedirectUri } from '../../../../backend/auth/getCanonicalOAuthRedirectUri';
 import { decodeOAuthState } from '../../../../backend/auth/oauthState';
 import { checkAndGrantSetupCredits } from '../../../../backend/services/earnCreditsService';
 import { saveToken as saveCommunityAiToken } from '../../../../backend/services/platformTokenService';
 import { persistGrantedScopes, normaliseScopes } from '../../../../backend/auth/oauthScopePersistence';
 import { config } from '@/config';
-
-/** Derives base URL from the actual request host — never the NEXT_PUBLIC_APP_URL env var.
- *  This ensures the redirect_uri used in token exchange exactly matches what was sent
- *  in the authorization request, even when NEXT_PUBLIC_APP_URL points to production. */
-function getRequestBaseUrl(req: NextApiRequest): string {
-  const proto = (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() || 'http';
-  const host = (req.headers['x-forwarded-host'] as string | undefined) || (req.headers.host as string) || 'localhost:3000';
-  return `${proto}://${host}`;
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -40,7 +31,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'linkedin';
-    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+    const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
+    if (!valid) {
+      return res.status(401).json({ error: 'invalid_oauth_state' });
+    }
 
     const credentials = await getOAuthCredentialsForPlatform(platform);
     if (!credentials?.client_id || !credentials?.client_secret) {
@@ -57,7 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         code: code as string,
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
-        redirect_uri: `${getRequestBaseUrl(req)}/api/auth/linkedin/callback`,
+        redirect_uri: getCanonicalOAuthRedirectUri('linkedin', req),
       }),
     });
 

@@ -341,7 +341,6 @@ export async function getApiConfigByPlatform(
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return null;
   }
-  console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   const { data, error } = await ownedDbTable('external_api_sources')
     .select('*')
     .eq('company_id', companyId)

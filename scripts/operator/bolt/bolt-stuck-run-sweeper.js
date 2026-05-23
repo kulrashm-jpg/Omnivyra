@@ -92,19 +92,27 @@ async function main() {
         ORDER BY heartbeat_at NULLS FIRST
         LIMIT 100
       )
+      -- Forensic-integrity: the sweeper NEVER touches error_message /
+      -- raw_error_message / failed_stage — those are the exclusive
+      -- domain of persistPipelineFailure(). The sweeper only records
+      -- abandonment metadata in dedicated columns. Two flavours of
+      -- failure (real stage-thrown cause + sweeper-detected abandonment)
+      -- can now coexist on the same row without either erasing the
+      -- other. failed_after_ms is still updated because it's a
+      -- timing measurement, not a causal claim.
       UPDATE bolt_execution_runs r
-         SET status              = 'failed',
-             error_message       = $2,
-             raw_error_message   = $3,
-             failed_stage        = 'stuck',
-             failed_after_ms     = EXTRACT(EPOCH FROM (now() - r.created_at)) * 1000,
-             lock_owner          = NULL,
-             lock_expires_at     = NULL,
-             updated_at          = now()
+         SET status                  = 'failed',
+             abandonment_reason      = 'operator_stuck_sweep',
+             abandonment_detected_at = now(),
+             failed_after_ms         = EXTRACT(EPOCH FROM (now() - r.created_at)) * 1000,
+             lock_owner              = NULL,
+             lock_expires_at         = NULL,
+             updated_at              = now()
         FROM stuck s
        WHERE r.id = s.id
-       RETURNING r.id, r.current_stage, r.campaign_id;
-    `, [STUCK_THRESHOLD_SECONDS, FRIENDLY_MSG, `Run stuck: no heartbeat for >${STUCK_THRESHOLD_SECONDS}s and lock expired.`]);
+         AND r.abandonment_detected_at IS NULL
+       RETURNING r.id, r.current_stage, r.campaign_id, r.error_message IS NOT NULL AS had_diagnostic;
+    `, [STUCK_THRESHOLD_SECONDS]);
 
     recovered = sweptRuns.length;
 
@@ -115,12 +123,22 @@ async function main() {
         run_id: r.id,
         stage: r.current_stage || 'unknown',
         status: 'failed',
-        // Metadata mirrors the shape persistPipelineFailure writes for
-        // in-pipeline failures, so downstream queries don't have to special-case stuck runs.
+        // Per-row audit record. Records the abandonment as a discrete
+        // event without touching the run row's error_message fields
+        // (those remain the domain of persistPipelineFailure). The
+        // `had_pre_existing_diagnostic` flag separates "swept a row
+        // that already had a real failure cause" from "swept a row
+        // that had no diagnostic" — high-signal for forensic
+        // reconstruction.
         metadata: {
-          error_message: FRIENDLY_MSG,
-          raw_error_message: `Run stuck: no heartbeat for >${STUCK_THRESHOLD_SECONDS}s and lock expired.`,
-          error_type: 'stuck',
+          abandonment_reason: 'operator_stuck_sweep',
+          stuck_threshold_seconds: STUCK_THRESHOLD_SECONDS,
+          had_pre_existing_diagnostic: Boolean(r.had_diagnostic),
+          // Single-hop causal link. Points operators at the prior
+          // event that would carry the real cause (typically
+          // bolt_pipeline_error from persistPipelineFailure). No
+          // recursive chasing — one hop is sufficient.
+          originating_failure_event: r.had_diagnostic ? 'bolt_pipeline_error' : null,
           retriable: true,
           recovered_by: 'bolt-stuck-run-sweeper',
           swept_at: ranAt,

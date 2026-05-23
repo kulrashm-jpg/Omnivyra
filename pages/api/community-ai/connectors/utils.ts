@@ -24,11 +24,12 @@ export function getCommunityAiConnectorCallbackUrl(platform: string, req?: impor
     const host = rawHost.replace(/^127\.0\.0\.1(:|$)/, 'localhost$1');
     baseUrl = `${proto}://${host}`;
   } else {
-    baseUrl = (
-      process.env.NEXT_PUBLIC_APP_URL ||
-      process.env.NEXT_PUBLIC_BASE_URL ||
-      'http://localhost:3000'
-    ).replace(/\/$/, '');
+    // No request context (background / service caller). Canonical URL via
+    // the validated config — was previously a localhost fallback that could
+    // leak unreachable callback URLs into stored provider configs when
+    // NEXT_PUBLIC_APP_URL was unset on the runtime.
+    const { getCanonicalAppUrl } = require('../../../../backend/config/getCanonicalAppUrl') as { getCanonicalAppUrl: () => string };
+    baseUrl = getCanonicalAppUrl();
   }
 
   return `${baseUrl}/api/community-ai/connectors/${platform}/callback`;

@@ -101,17 +101,23 @@ export async function sweepStaleExecutions(
     const { ownedDbTable } = await import('../db/writeOwner');
     const nowIso = new Date().toISOString();
     const cutoffIso = new Date(Date.now() - staleMs).toISOString();
-    const patch = {
+    // Forensic-integrity contract (aligned with the inline + operator
+    // sweepers): NEVER touch error_message / raw_error_message /
+    // failed_stage — those are the exclusive domain of
+    // persistPipelineFailure. The sweep ONLY records abandonment
+    // metadata in dedicated columns so the real stage-thrown cause
+    // (if any) survives alongside the sweep marker. The progress
+    // endpoint derives a user-facing message from abandonment_reason
+    // when error_message is null.
+    const patch: Record<string, unknown> = {
       status: 'failed',
-      error_message:
-        'Your campaign was interrupted by a worker restart and could not resume automatically. Please try again.',
-      raw_error_message: `Stale execution reclaimed by sweep: no heartbeat for >${Math.round(staleMs / 1000)}s.`,
-      failed_stage: 'stale-sweep',
+      abandonment_reason: 'cron_stale_execution_sweep',
+      abandonment_detected_at: nowIso,
       lock_owner: null,
       updated_at: nowIso,
     };
 
-    // Primary attempt: include lock_expires_at predicate when present.
+    // Primary attempt: include lock_expires_at + abandonment columns.
     let reclaimed = 0;
     try {
       const { data, error } = await ownedDbTable('bolt_execution_runs')
@@ -119,13 +125,25 @@ export async function sweepStaleExecutions(
         .in('status', ['started', 'running'])
         .lt('heartbeat_at', cutoffIso)
         .or(`lock_expires_at.is.null,lock_expires_at.lt.${nowIso}`)
+        .is('abandonment_detected_at', null)
         .select('id');
       if (error) throw error;
       reclaimed = Array.isArray(data) ? data.length : 0;
     } catch (primaryErr) {
-      // Schema desync fallback: heartbeat-only, no lock_expires_at.
+      // Schema desync fallback: drop abandonment columns AND
+      // lock_expires_at if the migration hasn't been applied yet.
+      // Without forensic columns the sweep falls back to legacy
+      // behavior — flips status to failed only — but still does NOT
+      // clobber error_message. The fallback is the absolute floor of
+      // safety; full forensic integrity requires migrations 20260725
+      // and 20260727 to be applied.
+      const fallbackPatch = {
+        status: 'failed',
+        lock_owner: null,
+        updated_at: nowIso,
+      };
       const { data, error } = await ownedDbTable('bolt_execution_runs')
-        .update(patch)
+        .update(fallbackPatch)
         .in('status', ['started', 'running'])
         .lt('heartbeat_at', cutoffIso)
         .select('id');

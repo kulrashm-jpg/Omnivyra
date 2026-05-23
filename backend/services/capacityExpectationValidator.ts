@@ -1,3 +1,5 @@
+import { enforceCapacityContract } from './campaignAiCapacity';
+
 type CapacityValidationStatus = 'valid' | 'invalid' | 'balanced';
 
 export type CapacityValidationResult = {
@@ -76,7 +78,25 @@ function parseCapacityByType(value: unknown): CapacityByType {
   return { ...EMPTY_BY_TYPE };
 }
 
-function coerceTotalCount(value: unknown): number {
+/**
+ * Sum a capacity-record-shaped value to a single non-negative integer.
+ *
+ * Post-normalization contract: callers reaching this validator must have
+ * already run their inputs through `normalizePlannerCapacityInputs` in
+ * `backend/services/campaignAiCapacity.ts`, so by the time we get here
+ * the value should be `null | number | Record<string, number>`. A string
+ * arriving here is contract drift — historically the function silently
+ * coerced strings to 0, which masked planner failures by making
+ * available_content_total = 0 indistinguishable from a real "user has
+ * no inventory" answer.
+ *
+ * We still return 0 for unexpected types (defensive — never throw from
+ * inside the validator) BUT we emit a structured warning so the drift
+ * is visible in logs and any monitoring dashboard. Pair with the
+ * `assertCapacityRecord` helper at the caller side when stricter
+ * enforcement is appropriate.
+ */
+function coerceTotalCount(value: unknown, fieldName?: string): number {
   if (value == null) return 0;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
   if (typeof value === 'object' && !Array.isArray(value)) {
@@ -86,6 +106,32 @@ function coerceTotalCount(value: unknown): number {
     }
     return sum;
   }
+  // Chokepoint-bypass detection. By the time a value reaches this
+  // branch, it should already have been normalized — anything else
+  // is a contract violation. enforceCapacityContract dispatches based
+  // on PLANNER_CONTRACT_ENFORCEMENT_MODE:
+  //   shadow → emit 'info' telemetry, return 0 (current state for migration)
+  //   warn   → emit 'warn' telemetry, return 0 (default)
+  //   strict → emit 'error' telemetry + throw (post-soak hardening)
+  // fieldName is best-effort: only `weekly_capacity` and
+  // `available_content` reach here in practice.
+  if (fieldName === 'weekly_capacity' || fieldName === 'available_content') {
+    const { shouldThrow } = enforceCapacityContract(value, fieldName, null);
+    if (shouldThrow) {
+      throw new Error(
+        `[capacity-contract] strict enforcement: expected normalized Record<string, number> at ${fieldName}, ` +
+        `received ${Array.isArray(value) ? 'array' : typeof value}. ` +
+        `Funnel raw inputs through normalizePlannerCapacityInputs() at the orchestrator chokepoint.`,
+      );
+    }
+  }
+  // TODO(remove-after-strict-mode-stable): once
+  // PLANNER_CONTRACT_ENFORCEMENT_MODE=strict has been live for ≥1
+  // release cycle with zero `planner_contract_violation` events at
+  // severity:'error', this defensive `return 0` becomes dead code.
+  // Replace the entire non-record branch with a hard throw and drop
+  // enforceCapacityContract's shouldThrow:false return path. See
+  // docs/planner-compatibility-retirement.md §2.
   return 0;
 }
 
@@ -288,8 +334,8 @@ export function validateCapacityVsExpectation(input: {
     ? Math.min(baselineUnique, repurposingImplied)
     : baselineUnique;
 
-  const weekly_capacity_total = coerceTotalCount(input.weekly_capacity);
-  const available_content_total = coerceTotalCount(input.available_content);
+  const weekly_capacity_total = coerceTotalCount(input.weekly_capacity, 'weekly_capacity');
+  const available_content_total = coerceTotalCount(input.available_content, 'available_content');
   const effective_capacity_total = Math.max(0, weekly_capacity_total * campaignWeeks - exclusive_campaigns_total);
   const supply_total = available_content_total + Math.max(0, (weekly_capacity_total * campaignWeeks) - exclusive_campaigns_total);
 
@@ -372,10 +418,22 @@ export function validateCapacityForContentMix(input: {
 
   if (rows.length === 0) return null;
 
-  return validateCapacityVsExpectation({
-    platform_content_requests: rows,
+  // Defensive normalization. This entry point is reachable from the
+  // /api/campaigns/validate-frequency HTTP endpoint, which passes raw
+  // body fields without going through the orchestrator chokepoint.
+  // Normalizing here is idempotent against records, so well-behaved
+  // callers pay only the type-check cost.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { normalizePlannerCapacityInputs } = require('./campaignAiCapacity') as typeof import('./campaignAiCapacity');
+  const normalized = normalizePlannerCapacityInputs({
     available_content: input.available_content,
     weekly_capacity: input.weekly_capacity,
+  });
+
+  return validateCapacityVsExpectation({
+    platform_content_requests: rows,
+    available_content: normalized.available_content,
+    weekly_capacity: normalized.weekly_capacity,
     exclusive_campaigns: input.exclusive_campaigns ?? 0,
     cross_platform_sharing: { enabled: input.cross_platform_sharing_enabled },
     campaign_duration_weeks: input.duration_weeks,

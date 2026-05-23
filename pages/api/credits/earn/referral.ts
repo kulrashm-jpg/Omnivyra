@@ -28,7 +28,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!roleRow) return res.status(400).json({ error: 'No active company' });
   const orgId = (roleRow as any).company_id as string;
   const code  = referralCodeFromUserId(user.id);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://www.omnivyra.com';
+  const { getCanonicalAppUrl } = await import('../../../../backend/config/getCanonicalAppUrl');
+  const appUrl = getCanonicalAppUrl();
 
   // ── GET — return code + referral history ──────────────────────────────────
   if (req.method === 'GET') {

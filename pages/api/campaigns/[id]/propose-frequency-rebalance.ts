@@ -4,6 +4,7 @@ import { getSupabaseUserFromRequest } from '../../../../backend/services/supabas
 import { getUserRole } from '../../../../backend/services/rbacService';
 import { getLatestCampaignVersion } from '../../../../backend/db/campaignVersionStore';
 import { getLatestApprovedCampaignVersion } from '../../../../backend/db/campaignApprovedVersionStore';
+import { getCanonicalAppUrl } from '../../../../backend/config/getCanonicalAppUrl';
 
 const getFrequencyValue = (value: any) => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -28,8 +29,13 @@ const applyFrequencyValue = (value: any, next: number) => {
   return next;
 };
 
+// Prefer the browser-supplied `Origin` header (correctly TLS-aware on Vercel
+// preview/prod, and gives a working URL for localhost dev). Fall back to the
+// canonical app URL instead of the previous `http://${req.headers.host}` —
+// that fallback hardcoded http:// regardless of TLS and trusted a raw
+// (header-injectable) host string.
 const buildOrigin = (req: NextApiRequest) =>
-  req.headers.origin || `http://${req.headers.host}`;
+  req.headers.origin || getCanonicalAppUrl();
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

@@ -63,7 +63,6 @@ export async function getAvailableApis(companyId?: string | null): Promise<Exter
     console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return [];
   }
-  console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   const baseQuery = () =>
     supabase
       .from('external_api_sources')

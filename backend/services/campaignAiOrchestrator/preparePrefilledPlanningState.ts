@@ -10,6 +10,7 @@ import {
 import {
   normalizeCapacityCounts,
   normalizeCapacityCountsWithBreakdown,
+  normalizePlannerCapacityInputs,
   parseFrequencyPerWeek,
 } from '../campaignAiCapacity';
 
@@ -158,15 +159,42 @@ export async function preparePrefilledPlanningState(args: {
     return false;
   };
 
-  const normalizedAvailableContent = normalizeCapacityCountsWithBreakdown((prefilledPlanning as any)?.available_content);
-  const normalizedWeeklyCapacity = normalizeCapacityCountsWithBreakdown(
-    (prefilledPlanning as any)?.weekly_capacity ?? (prefilledPlanning as any)?.content_capacity
-  );
+  // Canonical normalization chokepoint. Every caller of the
+  // orchestrator (BOLT pipeline, /api/campaigns/ai/plan,
+  // recommendation→campaign builders) funnels through
+  // preparePrefilledPlanningState, so wiring the canonical
+  // normalizer here centralizes the capacity contract for the
+  // entire planner surface. See normalizePlannerCapacityInputs
+  // in backend/services/campaignAiCapacity.ts for the contract
+  // spec — the key change vs the prior inline normalization is
+  // that has_existing_content is now an explicit boolean field
+  // rather than an implicit interpretation of a string in
+  // available_content.
+  const capacityNormalized = normalizePlannerCapacityInputs({
+    available_content: (prefilledPlanning as any)?.available_content,
+    weekly_capacity: (prefilledPlanning as any)?.weekly_capacity,
+    content_capacity: (prefilledPlanning as any)?.content_capacity,
+    has_existing_content:
+      typeof (prefilledPlanning as any)?.has_existing_content === 'boolean'
+        ? (prefilledPlanning as any).has_existing_content
+        : null,
+    // Telemetry context. Emits a structured `planner_contract_violation`
+    // event only when the input arrived in a non-canonical shape (e.g.
+    // legacy string available_content, content_capacity-only mirror).
+    // Zero-cost when inputs are already canonical.
+    _telemetry: {
+      caller: 'preparePrefilledPlanningState',
+      run_id: typeof (input as any)?.campaignId === 'string' ? (input as any).campaignId : null,
+      planner_mode: typeof input?.mode === 'string' ? input.mode : null,
+      campaign_type: typeof (campaignRow as any)?.campaign_type === 'string' ? (campaignRow as any).campaign_type : null,
+    },
+  });
   prefilledPlanning = {
     ...prefilledPlanning,
-    available_content: normalizedAvailableContent,
-    weekly_capacity: normalizedWeeklyCapacity,
-    content_capacity: normalizedWeeklyCapacity,
+    has_existing_content: capacityNormalized.has_existing_content,
+    available_content: capacityNormalized.available_content,
+    weekly_capacity: capacityNormalized.weekly_capacity,
+    content_capacity: capacityNormalized.content_capacity,
   };
 
   if ((prefilledPlanning as any)?.cross_platform_sharing == null && prefilledExecConfig != null) {

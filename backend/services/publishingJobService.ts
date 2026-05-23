@@ -4,6 +4,7 @@ import type { CmsProvider } from './cms/types';
 import { getIntegration } from './integrationService';
 import type { Blog } from './blogService';
 import { captureQueueMetrics, recordWorkerHeartbeat } from './queueOperationsService';
+import { runWorkerSnapshotShadowHook } from './workerSnapshotShadowHook';
 
 export type PublishingJobStatus = 'queued' | 'processing' | 'published' | 'failed' | 'retrying' | 'cancelled' | 'dead_letter' | 'scheduled';
 export type PublishingFailureCategory = 'validation' | 'auth' | 'rate_limit' | 'provider' | 'timeout' | 'not_found' | 'unknown';
@@ -156,6 +157,21 @@ export async function executeClaimedPublishingJob(job: PublishingJob, workerId: 
   try {
     const blog = await loadPublishingBlog(job);
     const integration = await loadPublishingIntegration(job);
+
+    // Env-gated worker shadow snapshot hook (WORKER_SNAPSHOT_SHADOW_ENABLED).
+    // Advisory telemetry only — runs after live draft resolution, never throws
+    // into the publish path, never alters publish/queue/retry behavior.
+    try {
+      await runWorkerSnapshotShadowHook({
+        jobId: job.id,
+        blogId: job.blog_id ?? null,
+        companyId: job.company_id,
+        liveDraft: blog as unknown as Record<string, unknown>,
+        liveDraftRenderedHtml: String(job.request_payload?.html_content ?? ''),
+        integrationType: job.provider,
+      });
+    } catch { /* shadow hook is advisory-only — never affects publishing */ }
+
     const adapter = getCmsAdapter(job.provider);
     const ctx = {
       provider: job.provider,

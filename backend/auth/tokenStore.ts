@@ -28,8 +28,15 @@ const TAG_LENGTH = 16; // GCM tag is always 16 bytes
 const KEY_LENGTH = 32; // AES-256 requires 32 bytes key
 
 /**
- * Get encryption key from config module
- * Converts hex string or base64 to Buffer
+ * Get encryption key from config module — strict hex-only.
+ *
+ * The previous accept-either-format heuristic ("looks like 64 hex chars? hex.
+ * otherwise base64.") was a silent foot-gun: rotating between hex and base64
+ * representations of the same 32 bytes produced different key buffers and
+ * silently broke decryption of all existing tokens. The Zod schema already
+ * enforces `/^[a-f0-9]{64}$/` at boot; this function aligns with that
+ * single canonical format and refuses anything else with a clear migration
+ * hint instead of attempting a guess.
  */
 function getEncryptionKey(): Buffer {
   const keyEnv = config.ENCRYPTION_KEY;
@@ -37,20 +44,19 @@ function getEncryptionKey(): Buffer {
     throw new Error('ENCRYPTION_KEY environment variable is required');
   }
 
-  // Try to parse as hex first, then base64
-  let keyBuffer: Buffer;
-  if (keyEnv.length === 64 && /^[0-9a-fA-F]+$/.test(keyEnv)) {
-    // Hex string (64 chars = 32 bytes)
-    keyBuffer = Buffer.from(keyEnv, 'hex');
-  } else {
-    // Base64
-    keyBuffer = Buffer.from(keyEnv, 'base64');
+  if (!/^[0-9a-fA-F]{64}$/.test(keyEnv)) {
+    throw new Error(
+      'ENCRYPTION_KEY must be exactly 64 hex characters (32 bytes). ' +
+      'Base64 keys are no longer accepted — if rotating from base64, convert via ' +
+      '`node -e "process.stdout.write(Buffer.from(process.argv[1], \\\'base64\\\').toString(\\\'hex\\\'))" "<base64-key>"` ' +
+      'and re-encrypt existing tokens, since the two formats are NOT byte-identical interpretations.'
+    );
   }
 
+  const keyBuffer = Buffer.from(keyEnv, 'hex');
   if (keyBuffer.length !== KEY_LENGTH) {
     throw new Error(`ENCRYPTION_KEY must be ${KEY_LENGTH} bytes (got ${keyBuffer.length})`);
   }
-
   return keyBuffer;
 }
 

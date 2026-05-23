@@ -6,6 +6,7 @@
  */
 
 import { Queue } from 'bullmq';
+import { getQueuePrefix } from './bullmqClient';
 
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
@@ -36,6 +37,7 @@ export const leadQueueConnection = getConnection();
 
 export const leadQueue = new Queue('lead-jobs', {
   connection: leadQueueConnection,
+  prefix: getQueuePrefix(),
   defaultJobOptions: {
     attempts: 1,
     backoff: {

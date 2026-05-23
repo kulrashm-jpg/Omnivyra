@@ -85,7 +85,7 @@ const isAllowedRole = (value?: string | null): boolean => {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function appUrl(): string {
-  return (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/$/, '');
+  return getCanonicalAppUrl();
 }
 
 /**

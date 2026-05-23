@@ -1,10 +1,13 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabase } from '../../../backend/db/supabaseClient';
+import { getCanonicalAppUrl } from '../../../backend/config/getCanonicalAppUrl';
 
-const SITE_URL =
-  process.env.NEXT_PUBLIC_APP_URL ||
-  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-  'https://omnivera.com';
+// Sitemap is submitted to search engines; URLs become canonical references in
+// the index. The previous chain — NEXT_PUBLIC_APP_URL → VERCEL_URL → literal
+// 'https://omnivera.com' (typo, dead domain) — could leak preview hostnames
+// into Google Search Console and pin a misspelled domain as canonical when
+// the env was unset. Resolve through the single canonical helper instead.
+const SITE_URL = getCanonicalAppUrl();
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {

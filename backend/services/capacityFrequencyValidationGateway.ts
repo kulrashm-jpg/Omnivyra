@@ -123,6 +123,32 @@ function derivePlatformContentRequestsFromBlueprint(blueprint: ValidateCapacityA
 export function validateCapacityAndFrequency(
   input: ValidateCapacityAndFrequencyInput
 ): CapacityValidationResult | null {
+  // Defensive normalization at gateway entry. The canonical chokepoint
+  // is `preparePrefilledPlanningState` in the orchestrator — every
+  // planner-mode caller goes through it. BUT this gateway is also
+  // reachable from non-orchestrator paths (validate-frequency HTTP
+  // endpoint, future direct callers), and those don't pre-normalize.
+  // Calling normalizePlannerCapacityInputs here is idempotent against
+  // already-normalized records, so chokepoint callers pay only the
+  // type-check cost; non-chokepoint callers get safe shape coercion.
+  //
+  // No semantic behavior change: the normalizer maps strings/legacy
+  // shapes to canonical records exactly as the chokepoint already
+  // does. This closes the strict-mode bypass surface flagged in the
+  // operational-risk investigation.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { normalizePlannerCapacityInputs } = require('./campaignAiCapacity') as typeof import('./campaignAiCapacity');
+  const normalized = normalizePlannerCapacityInputs({
+    available_content: input.available_content,
+    weekly_capacity: input.weekly_capacity,
+    content_capacity: (input as { content_capacity?: unknown }).content_capacity,
+  });
+  input = {
+    ...input,
+    available_content: normalized.available_content,
+    weekly_capacity: normalized.weekly_capacity,
+  };
+
   let platform_content_requests: unknown = input.platform_content_requests;
   if (
     (platform_content_requests == null ||

@@ -16,6 +16,7 @@ set -e
 TARGET_ENV=""
 HAS_INTENT="no"
 HAS_PRODUCTION_CONFIRM="no"
+HAS_LEDGER_DESYNC_ACK="no"
 FILTERED_ARGS=()
 
 for arg in "$@"; do
@@ -28,6 +29,9 @@ for arg in "$@"; do
       ;;
     --confirm-production-impact)
       HAS_PRODUCTION_CONFIRM="yes"
+      ;;
+    --acknowledge-ledger-desync)
+      HAS_LEDGER_DESYNC_ACK="yes"
       ;;
     *)
       FILTERED_ARGS+=("$arg")
@@ -89,6 +93,48 @@ if [ "$HAS_INTENT" != "yes" ]; then
   echo "  npm run db:push -- --target-env=local --apply"
   exit 0
 fi
+
+# ── UNSAFE_MIGRATION_LEDGER_STATE hard block ─────────────────────────────────
+# The repo carries 48+ duplicate version prefixes and 58+ invalid calendar
+# date prefixes in supabase/migrations/ (see docs/migration-discipline.md
+# §"Why db push is currently unsafe"). Supabase CLI orders by version, so
+# multi-file versions cause non-deterministic apply — the ledger records
+# a version as complete after one arbitrary file ran, silently skipping
+# the rest.
+#
+# `db push` is STRUCTURALLY unsafe against this ledger state. The block
+# below is a hard guard; bypass requires explicit acknowledgement via
+# --acknowledge-ledger-desync so the next operator who reaches for db
+# push is forced to read the migration-discipline doc first.
+echo "[operator-safety] UNSAFE_MIGRATION_LEDGER_STATE check..."
+if [ "$HAS_LEDGER_DESYNC_ACK" != "yes" ]; then
+  echo ""
+  echo "================================================================"
+  echo "  UNSAFE_MIGRATION_LEDGER_STATE — BLOCKED"
+  echo "================================================================"
+  echo ""
+  echo "  supabase db push is STRUCTURALLY UNSAFE against this repo's"
+  echo "  migration ledger state:"
+  echo ""
+  echo "    * 48+ duplicate version prefixes (e.g. 20260322 has 12 files)"
+  echo "    * 58+ files use invalid calendar dates (e.g. 20260631_*.sql)"
+  echo "    * supabase CLI orders by version, not filename"
+  echo "    * multi-file versions apply non-deterministically — the ledger"
+  echo "      records the version as complete after one arbitrary file"
+  echo "      ran, silently skipping the rest"
+  echo ""
+  echo "  Use the Supabase SQL editor to apply individual migrations"
+  echo "  manually. See docs/migration-discipline.md for the protocol."
+  echo ""
+  echo "  If you understand the risk and still need to run db push,"
+  echo "  pass --acknowledge-ledger-desync. The acknowledgement is"
+  echo "  logged below for audit traceability."
+  echo "================================================================"
+  exit 1
+fi
+
+echo "[operator-safety] UNSAFE_MIGRATION_LEDGER_STATE acknowledged by operator at $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+echo "[operator-safety] Proceeding with db push against ledger known to be desynced."
 
 bash ./scripts/guard-no-prod-push.sh "${FILTERED_ARGS[@]}"
 supabase db push "${FILTERED_ARGS[@]}"

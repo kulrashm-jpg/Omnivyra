@@ -34,12 +34,27 @@ async function recoverAbandonedCompanyRuns(companyId: string): Promise<void> {
   try {
     const nowIso = new Date().toISOString();
     const cutoffIso = new Date(Date.now() - 90 * 1000).toISOString();
+    // Forensic-integrity sweep. The sweeper NEVER touches
+    // error_message / raw_error_message / failed_stage — those are
+    // the exclusive domain of persistPipelineFailure(). The sweeper
+    // only records abandonment metadata in dedicated columns so the
+    // two flavours of failure (real stage-thrown cause + sweeper-
+    // detected abandonment) can coexist on the same row without
+    // either erasing the other.
+    //
+    // Behavior matrix after this sweep:
+    //   * Row had a real error from persistPipelineFailure:
+    //     error_message intact, raw_error_message intact, plus
+    //     abandonment_reason populated → operator sees BOTH causes.
+    //   * Row was truly abandoned (process died before any throw):
+    //     error_message NULL, raw_error_message NULL,
+    //     abandonment_reason populated → operator immediately knows
+    //     this was a worker/HMR/lifecycle death, not a stage error.
     const { data, error } = await ownedDbTable('bolt_execution_runs')
       .update({
         status: 'failed',
-        error_message: 'Your campaign plan was disrupted due to a technical glitch. Please try again. If the problem persists, try again later or reach out for support.',
-        raw_error_message: 'Run abandoned: pipeline died before reaching a stage boundary (worker crash / HMR / lifecycle).',
-        failed_stage: 'abandoned',
+        abandonment_reason: 'sweeper_heartbeat_stale_inline',
+        abandonment_detected_at: nowIso,
         lock_owner: null,
         lock_expires_at: null,
         updated_at: nowIso,
@@ -48,16 +63,47 @@ async function recoverAbandonedCompanyRuns(companyId: string): Promise<void> {
       .in('status', ['started', 'running'])
       .lt('heartbeat_at', cutoffIso)
       .or(`lock_expires_at.is.null,lock_expires_at.lt.${nowIso}`)
-      .select('id');
+      .is('abandonment_detected_at', null)
+      .select('id, error_message');
     if (error) {
       console.warn('[bolt/execute] inline sweep failed (non-fatal):', error.message);
       return;
     }
     if (Array.isArray(data) && data.length > 0) {
-      console.log('[bolt/execute] inline sweep recovered abandoned runs', {
-        companyId,
-        recovered_ids: data.map((r) => (r as { id: string }).id),
-      });
+      // Structured event under the canonical telemetry envelope.
+      // Splits "swept rows that ALSO had a real error" (a worker died
+      // after persisting its cause) from "swept rows that had no
+      // diagnostic" (pure abandonment) for forensic correlation.
+      const withDiagnostic = data.filter((r) => (r as { error_message: string | null }).error_message != null).length;
+      // Causal-chain linkage. When the sweep included rows that
+      // already had a persisted diagnostic, the abandonment is the
+      // *trailing* event for an underlying failure that was logged
+      // separately (typically as `planner_contract_violation` for
+      // capacity issues or as `bolt_pipeline_error` for stage
+      // throws). We emit the originating event name as a hint so
+      // operators don't have to manually correlate.
+      //
+      // We do NOT chase the link further — that would create
+      // recursive causal chains. One hop is enough to point an
+      // operator at the prior event; the prior event itself is
+      // self-contained.
+      const originatingFailureEvent = withDiagnostic > 0 ? 'bolt_pipeline_error' : null;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { emitStructuredEvent } = require('../../../observability/runtime/structuredTelemetry') as typeof import('../../../observability/runtime/structuredTelemetry');
+      emitStructuredEvent(
+        'bolt_sweeper_recovered_abandoned',
+        'info',
+        { run_id: null, planner_stage: 'abandonment_sweep' },
+        {
+          company_id: companyId,
+          recovered_ids: data.map((r) => (r as { id: string }).id),
+          count_swept: data.length,
+          count_with_existing_diagnostic: withDiagnostic,
+          count_truly_abandoned: data.length - withDiagnostic,
+          originating_failure_event: originatingFailureEvent,
+          cutoff_at: cutoffIso,
+        },
+      );
     }
   } catch (err) {
     console.warn('[bolt/execute] inline sweep crashed (non-fatal):', (err as Error)?.message);

@@ -1,5 +1,5 @@
 import { Worker } from 'bullmq';
-import { getRedisConfig } from './bullmqClient';
+import { getRedisConfig, getQueuePrefix } from './bullmqClient';
 
 console.info('[engine-worker] starting...');
 
@@ -24,6 +24,7 @@ const worker = new Worker(
   },
   {
     connection: getRedisConfig(),
+    prefix: getQueuePrefix(),
   }
 );
 

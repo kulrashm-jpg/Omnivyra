@@ -58,7 +58,10 @@ export function getShareStats(): { total: number; byPlatform: Record<string, num
 
 function getBaseUrl(): string {
   if (typeof window !== 'undefined') return window.location.origin;
-  return 'https://app.omnivyra.com';
+  // SSR fallback. Canonical is www.omnivyra.com — previous 'app.omnivyra.com'
+  // was a dead subdomain. Hook is client-side, so we keep the canonical
+  // inline rather than pulling in a server-only helper.
+  return 'https://www.omnivyra.com';
 }
 
 function getShareUrl(payload: SharePayload): string {

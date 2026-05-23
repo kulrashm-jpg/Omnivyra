@@ -20,6 +20,10 @@ const STAGE_LABELS: Record<string, string> = {
 function getStageLabel(stage: string | undefined, status?: string): string {
   if (!stage) return status === 'completed' ? 'Complete' : 'Initializing…';
   if (STAGE_LABELS[stage]) return STAGE_LABELS[stage];
+  // ai/plan:<substage> — keep parent label so progress UX stays stable; the
+  // sub-stage detail is surfaced separately by callers that consume
+  // BOLTProgress.ai_plan_substage_label.
+  if (stage.startsWith('ai/plan:')) return STAGE_LABELS['ai/plan'] ?? 'Creating week plan';
   if (stage.startsWith('generate-weekly-structure-week-')) {
     const weekNum = stage.replace(/\D/g, '') || '';
     return weekNum ? `Creating daily plans (Week ${weekNum})` : 'Creating daily plans';
@@ -44,6 +48,10 @@ export type BOLTProgress = {
   weeks_generated?: number;
   daily_slots_created?: number;
   scheduled_posts_created?: number;
+  // Intra-stage milestone surfaced during ai/plan (e.g. 'drafting', 'scoring').
+  // Optional + advisory — UI must keep working when the backend doesn't emit it.
+  ai_plan_substage?: string;
+  ai_plan_substage_label?: string;
 };
 
 export type BOLTProgressModalProps = {

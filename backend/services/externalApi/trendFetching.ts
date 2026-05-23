@@ -204,8 +204,8 @@ export async function fetchExternalTrends(
     runtimeOverrides?: Record<string, string>;
   }
 ): Promise<ExternalApiFetchSummary> {
-  console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
   if (!companyId) {
+    console.log('EXTERNAL_API_COMPANY_SCOPE', companyId);
     return {
       results: [],
       missing_env_placeholders: [],

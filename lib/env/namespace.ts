@@ -116,4 +116,72 @@ export function checkEnvIsolationOnce(): void {
     // Strictly warn-only; never block startup.
     console.warn('[env-isolation] check failed:', err);
   }
+  try {
+    enforceEnvIsolationFatal();
+  } catch (err) {
+    // Fatal-check is intended to throw on the dangerous combination;
+    // re-throw so server bootstrap halts. Distinct from the warn-only
+    // check above.
+    throw err;
+  }
+}
+
+/**
+ * Hard-block startup when prod-Supabase + local-Redis is detected.
+ *
+ * Rationale: this combination is the most production-dangerous env
+ * misconfiguration — queue work enqueued from the local runtime lands
+ * in local Redis, while remote workers (Railway) read from prod Redis.
+ * Jobs are invisible to consumers, but writes against prod Supabase
+ * still happen. Net effect: production state gets partially mutated
+ * by a dev process whose queue side believes everything is local.
+ *
+ * Detection:
+ *   - SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL points at a remote host
+ *   - AND REDIS_URL / UPSTASH_REDIS_REST_URL points at localhost
+ *
+ * Override:
+ *   Set ALLOW_PROD_DB_WITH_LOCAL_REDIS=1 to bypass. The bypass exists
+ *   ONLY for explicit emergency / debug usage — set it, do the thing,
+ *   immediately unset. Never put this in a long-lived shell profile.
+ *
+ * Intentionally unaffected:
+ *   - Local Supabase + local Redis (full local stack)
+ *   - Remote Supabase + remote Redis (full deployed stack, including
+ *     dev-against-prod-everything which is a documented pattern)
+ */
+export function enforceEnvIsolationFatal(): void {
+  if (process.env.ALLOW_PROD_DB_WITH_LOCAL_REDIS === '1') {
+    console.warn(
+      '[env-isolation] ALLOW_PROD_DB_WITH_LOCAL_REDIS=1 set — bypassing prod-DB/local-Redis hard block. ' +
+      'Unset this env var immediately after the emergency debug session.',
+    );
+    return;
+  }
+  const supabaseUrl =
+    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+  const redisUrl =
+    process.env.REDIS_URL || process.env.UPSTASH_REDIS_REST_URL || '';
+
+  const looksRemote = (url: string) =>
+    /^https?:\/\//.test(url) && !/localhost|127\.0\.0\.1|::1/.test(url);
+  const looksLocalRedis = (url: string) =>
+    /^(redis|rediss):\/\/[^@]*@?(localhost|127\.0\.0\.1|::1)|^redis:\/\/(localhost|127\.0\.0\.1|::1)/.test(url);
+
+  if (supabaseUrl && redisUrl && looksRemote(supabaseUrl) && looksLocalRedis(redisUrl)) {
+    let host = 'unknown';
+    try { host = new URL(supabaseUrl).host; } catch { /* leave unknown */ }
+    const msg =
+      `[env-isolation] FATAL: prod-Supabase + local-Redis detected.\n` +
+      `  SUPABASE_URL host: ${host}\n` +
+      `  REDIS_URL:         ${redisUrl}\n\n` +
+      `  This combination is production-dangerous: writes against prod Supabase\n` +
+      `  happen normally, but queue jobs land in local Redis and remote workers\n` +
+      `  never see them. Production state can be partially mutated by a local\n` +
+      `  process whose queue side believes everything is local.\n\n` +
+      `  If you genuinely need this for an emergency debug session, set\n` +
+      `  ALLOW_PROD_DB_WITH_LOCAL_REDIS=1 and unset it immediately after.`;
+    console.error(msg);
+    throw new Error('[env-isolation] prod-Supabase + local-Redis topology blocked');
+  }
 }

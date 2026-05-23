@@ -29,7 +29,14 @@ export default async function handler(
 ) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   seedRequestContextFromRequest(req);
-  const ip = String(req.headers['x-forwarded-for'] ?? req.socket?.remoteAddress ?? 'unknown').split(',')[0].trim();
+  // Prefer Vercel-authoritative `x-real-ip` (single value, set by Vercel's
+  // edge after sanitizing client-supplied headers) over the leftmost token of
+  // `x-forwarded-for`. On Vercel both produce the real client IP; off-Vercel
+  // the x-forwarded-for[0] path is attacker-controlled and would allow
+  // rate-limit bypass or poisoning of another user's bucket.
+  const realIp = req.headers['x-real-ip'];
+  const forwardedFor = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim();
+  const ip = String((Array.isArray(realIp) ? realIp[0] : realIp) || forwardedFor || req.socket?.remoteAddress || 'unknown').trim();
   const rl = await checkRateLimit(ip, { ...EMAIL_LINK_LIMIT, keyPrefix: 'rl:auth:magic-link', limit: 5, windowSecs: 3600 });
   if (!rl.allowed) return res.status(429).json({ error: 'Too many requests. Try again later.' });
 

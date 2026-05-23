@@ -196,7 +196,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const platform = 'instagram';
-    const { companyId, userId: stateUserId, returnTo } = decodeOAuthState(state as string);
+    const { companyId, userId: stateUserId, returnTo, valid } = decodeOAuthState(state as string);
+    if (!valid) {
+      return res.status(401).json({ error: 'invalid_oauth_state' });
+    }
 
     const oauthCredentials = await getOAuthCredentialsForPlatform('instagram');
     if (!oauthCredentials?.client_id || !oauthCredentials?.client_secret) {

@@ -30,6 +30,15 @@ const VIEW_OPTIONS: { value: OutcomeView; label: string; icon: string; hint: str
 
 const BOLT_STATE_KEY = 'bolt-text-strategy-state';
 
+// Format→required-platform binding. Mirrors BoltStrategyView.tsx so the
+// strategy hook can prune stale selections (e.g. `tweet` restored from
+// sessionStorage after X was disconnected) before they reach the planner.
+// Lists both 'x' and 'twitter' because the codebase has two competing
+// canonicalizations — see BoltStrategyView.tsx for the full rationale.
+const FORMAT_REQUIRED_PLATFORMS: Partial<Record<ContentFormat, string[]>> = {
+  tweet: ['x', 'twitter'],
+};
+
 const CONTENT_FORMATS: { value: ContentFormat; label: string; icon: string }[] = [
   { value: 'post',        label: 'Post',        icon: '📝' },
   { value: 'tweet',       label: 'Tweet',       icon: '💬' },
@@ -846,6 +855,34 @@ export function useBoltStrategy() {
     });
   }, [picker.loading, picker.supported]);
 
+  // Drop any selected format whose required platform isn't in the effective
+  // campaign target set. Keeps a stale `tweet` (sessionStorage-restored or
+  // left over after the user deselects X) from reaching the planner with no
+  // valid destination. Runs only after the picker resolves so we don't strip
+  // during the initial loading flicker.
+  //
+  // Effective set mirrors the chip-visibility rule in BoltStrategyView.tsx:
+  // user's explicit selection wins, falling back to all supported when
+  // nothing is picked (planner falls back to all supported in that case).
+  useEffect(() => {
+    if (picker.loading) return;
+    const effective = selectedPlatforms.length > 0 ? selectedPlatforms : picker.supported;
+    setContentFormats((prev) => {
+      const next = prev.filter((f) => {
+        const required = FORMAT_REQUIRED_PLATFORMS[f];
+        if (!required) return true;
+        return required.some((p) => effective.includes(p));
+      });
+      if (next.length === prev.length) return prev;
+      setFormatFrequency((fq) => {
+        const cleaned = { ...fq };
+        for (const f of prev) if (!next.includes(f)) delete cleaned[f];
+        return cleaned;
+      });
+      return next;
+    });
+  }, [picker.loading, picker.supported, selectedPlatforms]);
+
   function togglePlatform(p: string) {
     setSelectedPlatforms((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]);
   }
@@ -1058,6 +1095,8 @@ export function useBoltStrategy() {
           weeks_generated?: number;
           daily_slots_created?: number;
           scheduled_posts_created?: number;
+          ai_plan_substage?: string;
+          ai_plan_substage_label?: string;
         };
 
         if (!mounted) return;
@@ -1069,6 +1108,8 @@ export function useBoltStrategy() {
           weeks_generated: prog.weeks_generated,
           daily_slots_created: prog.daily_slots_created,
           scheduled_posts_created: prog.scheduled_posts_created,
+          ai_plan_substage: prog.ai_plan_substage,
+          ai_plan_substage_label: prog.ai_plan_substage_label,
         });
 
         if (prog.status === 'completed') {

@@ -71,6 +71,38 @@ import { buildRegenerationExecutionManifest } from '../content/regenerationExecu
 import { buildRegenerationReadinessContract } from '../content/regenerationReadinessContracts';
 import { planRecoveryExecutionDryRun } from '../content/recoveryExecutionDryRunPlanner';
 import { buildRecoveryExecutorContracts } from '../content/recoveryExecutorContracts';
+import { buildExecutorVerificationContracts } from '../content/executorVerificationContracts';
+import { observeVerificationReadiness } from '../content/verificationReadinessObserver';
+import { buildAcceptanceReadinessContracts } from '../content/acceptanceReadinessContracts';
+import { assembleAcceptanceReviewPackage } from '../content/acceptanceReviewPackageAssembler';
+import { observeValidatorReadiness } from '../content/validatorReadinessObserver';
+import { buildValidatorExecutionManifest } from '../content/validatorExecutionManifest';
+import { sequenceValidatorReview } from '../content/validatorReviewSequencer';
+import { buildValidatorResultContracts } from '../content/validatorResultContracts';
+import { prepareValidatorDecision } from '../content/validatorDecisionPreparation';
+import { simulateValidatorAcceptance } from '../content/validatorAcceptanceSimulation';
+import { sequenceValidatorRecoveryDecision } from '../content/validatorRecoveryDecisionSequencer';
+import { buildValidatorAuditTrail } from '../content/validatorAuditTrail';
+import { assembleValidatorReviewSnapshot } from '../content/validatorReviewSnapshotAssembler';
+import { buildValidatorCoverageLedger } from '../content/validatorCoverageLedger';
+import { buildValidatorDecisionTrace } from '../content/validatorDecisionTrace';
+import { buildValidatorHandoffReadiness } from '../content/validatorHandoffReadiness';
+import { buildValidatorHandoffManifest } from '../content/validatorHandoffManifest';
+import { prepareValidatorExecution } from '../content/validatorExecutionPreparation';
+import { observeValidatorOperationalReadiness } from '../content/validatorOperationalReadiness';
+import { evaluateValidatorPreflightReadiness } from '../content/validatorPreflightReadinessGate';
+import { buildValidatorExecutionAdapterContract } from '../content/validatorExecutionAdapterContract';
+import { planValidatorInvocationDryRun } from '../content/validatorInvocationDryRunPlanner';
+import { buildValidatorInvocationResultContract } from '../content/validatorInvocationResultContract';
+import { buildValidatorOutputNormalizationContract } from '../content/validatorOutputNormalizationContract';
+import { buildNormalizedValidatorOutputEnvelope } from '../content/normalizedValidatorOutputEnvelope';
+import { buildValidatorExecutionEligibilityPolicy } from '../content/validatorExecutionEligibilityPolicy';
+import { interpretValidatorRuntimeEligibility } from '../content/validatorRuntimeEligibilityInterpreter';
+import { buildValidatorRuntimeReadinessEnvelope } from '../content/validatorRuntimeReadinessEnvelope';
+import { buildValidatorRuntimeGovernanceEnvelope } from '../content/validatorRuntimeGovernanceEnvelope';
+import { buildValidatorRuntimeStabilizationEnvelope } from '../content/validatorRuntimeStabilizationEnvelope';
+import { buildValidatorRuntimeActivationReadinessGate } from '../content/validatorRuntimeActivationReadinessGate';
+import { buildValidatorRuntimeRolloutClosureEnvelope } from '../content/validatorRuntimeRolloutClosureEnvelope';
 import { assembleUnifiedEditorialBrief } from '../content/unifiedEditorialBriefAssembler';
 import { prioritizeEditorialRuntimeContext } from '../content/editorialRuntimeContextPrioritizer';
 import { buildGeneratorRuntimeAlignment } from '../content/generatorRuntimeAlignment';
@@ -174,6 +206,231 @@ function attachEditorialDiagnostics(
       regenerationCandidateSelection,
       regenerationReadinessContract,
     });
+    const executorVerificationContracts = buildExecutorVerificationContracts({
+      recoveryExecutorContracts,
+      recoveryExecutionDryRun,
+      regenerationExecutionManifest,
+      regenerationReadinessContract,
+    });
+    const verificationReadinessObservation = observeVerificationReadiness({
+      executorVerificationContracts,
+      recoveryExecutorContracts,
+      recoveryExecutionDryRun,
+      regenerationExecutionManifest,
+    });
+    const acceptanceReadinessContracts = buildAcceptanceReadinessContracts({
+      verificationReadinessObservation,
+      executorVerificationContracts,
+      recoveryExecutorContracts,
+      recoveryExecutionDryRun,
+    });
+    const acceptanceReviewPackage = assembleAcceptanceReviewPackage({
+      acceptanceReadinessContracts,
+      verificationReadinessObservation,
+      executorVerificationContracts,
+      recoveryExecutorContracts,
+      recoveryExecutionDryRun,
+    });
+    const validatorReadinessObservation = observeValidatorReadiness({
+      acceptanceReviewPackage,
+      acceptanceReadinessContracts,
+      verificationReadinessObservation,
+      executorVerificationContracts,
+      recoveryExecutorContracts,
+      recoveryExecutionDryRun,
+    });
+    const validatorExecutionManifest = buildValidatorExecutionManifest({
+      acceptanceReviewPackage,
+      validatorReadinessObservation,
+      acceptanceReadinessContracts,
+      verificationReadinessObservation,
+      executorVerificationContracts,
+      recoveryExecutorContracts,
+      recoveryExecutionDryRun,
+    });
+    const validatorReviewSequence = sequenceValidatorReview({
+      validatorExecutionManifest,
+      validatorReadinessObservation,
+      acceptanceReviewPackage,
+      acceptanceReadinessContracts,
+      recoveryExecutionDryRun,
+    });
+    const validatorResultContracts = buildValidatorResultContracts({
+      validatorReviewSequence,
+      validatorExecutionManifest,
+      validatorReadinessObservation,
+      acceptanceReviewPackage,
+      executorVerificationContracts,
+    });
+    const validatorDecisionPreparation = prepareValidatorDecision({
+      validatorResultContracts,
+      validatorReviewSequence,
+      validatorExecutionManifest,
+      validatorReadinessObservation,
+      acceptanceReviewPackage,
+    });
+    const validatorAcceptanceSimulation = simulateValidatorAcceptance({
+      validatorDecisionPreparation,
+      validatorResultContracts,
+      validatorReviewSequence,
+    });
+    const validatorRecoveryDecisionSequence = sequenceValidatorRecoveryDecision({
+      validatorAcceptanceSimulation,
+      validatorDecisionPreparation,
+      validatorResultContracts,
+      validatorReviewSequence,
+      validatorExecutionManifest,
+    });
+    const validatorAuditTrail = buildValidatorAuditTrail({
+      validatorRecoveryDecisionSequence,
+      validatorAcceptanceSimulation,
+      validatorDecisionPreparation,
+      validatorResultContracts,
+      validatorReviewSequence,
+    });
+    const validatorReviewSnapshot = assembleValidatorReviewSnapshot({
+      validatorAuditTrail,
+      validatorRecoveryDecisionSequence,
+      validatorAcceptanceSimulation,
+      validatorDecisionPreparation,
+      validatorResultContracts,
+    });
+    const validatorCoverageLedger = buildValidatorCoverageLedger({
+      validatorReviewSnapshot,
+      validatorAuditTrail,
+      validatorRecoveryDecisionSequence,
+      validatorResultContracts,
+    });
+    const validatorDecisionTrace = buildValidatorDecisionTrace({
+      validatorCoverageLedger,
+      validatorReviewSnapshot,
+      validatorAuditTrail,
+      validatorRecoveryDecisionSequence,
+      validatorDecisionPreparation,
+    });
+    const validatorHandoffReadiness = buildValidatorHandoffReadiness({
+      validatorDecisionTrace,
+      validatorCoverageLedger,
+      validatorReviewSnapshot,
+      validatorAuditTrail,
+      validatorRecoveryDecisionSequence,
+    });
+    const validatorHandoffManifest = buildValidatorHandoffManifest({
+      validatorHandoffReadiness,
+      validatorDecisionTrace,
+      validatorCoverageLedger,
+      validatorReviewSnapshot,
+      validatorAuditTrail,
+    });
+    const validatorExecutionPreparation = prepareValidatorExecution({
+      validatorHandoffManifest,
+      validatorHandoffReadiness,
+      validatorDecisionTrace,
+      validatorCoverageLedger,
+      validatorAuditTrail,
+      validatorRecoveryDecisionSequence,
+    });
+    const validatorOperationalReadiness = observeValidatorOperationalReadiness({
+      validatorExecutionPreparation,
+      validatorHandoffManifest,
+      validatorHandoffReadiness,
+      validatorCoverageLedger,
+      validatorReviewSnapshot,
+    });
+    const validatorPreflightReadinessGate = evaluateValidatorPreflightReadiness({
+      validatorOperationalReadiness,
+      validatorExecutionPreparation,
+      validatorHandoffManifest,
+      validatorDecisionTrace,
+      validatorCoverageLedger,
+    });
+    const validatorExecutionAdapterContract = buildValidatorExecutionAdapterContract({
+      validatorPreflightReadinessGate,
+      validatorOperationalReadiness,
+      validatorExecutionPreparation,
+      validatorHandoffManifest,
+      validatorDecisionTrace,
+    });
+    const validatorInvocationDryRunPlan = planValidatorInvocationDryRun({
+      validatorExecutionAdapterContract,
+      validatorPreflightReadinessGate,
+      validatorOperationalReadiness,
+      validatorExecutionPreparation,
+      validatorDecisionTrace,
+    });
+    const validatorInvocationResultContract = buildValidatorInvocationResultContract({
+      validatorInvocationDryRunPlan,
+      validatorExecutionAdapterContract,
+      validatorPreflightReadinessGate,
+      validatorOperationalReadiness,
+      validatorDecisionTrace,
+    });
+    const validatorOutputNormalizationContract = buildValidatorOutputNormalizationContract({
+      validatorInvocationResultContract,
+      validatorInvocationDryRunPlan,
+      validatorExecutionAdapterContract,
+      validatorPreflightReadinessGate,
+      validatorDecisionTrace,
+    });
+    const normalizedValidatorOutputEnvelope = buildNormalizedValidatorOutputEnvelope({
+      validatorOutputNormalizationContract,
+      validatorInvocationResultContract,
+      validatorInvocationDryRunPlan,
+      validatorExecutionAdapterContract,
+      validatorDecisionTrace,
+    });
+    const validatorExecutionEligibilityPolicy = buildValidatorExecutionEligibilityPolicy({
+      normalizedValidatorOutputEnvelope,
+      validatorOutputNormalizationContract,
+      validatorInvocationResultContract,
+      validatorPreflightReadinessGate,
+      validatorDecisionTrace,
+    });
+    const validatorRuntimeEligibilityInterpretation = interpretValidatorRuntimeEligibility({
+      validatorExecutionEligibilityPolicy,
+      normalizedValidatorOutputEnvelope,
+      validatorOutputNormalizationContract,
+      validatorPreflightReadinessGate,
+      validatorDecisionTrace,
+    });
+    const validatorRuntimeReadinessEnvelope = buildValidatorRuntimeReadinessEnvelope({
+      validatorRuntimeEligibilityInterpretation,
+      normalizedValidatorOutputEnvelope,
+      validatorOutputNormalizationContract,
+      validatorPreflightReadinessGate,
+      validatorDecisionTrace,
+    });
+    const validatorRuntimeGovernanceEnvelope = buildValidatorRuntimeGovernanceEnvelope({
+      validatorRuntimeReadinessEnvelope,
+      validatorRuntimeEligibilityInterpretation,
+      normalizedValidatorOutputEnvelope,
+      validatorPreflightReadinessGate,
+      validatorDecisionTrace,
+    });
+    const validatorRuntimeStabilizationEnvelope = buildValidatorRuntimeStabilizationEnvelope({
+      validatorRuntimeGovernanceEnvelope,
+      validatorRuntimeReadinessEnvelope,
+      validatorRuntimeEligibilityInterpretation,
+      normalizedValidatorOutputEnvelope,
+      validatorDecisionTrace,
+    });
+    const validatorRuntimeActivationReadinessGate = buildValidatorRuntimeActivationReadinessGate({
+      validatorRuntimeStabilizationEnvelope,
+      validatorRuntimeGovernanceEnvelope,
+      validatorRuntimeReadinessEnvelope,
+      validatorRuntimeEligibilityInterpretation,
+      normalizedValidatorOutputEnvelope,
+      validatorDecisionTrace,
+    });
+    const validatorRuntimeRolloutClosureEnvelope = buildValidatorRuntimeRolloutClosureEnvelope({
+      validatorRuntimeStabilizationEnvelope,
+      validatorRuntimeGovernanceEnvelope,
+      validatorRuntimeReadinessEnvelope,
+      validatorRuntimeEligibilityInterpretation,
+      normalizedValidatorOutputEnvelope,
+      validatorPreflightReadinessGate,
+      validatorDecisionTrace,
+    });
     return {
       ...result,
       editorial_diagnostics: {
@@ -188,6 +445,38 @@ function attachEditorialDiagnostics(
         regenerationExecutionManifest,
         recoveryExecutionDryRun,
         recoveryExecutorContracts,
+        executorVerificationContracts,
+        verificationReadinessObservation,
+        acceptanceReadinessContracts,
+        acceptanceReviewPackage,
+        validatorReadinessObservation,
+        validatorExecutionManifest,
+        validatorReviewSequence,
+        validatorResultContracts,
+        validatorDecisionPreparation,
+        validatorAcceptanceSimulation,
+        validatorRecoveryDecisionSequence,
+        validatorAuditTrail,
+        validatorReviewSnapshot,
+        validatorCoverageLedger,
+        validatorDecisionTrace,
+        validatorHandoffReadiness,
+        validatorHandoffManifest,
+        validatorExecutionPreparation,
+        validatorOperationalReadiness,
+        validatorPreflightReadinessGate,
+        validatorExecutionAdapterContract,
+        validatorInvocationDryRunPlan,
+        validatorInvocationResultContract,
+        validatorOutputNormalizationContract,
+        normalizedValidatorOutputEnvelope,
+        validatorExecutionEligibilityPolicy,
+        validatorRuntimeEligibilityInterpretation,
+        validatorRuntimeReadinessEnvelope,
+        validatorRuntimeGovernanceEnvelope,
+        validatorRuntimeStabilizationEnvelope,
+        validatorRuntimeActivationReadinessGate,
+        validatorRuntimeRolloutClosureEnvelope,
       },
     };
   } catch {

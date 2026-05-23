@@ -136,7 +136,30 @@ export const envSchema = z.object({
     .min(100)
     .default(5000)
     .describe('Wait time for Redis startup in scripts'),
-  
+
+  // ── Worker / queue / cron tuning (all optional — invalid/missing falls
+  // through to the existing in-call-site default, preserving prior behavior) ─
+  BOLT_WORKER_CONCURRENCY: z.number().int().optional()
+    .describe('Concurrency for bolt-execution worker (1-16); invalid/missing → min(4, cpus)'),
+  ENGINE_JOBS_CONCURRENCY: z.number().int().optional()
+    .describe('Concurrency for engine-jobs worker (1-8); invalid/missing → 2'),
+  HEAVY_JOB_CONCURRENCY: z.number().int().optional()
+    .describe('In-process heavy-job concurrency cap (1-8); invalid/missing → 3'),
+  CREATOR_RENDER_REDIS_URL: z.string().optional()
+    .describe('Override REDIS_URL for creator-render queue (presence-toggles the durable queue)'),
+  CREATOR_RENDER_JOB_TIMEOUT_MS: z.number().int().optional()
+    .describe('Creator-render job timeout in ms; missing → 180000'),
+  CREATOR_RENDER_WORKER_CONCURRENCY: z.number().int().optional()
+    .describe('Creator-render worker concurrency; missing → 3'),
+  CRON_INTERVAL_SECONDS: z.number().int().optional()
+    .describe('Cron tick interval in seconds; missing → 900'),
+
+  // ── Soak-only opt-in flags (default OFF; production behavior unchanged) ──
+  WORKER_SOAK_MODE: z.string().optional()
+    .describe('When "1", soak-marked jobs (job.data.__soak === true) hit a Chromium-only no-persistence branch in the creator-render worker. Default OFF.'),
+  SOAK_FORCE_THROW: z.string().optional()
+    .describe('When "1" AND WORKER_SOAK_MODE === "1", the soak branch throws after the Chromium launch to exercise the retry/DLQ path. Default OFF.'),
+
   // ── OpenAI (required for AI features) ───────────────────────────────────────
   OPENAI_API_KEY: z
     .string()
@@ -171,7 +194,17 @@ export const envSchema = z.object({
   ENCRYPTION_KEY: z
     .string()
     .regex(/^[a-f0-9]{64}$/, 'ENCRYPTION_KEY must be 64 hex characters')
-    .describe('256-bit hex encryption key'),
+    .describe('256-bit hex encryption key for AES-GCM at-rest token storage'),
+
+  // Dedicated key for OAuth state HMAC signing. Optional — when unset,
+  // backend/auth/oauthState.ts falls back to ENCRYPTION_KEY for backward
+  // compatibility. Setting both splits the blast radius: a compromise of
+  // either key alone does not reveal stored tokens AND forge OAuth state.
+  OAUTH_STATE_HMAC_KEY: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/, 'OAUTH_STATE_HMAC_KEY must be 64 hex characters when set')
+    .optional()
+    .describe('256-bit hex HMAC key for OAuth state signing. Optional; falls back to ENCRYPTION_KEY when unset.'),
   
   // ── Metrics (internal) ─────────────────────────────────────────────────────
   INTERNAL_METRICS_SECRET: z
@@ -286,6 +319,36 @@ export const envSchema = z.object({
 
   // ── Content architect ─────────────────────────────────────────────────────
   CONTENT_ARCHITECT_PASSWORD: z.string().optional(),
+
+  // ── Critical webhook / scheduler secrets ──────────────────────────────────
+  // Previously read via direct `process.env.X` in pages/api/stripe/webhook.ts,
+  // pages/api/billing/settlement-webhook/[provider].ts, and pages/api/cron/*.
+  // They bypassed boot validation, so a deploy missing them surfaced only on
+  // the first request (500). Wiring them through the schema brings them into
+  // the typed `config` object and makes their presence/absence observable at
+  // boot. Marked optional because not every environment uses every provider
+  // (e.g. a Stripe-only deploy doesn't need the Razorpay sandbox secret),
+  // but `.describe()` documents the production expectation for each.
+  STRIPE_WEBHOOK_SECRET: z.string().optional()
+    .describe('Stripe webhook signing secret (whsec_...). Required in production for /api/stripe/webhook.'),
+  SETTLEMENT_WEBHOOK_SANDBOX_SECRET_RAZORPAY: z.string().optional()
+    .describe('Razorpay sandbox webhook signing secret. Required to receive sandbox settlement webhooks.'),
+  SETTLEMENT_WEBHOOK_SANDBOX_SECRET_STRIPE: z.string().optional()
+    .describe('Stripe sandbox webhook signing secret for /api/billing/settlement-webhook/stripe.'),
+  SETTLEMENT_WEBHOOK_SANDBOX_SECRET_CASHFREE: z.string().optional()
+    .describe('Cashfree sandbox webhook signing secret.'),
+  SETTLEMENT_WEBHOOK_SANDBOX_SECRET_PHONEPE: z.string().optional()
+    .describe('PhonePe sandbox salt key (used as HMAC secret for X-VERIFY validation).'),
+  SETTLEMENT_WEBHOOK_SANDBOX_SALT_INDEX_PHONEPE: z.string().optional()
+    .describe('PhonePe salt index (default "1"); paired with SETTLEMENT_WEBHOOK_SANDBOX_SECRET_PHONEPE.'),
+  SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX: z.string().optional()
+    .describe('Dev-only opt-in to accept settlement webhooks without a configured secret. Must NEVER be set in production.'),
+  SETTLEMENT_WEBHOOK_REPLAY_TOLERANCE_SECONDS: z.string().optional()
+    .describe('Override the default 300s replay window for sandbox settlement webhooks.'),
+  CRON_SECRET: z.string().optional()
+    .describe('Bearer token Vercel cron passes in Authorization header. Required in production for /api/cron/*.'),
+  OMNIVYRA_QUEUE_PREFIX_ENABLED: z.string().optional()
+    .describe('When "true", BullMQ instances use env-prefixed Redis keys (omnivyra:<env>::*) instead of the default bull: keyspace. See backend/queue/bullmqClient.ts for cutover protocol.'),
 });
 
 /**
@@ -323,7 +386,22 @@ export function validateEnv(): EnvConfig {
         ? parseInt(process.env.REDIS_OVERFLOW_CAP_PER_QUEUE, 10)
         : undefined,
       REDIS_WAIT_MS: process.env.REDIS_WAIT_MS ? parseInt(process.env.REDIS_WAIT_MS, 10) : undefined,
-      
+
+      // Worker / queue / cron tuning — silently filter NaN to undefined so an
+      // invalid env value falls back to the call-site default (matches prior
+      // `Number(process.env.X)`+`Number.isInteger(o)` behavior at the call sites).
+      BOLT_WORKER_CONCURRENCY: (() => { const v = parseInt(process.env.BOLT_WORKER_CONCURRENCY ?? '', 10); return Number.isFinite(v) ? v : undefined; })(),
+      ENGINE_JOBS_CONCURRENCY: (() => { const v = parseInt(process.env.ENGINE_JOBS_CONCURRENCY ?? '', 10); return Number.isFinite(v) ? v : undefined; })(),
+      HEAVY_JOB_CONCURRENCY: (() => { const v = parseInt(process.env.HEAVY_JOB_CONCURRENCY ?? '', 10); return Number.isFinite(v) ? v : undefined; })(),
+      CREATOR_RENDER_REDIS_URL: process.env.CREATOR_RENDER_REDIS_URL,
+      CREATOR_RENDER_JOB_TIMEOUT_MS: (() => { const v = parseInt(process.env.CREATOR_RENDER_JOB_TIMEOUT_MS ?? '', 10); return Number.isFinite(v) ? v : undefined; })(),
+      CREATOR_RENDER_WORKER_CONCURRENCY: (() => { const v = parseInt(process.env.CREATOR_RENDER_WORKER_CONCURRENCY ?? '', 10); return Number.isFinite(v) ? v : undefined; })(),
+      CRON_INTERVAL_SECONDS: (() => { const v = parseInt(process.env.CRON_INTERVAL_SECONDS ?? '', 10); return Number.isFinite(v) ? v : undefined; })(),
+
+      // Soak-only opt-in flags (default OFF; production behavior unchanged when unset)
+      WORKER_SOAK_MODE: process.env.WORKER_SOAK_MODE,
+      SOAK_FORCE_THROW: process.env.SOAK_FORCE_THROW,
+
       // OpenAI
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
       OPENAI_RESPONSES_MODEL: process.env.OPENAI_RESPONSES_MODEL,
@@ -333,6 +411,7 @@ export function validateEnv(): EnvConfig {
       
       // Encryption
       ENCRYPTION_KEY: process.env.ENCRYPTION_KEY,
+      OAUTH_STATE_HMAC_KEY: process.env.OAUTH_STATE_HMAC_KEY,
       INTERNAL_METRICS_SECRET: process.env.INTERNAL_METRICS_SECRET,
       
       // App config
@@ -406,6 +485,20 @@ export function validateEnv(): EnvConfig {
 
       // Content architect
       CONTENT_ARCHITECT_PASSWORD: process.env.CONTENT_ARCHITECT_PASSWORD,
+
+      // Critical webhook / scheduler secrets — wiring them here brings them
+      // into the validated config object so callers can switch from direct
+      // process.env reads to typed config.X reads at their leisure.
+      STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
+      SETTLEMENT_WEBHOOK_SANDBOX_SECRET_RAZORPAY: process.env.SETTLEMENT_WEBHOOK_SANDBOX_SECRET_RAZORPAY,
+      SETTLEMENT_WEBHOOK_SANDBOX_SECRET_STRIPE: process.env.SETTLEMENT_WEBHOOK_SANDBOX_SECRET_STRIPE,
+      SETTLEMENT_WEBHOOK_SANDBOX_SECRET_CASHFREE: process.env.SETTLEMENT_WEBHOOK_SANDBOX_SECRET_CASHFREE,
+      SETTLEMENT_WEBHOOK_SANDBOX_SECRET_PHONEPE: process.env.SETTLEMENT_WEBHOOK_SANDBOX_SECRET_PHONEPE,
+      SETTLEMENT_WEBHOOK_SANDBOX_SALT_INDEX_PHONEPE: process.env.SETTLEMENT_WEBHOOK_SANDBOX_SALT_INDEX_PHONEPE,
+      SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX: process.env.SETTLEMENT_WEBHOOK_ALLOW_UNVERIFIED_SANDBOX,
+      SETTLEMENT_WEBHOOK_REPLAY_TOLERANCE_SECONDS: process.env.SETTLEMENT_WEBHOOK_REPLAY_TOLERANCE_SECONDS,
+      CRON_SECRET: process.env.CRON_SECRET,
+      OMNIVYRA_QUEUE_PREFIX_ENABLED: process.env.OMNIVYRA_QUEUE_PREFIX_ENABLED,
     };
     
     const result = envSchema.parse(raw);

@@ -55,10 +55,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!adapter) {
     return res.status(400).json({ error: 'provider_not_registered', provider });
   }
-  // SANDBOX-ONLY enforcement: a live-mode adapter is rejected outright. Live
-  // settlement activation is a deliberate future step.
-  if (adapter.describe().mode === 'live') {
-    return res.status(400).json({ error: 'live_settlement_not_activated', provider });
+  // SANDBOX-ONLY enforcement via strict allowlist: this endpoint accepts ONLY
+  // adapters that explicitly declare `mode: 'test'`. A live-mode adapter is
+  // rejected outright (live settlement activation is a deliberate future
+  // step), and 'unknown'-mode adapters (e.g. the Stripe stub at
+  // paymentProviderAdapter.ts:136) are also rejected so an operator who
+  // provisions a sandbox secret for a stub adapter cannot drive settlement
+  // state through this endpoint.
+  const mode = adapter.describe().mode;
+  if (mode !== 'test') {
+    return res.status(400).json({
+      error: mode === 'live' ? 'live_settlement_not_activated' : 'settlement_not_activated',
+      provider,
+      mode,
+    });
   }
 
   // ── raw body + provider-specific sandbox signature verification ──────────
